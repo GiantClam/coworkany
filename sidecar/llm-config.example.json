@@ -1,0 +1,32 @@
+{
+    "$schema": "./llm-config.schema.json",
+    "provider": "anthropic",
+    "anthropic": {
+        "apiKey": "sk-ant-your-api-key-here",
+        "model": "claude-sonnet-4-5"
+    },
+    "openrouter": {
+        "apiKey": "your-openrouter-api-key-here",
+        "model": "anthropic/claude-sonnet-4.5"
+    },
+    "custom": {
+        "apiKey": "your-aiberm-api-key-here",
+        "baseUrl": "https://aiberm.com/v1/chat/completions",
+        "model": "claude-sonnet-4-5-20250929-thinking",
+        "apiFormat": "openai"
+    },
+    "maxHistoryMessages": 20,
+    "search": {
+        "provider": "serper",
+        "serperApiKey": "",
+        "searxngUrl": "",
+        "tavilyApiKey": "",
+        "braveApiKey": ""
+    },
+    "browserUse": {
+        "enabled": true,
+        "serviceUrl": "http://localhost:8100",
+        "defaultMode": "auto",
+        "llmModel": "gpt-4o"
+    }
+}

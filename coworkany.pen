@@ -1,0 +1,99 @@
+{
+  "version": "2.7",
+  "children": [
+    {
+      "type": "frame",
+      "id": "bi8Au",
+      "x": 0,
+      "y": 0,
+      "name": "Launcher Design Canvas",
+      "clip": true,
+      "width": 1000,
+      "height": 800,
+      "fill": "#1e1e1e",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "71qeW",
+          "x": 200,
+          "y": 300,
+          "name": "Launcher",
+          "width": 600,
+          "height": 60,
+          "fill": "#2d2d2d",
+          "cornerRadius": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Hshul",
+              "name": "contentRow",
+              "width": "fill_container",
+              "height": "fill_container",
+              "gap": 16,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "3MEUS",
+                  "name": "Search Icon",
+                  "width": 24,
+                  "height": 24,
+                  "fill": {
+                    "type": "image",
+                    "enabled": true,
+                    "url": "./images/generated-1770260934528.png",
+                    "mode": "fill"
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "4SwJH",
+                  "name": "input",
+                  "fill": "#9ca3af",
+                  "content": "Ask CoworkAny...",
+                  "fontFamily": "Inter",
+                  "fontSize": 20,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "yfCkd",
+                  "name": "cmdHint",
+                  "fill": "#374151",
+                  "cornerRadius": 4,
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "7Y2bQ",
+                      "name": "hintText",
+                      "fill": "#9ca3af",
+                      "content": "↵ Enter",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "bold"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "0H96F",
+                  "name": "Settings Icon",
+                  "width": 20,
+                  "height": 20,
+                  "fill": {
+                    "type": "image",
+                    "enabled": true,
+                    "url": "./images/generated-1770260941548.png",
+                    "mode": "fill"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

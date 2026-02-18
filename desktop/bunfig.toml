@@ -1,0 +1,15 @@
+[test]
+# Exclude Playwright E2E tests — these require a running Tauri app and Chrome.
+# Run them separately with: npx playwright test
+exclude = [
+    "tests/*e2e*",
+    "tests/*.spec.*",
+    "tests/tauriFixture*",
+    "tests/tauriFixtureNoChrome*",
+    "tests/diagnostic.test.ts",
+    "tests/stock-research-ui.test.ts",
+    "tests/stock-research-log-analysis.test.ts",
+    "tests/stock-research-log-only.test.ts",
+    "tests/stock-research-direct.test.ts",
+    "tests/visual-regression.test.ts",
+]

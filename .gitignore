@@ -53,3 +53,40 @@ desktop/src-tauri/target/
 browser-use-service/.venv
 browser-use-service/venv
 desktop/node_modules/
+
+# Local agent/workspace state
+.agent/
+.claude/
+.opencode/
+.playwright-mcp/
+.coworkany/
+desktop/.coworkany/
+desktop/src-tauri/.coworkany/
+
+# Local diagnostics/build artifacts
+desktop/src-tauri/cargo_check.json
+desktop/src-tauri/cargo_check_utf8.json
+desktop/src-tauri/cargo_output.txt
+desktop/src-tauri/build_error.log
+desktop/src-tauri/crash.log
+sidecar/scanned-repos-cache.json
+sidecar/workspaces.json
+
+# Local Windows placeholder files
+nul
+desktop/nul
+sidecar/nul
+sidecar/nul.exe
+
+# Ad-hoc local visual snapshots
+ui-test-*.png
+visual-*.png
+sidecar/example-com-screenshot.png
+
+# Local generated reports/scratch files
+sidecar/AI*.md
+sidecar/Python*.md
+sidecar/factorials_*.txt
+sidecar/test.txt
+sidecar/test@#$%^&.txt
+sidecar/.npmrc

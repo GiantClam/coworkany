@@ -1,0 +1,33 @@
+{
+  "name": "@coworkany/sidecar",
+  "version": "0.1.0",
+  "description": "CoworkAny Agent Orchestrator - Sidecar process for desktop app",
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "dev": "bun run --watch src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
+    "@modelcontextprotocol/server-github": "^2025.4.8",
+    "@modelcontextprotocol/server-memory": "^2026.1.26",
+    "express": "^4.22.1",
+    "googleapis": "^133.0.0",
+    "playwright": "^1.50.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.25",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  }
+}

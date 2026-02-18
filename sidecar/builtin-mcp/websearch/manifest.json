@@ -1,0 +1,20 @@
+{
+    "id": "websearch",
+    "name": "Web Search",
+    "version": "1.0.0",
+    "description": "Built-in web search capability using DuckDuckGo",
+    "runtime": "builtin",
+    "tools": [
+        "web_search",
+        "fetch_webpage"
+    ],
+    "effects": [
+        "network:read"
+    ],
+    "tags": [
+        "search",
+        "web",
+        "builtin"
+    ],
+    "builtin": true
+}

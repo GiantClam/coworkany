@@ -1,0 +1,149 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "LLM Configuration",
+    "description": "Configuration for LLM providers in CoworkAny Sidecar",
+    "type": "object",
+    "required": [
+        "provider"
+    ],
+    "properties": {
+        "provider": {
+            "type": "string",
+            "enum": [
+                "anthropic",
+                "openrouter",
+                "custom"
+            ],
+            "description": "Active LLM provider"
+        },
+        "anthropic": {
+            "type": "object",
+            "description": "Anthropic Claude API settings (base URL is fixed)",
+            "properties": {
+                "apiKey": {
+                    "type": "string",
+                    "description": "Anthropic API key"
+                },
+                "model": {
+                    "type": "string",
+                    "default": "claude-sonnet-4-5",
+                    "description": "Model ID (e.g., claude-sonnet-4-5, claude-opus-4-5)"
+                }
+            },
+            "required": [
+                "apiKey"
+            ]
+        },
+        "openrouter": {
+            "type": "object",
+            "description": "OpenRouter API settings (base URL is fixed)",
+            "properties": {
+                "apiKey": {
+                    "type": "string",
+                    "description": "OpenRouter API key"
+                },
+                "model": {
+                    "type": "string",
+                    "default": "anthropic/claude-sonnet-4.5",
+                    "description": "Model ID (e.g., anthropic/claude-sonnet-4.5)"
+                }
+            },
+            "required": [
+                "apiKey"
+            ]
+        },
+        "custom": {
+            "type": "object",
+            "description": "Custom third-party provider (base URL is configurable)",
+            "properties": {
+                "apiKey": {
+                    "type": "string",
+                    "description": "API key for the custom provider"
+                },
+                "baseUrl": {
+                    "type": "string",
+                    "description": "Base URL for the custom provider's API endpoint"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model ID for the custom provider"
+                },
+                "apiFormat": {
+                    "type": "string",
+                    "enum": [
+                        "openai",
+                        "anthropic"
+                    ],
+                    "default": "openai",
+                    "description": "API format: openai or anthropic"
+                }
+            },
+            "required": [
+                "apiKey",
+                "baseUrl",
+                "model"
+            ]
+        },
+        "maxHistoryMessages": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 20,
+            "description": "Maximum number of conversation history messages to keep"
+        },
+        "search": {
+            "type": "object",
+            "description": "Web search provider settings for the search_web tool",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["serper", "searxng", "tavily", "brave"],
+                    "default": "serper",
+                    "description": "Active search provider. Serper.dev recommended (2500 free/month, Google results)"
+                },
+                "serperApiKey": {
+                    "type": "string",
+                    "description": "Serper.dev API key (2500 free searches/month, no credit card needed). Get at https://serper.dev"
+                },
+                "searxngUrl": {
+                    "type": "string",
+                    "description": "Custom SearXNG instance URL (optional, uses public instances by default)"
+                },
+                "tavilyApiKey": {
+                    "type": "string",
+                    "description": "Tavily API key for web search (1000 free/month). Get at https://tavily.com"
+                },
+                "braveApiKey": {
+                    "type": "string",
+                    "description": "Brave Search API key. Get at https://brave.com/search/api/"
+                }
+            }
+        },
+        "browserUse": {
+            "type": "object",
+            "description": "Browser-use AI automation service settings for smart browser mode",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable browser-use service integration. When false, only precise (Playwright) mode is available."
+                },
+                "serviceUrl": {
+                    "type": "string",
+                    "default": "http://localhost:8100",
+                    "description": "URL of the browser-use FastAPI service"
+                },
+                "defaultMode": {
+                    "type": "string",
+                    "enum": ["precise", "smart", "auto"],
+                    "default": "auto",
+                    "description": "Default browser automation mode. 'precise' = Playwright CSS selectors, 'smart' = AI vision, 'auto' = try precise then smart"
+                },
+                "llmModel": {
+                    "type": "string",
+                    "default": "gpt-4o",
+                    "description": "LLM model used by browser-use agent for visual understanding"
+                }
+            }
+        }
+    }
+}
