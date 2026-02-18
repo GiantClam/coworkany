@@ -1,0 +1,41 @@
+.layout {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+}
+
+.layout-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    width: 100%;
+}
+
+.layout-sidebar {
+    flex-shrink: 0;
+    border-right: 1px solid var(--border-subtle);
+    background-color: var(--bg-sidebar);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    width: var(--sidebar-collapsed-width);
+    transition: width var(--ease-default);
+}
+
+.layout-sidebar:hover,
+.layout-sidebar:has(.sidebar:hover) {
+    width: var(--sidebar-expanded-width);
+}
+
+.layout-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    background-color: var(--bg-app);
+    /* Or slightly lighter? No, consistent dark */
+}

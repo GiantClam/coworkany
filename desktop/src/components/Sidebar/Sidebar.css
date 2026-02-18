@@ -1,0 +1,372 @@
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 10px 8px;
+    gap: var(--space-2);
+    width: var(--sidebar-collapsed-width);
+    transition: width var(--ease-default);
+    overflow: hidden;
+    position: relative;
+}
+
+.sidebar:hover,
+.sidebar:focus-within {
+    width: var(--sidebar-expanded-width);
+}
+
+.sidebar-header-collapsed {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 0;
+    margin-bottom: var(--space-2);
+}
+
+.sidebar-logo {
+    height: 28px;
+    width: auto;
+}
+
+.nav-section-collapsed {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.nav-item-collapsed {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    border-radius: 10px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all var(--ease-default);
+    position: relative;
+    width: 100%;
+}
+
+.sidebar:hover .nav-item-collapsed,
+.sidebar:focus-within .nav-item-collapsed {
+    justify-content: flex-start;
+}
+
+.nav-item-label {
+    margin-left: var(--space-2);
+    opacity: 0;
+    max-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: opacity var(--ease-default), max-width var(--ease-default);
+}
+
+.sidebar:hover .nav-item-label,
+.sidebar:focus-within .nav-item-label {
+    opacity: 1;
+    max-width: 120px;
+}
+
+.nav-item-collapsed:hover {
+    background-color: var(--bg-element);
+    color: var(--text-primary);
+}
+
+.nav-item-collapsed.active {
+    background-color: var(--brand-50);
+    color: var(--brand-600);
+}
+
+.nav-tooltip {
+    position: absolute;
+    left: 100%;
+    margin-left: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-8px);
+    transition: all var(--ease-default);
+    z-index: var(--z-popover);
+    box-shadow: var(--shadow-md);
+}
+
+.sidebar:not(:hover):not(:focus-within) .nav-item-collapsed:hover .nav-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+}
+
+.workspace-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    overflow: hidden;
+    min-height: 0;
+    opacity: 0;
+    transition: opacity var(--ease-default);
+}
+
+.sidebar:hover .workspace-section,
+.sidebar:focus-within .workspace-section {
+    opacity: 1;
+}
+
+.sidebar:not(:hover):not(:focus-within) .workspace-section {
+    pointer-events: none;
+}
+
+.workspace-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2);
+}
+
+.workspace-header .nav-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0;
+    padding-left: 0;
+}
+
+.sidebar-footer-collapsed {
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.sidebar-footer-collapsed .connection-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 12px;
+    color: var(--text-muted);
+    width: 100%;
+    justify-content: center;
+}
+
+.sidebar-footer-collapsed .connection-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Workspace Section */
+.workspace-add-btn {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all var(--ease-default);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.workspace-add-btn:hover {
+    background-color: var(--bg-element);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.workspace-create-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-element);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+}
+
+.workspace-input {
+    padding: var(--space-2);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+    transition: all var(--ease-default);
+}
+
+.workspace-input:focus {
+    border-color: var(--status-info);
+}
+
+.workspace-input::placeholder {
+    color: var(--text-muted);
+}
+
+.workspace-create-btn {
+    padding: var(--space-2);
+    background: var(--status-info);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--ease-default);
+}
+
+.workspace-create-btn:hover {
+    opacity: 0.9;
+}
+
+.workspace-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-height: 0;
+    /* Add min-height to ensure flex shrinking works */
+    scrollbar-width: none;
+    /* Firefox: hide scrollbar */
+}
+
+/* Chrome/Safari: hide scrollbar */
+.workspace-list::-webkit-scrollbar {
+    display: none;
+}
+
+.workspace-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.workspace-item {
+    display: flex;
+    align-items: center;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--ease-default);
+    gap: var(--space-2);
+}
+
+.workspace-item:hover {
+    background-color: var(--bg-element);
+    color: var(--text-primary);
+}
+
+.workspace-item.active {
+    background-color: var(--brand-50);
+    color: var(--text-primary);
+    font-weight: 500;
+    border-left: 2px solid var(--brand-500);
+}
+
+.workspace-expand {
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+    user-select: none;
+}
+
+.workspace-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-count {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.workspace-sessions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-left: var(--space-4);
+    margin-top: var(--space-1);
+}
+
+.workspace-session-empty {
+    padding: var(--space-2);
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.workspace-empty {
+    padding: var(--space-2);
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.session-item {
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--ease-default);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-item:hover {
+    background-color: var(--bg-element);
+    color: var(--text-primary);
+}
+
+.session-item.active {
+    background-color: var(--brand-100);
+    color: var(--brand-600);
+}
+
+.session-item.running {
+    color: var(--brand-500);
+}
+
+[data-theme="dark"] .session-item.active {
+    background-color: var(--brand-900);
+    color: var(--brand-200);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.connected {
+    background-color: var(--status-success);
+    box-shadow: 0 0 4px var(--status-success);
+}
+
+.status-dot.disconnected {
+    background-color: var(--status-error);
+}

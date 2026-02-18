@@ -1,0 +1,303 @@
+/* Setup Wizard Styles */
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal, 40);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-app);
+    font-family: var(--font-body, sans-serif);
+    color: var(--text-primary);
+}
+
+.container {
+    width: 520px;
+    max-width: calc(100vw - 48px);
+    background: var(--bg-panel, #fff);
+    border-radius: var(--radius-xl, 16px);
+    box-shadow: var(--shadow-float);
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+}
+
+/* Steps indicator */
+.steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px 24px 0;
+}
+
+.stepDot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--border-subtle);
+    transition: var(--transition-fast);
+}
+
+.stepDotActive {
+    width: 24px;
+    background: var(--accent-primary);
+}
+
+.stepDotCompleted {
+    background: var(--status-success);
+}
+
+/* Content area */
+.content {
+    padding: 32px 32px 24px;
+    min-height: 280px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Footer / navigation */
+.footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 32px 24px;
+    gap: 12px;
+}
+
+.footerRight {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+/* Buttons */
+.btnPrimary {
+    padding: 10px 24px;
+    border-radius: var(--radius-md, 8px);
+    border: none;
+    background: var(--accent-primary);
+    color: #fff;
+    font-family: var(--font-body);
+    font-size: var(--font-size-sm, 14px);
+    font-weight: var(--font-semibold, 600);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.btnPrimary:hover {
+    background: var(--accent-hover);
+}
+
+.btnPrimary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btnSecondary {
+    padding: 10px 24px;
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: var(--font-size-sm, 14px);
+    font-weight: var(--font-medium, 500);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.btnSecondary:hover {
+    background: var(--bg-element);
+    color: var(--text-primary);
+}
+
+.btnSkip {
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-family: var(--font-body);
+    font-size: var(--font-size-xs, 12px);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.btnSkip:hover {
+    color: var(--text-secondary);
+}
+
+/* Welcome step */
+.welcomeTitle {
+    font-family: var(--font-heading, serif);
+    font-size: var(--font-size-2xl, 24px);
+    font-weight: var(--font-bold, 700);
+    margin-bottom: 12px;
+    text-align: center;
+}
+
+.welcomeSubtitle {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm, 14px);
+    line-height: var(--leading-relaxed, 1.75);
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.featureList {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.featureItem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: var(--font-size-sm, 14px);
+    color: var(--text-primary);
+}
+
+.featureIcon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    background: var(--accent-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 16px;
+}
+
+/* API Key step */
+.formGroup {
+    margin-bottom: 20px;
+}
+
+.formLabel {
+    display: block;
+    font-size: var(--font-size-sm, 14px);
+    font-weight: var(--font-medium, 500);
+    margin-bottom: 6px;
+    color: var(--text-primary);
+}
+
+.formHint {
+    font-size: var(--font-size-xs, 12px);
+    color: var(--text-tertiary);
+    margin-bottom: 12px;
+}
+
+.formInput {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md, 8px);
+    background: var(--bg-element);
+    color: var(--text-primary);
+    font-family: var(--font-code, monospace);
+    font-size: var(--font-size-sm, 14px);
+    outline: none;
+    transition: var(--transition-fast);
+    box-sizing: border-box;
+}
+
+.formInput:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.formSelect {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md, 8px);
+    background: var(--bg-element);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: var(--font-size-sm, 14px);
+    outline: none;
+    transition: var(--transition-fast);
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+.formSelect:focus {
+    border-color: var(--accent-primary);
+}
+
+.validationResult {
+    margin-top: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-xs, 12px);
+}
+
+.validationSuccess {
+    background: rgba(77, 124, 15, 0.08);
+    color: var(--status-success);
+    border: 1px solid rgba(77, 124, 15, 0.2);
+}
+
+.validationError {
+    background: rgba(190, 18, 60, 0.08);
+    color: var(--status-error);
+    border: 1px solid rgba(190, 18, 60, 0.2);
+}
+
+/* Complete step */
+.completeIcon {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-full);
+    background: rgba(77, 124, 15, 0.1);
+    color: var(--status-success);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin: 0 auto 16px;
+}
+
+.completeTitle {
+    font-family: var(--font-heading, serif);
+    font-size: var(--font-size-xl, 20px);
+    font-weight: var(--font-bold, 700);
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.completeText {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm, 14px);
+    text-align: center;
+    line-height: var(--leading-relaxed);
+    margin-bottom: 24px;
+}
+
+.summaryList {
+    background: var(--bg-element);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    font-size: var(--font-size-sm, 14px);
+    line-height: var(--leading-relaxed);
+}
+
+.summaryItem {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+}
+
+.summaryLabel {
+    color: var(--text-secondary);
+}
+
+.summaryValue {
+    color: var(--text-primary);
+    font-weight: var(--font-medium, 500);
+}

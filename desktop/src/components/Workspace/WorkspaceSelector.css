@@ -1,0 +1,174 @@
+.workspace-selector {
+    position: relative;
+    display: inline-block;
+}
+
+.workspace-selector-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.workspace-selector-button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background-color: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.workspace-selector-button:hover:not(:disabled) {
+    background-color: var(--bg-element-hover);
+    border-color: var(--border-default);
+}
+
+.workspace-selector-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.workspace-selector-button.disabled {
+    opacity: 0.6;
+}
+
+.workspace-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.workspace-name {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.workspace-arrow {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    margin-left: var(--space-1);
+}
+
+.workspace-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 280px;
+    max-width: 400px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.workspace-item {
+    padding: var(--space-3);
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background-color 0.15s ease;
+}
+
+.workspace-item:last-child {
+    border-bottom: none;
+}
+
+.workspace-item:hover {
+    background-color: var(--bg-element-hover);
+}
+
+.workspace-item.active {
+    background-color: var(--accent-subtle);
+}
+
+.workspace-item.active .workspace-item-name {
+    color: var(--status-info);
+    font-weight: 600;
+}
+
+.workspace-item-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+}
+
+.workspace-item-path {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-family: var(--font-code);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Create workspace button (+) */
+.btn-create-workspace {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn-create-workspace:hover {
+    background: var(--bg-element-hover);
+    border-color: var(--border-default);
+}
+
+/* Empty state hint */
+.workspace-empty-hint {
+    padding: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+}
+
+/* Rename input inside dropdown item */
+.workspace-rename-input {
+    width: 100%;
+    padding: 4px var(--space-2);
+    font-size: 13px;
+    font-family: var(--font-body);
+    border: 1px solid var(--accent-primary);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    outline: none;
+}
+
+/* Delete button */
+.workspace-delete-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px var(--space-1);
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    opacity: 0;
+    transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.workspace-item:hover .workspace-delete-btn {
+    opacity: 1;
+}
+
+.workspace-delete-btn:hover {
+    color: var(--status-error);
+}

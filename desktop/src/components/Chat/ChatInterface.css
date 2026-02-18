@@ -1,0 +1,247 @@
+/* Main Container */
+.chat-interface {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    position: relative;
+    font-family: var(--font-body);
+}
+
+/* When there's no active session, the welcome section takes most space */
+.chat-interface > .welcome-section {
+    flex: 1;
+    min-height: 0;
+}
+
+.chat-interface > .input-area {
+    flex-shrink: 0;
+}
+
+/* Header */
+.chat-header {
+    padding: 0 var(--space-4);
+    background-color: var(--bg-app);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 48px;
+    flex-shrink: 0;
+}
+
+.chat-header h2 {
+    font-family: var(--font-heading);
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+/* Status Badges */
+.status-badge {
+    font-family: var(--font-code);
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-subtle);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.status-badge.clickable:hover {
+    background-color: var(--bg-element-hover);
+    border-color: var(--text-tertiary);
+}
+
+.status-badge.running {
+    color: var(--brand-600);
+    border-color: rgba(59, 130, 246, 0.2);
+    background-color: rgba(59, 130, 246, 0.08);
+}
+
+.status-badge.finished {
+    color: var(--status-success);
+    border-color: rgba(63, 126, 18, 0.2);
+    background-color: rgba(63, 126, 18, 0.05);
+}
+
+.status-badge.failed {
+    color: var(--status-error);
+    border-color: rgba(190, 18, 60, 0.2);
+    background-color: rgba(190, 18, 60, 0.05);
+}
+
+/* Action Buttons */
+.status-action {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: var(--font-body);
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.status-action:hover:not(:disabled) {
+    background-color: var(--bg-element-hover);
+    color: var(--text-primary);
+    border-color: var(--text-tertiary);
+}
+
+.status-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Error Banner */
+.chat-error {
+    margin: var(--space-4) var(--space-4) 0;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background-color: rgba(190, 18, 60, 0.05);
+    border: 1px solid rgba(190, 18, 60, 0.2);
+    color: var(--status-error);
+    font-size: 13px;
+    text-align: center;
+}
+
+/* Timeline/Messages Area handled in Timeline.css, but ensured here */
+.timeline {
+    flex: 1;
+    overflow-y: auto;
+}
+
+/* Input Area */
+.input-area {
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--bg-app);
+    border-top: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.input-container {
+    display: flex;
+    gap: var(--space-2);
+    background-color: var(--bg-element);
+    padding: var(--space-2);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s ease;
+}
+
+.input-container:focus-within {
+    border-color: var(--brand-400);
+    box-shadow: var(--shadow-md), 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+[data-theme="dark"] .input-container:focus-within {
+    border-color: var(--brand-500);
+    box-shadow: var(--shadow-md), 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.chat-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    font-family: var(--font-body);
+    font-size: 15px;
+    color: var(--text-primary);
+    padding: 8px 12px;
+    min-width: 0;
+}
+
+.chat-input::placeholder {
+    color: var(--text-muted);
+}
+
+.chat-input:focus {
+    outline: none;
+}
+
+.send-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background-color: var(--brand-500);
+    color: white;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.send-button:hover:not(:disabled) {
+    background-color: var(--brand-600);
+    transform: scale(1.05);
+}
+
+.send-button:disabled {
+    background-color: var(--bg-element-hover);
+    color: var(--text-muted);
+    cursor: default;
+}
+
+/* Voice input button */
+.voice-button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+    flex-shrink: 0;
+}
+
+.voice-button:hover:not(:disabled) {
+    background: var(--bg-element-hover);
+}
+
+.voice-button.listening {
+    background: var(--status-error);
+    color: #fff;
+}
+
+.voice-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+/* Interim voice transcript preview */
+.voice-interim {
+    padding: 4px var(--space-2);
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+    font-style: italic;
+    opacity: 0.7;
+}
+
+/* Lazy-loaded modal content wrappers */
+.lazy-fallback {
+    padding: var(--space-4);
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.lazy-wrapper {
+    height: 100%;
+    overflow: hidden;
+}

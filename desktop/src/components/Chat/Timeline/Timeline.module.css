@@ -1,0 +1,402 @@
+/* ============================================================================
+ * Timeline Component Styles
+ * ============================================================================ */
+
+.timeline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    padding: var(--space-6) var(--space-4);
+    overflow-y: auto;
+    height: 100%;
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* ============================================================================
+ * Timeline Items
+ * ============================================================================ */
+
+.timelineItem {
+    animation: fadeIn var(--transition-base);
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ============================================================================
+ * User Message
+ * ============================================================================ */
+
+.timelineItem.user {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.timelineItem.user .contentBubble {
+    background: var(--bg-element);
+    color: var(--text-primary);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-xl);
+    max-width: 68%;
+    white-space: pre-wrap;
+    border: none;
+}
+
+/* ============================================================================
+ * Assistant Message
+ * ============================================================================ */
+
+.timelineItem.assistant {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.timelineItem.assistant .contentBubble {
+    background: transparent;
+    border: none;
+    padding: 0;
+    max-width: 85%;
+}
+
+.contentBubble {
+    font-size: var(--font-size-sm);
+    line-height: var(--leading-relaxed);
+}
+
+/* ============================================================================
+ * Tool Call Card
+ * ============================================================================ */
+
+.toolCard {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    transition: box-shadow var(--transition-base);
+}
+
+.toolCard:hover {
+    box-shadow: var(--shadow-md);
+}
+
+.toolCard[data-status="success"] {
+    border-left: 3px solid var(--status-success);
+}
+
+.toolCard[data-status="failed"] {
+    border-left: 3px solid var(--status-error);
+}
+
+.toolCard[data-status="running"] {
+    border-left: 3px solid var(--status-info);
+}
+
+.toolHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3) var(--space-4);
+    cursor: pointer;
+    background: none;
+    border: none;
+    width: 100%;
+    text-align: left;
+    transition: background-color var(--transition-fast);
+}
+
+.toolHeader:hover {
+    background: var(--bg-element-hover);
+}
+
+.toolInfo {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+    overflow: hidden;
+}
+
+.toolIcon {
+    font-size: var(--font-size-lg);
+    flex-shrink: 0;
+}
+
+.toolName {
+    font-weight: var(--font-medium);
+    color: var(--text-primary);
+    margin-right: var(--space-2);
+}
+
+.toolPreview {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.toolStatus {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-medium);
+    color: var(--text-secondary);
+}
+
+.statusDot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--text-muted);
+}
+
+.statusDot[data-status="running"] {
+    background: var(--status-info);
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.statusDot[data-status="success"] {
+    background: var(--status-success);
+}
+
+.statusDot[data-status="failed"] {
+    background: var(--status-error);
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.toolBody {
+    padding: var(--space-4);
+    border-top: 1px solid var(--border-subtle);
+}
+
+.toolBody .inputSection,
+.toolBody .outputSection {
+    margin-bottom: var(--space-3);
+}
+
+.toolBody .inputSection:last-child,
+.toolBody .outputSection:last-child {
+    margin-bottom: 0;
+}
+
+.sectionLabel {
+    font-weight: var(--font-medium);
+    font-size: var(--font-size-xs);
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.codeBlock {
+    margin: 0;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--bg-element);
+    font-family: var(--font-code);
+    font-size: var(--font-size-xs);
+    overflow-x: auto;
+}
+
+.markdownBody {
+    font-size: var(--font-size-sm);
+    line-height: var(--leading-relaxed);
+}
+
+/* ============================================================================
+ * System Badge
+ * ============================================================================ */
+
+.timelineItem.system {
+    display: flex;
+    justify-content: center;
+    margin: var(--space-2) 0;
+}
+
+.systemBadge {
+    display: inline-block;
+    padding: var(--space-1) var(--space-3);
+    background: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    font-weight: var(--font-medium);
+}
+
+/* ============================================================================
+ * Markdown Overrides (within timeline items)
+ * ============================================================================ */
+
+.markdownBody h1,
+.markdownBody h2,
+.markdownBody h3,
+.markdownBody h4,
+.markdownBody h5,
+.markdownBody h6 {
+    margin-top: var(--space-4);
+    margin-bottom: var(--space-2);
+    font-weight: var(--font-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
+
+.markdownBody h1 { font-size: var(--font-size-2xl); }
+.markdownBody h2 { font-size: var(--font-size-xl); }
+.markdownBody h3 { font-size: var(--font-size-lg); }
+.markdownBody h4 { font-size: var(--font-size-base); }
+
+.markdownBody p {
+    margin-top: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.markdownBody code {
+    background: var(--bg-element);
+    padding: 2px var(--space-1);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-code);
+    font-size: var(--font-size-xs);
+    color: var(--accent-primary);
+}
+
+.markdownBody pre {
+    margin: var(--space-3) 0;
+    padding: var(--space-3);
+    background: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+}
+
+.markdownBody pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+}
+
+.markdownBody ul,
+.markdownBody ol {
+    margin: var(--space-2) 0;
+    padding-left: var(--space-6);
+}
+
+.markdownBody li {
+    margin: var(--space-1) 0;
+}
+
+.markdownBody a {
+    color: var(--accent-primary);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+}
+
+.markdownBody a:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+}
+
+.markdownBody blockquote {
+    margin: var(--space-3) 0;
+    padding-left: var(--space-4);
+    border-left: 3px solid var(--accent-primary);
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.markdownBody table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--space-3) 0;
+}
+
+.markdownBody th,
+.markdownBody td {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    text-align: left;
+}
+
+.markdownBody th {
+    background: var(--bg-element);
+    font-weight: var(--font-semibold);
+}
+
+.markdownBody img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    margin: var(--space-3) 0;
+}
+
+/* ============================================================================
+ * Message Bubble Utilities
+ * ============================================================================ */
+
+.messageWrapper {
+    position: relative;
+}
+
+.copyButton {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 10;
+    padding: 2px 6px;
+    font-size: 11px;
+    background: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text-secondary);
+    opacity: 0.9;
+    font-family: var(--font-body);
+    transition: opacity var(--transition-fast);
+}
+
+.copyButton:hover {
+    opacity: 1;
+}
+
+.userText {
+    white-space: pre-wrap;
+}
+
+/* ============================================================================
+ * Responsive Adjustments
+ * ============================================================================ */
+
+@media (max-width: 768px) {
+    .timeline {
+        padding: var(--space-4) var(--space-3);
+        gap: var(--space-4);
+    }
+
+    .timelineItem.user .contentBubble {
+        max-width: 90%;
+    }
+
+    .timelineItem.assistant .contentBubble {
+        max-width: 100%;
+    }
+}

@@ -1,0 +1,78 @@
+.diff-viewer {
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+    font-size: 12px;
+}
+
+.diff-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: #f6f8fa;
+    border-bottom: 1px solid #e1e4e8;
+}
+
+.diff-file-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.diff-file-path {
+    font-weight: 600;
+    color: #24292e;
+}
+
+.diff-operation {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.diff-operation.op-create {
+    background: #dcffe4;
+    color: #22863a;
+}
+
+.diff-operation.op-modify {
+    background: #fff5b1;
+    color: #735c0f;
+}
+
+.diff-operation.op-delete {
+    background: #ffeef0;
+    color: #cb2431;
+}
+
+.diff-operation.op-rename {
+    background: #f1f8ff;
+    color: #0366d6;
+}
+
+.diff-stats {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.diff-stats .additions {
+    color: #22863a;
+}
+
+.diff-stats .deletions {
+    color: #cb2431;
+}
+
+.diff-description {
+    padding: 8px 16px;
+    background: #fffbdd;
+    border-bottom: 1px solid #e1e4e8;
+    font-size: 13px;
+    color: #735c0f;
+}

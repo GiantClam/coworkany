@@ -1,0 +1,223 @@
+/* Clean Theme */
+/* Fonts are preloaded via <link> in index.html — no blocking @import */
+
+:root {
+    /* Neutral Slate Scale */
+    --c-ink-50: #f8fafc;
+    --c-ink-100: #f1f5f9;
+    --c-ink-200: #e2e8f0;
+    --c-ink-300: #cbd5e1;
+    --c-ink-400: #94a3b8;
+    --c-ink-500: #64748b;
+    --c-ink-600: #475569;
+    --c-ink-700: #334155;
+    --c-ink-800: #1e293b;
+    --c-ink-900: #0f172a;
+    --c-ink-950: #020617;
+
+    --bg-app: #ffffff;
+    --bg-sidebar: var(--c-ink-100);
+    --bg-panel: #ffffff;
+    --bg-element: var(--c-ink-100);
+    --bg-element-hover: var(--c-ink-200);
+    --bg-subtle: var(--c-ink-50);
+
+    /* Borders */
+    --border-subtle: var(--c-ink-200);
+    --border-strong: var(--c-ink-400);
+
+    /* Text */
+    --text-primary: var(--c-ink-900);
+    --text-secondary: var(--c-ink-600);
+    --text-tertiary: var(--c-ink-400);
+    --text-muted: var(--c-ink-400);
+    --text-inverse: #ffffff;
+    --text-on-dark: var(--c-ink-50);
+
+    /* Accents - Enterprise Blue */
+    --accent-primary: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-subtle: rgba(37, 99, 235, 0.08);
+
+    /* Status - Muted/Natural */
+    --status-success: #4d7c0f;
+    /* Green-700 */
+    --status-error: #be123c;
+    /* Rose-700 */
+    --status-warning: #b45309;
+    /* Amber-700 */
+    --status-info: #0369a1;
+    /* Sky-700 */
+
+    /* Typography — Inter for clean modern look, system-ui as instant fallback */
+    --font-heading: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-body: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-code: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+
+    /* Spacing */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    /* Radii */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-full: 9999px;
+
+    /* Shadows - Soft and Warm */
+    --shadow-sm: 0 1px 2px 0 rgba(28, 25, 23, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(28, 25, 23, 0.06), 0 2px 4px -2px rgba(28, 25, 23, 0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(28, 25, 23, 0.08), 0 4px 6px -4px rgba(28, 25, 23, 0.08);
+    --shadow-float: 0 20px 25px -5px rgba(28, 25, 23, 0.1), 0 8px 10px -6px rgba(28, 25, 23, 0.1);
+
+    /* Typography - Font Sizes */
+    --font-size-xs: 0.75rem;    /* 12px */
+    --font-size-sm: 0.875rem;   /* 14px */
+    --font-size-base: 1rem;     /* 16px */
+    --font-size-lg: 1.125rem;   /* 18px */
+    --font-size-xl: 1.25rem;    /* 20px */
+    --font-size-2xl: 1.5rem;    /* 24px */
+    --font-size-3xl: 1.875rem;  /* 30px */
+
+    /* Typography - Line Heights */
+    --leading-none: 1;
+    --leading-tight: 1.25;
+    --leading-normal: 1.5;
+    --leading-relaxed: 1.75;
+
+    /* Typography - Font Weights */
+    --font-normal: 400;
+    --font-medium: 500;
+    --font-semibold: 600;
+    --font-bold: 700;
+
+    /* Transitions */
+    --ease-default: 0.2s cubic-bezier(0.2, 0.0, 0.2, 1);
+    --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Z-Index Layers */
+    --z-base: 1;
+    --z-dropdown: 10;
+    --z-sticky: 20;
+    --z-overlay: 30;
+    --z-modal: 40;
+    --z-popover: 50;
+    --z-tooltip: 60;
+
+    /* Semantic aliases — keep undefined-variable warnings away */
+    --bg-elevated: var(--bg-panel);
+    --border-default: var(--border-strong);
+
+    /* Accessibility */
+    --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-primary);
+
+    /* Component Specific - Common Values */
+    --input-height: 40px;
+    --button-height: 40px;
+    --header-height: 48px;
+    --sidebar-width: 280px;
+    
+    /* Collapsible Sidebar */
+    --sidebar-collapsed-width: 56px;
+    --sidebar-expanded-width: 220px;
+    
+    /* Brand Colors (Enterprise Blue) */
+    --brand-50: #eff6ff;
+    --brand-100: #dbeafe;
+    --brand-200: #bfdbfe;
+    --brand-300: #93c5fd;
+    --brand-400: #60a5fa;
+    --brand-500: #3b82f6;
+    --brand-600: #2563eb;
+    --brand-700: #1d4ed8;
+    
+    /* Glass Effect */
+    --glass-bg: rgba(255, 255, 255, 0.8);
+    --glass-bg-dark: rgba(0, 0, 0, 0.8);
+    --glass-blur: blur(12px);
+}
+
+/* Dark Theme */
+[data-theme="dark"] {
+    /* Inverted Ink Scale for Dark Mode */
+    --bg-app: var(--c-ink-900);
+    --bg-sidebar: var(--c-ink-800);
+    --bg-panel: var(--c-ink-800);
+    --bg-element: var(--c-ink-700);
+    --bg-element-hover: var(--c-ink-600);
+    --bg-subtle: #211f1d;
+
+    --border-subtle: var(--c-ink-700);
+    --border-strong: var(--c-ink-500);
+
+    --text-primary: var(--c-ink-50);
+    --text-secondary: var(--c-ink-300);
+    --text-tertiary: var(--c-ink-400);
+    --text-muted: var(--c-ink-500);
+    --text-inverse: var(--c-ink-900);
+    --text-on-dark: var(--c-ink-50);
+
+    /* Slightly brighter accent in dark mode */
+    --accent-primary: #e88667;
+    --accent-hover: #f29877;
+    --accent-subtle: rgba(232, 134, 103, 0.12);
+
+    /* Status colors — slightly brighter in dark mode */
+    --status-success: #65a30d;
+    --status-error: #e11d48;
+    --status-warning: #d97706;
+    --status-info: #0ea5e9;
+
+    /* Shadows — darker in dark mode */
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+    --shadow-float: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    
+    /* Brand Colors - Brighter in dark mode */
+    --brand-50: #1e3a5f;
+    --brand-100: #1e40af;
+    --brand-200: #1d4ed8;
+    --brand-300: #2563eb;
+    --brand-400: #3b82f6;
+    --brand-500: #60a5fa;
+    --brand-600: #93c5fd;
+    --brand-700: #bfdbfe;
+    
+    /* Glass Effect - Dark mode */
+    --glass-bg: rgba(30, 30, 30, 0.8);
+    --glass-bg-dark: rgba(0, 0, 0, 0.8);
+
+    /* Focus ring — brighter in dark mode */
+    --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-primary);
+}
+
+/* ============================================================================
+ * Global accessibility — keyboard focus ring
+ * Applies only on keyboard navigation (not mouse clicks)
+ * ============================================================================ */
+
+*:focus {
+    outline: none;
+}
+
+*:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* Inputs get a border-based focus style instead of box-shadow ring */
+input:focus-visible,
+textarea:focus-visible {
+    outline: none;
+    box-shadow: none;
+    border-color: var(--accent-primary) !important;
+}
