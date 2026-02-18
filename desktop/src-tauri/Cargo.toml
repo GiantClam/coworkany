@@ -1,0 +1,46 @@
+[package]
+name = "coworkany-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "CoworkAny Desktop - AI Agent Desktop Application"
+
+[lib]
+name = "coworkany_desktop_lib"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.10", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+thiserror = "1.0"
+# Diff and Shadow FS
+similar = "2.4"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+url = "2.5"
+hex = "0.4"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+# Process Manager
+ureq = "2.9"
+dirs = "5.0"
+# Screen Capture
+screenshots = "0.8"
+image = "0.24"
+base64 = "0.22"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-store = "2"
+tauri-plugin-updater = "2"
+
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
