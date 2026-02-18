@@ -1,0 +1,11 @@
+# RAG Service Dependencies
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+chromadb>=0.4.22
+sentence-transformers>=2.3.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+watchdog>=3.0.0
+markdown>=3.5.0
+pyyaml>=6.0.1
+httpx>=0.26.0
