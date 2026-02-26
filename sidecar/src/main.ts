@@ -105,6 +105,13 @@ import { executeJavaScriptTool, executePythonTool } from './tools/codeExecution'
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
 import { AUTONOMOUS_LEARNING_PROTOCOL } from './data/prompts/autonomousLearning';
 import {
+    buildArtifactTelemetry,
+    buildArtifactContract,
+    detectDegradedOutputs,
+    evaluateArtifactContract,
+    extractArtifactPathsFromToolResult,
+} from './agent/artifactContract';
+import {
     createGapDetector,
     createResearchEngine,
     createLearningProcessor,
@@ -277,11 +284,15 @@ const taskConfigs = new Map<string, {
     enabledSkills?: string[];
     workspacePath?: string;
 }>();
+const taskResumeMessages = new Map<string, Array<{ content: string; config?: { modelId?: string; maxTokens?: number; maxHistoryMessages?: number; enabledClaudeSkills?: string[]; enabledToolpacks?: string[]; enabledSkills?: string[] } }>>();
 
 const mcpGateway = new MCPGateway();
 
 const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 const taskHistoryLimits = new Map<string, number>();
+const taskArtifactContracts = new Map<string, ReturnType<typeof buildArtifactContract>>();
+const taskArtifactsCreated = new Map<string, Set<string>>();
+const artifactTelemetryPath = path.join(process.cwd(), '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl');
 
 // Forward declarations for LLM types (used by AutonomousLlmAdapter)
 type LlmProvider = 'anthropic' | 'openrouter' | 'openai' | 'ollama' | 'custom';
@@ -1683,10 +1694,36 @@ suspendResumeManager.on('task_suspended', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} suspended: ${data.reason}`);
     console.log(`[SuspendResume] User message: ${data.userMessage}`);
     console.log(`[SuspendResume] Can auto-resume: ${data.canAutoResume}`);
+
+    // Protocol currently supports TASK_STATUS only with idle/running/finished/failed.
+    // Emit an informational system message for richer suspended state details.
+    emit({
+        id: randomUUID(),
+        taskId: data.taskId,
+        timestamp: new Date().toISOString(),
+        sequence: nextSequence(data.taskId),
+        type: 'CHAT_MESSAGE',
+        payload: {
+            role: 'system',
+            content: `[SUSPENDED] reason=${data.reason}; canAutoResume=${String(data.canAutoResume)}; message=${data.userMessage}`,
+        },
+    } as any);
 });
 
 suspendResumeManager.on('task_resumed', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} resumed after ${data.suspendDuration}ms`);
+
+    emit({
+        id: randomUUID(),
+        taskId: data.taskId,
+        timestamp: new Date().toISOString(),
+        sequence: nextSequence(data.taskId),
+        type: 'CHAT_MESSAGE',
+        payload: {
+            role: 'system',
+            content: `[RESUMED] durationMs=${data.suspendDuration}; reason=${data.resumeReason || 'n/a'}`,
+        },
+    } as any);
 });
 
 suspendResumeManager.on('task_cancelled', (data: any) => {
@@ -2215,6 +2252,25 @@ function getTaskConfig(taskId: string): {
     return taskConfigs.get(taskId);
 }
 
+function dequeueQueuedResumeMessages(taskId: string): Array<{ content: string; config?: { modelId?: string; maxTokens?: number; maxHistoryMessages?: number; enabledClaudeSkills?: string[]; enabledToolpacks?: string[]; enabledSkills?: string[] } }> {
+    const queued = taskResumeMessages.get(taskId) || [];
+    taskResumeMessages.delete(taskId);
+    return queued;
+}
+
+function enqueueResumeMessage(taskId: string, content: string, config?: {
+    modelId?: string;
+    maxTokens?: number;
+    maxHistoryMessages?: number;
+    enabledClaudeSkills?: string[];
+    enabledToolpacks?: string[];
+    enabledSkills?: string[];
+}): void {
+    const current = taskResumeMessages.get(taskId) || [];
+    current.push({ content, config });
+    taskResumeMessages.set(taskId, current);
+}
+
 function loadLlmConfig(workspaceRootPath: string): LlmConfig {
     const defaultConfig: LlmConfig = { provider: 'anthropic' };
     try {
@@ -2232,8 +2288,10 @@ function loadLlmConfig(workspaceRootPath: string): LlmConfig {
                 provider: legacyProvider as LlmProvider,
                 anthropic: data.anthropic,
                 openrouter: data.openrouter,
+                openai: data.openai,
+                ollama: data.ollama,
                 custom: data.custom,
-                verified: !!(data.anthropic?.apiKey || data.openrouter?.apiKey || data.custom?.apiKey)
+                verified: !!(data.anthropic?.apiKey || data.openrouter?.apiKey || data.openai?.apiKey || data.custom?.apiKey)
             };
             data.profiles = [defaultProfile];
             data.activeProfileId = 'default';
@@ -2301,10 +2359,23 @@ function resolveProviderConfig(config: LlmConfig, overrides: AnthropicStreamOpti
                 const modelId = overrides.modelId ?? openrouterConfig.model ?? 'anthropic/claude-sonnet-4.5';
                 return { provider, apiFormat: 'openai', apiKey, baseUrl, modelId };
             }
+            if (provider === 'openai') {
+                const openaiConfig = config.openai ?? { apiKey: '' };
+                const apiKey = openaiConfig.apiKey ?? '';
+                let baseUrl = openaiConfig.baseUrl || FIXED_BASE_URLS.openai;
+                if (openaiConfig.baseUrl && !openaiConfig.baseUrl.includes('/chat/completions')) {
+                    baseUrl = openaiConfig.baseUrl.replace(/\/$/, '') + '/chat/completions';
+                }
+                const modelId = overrides.modelId ?? openaiConfig.model ?? 'gpt-4o';
+                return { provider, apiFormat: 'openai', apiKey, baseUrl, modelId };
+            }
             if (provider === 'custom') {
                 const customConfig = config.custom ?? { apiKey: '', baseUrl: '', model: '' };
                 const apiKey = customConfig.apiKey ?? '';
-                const baseUrl = customConfig.baseUrl ?? '';
+                let baseUrl = customConfig.baseUrl ?? '';
+                if (baseUrl && !baseUrl.includes('/chat/completions')) {
+                    baseUrl = baseUrl.replace(/\/$/, '') + '/chat/completions';
+                }
                 const modelId = overrides.modelId ?? customConfig.model ?? '';
                 const apiFormat = customConfig.apiFormat ?? 'openai';
                 return { provider, apiFormat, apiKey, baseUrl, modelId };
@@ -2331,7 +2402,12 @@ function resolveProviderConfig(config: LlmConfig, overrides: AnthropicStreamOpti
     if (provider === 'openai') {
         const openaiConfig = profile.openai ?? { apiKey: '' };
         const apiKey = openaiConfig.apiKey ?? '';
-        const baseUrl = openaiConfig.baseUrl || FIXED_BASE_URLS.openai;
+        // If user provides custom baseUrl, append /chat/completions if not already present
+        let baseUrl = openaiConfig.baseUrl || FIXED_BASE_URLS.openai;
+        if (openaiConfig.baseUrl && !openaiConfig.baseUrl.includes('/chat/completions')) {
+            // Ensure no trailing slash, then append
+            baseUrl = openaiConfig.baseUrl.replace(/\/$/, '') + '/chat/completions';
+        }
         const modelId = overrides.modelId ?? openaiConfig.model ?? 'gpt-4o';
         return { provider, apiFormat: 'openai', apiKey, baseUrl, modelId };
     }
@@ -2491,7 +2567,7 @@ async function streamAnthropicResponse(
 
     try {
         while (true) {
-            const { done, value } = await reader.read();
+            const { done, value } = await readStreamChunkWithTimeout(reader, 60000, 'anthropic_stream');
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
@@ -2725,89 +2801,104 @@ async function streamOpenAIResponse(
     const toolCalls: any[] = []; // Track partial tool calls
     let openaiInputTokens = 0;
     let openaiOutputTokens = 0;
+    let lastSemanticProgressAt = Date.now();
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+    try {
+        while (true) {
+            const { done, value } = await readStreamChunkWithTimeout(reader, 60000, 'openai_stream');
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
 
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('data:')) {
-                continue;
-            }
-            const data = trimmed.replace(/^data:\s*/, '');
-            if (!data || data === '[DONE]') {
-                continue;
-            }
-            try {
-                const payload = JSON.parse(data) as Record<string, any>;
-                const choices = payload.choices as Array<any> | undefined;
-                const delta = choices?.[0]?.delta as any | undefined;
-                const finishReason = choices?.[0]?.finish_reason as string | undefined;
-
-                // Track token usage from OpenAI stream (typically in the last chunk)
-                if (payload.usage) {
-                    openaiInputTokens = payload.usage.prompt_tokens || 0;
-                    openaiOutputTokens = payload.usage.completion_tokens || 0;
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) {
+                    continue;
                 }
+                const data = trimmed.replace(/^data:\s*/, '');
+                if (!data || data === '[DONE]') {
+                    continue;
+                }
+                try {
+                    const payload = JSON.parse(data) as Record<string, any>;
+                    const choices = payload.choices as Array<any> | undefined;
+                    const delta = choices?.[0]?.delta as any | undefined;
+                    const finishReason = choices?.[0]?.finish_reason as string | undefined;
 
-                // Log finish reason for debugging
-                if (finishReason) {
-                    console.error(`[Stream] Finish reason: ${finishReason}`);
-                    if (finishReason === 'length') {
-                        console.error(`[Stream] WARNING: Response was truncated due to max_tokens limit`);
+                    // Track token usage from OpenAI stream (typically in the last chunk)
+                    if (payload.usage) {
+                        openaiInputTokens = payload.usage.prompt_tokens || 0;
+                        openaiOutputTokens = payload.usage.completion_tokens || 0;
+                        lastSemanticProgressAt = Date.now();
                     }
-                }
 
-                if (!delta) continue;
-
-                // Handle reasoning/thinking content (e.g., from thinking models via aiberm)
-                // We log it but don't include it in the final assistant text to avoid
-                // polluting tool call decisions with thinking markup.
-                if (delta.reasoning_content) {
-                    // Optionally emit as a thinking event for UI display
-                    // For now, just skip — the thinking is internal to the model
-                }
-
-                // Handle text content
-                if (delta.content) {
-                    assistantText += delta.content;
-                    emit(
-                        createTextDeltaEvent(taskId, {
-                            delta: delta.content,
-                            role: 'assistant',
-                        })
-                    );
-                }
-
-                // Handle tool calls
-                if (delta.tool_calls) {
-                    for (const tc of delta.tool_calls) {
-                        const index = tc.index;
-                        if (!toolCalls[index]) {
-                            toolCalls[index] = {
-                                type: 'tool_use',
-                                id: tc.id || `call_${randomUUID().slice(0, 8)}`,
-                                name: tc.function?.name || '',
-                                input_json: '',
-                            };
-                            console.error(`[Stream] New tool call at index ${index}: id=${tc.id}, name=${tc.function?.name}`);
+                    // Log finish reason for debugging
+                    if (finishReason) {
+                        console.error(`[Stream] Finish reason: ${finishReason}`);
+                        if (finishReason === 'length') {
+                            console.error(`[Stream] WARNING: Response was truncated due to max_tokens limit`);
                         }
-                        if (tc.id) toolCalls[index].id = tc.id;
-                        if (tc.function?.name) toolCalls[index].name = tc.function.name;
-                        if (tc.function?.arguments) {
-                            toolCalls[index].input_json += tc.function.arguments;
+                        lastSemanticProgressAt = Date.now();
+                    }
+
+                    if (!delta) continue;
+
+                    // Handle reasoning/thinking content (e.g., from thinking models via aiberm)
+                    // We log it but don't include it in the final assistant text to avoid
+                    // polluting tool call decisions with thinking markup.
+                    if (delta.reasoning_content) {
+                        // Optionally emit as a thinking event for UI display
+                        // For now, just skip — the thinking is internal to the model
+                    }
+
+                    // Handle text content
+                    if (delta.content) {
+                        assistantText += delta.content;
+                        lastSemanticProgressAt = Date.now();
+                        emit(
+                            createTextDeltaEvent(taskId, {
+                                delta: delta.content,
+                                role: 'assistant',
+                            })
+                        );
+                    }
+
+                    // Handle tool calls
+                    if (delta.tool_calls) {
+                        for (const tc of delta.tool_calls) {
+                            const index = tc.index;
+                            if (!toolCalls[index]) {
+                                toolCalls[index] = {
+                                    type: 'tool_use',
+                                    id: tc.id || `call_${randomUUID().slice(0, 8)}`,
+                                    name: tc.function?.name || '',
+                                    input_json: '',
+                                };
+                                console.error(`[Stream] New tool call at index ${index}: id=${tc.id}, name=${tc.function?.name}`);
+                            }
+                            if (tc.id) toolCalls[index].id = tc.id;
+                            if (tc.function?.name) toolCalls[index].name = tc.function.name;
+                            if (tc.function?.arguments) {
+                                toolCalls[index].input_json += tc.function.arguments;
+                                lastSemanticProgressAt = Date.now();
+                            }
                         }
                     }
+                } catch (e) {
+                    // Ignore parse errors
                 }
-            } catch (e) {
-                // Ignore parse errors
+            }
+
+            // Best-practice watchdog: if stream keeps connection alive but provides
+            // no semantic progress (no text/tool deltas) for too long, fail fast.
+            if (Date.now() - lastSemanticProgressAt > 60000) {
+                throw new Error('openai_stream_semantic_stall_timeout_60000ms');
             }
         }
+    } finally {
+        reader.releaseLock();
     }
 
     // Finalize tool calls
@@ -2912,9 +3003,12 @@ async function runAgentLoop(
     options: AnthropicStreamOptions,
     config: LlmProviderConfig,
     tools: ToolDefinition[]
-): Promise<void> {
+): Promise<{ artifactsCreated: string[]; toolsUsed: string[] }> {
     const MAX_STEPS = 30;
+    const TOOL_EXECUTION_TIMEOUT_MS = 90000;
     let steps = 0;
+    const artifactsCreated = new Set<string>();
+    const toolsUsed = new Set<string>();
 
     // Loop detection: track consecutive identical tool calls
     const recentToolCalls: Array<{ name: string; inputHash: string }> = [];
@@ -3086,6 +3180,7 @@ async function runAgentLoop(
         // Execute tools
         const toolResults: any[] = [];
         for (const toolUse of toolUses) {
+            toolsUsed.add(toolUse.name);
             emit(createToolCallEvent(taskId, {
                 id: toolUse.id,
                 name: toolUse.name,
@@ -3198,9 +3293,9 @@ async function runAgentLoop(
                         sequence: 0,
                         type: 'TEXT_DELTA',
                         payload: {
-                            delta: `\n\n抱歉，我无法完成这个任务。浏览器导航到目标网站后始终无法正确加载页面。` +
-                                `这通常是因为浏览器没有正确连接到已登录的 Chrome 实例。` +
-                                `请确保 Chrome 浏览器在端口 9222/9224 上运行且已登录目标网站。`,
+                            delta: `\n\n抱歉，我无法完成这个任务。浏览器自动化反复失败并进入保护性终止。` +
+                                `更可能的原因是浏览器后端连接状态不一致（例如一个后端已连接，另一个后端未连接），` +
+                                `而不一定是 Chrome 没有启动。请重试 browser_connect，若仍失败请检查后端连接状态日志。`,
                             role: 'assistant',
                         },
                     });
@@ -3212,7 +3307,7 @@ async function runAgentLoop(
                         type: 'TASK_STATUS',
                         payload: { status: 'finished' },
                     });
-                    return;
+                    return { artifactsCreated: [], toolsUsed: Array.from(toolsUsed) };
                 }
 
                 const blockMsg = `ERROR: ${toolUse.name}(${currentInputHash.substring(0, 60)}) is PERMANENTLY BLOCKED. ` +
@@ -3245,6 +3340,8 @@ async function runAgentLoop(
 
             const loopDetectableTools = [
                 'browser_get_content', 'browser_screenshot', 'view_file', 'list_dir',
+                // run_command can also get stuck in repetitive "verification" loops (e.g. repeated ls/wc)
+                'run_command',
                 'browser_click', 'browser_wait',
                 // Also detect loops on mode-switching and navigation (SPA issues)
                 'browser_set_mode', 'browser_navigate', 'browser_ai_action',
@@ -3736,7 +3833,7 @@ async function runAgentLoop(
                         `1. Use browser_get_content to check if the page loaded after recovery\n` +
                         `2. If the page still shows an error, use browser_navigate with wait_until="networkidle" to reload\n` +
                         `3. Use browser_execute_script to interact with the page via JavaScript (dispatchEvent, etc.)\n` +
-                        `4. For X/Twitter: navigate to https://x.com/compose/post directly\n` +
+                        `4. Re-open the target site root page, then continue with skill/tool planning\n` +
                         `5. Use search_web to find specific automation techniques for this site\n` +
                         `6. DO NOT try browser_set_mode("smart") again - it is unavailable.\n`;
                     autopilotExecuted = true;
@@ -3744,20 +3841,56 @@ async function runAgentLoop(
 
                 // ── browser_navigate loop: page not loading ──────────────
                 if (!autopilotExecuted && toolUse.name === 'browser_navigate') {
-                    console.log(`[AgentLoop] AUTOPILOT: browser_navigate loop detected. Trying with networkidle...`);
+                    const url = toolUse.input?.url || '';
+                    console.log(`[AgentLoop] AUTOPILOT: browser_navigate loop detected for URL: ${url}`);
+                    
+                    // Generic recovery policy (site-agnostic):
+                    // 1) If deep-link likely unstable (compose/new/share path), recover to origin root
+                    // 2) Otherwise retry origin root to restore healthy session state
                     const navTool = tools.find(t => t.name === 'browser_navigate');
-                    if (navTool) {
+                    if (navTool && typeof url === 'string' && /^https?:\/\//i.test(url)) {
                         try {
-                            const url = toolUse.input?.url || '';
-                            const result = await navTool.handler({ url, wait_until: 'networkidle', timeout_ms: 30000 }, { taskId, workspacePath: workspaceRoot });
-                            await new Promise(r => setTimeout(r, 3000));
-                            autopilotResult = `[AUTOPILOT] Re-navigated to ${url} with wait_until="networkidle": ${JSON.stringify(result)}\n` +
-                                `Use browser_get_content to check the page. If still failing, use search_web to find how to automate this site.`;
+                            const parsed = new URL(url);
+                            const pathLower = parsed.pathname.toLowerCase();
+                            const unstableDeepLink = /\/(compose|new|create|share|intent|status|messages?)\b/.test(pathLower);
+                            const recoveryUrl = `${parsed.protocol}//${parsed.host}`;
+                            const strategy = unstableDeepLink ? 'deep-link-to-origin' : 'origin-retry';
+
+                            console.log(`[AgentLoop] AUTOPILOT: navigation loop detected, strategy=${strategy}, recoveryUrl=${recoveryUrl}`);
+
+                            const navResult = await navTool.handler(
+                                { url: recoveryUrl, wait_until: 'domcontentloaded', timeout_ms: 20000 },
+                                { taskId, workspacePath: workspaceRoot }
+                            );
+
+                            autopilotResult = `[AUTOPILOT] Recovered navigation loop with strategy=${strategy}. ` +
+                                `Recovered URL: ${recoveryUrl}. Result: ${JSON.stringify(navResult)}\n` +
+                                `Next: continue normal LLM + skills + tools planning for the user task.`;
                             autopilotExecuted = true;
                         } catch (e) {
-                            autopilotResult = `[AUTOPILOT] Navigation retry failed: ${e instanceof Error ? e.message : String(e)}. ` +
-                                `Use search_web to find solutions for automating this website.`;
+                            autopilotResult = `[AUTOPILOT] Generic navigation-loop recovery failed: ${e instanceof Error ? e.message : String(e)}.`;
                             autopilotExecuted = true;
+                        }
+                    }
+                    
+                    // Standard navigation retry for non-X sites
+                    if (!autopilotExecuted) {
+                        const navTool = tools.find(t => t.name === 'browser_navigate');
+                        if (navTool) {
+                            try {
+                                // Try navigating to the base URL instead of deep link
+                                const baseUrl = url.split('/').slice(0, 3).join('/');
+                                console.log(`[AgentLoop] AUTOPILOT: Trying base URL: ${baseUrl}`);
+                                const result = await navTool.handler({ url: baseUrl, wait_until: 'domcontentloaded', timeout_ms: 20000 }, { taskId, workspacePath: workspaceRoot });
+                                await new Promise(r => setTimeout(r, 3000));
+                                autopilotResult = `[AUTOPILOT] Deep URL was timing out. Navigated to base URL ${baseUrl} instead: ${JSON.stringify(result)}\n` +
+                                    `Use browser_get_content to check the page state, then navigate to the specific page you need.`;
+                                autopilotExecuted = true;
+                            } catch (e) {
+                                autopilotResult = `[AUTOPILOT] Navigation retry failed: ${e instanceof Error ? e.message : String(e)}. ` +
+                                    `Use search_web to find solutions for automating this website.`;
+                                autopilotExecuted = true;
+                            }
                         }
                     }
                 }
@@ -3832,11 +3965,19 @@ async function runAgentLoop(
                                 toolName: toolUse.name,
                                 args: toolUse.input || {},
                             };
-                            const adaptiveResult = await adaptiveExecutor.executeWithRetry(
+                            const adaptiveResult = await withOperationTimeout(
+                                adaptiveExecutor.executeWithRetry(
                                 executionStep,
                                 async (_name: string, args: Record<string, unknown>) => {
-                                    return await tool.handler(args, { taskId, workspacePath: workspaceRoot });
+                                    return await withOperationTimeout(
+                                        tool.handler(args, { taskId, workspacePath: workspaceRoot }),
+                                        TOOL_EXECUTION_TIMEOUT_MS,
+                                        `tool_${toolUse.name}`
+                                    );
                                 }
+                            ),
+                                TOOL_EXECUTION_TIMEOUT_MS,
+                                `adaptive_${toolUse.name}`
                             );
                             if (adaptiveResult.success) {
                                 result = adaptiveResult.output;
@@ -3850,7 +3991,11 @@ async function runAgentLoop(
                         }
                     } else {
                         try {
-                            result = await tool.handler(toolUse.input, { taskId, workspacePath: workspaceRoot });
+                            result = await withOperationTimeout(
+                                tool.handler(toolUse.input, { taskId, workspacePath: workspaceRoot }),
+                                TOOL_EXECUTION_TIMEOUT_MS,
+                                `tool_${toolUse.name}`
+                            );
                         } catch (e) {
                             result = `Error: ${e instanceof Error ? e.message : String(e)}`;
                             isError = true;
@@ -3876,6 +4021,38 @@ async function runAgentLoop(
                 result = recovery.result;
                 consecutiveToolErrors = recovery.consecutiveToolErrors;
             } else {
+                // Manual-collaboration suspend for interactive terminal commands.
+                // run_command may open a real terminal window and require user input
+                // (password/confirmation). Suspend current task until user follow-up.
+                if (
+                    toolUse.name === 'run_command' &&
+                    result &&
+                    typeof result === 'object' &&
+                    (result as any).status === 'opened_in_terminal' &&
+                    !suspendResumeManager.isSuspended(taskId)
+                ) {
+                    const commandText = typeof (result as any).command === 'string'
+                        ? (result as any).command
+                        : 'interactive command';
+                    const userMsg = typeof (result as any).message === 'string'
+                        ? `${(result as any).message} 完成后回复“已完成”，我将继续执行。`
+                        : `请在终端中完成命令（${commandText}），完成后回复“已完成”，我将继续执行。`;
+
+                    await suspendResumeManager.suspend(
+                        taskId,
+                        'interactive_command',
+                        userMsg,
+                        ResumeConditions.manual(),
+                        { command: commandText }
+                    );
+
+                    result = {
+                        ...(result as Record<string, unknown>),
+                        suspended: true,
+                        reason: 'waiting_for_user_terminal_input',
+                    };
+                }
+
                 // Generic autopilot: after browser_connect succeeds, if browser is still
                 // on about:blank, try to infer a target URL from user query (or search)
                 // and navigate automatically. This is site-agnostic and prevents
@@ -3884,6 +4061,23 @@ async function runAgentLoop(
                     try {
                         const connectSucceeded = typeof result === 'object' && result !== null && (result as any).success !== false;
                         if (connectSucceeded) {
+                            const connInfo = BrowserService.getInstance().getConnectionInfo();
+                            const userHint = connInfo.mode === 'persistent_profile'
+                                ? '当前为持久化自动化会话（非系统Chrome登录态）。如需复用你已登录账号，请先启动 Chrome 的远程调试端口(9222)并重试 browser_connect。否则请在当前自动化窗口完成登录。'
+                                : '当前已连接到系统Chrome登录态，可直接执行需要登录的网站操作。';
+
+                            emit({
+                                id: randomUUID(),
+                                taskId,
+                                timestamp: new Date().toISOString(),
+                                sequence: nextSequence(taskId),
+                                type: 'CHAT_MESSAGE',
+                                payload: {
+                                    role: 'system',
+                                    content: `[BROWSER_CONNECTION] mode=${connInfo.mode}; isUserProfile=${String(connInfo.isUserProfile)}; ${userHint}`,
+                                },
+                            } as any);
+
                             const navTool = tools.find(t => t.name === 'browser_navigate');
                             const contentTool = tools.find(t => t.name === 'browser_get_content');
                             let currentUrl = '';
@@ -3906,18 +4100,31 @@ async function runAgentLoop(
 
                             if (onBlankPage) {
                                 let targetUrl = '';
-                                const directUrlMatch = (lastUserQuery || '').match(/https?:\/\/[^\s"'`<>]+/i);
+                                const queryForInference = lastUserQuery || '';
+                                const directUrlMatch = queryForInference.match(/https?:\/\/[^\s"'`<>]+/i);
                                 if (directUrlMatch?.[0]) {
                                     targetUrl = directUrlMatch[0];
                                 }
 
+                                // Infer common destination sites directly from user intent.
+                                if (!targetUrl && /(\bX\b|Twitter|x\.com|推特)/i.test(queryForInference)) {
+                                    targetUrl = 'https://x.com/home';
+                                }
+
                                 // If user didn't provide a URL, search the web and pick the first URL.
-                                if (!targetUrl && lastUserQuery) {
+                                // Skip this when prompt appears to be a compaction/system summary to avoid
+                                // unrelated URL hallucinations from meta-text.
+                                const looksLikeCompactionSummary =
+                                    queryForInference.includes('[Context Summary') ||
+                                    queryForInference.includes('older messages compressed') ||
+                                    queryForInference.includes('.coworkany/task_plan.md');
+
+                                if (!targetUrl && queryForInference && !looksLikeCompactionSummary) {
                                     const searchTool = tools.find(t => t.name === 'search_web');
                                     if (searchTool) {
                                         try {
                                             const searchResult = await searchTool.handler(
-                                                { query: lastUserQuery },
+                                                { query: queryForInference },
                                                 { taskId, workspacePath: workspaceRoot }
                                             );
                                             const searchText = typeof searchResult === 'string'
@@ -3949,6 +4156,17 @@ async function runAgentLoop(
                                             url: targetUrl,
                                             result: navResult,
                                         };
+
+                                        // If X transient error appears under persistent profile, provide deterministic guidance
+                                        if (
+                                            connInfo.mode === 'persistent_profile' &&
+                                            /x\.com|twitter\.com/i.test(targetUrl) &&
+                                            navResult && typeof navResult === 'object' &&
+                                            (navResult as any).warning === 'x_transient_error_detected'
+                                        ) {
+                                            (result as any).nextRecommendedAction =
+                                                '检测到 X 临时错误页。当前会话为 persistent_profile，建议：1) 在当前自动化窗口手动完成登录后继续；或 2) 启动系统Chrome远程调试端口9222后重连，以复用真实登录态。';
+                                        }
                                     } else {
                                         result = {
                                             success: true,
@@ -3977,6 +4195,11 @@ async function runAgentLoop(
             }
 
             let resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+
+            const artifactPaths = extractArtifactPathsFromToolResult(toolUse.name, result);
+            for (const artifactPath of artifactPaths) {
+                artifactsCreated.add(artifactPath);
+            }
 
             // Cache the result for read-only tools (for loop detection context)
             if (isReadOnly) {
@@ -4090,6 +4313,41 @@ async function runAgentLoop(
                             `Please continue with the original task. The user is now logged in and the page should be ready.`,
                     });
 
+                    // Replay user collaboration messages received during suspension.
+                    const queuedMessages = dequeueQueuedResumeMessages(taskId);
+                    for (const queued of queuedMessages) {
+                        if (queued.config) {
+                            const taskConfig = getTaskConfig(taskId);
+                            if (
+                                typeof queued.config.maxHistoryMessages === 'number' &&
+                                queued.config.maxHistoryMessages > 0
+                            ) {
+                                taskHistoryLimits.set(taskId, queued.config.maxHistoryMessages);
+                            }
+                            taskConfigs.set(taskId, {
+                                ...taskConfig,
+                                ...queued.config,
+                            });
+                        }
+
+                        emit({
+                            id: randomUUID(),
+                            taskId,
+                            timestamp: new Date().toISOString(),
+                            sequence: nextSequence(taskId),
+                            type: 'CHAT_MESSAGE',
+                            payload: {
+                                role: 'user',
+                                content: queued.content,
+                            },
+                        });
+
+                        pushConversationMessage(taskId, {
+                            role: 'user',
+                            content: queued.content,
+                        });
+                    }
+
                     // Continue the loop - LLM will get the resume context and proceed
                 } else {
                     console.log(`[AgentLoop] Task ${taskId} cancelled during suspension: ${resumeResult.reason}`);
@@ -4099,6 +4357,11 @@ async function runAgentLoop(
             }
         }
     }
+
+    return {
+        artifactsCreated: Array.from(artifactsCreated),
+        toolsUsed: Array.from(toolsUsed),
+    };
 }
 
 async function streamLlmResponse(
@@ -4120,6 +4383,50 @@ async function streamLlmResponse(
     } finally {
         clearRateLimitContext();
     }
+}
+
+async function readStreamChunkWithTimeout(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    timeoutMs: number,
+    streamName: string
+): Promise<{ done: boolean; value?: Uint8Array }> {
+    return await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            reject(new Error(`${streamName}_inactivity_timeout_${timeoutMs}ms`));
+        }, timeoutMs);
+
+        reader.read()
+            .then((result) => {
+                clearTimeout(timeoutId);
+                resolve(result);
+            })
+            .catch((error) => {
+                clearTimeout(timeoutId);
+                reject(error);
+            });
+    });
+}
+
+async function withOperationTimeout<T>(
+    operation: Promise<T>,
+    timeoutMs: number,
+    timeoutLabel: string
+): Promise<T> {
+    return await new Promise<T>((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            reject(new Error(`${timeoutLabel}_timeout_${timeoutMs}ms`));
+        }, timeoutMs);
+
+        operation
+            .then((result) => {
+                clearTimeout(timeoutId);
+                resolve(result);
+            })
+            .catch((error) => {
+                clearTimeout(timeoutId);
+                reject(error);
+            });
+    });
 }
 
 function safeStat(targetPath: string): fs.Stats | null {
@@ -4167,6 +4474,32 @@ function toToolpackRecord(stored: {
         lastUsedAt: stored.lastUsedAt,
         status: 'stopped',
     };
+}
+
+function buildConversationText(taskId: string): string {
+    const conversation = taskConversations.get(taskId) || [];
+    return conversation
+        .map(msg => {
+            if (typeof msg.content === 'string') return msg.content;
+            if (!Array.isArray(msg.content)) return '';
+            return msg.content
+                .map((block: any) => {
+                    if (typeof block?.text === 'string') return block.text;
+                    if (typeof block?.content === 'string') return block.content;
+                    return '';
+                })
+                .join(' ');
+        })
+        .join('\n');
+}
+
+function appendArtifactTelemetry(entry: unknown): void {
+    try {
+        fs.mkdirSync(path.dirname(artifactTelemetryPath), { recursive: true });
+        fs.appendFileSync(artifactTelemetryPath, `${JSON.stringify(entry)}\n`, 'utf-8');
+    } catch (error) {
+        console.error('[ArtifactGate] Failed to persist telemetry:', error);
+    }
 }
 
 function toSkillRecord(stored: {
@@ -4322,6 +4655,9 @@ async function handleCommand(command: IpcCommand): Promise<void> {
 
                 // Check if this should run as an autonomous task (OpenClaw-style)
                 const userQuery = command.payload.userQuery;
+                const artifactContract = buildArtifactContract(userQuery);
+                taskArtifactContracts.set(taskId, artifactContract);
+                taskArtifactsCreated.set(taskId, new Set<string>());
                 if (shouldRunAutonomously(userQuery)) {
                     console.error(`[Task ${taskId}] Detected autonomous task intent, delegating to AutonomousAgent`);
 
@@ -4427,14 +4763,64 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     const providerConfig = resolveProviderConfig(loadLlmConfig(workspaceRoot), options);
 
                     // RUN AGENT LOOP
-                    await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+                    const loopResult = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+                    const knownArtifacts = taskArtifactsCreated.get(taskId) || new Set<string>();
+                    for (const artifact of loopResult.artifactsCreated) {
+                        knownArtifacts.add(artifact);
+                    }
+                    taskArtifactsCreated.set(taskId, knownArtifacts);
 
-                    emit(
-                        createTaskFinishedEvent(taskId, {
-                            summary: 'Task completed',
-                            duration: Date.now() - startedAt,
-                        })
-                    );
+                    const mergedArtifacts = Array.from(knownArtifacts);
+                    const contractEvidence = {
+                        files: mergedArtifacts,
+                        toolsUsed: loopResult.toolsUsed,
+                        outputText: buildConversationText(taskId),
+                    };
+                    const artifactEvaluation = evaluateArtifactContract(artifactContract, {
+                        files: contractEvidence.files,
+                        toolsUsed: contractEvidence.toolsUsed,
+                        outputText: contractEvidence.outputText,
+                    });
+                    const degradedOutput = detectDegradedOutputs(artifactContract, mergedArtifacts);
+                    appendArtifactTelemetry(buildArtifactTelemetry(artifactContract, contractEvidence, artifactEvaluation));
+
+                    if (!artifactEvaluation.passed) {
+                        const unmetMessage = `Artifact contract unmet: ${artifactEvaluation.failed
+                            .map(item => `${item.description} (${item.reason})`)
+                            .join('; ')}`;
+
+                        emit(
+                            createTaskFailedEvent(taskId, {
+                                error: unmetMessage,
+                                errorCode: 'ARTIFACT_CONTRACT_UNMET',
+                                recoverable: true,
+                                suggestion: degradedOutput.hasDegradedOutput
+                                    ? `Detected degraded output (${degradedOutput.degradedArtifacts.join(', ')}). Please confirm downgrade by sending: "CONFIRM_DEGRADE_TO_MD" or retry PPTX generation.`
+                                    : `Expected file types not found. Generated files: ${mergedArtifacts.join(', ') || 'none'}`,
+                            })
+                        );
+
+                        try {
+                            const learnResult = await selfLearningController.quickLearnFromError(
+                                `${unmetMessage}. Query: ${userQuery}`,
+                                userQuery,
+                                1
+                            );
+                            if (learnResult.learned) {
+                                console.log(`[ArtifactGate] Triggered self-learning for unmet contract: ${unmetMessage}`);
+                            }
+                        } catch (learnErr) {
+                            console.error('[ArtifactGate] Self-learning trigger failed:', learnErr);
+                        }
+                    } else {
+                        emit(
+                                createTaskFinishedEvent(taskId, {
+                                    summary: 'Task completed',
+                                    artifactsCreated: mergedArtifacts,
+                                    duration: Date.now() - startedAt,
+                                })
+                            );
+                    }
                 } catch (error) {
                     const errorMessage =
                         error instanceof Error ? error.message : String(error);
@@ -4511,6 +4897,28 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 const taskId = command.payload.taskId;
                 const content = command.payload.content;
 
+                // If task is currently suspended, treat incoming user message as collaboration signal.
+                // Queue this message so it is processed immediately after resume.
+                if (suspendResumeManager.isSuspended(taskId)) {
+                    enqueueResumeMessage(taskId, content, command.payload.config);
+
+                    const resume = await suspendResumeManager.resume(taskId, 'User provided follow-up input');
+
+                    emit({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'send_task_message_response',
+                        payload: {
+                            success: resume.success,
+                            taskId,
+                            error: resume.success ? undefined : 'resume_failed',
+                        },
+                    });
+
+                    // Do not start a second parallel loop here. The suspended loop will continue.
+                    break;
+                }
+
                 emit({
                     id: randomUUID(),
                     taskId,
@@ -4542,8 +4950,8 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     payload: { status: 'running' },
                 });
 
-                // Add user message
-                pushConversationMessage(taskId, { role: 'user', content });
+                const artifactContract = taskArtifactContracts.get(taskId) || buildArtifactContract(content);
+                taskArtifactContracts.set(taskId, artifactContract);
 
                 const taskConfig = getTaskConfig(taskId);
                 if (command.payload.config) {
@@ -4592,13 +5000,58 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     const providerConfig = resolveProviderConfig(loadLlmConfig(workspaceRoot), options);
 
                     // RUN AGENT LOOP
-                    await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+                    const loopResult = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+                    const knownArtifacts = taskArtifactsCreated.get(taskId) || new Set<string>();
+                    for (const artifact of loopResult.artifactsCreated) {
+                        knownArtifacts.add(artifact);
+                    }
+                    taskArtifactsCreated.set(taskId, knownArtifacts);
 
-                    emit(
-                        createTaskStatusEvent(taskId, {
-                            status: 'finished',
-                        })
-                    );
+                    const mergedArtifacts = Array.from(knownArtifacts);
+                    const contractEvidence = {
+                        files: mergedArtifacts,
+                        toolsUsed: loopResult.toolsUsed,
+                        outputText: buildConversationText(taskId),
+                    };
+                    const artifactEvaluation = evaluateArtifactContract(artifactContract, {
+                        files: contractEvidence.files,
+                        toolsUsed: contractEvidence.toolsUsed,
+                        outputText: contractEvidence.outputText,
+                    });
+                    const degradedOutput = detectDegradedOutputs(artifactContract, mergedArtifacts);
+                    appendArtifactTelemetry(buildArtifactTelemetry(artifactContract, contractEvidence, artifactEvaluation));
+
+                    if (!artifactEvaluation.passed) {
+                        const userConfirmedDegrade = /CONFIRM_DEGRADE_TO_MD/i.test(content);
+                        if (userConfirmedDegrade && degradedOutput.hasDegradedOutput) {
+                            emit(
+                                createTaskFinishedEvent(taskId, {
+                                    summary: `Task completed with user-approved degraded output: ${degradedOutput.degradedArtifacts.join(', ')}`,
+                                    artifactsCreated: mergedArtifacts,
+                                    duration: 0,
+                                })
+                            );
+                        } else {
+                            emit(
+                                createTaskFailedEvent(taskId, {
+                                    error: `Artifact contract unmet: ${artifactEvaluation.failed
+                                        .map(item => `${item.description} (${item.reason})`)
+                                        .join('; ')}`,
+                                    errorCode: 'ARTIFACT_CONTRACT_UNMET',
+                                    recoverable: true,
+                                    suggestion: degradedOutput.hasDegradedOutput
+                                        ? `Detected degraded output (${degradedOutput.degradedArtifacts.join(', ')}). Ask user for explicit confirmation token CONFIRM_DEGRADE_TO_MD.`
+                                        : `Expected file types not found. Generated files: ${mergedArtifacts.join(', ') || 'none'}`,
+                                })
+                            );
+                        }
+                    } else {
+                        emit(
+                            createTaskStatusEvent(taskId, {
+                                status: 'finished',
+                            })
+                        );
+                    }
                 } catch (error) {
                     const errorMessage =
                         error instanceof Error ? error.message : String(error);
@@ -5019,6 +5472,9 @@ async function handleCommand(command: IpcCommand): Promise<void> {
             case 'create_workspace': {
                 const { name, path: requestedPath } = (command as { payload: { name: string; path: string } }).payload;
 
+                console.log('[create_workspace] Received request - name:', name, 'requestedPath:', requestedPath);
+                console.log('[create_workspace] process.cwd():', process.cwd());
+
                 // User Requirement 1: Workspace path in "workspace" directory under program install directory
                 // If path is empty or matches requirement, auto-generate it.
                 let finalPath = requestedPath;
@@ -5035,13 +5491,18 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     }
                 }
 
+                console.log('[create_workspace] finalPath:', finalPath);
                 const workspace = workspaceStore.create(name, finalPath);
-                emitAny({
+                console.log('[create_workspace] Created workspace:', JSON.stringify(workspace, null, 2));
+
+                const response = {
                     commandId: (command as { id: string }).id,
                     timestamp: new Date().toISOString(),
                     type: 'create_workspace_response',
                     payload: { workspace },
-                });
+                };
+                console.log('[create_workspace] Sending response:', JSON.stringify(response, null, 2));
+                emitAny(response);
                 break;
             }
 
@@ -5423,16 +5884,24 @@ async function processLine(line: string): Promise<void> {
     const trimmed = line.trim();
     if (!trimmed) return;
 
+    console.error('[DEBUG] Received line:', trimmed.substring(0, 200));
+    
     try {
         const raw = JSON.parse(trimmed);
+        console.error('[DEBUG] Parsed JSON, type:', raw.type);
+        
         const commandResult = IpcCommandSchema.safeParse(raw);
         if (commandResult.success) {
+            console.error('[DEBUG] Valid command, handling:', commandResult.data.type);
             await handleCommand(commandResult.data);
             return;
+        } else {
+            console.error('[DEBUG] Command parse failed:', JSON.stringify(commandResult.error.format()).substring(0, 500));
         }
 
         const responseResult = IpcResponseSchema.safeParse(raw);
         if (responseResult.success) {
+            console.error('[DEBUG] Valid response, handling:', responseResult.data.type);
             await handleResponse(responseResult.data);
             return;
         }
@@ -5525,16 +5994,24 @@ async function main(): Promise<void> {
 
     // Handle stdin for Node.js / Bun
     process.stdin.setEncoding('utf-8');
+    process.stdin.resume(); // Ensure stdin is flowing
 
-    process.stdin.on('data', async (chunk: string) => {
-        buffer += chunk;
+    // Use readable event for more reliable stdin handling
+    process.stdin.on('readable', () => {
+        let chunk: string | null;
+        while ((chunk = process.stdin.read()) !== null) {
+            console.error('[DEBUG] stdin read chunk, length:', chunk.length);
+            buffer += chunk;
+        }
 
         // Process complete lines
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
 
         for (const line of lines) {
-            await processLine(line);
+            processLine(line).catch(err => {
+                console.error('[ERROR] Error processing line:', err);
+            });
         }
     });
 

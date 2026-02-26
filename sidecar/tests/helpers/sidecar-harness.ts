@@ -90,8 +90,10 @@ export class EventCollector {
     textBuffer = '';
     taskStarted = false;
     taskFinished = false;
+    taskFinishedByEvent = false;
     taskFailed = false;
     taskError: string | null = null;
+    idleTimeoutReached = false;
 
     processEvent(event: TaskEvent): void {
         this.events.push(event);
@@ -135,6 +137,7 @@ export class EventCollector {
 
             case 'TASK_FINISHED':
                 this.taskFinished = true;
+                this.taskFinishedByEvent = true;
                 console.log(`[${ts}] TASK_FINISHED: ${event.payload?.summary || 'completed'}`);
                 break;
 
@@ -312,15 +315,31 @@ export class SidecarProcess {
                 console.log(`========================\n`);
             }
 
-            // Stale detection: if no new events for 60s after initial activity
+            // Stale detection: if no new events for 60s after initial activity.
+            // IMPORTANT: if task is suspended awaiting user collaboration, do not
+            // auto-mark as finished. Let caller timeout or explicitly resume.
             const currentEventCount = this.collector.events.length;
             if (currentEventCount > 0 && currentEventCount === lastEventCount) {
                 if (staleCheckStart === 0) {
                     staleCheckStart = Date.now();
                 } else if (Date.now() - staleCheckStart > 60_000) {
-                    console.log(`[${elapsedSec}s] Agent idle for 60s, treating as completed.`);
-                    this.collector.taskFinished = true;
-                    break;
+                    const lastSuspended = [...this.collector.events]
+                        .reverse()
+                        .find(e => e.type === 'TASK_SUSPENDED');
+                    const lastResumed = [...this.collector.events]
+                        .reverse()
+                        .find(e => e.type === 'TASK_RESUMED');
+                    const isWaitingForCollab = !!lastSuspended &&
+                        (!lastResumed || new Date(lastSuspended.timestamp).getTime() > new Date(lastResumed.timestamp).getTime());
+
+                    if (isWaitingForCollab) {
+                        console.log(`[${elapsedSec}s] Agent idle but task is suspended, still waiting for user collaboration...`);
+                        staleCheckStart = Date.now();
+                    } else {
+                        console.log(`[${elapsedSec}s] Agent idle for 60s, treating as stalled (no terminal event).`);
+                        this.collector.idleTimeoutReached = true;
+                        break;
+                    }
                 }
             } else {
                 staleCheckStart = 0;

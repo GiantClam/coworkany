@@ -465,19 +465,19 @@ describe('BrowserService Mode Routing', () => {
         }
     });
 
-    test('smart mode only calls BrowserUse', async () => {
+    test('smart mode falls back to Playwright when BrowserUse is disconnected', async () => {
         const service = new BrowserService();
         service.setMode('smart');
 
-        // BrowserUse will fail (service not running) -
-        // but should NOT fall back to Playwright
+        // In hardened routing, smart mode first checks BrowserUse connection state.
+        // If BrowserUse is disconnected, it should fallback to Playwright immediately.
         try {
             await service.navigate('https://example.com');
             expect(true).toBe(false);
         } catch (error) {
-            // Should be a fetch/network error from BrowserUse, not Playwright
+            // Should now be a Playwright not-connected error from fallback path.
             const msg = (error as Error).message;
-            expect(msg.includes('fetch') || msg.includes('browser-use') || msg.includes('ECONNREFUSED') || msg.includes('Unable to connect')).toBe(true);
+            expect(msg.includes('Browser not connected') || msg.includes('not connected')).toBe(true);
         }
     });
 

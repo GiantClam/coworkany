@@ -57,7 +57,7 @@ describe('PostExecutionLearningManager failure recovery', () => {
             context: { userQuery: '请帮我查询数据库用户信息' },
         }, taskId));
 
-        manager.handleEvent(makeEvent('TOOL_CALLED', {
+        manager.handleEvent(makeEvent('TOOL_CALL', {
             toolName: 'database_query',
             args: { connection: 'default', query: 'select * from users' },
         }, taskId));
@@ -83,5 +83,66 @@ describe('PostExecutionLearningManager failure recovery', () => {
         // Ensure failure knowledge is still precipitated for future reuse
         expect(precipitateCalls.length).toBe(1);
         expect(precipitateCalls[0]?.knowledge?.type).toBe('failure_knowledge');
+    });
+
+    test('triggers quickLearnFromError for missing pptx capability based on user goal', async () => {
+        const quickLearnCalls: Array<{ error: string; query: string; attempts: number }> = [];
+
+        const manager = createPostExecutionLearningManager(
+            {
+                precipitate: async () => ({
+                    success: true,
+                    type: 'knowledge_entry',
+                    path: '/tmp/failure.md',
+                    entityId: 'failed-test',
+                }),
+            } as any,
+            {
+                recordUsage: () => undefined,
+            } as any,
+            {
+                minToolCallsForSkill: 1,
+                minDurationForLearning: 0,
+                valueKeywords: ['ppt', 'presentation', '演示文稿'],
+            }
+        );
+
+        manager.setSelfLearningController({
+            quickLearnFromError: async (errorMessage: string, originalQuery: string, attemptCount: number) => {
+                quickLearnCalls.push({ error: errorMessage, query: originalQuery, attempts: attemptCount });
+                return {
+                    learned: true,
+                    suggestion: 'Use a pptx generation tool and verify output file exists.',
+                };
+            },
+        } as any);
+
+        const taskId = randomUUID();
+
+        manager.handleEvent(makeEvent('TASK_STARTED', {
+            title: 'ppt task',
+            context: { userQuery: '帮我制作一个关于AI环卫应用的PPT演示文稿并导出pptx文件' },
+        }, taskId));
+
+        manager.handleEvent(makeEvent('TOOL_CALL', {
+            toolName: 'write_to_file',
+            args: { path: 'slides.md' },
+        }, taskId));
+
+        manager.handleEvent(makeEvent('TOOL_RESULT', {
+            success: true,
+            result: { path: 'slides.md' },
+        }, taskId));
+
+        manager.handleEvent(makeEvent('TASK_FAILED', {
+            error: 'Missing required artifact: expected .pptx file but only markdown was created',
+            recoverable: true,
+            duration: 1500,
+        }, taskId));
+
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(quickLearnCalls.length).toBe(1);
+        expect(quickLearnCalls[0]?.query).toContain('PPT');
     });
 });

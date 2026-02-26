@@ -115,11 +115,13 @@ export class PostExecutionLearningManager {
         session.events.push(event);
 
         // Extract tool calls
-        if (event.type === 'TOOL_CALLED') {
+        const eventType = (event as any).type;
+
+        if (eventType === 'TOOL_CALLED' || eventType === 'TOOL_CALL') {
             const payload = event.payload as any;
             session.toolCalls.push({
-                toolName: payload.toolName,
-                args: payload.args,
+                toolName: payload.toolName || payload.name || 'unknown_tool',
+                args: payload.args || payload.input || {},
                 success: true, // Will be updated on TOOL_RESULT
             });
         }
@@ -129,7 +131,13 @@ export class PostExecutionLearningManager {
             const lastCall = session.toolCalls[session.toolCalls.length - 1];
             if (lastCall) {
                 lastCall.result = payload.result;
-                lastCall.success = payload.success !== false;
+                if (typeof payload.success === 'boolean') {
+                    lastCall.success = payload.success;
+                } else if (typeof payload.isError === 'boolean') {
+                    lastCall.success = !payload.isError;
+                } else {
+                    lastCall.success = true;
+                }
             }
         }
 
@@ -246,6 +254,15 @@ export class PostExecutionLearningManager {
             errorLower.includes('401') || errorLower.includes('403') || errorLower.includes('500')) {
             return 'api_integration';
         }
+
+        // Presentation/ppt generation related
+        if (queryLower.includes('ppt') || queryLower.includes('pptx') ||
+            queryLower.includes('powerpoint') || queryLower.includes('presentation') ||
+            queryLower.includes('演示文稿') || queryLower.includes('幻灯片') ||
+            errorLower.includes('ppt') || errorLower.includes('pptx') ||
+            errorLower.includes('missing required artifact')) {
+            return 'presentation_generation';
+        }
         
         // File system related
         if (errorLower.includes('permission') || errorLower.includes('denied') ||
@@ -267,7 +284,7 @@ export class PostExecutionLearningManager {
      */
     private shouldTriggerLearning(missingCapability: string, errorMessages: string): boolean {
         // High priority capabilities that should trigger learning
-        const highPriority = ['database_operations', 'api_integration'];
+        const highPriority = ['database_operations', 'api_integration', 'presentation_generation'];
         const hasHighPriority = highPriority.some(p => missingCapability.includes(p));
         
         // Only trigger for actionable errors (not auth/syntax errors)
