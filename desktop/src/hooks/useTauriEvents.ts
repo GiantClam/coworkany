@@ -35,16 +35,14 @@ export function useTauriEvents() {
                 console.debug('[Tauri] Not running inside Tauri WebView — event listeners skipped');
                 return;
             }
-            await hydrateSessions();
+
             // Listen for task events from sidecar
             unlistenTaskEvent = await listen<TaskEvent>('task-event', (event) => {
-                console.log('[Tauri] Received task-event:', event.payload);
                 addEvent(event.payload);
             });
 
             // Listen for IPC responses (effect decisions, patch results)
             unlistenIpcResponse = await listen<IpcResponse>('ipc-response', (event) => {
-                console.log('[Tauri] Received ipc-response:', event.payload);
                 handleIpcResponse(event.payload);
             });
 
@@ -61,6 +59,9 @@ export function useTauriEvents() {
 
             // Mark as connected (we assume connected on setup)
             setSidecarConnected(true);
+
+            // Hydrate persisted sessions after listeners are ready to avoid startup stalls.
+            void hydrateSessions();
 
             console.log('[Tauri] Event listeners registered');
         }

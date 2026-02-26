@@ -48,7 +48,12 @@ function extractPayload(result: IpcResult): Record<string, unknown> {
 // Hook
 // ============================================================================
 
-export function useToolpacks() {
+interface UseToolpacksOptions {
+    autoRefresh?: boolean;
+}
+
+export function useToolpacks(options: UseToolpacksOptions = {}) {
+    const { autoRefresh = true } = options;
     const [toolpacks, setToolpacks] = useState<ToolpackRecord[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -129,8 +134,9 @@ export function useToolpacks() {
 
     // Load on mount
     useEffect(() => {
+        if (!autoRefresh) return;
         refresh();
-    }, [refresh]);
+    }, [refresh, autoRefresh]);
 
     return {
         toolpacks,

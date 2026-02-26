@@ -171,13 +171,11 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
         auditEvents: [],
 
         addEvent: (event: TaskEvent) => {
-            console.log('[TaskEventStore] addEvent called:', event.type, event.taskId);
             set((state) => {
                 const sessions = new Map(state.sessions);
                 const existing = sessions.get(event.taskId) ?? createEmptySession(event.taskId);
                 const updated = applyEvent(existing, event);
                 sessions.set(event.taskId, updated);
-                console.log('[TaskEventStore] Session updated, messages count:', updated.messages.length);
                 const snapshot: SessionsSnapshot = {
                     sessions: Array.from(sessions.values()),
                     activeTaskId: state.activeTaskId,

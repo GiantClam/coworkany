@@ -20,6 +20,7 @@ import { Timeline } from './Timeline/Timeline';
 import { ModalDialog } from '../Common/ModalDialog';
 import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
+import { TaskExecutionPanel } from './components/TaskExecutionPanel';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
 import { useUIStore } from '../../stores/uiStore';
 
@@ -78,8 +79,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
-    const { skills } = useSkills();
-    const { toolpacks } = useToolpacks();
+    const { skills } = useSkills({ autoRefresh: !!activeSession?.taskId });
+    const { toolpacks } = useToolpacks({ autoRefresh: !!activeSession?.taskId });
     const { activeWorkspace, createWorkspace, selectWorkspace, updateWorkspace } = useWorkspace();
     const [llmConfig, setLlmConfig] = useState<LlmConfig>({});
     const { switchToLauncher, openDashboard } = useUIStore();
@@ -257,67 +258,62 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleCloseSkills = useCallback(() => setShowSkillsDialog(false), []);
     const handleCloseMcp = useCallback(() => setShowMcpDialog(false), []);
 
-    if (!activeSession) {
-        return (
-            <div className="chat-interface">
-                <WelcomeSection
-                    onNewTask={() => switchToLauncher()}
-                    onOpenProject={() => {
-                        // TODO: Implement project picker
-                    }}
-                    onTaskList={() => openDashboard()}
-                />
-                {(workspaceError || startError || cancelError || sendError || clearError) && (
-                    <div className="chat-error">
-                        {workspaceError || startError || cancelError || sendError || clearError}
-                    </div>
-                )}
-                <InputArea
-                    query={query}
-                    placeholder={t('chat.placeholderBuild')}
-                    disabled={isStarting}
-                    onQueryChange={setQuery}
-                    onSubmit={handleSubmit}
-                />
-            </div>
-        );
-    }
+    const currentSession = activeSession;
 
     return (
         <div className="chat-interface">
-            <Header
-                title={activeSession?.title || t('chat.currentTask')}
-                status={activeSession.status}
-                statusLabel={statusLabel}
-                llmConfig={llmConfig}
-                enabledSkillsCount={enabledSkills.length}
-                enabledToolpacksCount={enabledToolpacks.length}
-                isClearing={isClearing}
-                isCancelling={isCancelling}
-                onSetActiveProfile={setActiveProfile}
-                onShowSettings={handleShowSettings}
-                onShowSkills={handleShowSkills}
-                onShowMcp={handleShowMcp}
-                onClearHistory={handleClearHistory}
-                onCancel={handleCancel}
-            />
+            <div className="chat-shell">
+                <div className="chat-main">
+                    {currentSession && (
+                        <Header
+                            title={currentSession.title || t('chat.currentTask')}
+                            status={currentSession.status}
+                            statusLabel={statusLabel}
+                            llmConfig={llmConfig}
+                            enabledSkillsCount={enabledSkills.length}
+                            enabledToolpacksCount={enabledToolpacks.length}
+                            isClearing={isClearing}
+                            isCancelling={isCancelling}
+                            onSetActiveProfile={setActiveProfile}
+                            onShowSettings={handleShowSettings}
+                            onShowSkills={handleShowSkills}
+                            onShowMcp={handleShowMcp}
+                            onClearHistory={handleClearHistory}
+                            onCancel={handleCancel}
+                        />
+                    )}
 
-            {(workspaceError || startError || cancelError || sendError || clearError) && (
-                <div className="chat-error">
-                    {workspaceError || startError || cancelError || sendError || clearError}
+                    {(workspaceError || startError || cancelError || sendError || clearError) && (
+                        <div className="chat-error">
+                            {workspaceError || startError || cancelError || sendError || clearError}
+                        </div>
+                    )}
+
+                    {currentSession ? (
+                        <Timeline session={currentSession} />
+                    ) : (
+                        <WelcomeSection
+                            onNewTask={() => switchToLauncher()}
+                            onOpenProject={() => {
+                                // TODO: Implement project picker
+                            }}
+                            onTaskList={() => openDashboard()}
+                        />
+                    )}
+
+                    <InputArea
+                        query={query}
+                        placeholder={currentSession
+                            ? (currentSession.status === 'running' ? t('chat.taskInProgress') : t('chat.newInstructions'))
+                            : t('chat.placeholderBuild')}
+                        disabled={currentSession ? (currentSession.status === 'running' || isSending) : isStarting}
+                        onQueryChange={setQuery}
+                        onSubmit={handleSubmit}
+                    />
                 </div>
-            )}
 
-            {/* Timeline Area */}
-            <Timeline session={activeSession} />
-
-            <InputArea
-                query={query}
-                placeholder={activeSession.status === 'running' ? t('chat.taskInProgress') : t('chat.newInstructions')}
-                disabled={activeSession.status === 'running' || isSending}
-                onQueryChange={setQuery}
-                onSubmit={handleSubmit}
-            />
+                <TaskExecutionPanel />
+            </div>
 
             {/* Dialogs */}
             <ModalDialog

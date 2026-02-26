@@ -45,7 +45,12 @@ function extractPayload(result: IpcResult): Record<string, unknown> {
 // Hook
 // ============================================================================
 
-export function useSkills() {
+interface UseSkillsOptions {
+    autoRefresh?: boolean;
+}
+
+export function useSkills(options: UseSkillsOptions = {}) {
+    const { autoRefresh = true } = options;
     const [skills, setSkills] = useState<SkillRecord[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -125,6 +130,8 @@ export function useSkills() {
 
     // Load on mount + refresh on skills-updated
     useEffect(() => {
+        if (!autoRefresh) return;
+
         let unlisten: UnlistenFn | undefined;
         refresh();
         listen('skills-updated', () => {
@@ -139,7 +146,7 @@ export function useSkills() {
         return () => {
             unlisten?.();
         };
-    }, [refresh]);
+    }, [refresh, autoRefresh]);
 
     return {
         skills,
