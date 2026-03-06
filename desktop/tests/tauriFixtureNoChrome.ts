@@ -143,7 +143,7 @@ export const test = base.extend<TauriFixtures>({
     }, { scope: 'test', timeout: 0 }],
 
     page: [async ({ context }, use) => {
-        // Same logic as original tauriFixture.ts for finding the main window
+        // Same single-window selection logic as tauriFixture.ts.
         let pages = context.pages();
         console.log(`[Fixture-NoChrome] Found ${pages.length} pages:`);
         
@@ -182,17 +182,7 @@ export const test = base.extend<TauriFixtures>({
 
                 if (!url.includes('localhost:5173')) continue;
 
-                // Check for Launcher input
-                const hasLauncherInput = await p.locator('input[placeholder="Ask CoworkAny..."]')
-                    .isVisible({ timeout: 3_000 }).catch(() => false);
-
-                if (hasLauncherInput) {
-                    page = p;
-                    console.log(`[Fixture-NoChrome] Selected MAIN window (Launcher input found)`);
-                    break;
-                }
-
-                // Check for ChatInterface input
+                // Check for the main chat input
                 const hasChatInput = await p.locator('.chat-input')
                     .isVisible({ timeout: 2_000 }).catch(() => false);
 

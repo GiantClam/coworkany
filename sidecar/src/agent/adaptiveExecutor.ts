@@ -132,10 +132,11 @@ export class AdaptiveExecutor {
         // Handle explicit success/error indicators
         if (typeof result === 'object' && result !== null) {
             if (result.success === false || result.error) {
+                const isSearchFailure = step.toolName === 'search_web';
                 return {
                     success: false,
                     error: result.error || result.message || 'Tool returned error',
-                    shouldRetry: this.isRetryableError(result.error || ''),
+                    shouldRetry: isSearchFailure ? false : this.isRetryableError(result.error || ''),
                 };
             }
 

@@ -79,7 +79,7 @@ async function fetchSearXNGInstances(): Promise<SearXNGInstance[]> {
                 'Accept': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             },
-            signal: AbortSignal.timeout(10000), // 10s timeout
+            signal: AbortSignal.timeout(5000), // 5s timeout
         });
 
         if (!response.ok) {
@@ -207,7 +207,7 @@ async function searchSearXNG(
                 'Cache-Control': 'no-cache',
                 'Pragma': 'no-cache',
             },
-            signal: AbortSignal.timeout(8000), // 8 second timeout
+            signal: AbortSignal.timeout(5000), // 5 second timeout
         });
 
         if (!response.ok) {
@@ -459,7 +459,7 @@ async function searchGoogle(
                 'Sec-Ch-Ua-Platform': '"Windows"',
                 'Upgrade-Insecure-Requests': '1',
             },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(5000),
         });
 
         if (!response.ok) {
@@ -603,7 +603,7 @@ async function searchDuckDuckGo(
                 'Accept-Language': 'en-US,en;q=0.9',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(5000),
         });
 
         if (!response.ok) {
@@ -774,7 +774,7 @@ async function searchDuckDuckGoHTML(
                 'Accept-Language': 'en-US,en;q=0.9',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(5000),
         });
 
         if (!response.ok) {
@@ -1229,6 +1229,16 @@ export function createWebSearchTool(): ToolDefinition {
                 : formatSearchResults(response);
 
             console.error(`[WebSearch] Found ${response.results.length} results via ${response.provider}`);
+
+            if (response.error) {
+                return {
+                    success: false,
+                    error: response.error,
+                    provider: response.provider,
+                    query: response.query,
+                    formatted,
+                };
+            }
 
             return formatted;
         },

@@ -5,14 +5,30 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, State};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::process_manager::{ProcessManagerState, ServiceInfo};
 use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
+
+static STARTUP_PROCESS_INSTANT: OnceLock<Instant> = OnceLock::new();
+static STARTUP_PROCESS_EPOCH_MS: OnceLock<u128> = OnceLock::new();
+
+pub fn init_startup_clock() {
+    STARTUP_PROCESS_INSTANT.get_or_init(Instant::now);
+    STARTUP_PROCESS_EPOCH_MS.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    });
+}
 
 // ============================================================================
 // Command Input Types
@@ -156,6 +172,8 @@ pub struct StartTaskResult {
     pub success: bool,
     #[serde(rename = "taskId")]
     pub task_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Value>,
     pub error: Option<String>,
 }
 
@@ -206,6 +224,7 @@ pub struct OpenAIProviderSettings {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub allow_insecure_tls: Option<bool>,
 }
 
 /// Provider-specific settings for Ollama
@@ -224,6 +243,16 @@ pub struct CustomProviderSettings {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub api_format: Option<String>,
+    pub allow_insecure_tls: Option<bool>,
+}
+
+/// Proxy settings for outbound HTTP(S) calls from sidecar
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySettings {
+    pub enabled: Option<bool>,
+    pub url: Option<String>,
+    pub bypass: Option<String>,
 }
 
 /// A verified LLM profile
@@ -259,6 +288,9 @@ pub struct LlmConfig {
     /// Web search provider settings (serper, tavily, brave, searxng)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<Value>,
+    /// Outbound proxy settings for sidecar/provider requests
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxySettings>,
     /// Browser-use AI automation settings
     #[serde(rename = "browserUse", skip_serializing_if = "Option::is_none")]
     pub browser_use: Option<Value>,
@@ -296,6 +328,23 @@ pub struct GenericIpcResult {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupMeasurementConfig {
+    pub enabled: bool,
+    pub profile: String,
+    pub run_label: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupMetricInput {
+    pub mark: String,
+    pub frontend_elapsed_ms: Option<f64>,
+    pub perf_now_ms: Option<f64>,
+    pub window_label: Option<String>,
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -305,11 +354,36 @@ fn now_timestamp() -> String {
 }
 
 fn build_command(command_type: &str, payload: Value) -> Value {
+    fn prune_nulls(value: Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut cleaned = serde_json::Map::new();
+                for (key, inner) in map {
+                    let next = prune_nulls(inner);
+                    if !next.is_null() {
+                        cleaned.insert(key, next);
+                    }
+                }
+                Value::Object(cleaned)
+            }
+            Value::Array(items) => {
+                Value::Array(
+                    items
+                        .into_iter()
+                        .map(prune_nulls)
+                        .filter(|item| !item.is_null())
+                        .collect(),
+                )
+            }
+            other => other,
+        }
+    }
+
     json!({
         "id": Uuid::new_v4().to_string(),
         "timestamp": now_timestamp(),
         "type": command_type,
-        "payload": payload
+        "payload": prune_nulls(payload)
     })
 }
 
@@ -325,36 +399,72 @@ async fn ensure_sidecar_running(
     Ok(())
 }
 
-fn send_command_and_wait(
+async fn send_command_and_wait(
     state: &State<'_, SidecarState>,
     command: Value,
     timeout_ms: u64,
 ) -> Result<Value, String> {
-    let manager = state.0.lock().map_err(|e| e.to_string())?;
-    manager
-        .send_and_wait(command, timeout_ms)
+    let rx = {
+        let manager = state.0.lock().map_err(|e| e.to_string())?;
+        manager
+            .send_command_async(command)
+            .map_err(|e| e.to_string())?
+    };
+
+    // Use tokio::task::spawn_blocking since recv_timeout blocks the thread
+    tokio::task::spawn_blocking(move || {
+        match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+            Ok(response) => Ok(response),
+            Err(err) => Err(format!("response timeout: {}", err)),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn app_data_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    app_handle
+        .path()
+        .app_data_dir()
         .map_err(|e| e.to_string())
 }
 
-fn llm_config_path() -> Result<PathBuf, String> {
-    // Get the current working directory (should be the project root when running with tauri dev)
+fn llm_config_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    app_data_dir(app_handle).map(|dir| dir.join("llm-config.json"))
+}
+
+fn settings_store_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    app_data_dir(app_handle).map(|dir| dir.join("settings.json"))
+}
+
+fn legacy_llm_config_path() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    
-    // Build path to sidecar/llm-config.json
-    let config_path = cwd.join("..").join("sidecar").join("llm-config.json");
-    
-    // Canonicalize to get absolute path (this will fail if path doesn't exist)
-    let canonical = config_path.canonicalize().unwrap_or_else(|_| config_path.clone());
-    
-    debug!("llm_config_path: cwd={:?}, resolved={:?}", cwd, canonical);
-    
-    Ok(canonical)
+    Ok(cwd.join("..").join("sidecar").join("llm-config.json"))
 }
 
-fn sessions_path() -> Result<PathBuf, String> {
-    std::env::current_dir()
-        .map_err(|e| e.to_string())
-        .map(|cwd| cwd.join(".coworkany").join("sessions.json"))
+fn sessions_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    app_data_dir(app_handle).map(|dir| dir.join("sessions.json"))
+}
+
+fn startup_metrics_path(app_handle: &AppHandle, profile: &str) -> Result<PathBuf, String> {
+    app_data_dir(app_handle).map(|dir| dir.join("startup-metrics").join(format!("{profile}.jsonl")))
+}
+
+fn startup_profile() -> String {
+    match std::env::var("COWORKANY_STARTUP_PROFILE") {
+        Ok(value) if value.eq_ignore_ascii_case("baseline") => "baseline".to_string(),
+        _ => "optimized".to_string(),
+    }
+}
+
+fn startup_measurement_enabled() -> bool {
+    matches!(
+        std::env::var("COWORKANY_STARTUP_MEASURE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 // ============================================================================
@@ -393,27 +503,43 @@ pub async fn start_task(
         enabled_skills: cfg.enabled_skills,
     });
 
-    // Send command to sidecar
-    let command = IpcCommand::start_task(
+    // Send command to sidecar and wait for the immediate ack so the frontend
+    // can stay in sync with any workspace metadata updates (e.g. auto-rename).
+    let command = serde_json::to_value(IpcCommand::start_task(
         task_id.clone(),
         input.title,
         input.user_query,
         context,
         config,
-    );
+    ))
+    .map_err(|e| e.to_string())?;
 
-    {
-        let manager = state.0.lock().map_err(|e| e.to_string())?;
-        manager.send_command(command).map_err(|e| {
-            error!("Failed to send start_task command: {}", e);
-            e.to_string()
-        })?;
-    }
+    let response = send_command_and_wait(&state, command, 3000).await?;
+    let payload = response
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let success = payload
+        .get("success")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let response_task_id = payload
+        .get("taskId")
+        .and_then(|value| value.as_str())
+        .unwrap_or(task_id.as_str())
+        .to_string();
+    let workspace = payload.get("workspace").cloned();
+    let error = payload
+        .get("error")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
 
     Ok(StartTaskResult {
-        success: true,
-        task_id,
-        error: None,
+        success,
+        task_id: response_task_id,
+        workspace,
+        error,
     })
 }
 
@@ -492,7 +618,7 @@ pub async fn get_tasks(
     let command = build_command("get_tasks", payload);
     
     // Sidecar returns Full Response Object (with type, commandId, payload)
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     
     // meaningful data is in response.payload
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
@@ -546,7 +672,7 @@ pub async fn send_task_message(
 
 /// Get sidecar status
 #[tauri::command]
-pub fn get_sidecar_status(state: State<'_, SidecarState>) -> Result<SidecarStatusResult, String> {
+pub async fn get_sidecar_status(state: State<'_, SidecarState>) -> Result<SidecarStatusResult, String> {
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
 
     Ok(SidecarStatusResult {
@@ -554,32 +680,88 @@ pub fn get_sidecar_status(state: State<'_, SidecarState>) -> Result<SidecarStatu
     })
 }
 
-/// Get LLM config from sidecar/llm-config.json
+/// Get LLM config from the shared app data directory.
 #[tauri::command]
-pub fn get_llm_settings() -> Result<LlmConfigResult, String> {
-    let path = llm_config_path()?;
+pub async fn get_llm_settings(app_handle: AppHandle) -> Result<LlmConfigResult, String> {
+    let path = llm_config_path(&app_handle)?;
     info!("get_llm_settings: reading from {:?}", path);
-    
-    if !path.exists() {
-        info!("get_llm_settings: file does not exist, returning default");
-        return Ok(LlmConfigResult {
-            success: true,
-            payload: LlmConfig::default(),
-            error: None,
-        });
-    }
 
-    let raw = fs::read_to_string(&path).map_err(|e| {
-        error!("get_llm_settings: failed to read file: {}", e);
-        e.to_string()
-    })?;
+    let raw = if path.exists() {
+        tokio::fs::read_to_string(&path).await.map_err(|e| {
+            error!("get_llm_settings: failed to read file: {}", e);
+            e.to_string()
+        })?
+    } else {
+        let store_path = settings_store_path(&app_handle)?;
+        if store_path.exists() {
+            let store_raw = tokio::fs::read_to_string(&store_path).await.map_err(|e| {
+                error!("get_llm_settings: failed to read settings store: {}", e);
+                e.to_string()
+            })?;
+            if let Ok(store_json) = serde_json::from_str::<Value>(&store_raw) {
+                if let Some(llm_config) = store_json.get("llmConfig") {
+                    let migrated = serde_json::to_string_pretty(llm_config).map_err(|e| e.to_string())?;
+                    if let Some(parent) = path.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                    }
+                    tokio::fs::write(&path, &migrated).await.map_err(|e| e.to_string())?;
+                    info!("get_llm_settings: migrated llmConfig from settings.json");
+                    migrated
+                } else {
+                    let legacy_path = legacy_llm_config_path()?;
+                    if legacy_path.exists() {
+                        let legacy_raw = tokio::fs::read_to_string(&legacy_path).await.map_err(|e| e.to_string())?;
+                        if let Some(parent) = path.parent() {
+                            tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                        }
+                        tokio::fs::write(&path, &legacy_raw).await.map_err(|e| e.to_string())?;
+                        info!("get_llm_settings: migrated legacy llm-config.json");
+                        legacy_raw
+                    } else {
+                        info!("get_llm_settings: no config file found, returning default");
+                        return Ok(LlmConfigResult {
+                            success: true,
+                            payload: LlmConfig::default(),
+                            error: None,
+                        });
+                    }
+                }
+            } else {
+                info!("get_llm_settings: settings.json invalid, returning default");
+                return Ok(LlmConfigResult {
+                    success: true,
+                    payload: LlmConfig::default(),
+                    error: None,
+                });
+            }
+        } else {
+            let legacy_path = legacy_llm_config_path()?;
+            if legacy_path.exists() {
+                let legacy_raw = tokio::fs::read_to_string(&legacy_path).await.map_err(|e| e.to_string())?;
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                }
+                tokio::fs::write(&path, &legacy_raw).await.map_err(|e| e.to_string())?;
+                info!("get_llm_settings: migrated legacy llm-config.json");
+                legacy_raw
+            } else {
+                info!("get_llm_settings: no config file found, returning default");
+                return Ok(LlmConfigResult {
+                    success: true,
+                    payload: LlmConfig::default(),
+                    error: None,
+                });
+            }
+        }
+    };
+
     info!("get_llm_settings: read {} bytes", raw.len());
-    
+
     let config: LlmConfig = serde_json::from_str(&raw).map_err(|e| {
         error!("get_llm_settings: failed to parse JSON: {}", e);
         e.to_string()
     })?;
-    
+
     info!("get_llm_settings: parsed config, provider={:?}", config.provider);
     Ok(LlmConfigResult {
         success: true,
@@ -588,22 +770,21 @@ pub fn get_llm_settings() -> Result<LlmConfigResult, String> {
     })
 }
 
-/// Save LLM config to sidecar/llm-config.json
+/// Save LLM config to the shared app data directory.
 #[tauri::command]
-pub fn save_llm_settings(mut input: LlmConfig, app: AppHandle) -> Result<LlmConfigResult, String> {
-    let path = llm_config_path()?;
+pub async fn save_llm_settings(mut input: LlmConfig, app: AppHandle) -> Result<LlmConfigResult, String> {
+    let path = llm_config_path(&app)?;
     info!("save_llm_settings: saving to {:?}", path);
-    
     // Preserve the $schema field
     if input.schema.is_none() {
         input.schema = Some("./llm-config.schema.json".to_string());
     }
     
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(&input).map_err(|e| e.to_string())?;
-    fs::write(&path, content).map_err(|e| {
+    tokio::fs::write(&path, content).await.map_err(|e| {
         error!("save_llm_settings: failed to write file: {}", e);
         e.to_string()
     })?;
@@ -627,6 +808,7 @@ pub struct ValidateLlmInput {
     pub provider: String,
     pub anthropic: Option<AnthropicProviderSettings>,
     pub openrouter: Option<OpenRouterProviderSettings>,
+    pub openai: Option<OpenAIProviderSettings>,
     pub custom: Option<CustomProviderSettings>,
 }
 
@@ -639,6 +821,20 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
+
+    let openai_compatible_default = |provider: &str| -> Option<(&'static str, &'static str)> {
+        match provider {
+            "openai" => Some(("https://api.openai.com/v1/chat/completions", "gpt-4o")),
+            "aiberm" => Some(("https://aiberm.com/v1/chat/completions", "claude-sonnet-4-5-20250929-thinking")),
+            "nvidia" => Some(("https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-70b-instruct")),
+            "siliconflow" => Some(("https://api.siliconflow.cn/v1/chat/completions", "Qwen/Qwen2.5-7B-Instruct")),
+            "gemini" => Some(("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.0-flash")),
+            "qwen" => Some(("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "qwen-plus")),
+            "minimax" => Some(("https://api.minimax.chat/v1/chat/completions", "MiniMax-Text-01")),
+            "kimi" => Some(("https://api.moonshot.cn/v1/chat/completions", "moonshot-v1-8k")),
+            _ => None,
+        }
+    };
 
     let (url, api_key, body) = match input.provider.as_str() {
         "anthropic" => {
@@ -698,7 +894,24 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
                 )
             }
         }
-        _ => return Err(format!("Unknown provider: {}", input.provider)),
+        provider => {
+            if let Some((default_url, default_model)) = openai_compatible_default(provider) {
+                let settings = input.openai.ok_or("Missing OpenAI-compatible settings")?;
+                let key = settings.api_key.ok_or("Missing API key")?;
+                let model = settings.model.unwrap_or_else(|| default_model.to_string());
+                (
+                    settings.base_url.unwrap_or_else(|| default_url.to_string()),
+                    key,
+                    json!({
+                        "model": model,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}]
+                    }),
+                )
+            } else {
+                return Err(format!("Unknown provider: {}", input.provider));
+            }
+        }
     };
 
     let mut request = client.post(url);
@@ -732,10 +945,10 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
     }
 }
 
-/// Get sessions snapshot from workspace .coworkany/sessions.json
+/// Get sessions snapshot from the shared app data directory.
 #[tauri::command]
-pub fn load_sessions() -> Result<SessionsSnapshotResult, String> {
-    let path = sessions_path()?;
+pub async fn load_sessions(app_handle: AppHandle) -> Result<SessionsSnapshotResult, String> {
+    let path = sessions_path(&app_handle)?;
     if !path.exists() {
         return Ok(SessionsSnapshotResult {
             success: true,
@@ -744,7 +957,7 @@ pub fn load_sessions() -> Result<SessionsSnapshotResult, String> {
         });
     }
 
-    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let raw = tokio::fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
     let snapshot: SessionsSnapshot = serde_json::from_str(&raw).unwrap_or_default();
     Ok(SessionsSnapshotResult {
         success: true,
@@ -753,15 +966,94 @@ pub fn load_sessions() -> Result<SessionsSnapshotResult, String> {
     })
 }
 
-/// Save sessions snapshot to workspace .coworkany/sessions.json
+/// Get startup measurement configuration (driven by process env).
 #[tauri::command]
-pub fn save_sessions(input: SessionsSnapshot) -> Result<SessionsSnapshotResult, String> {
-    let path = sessions_path()?;
+pub fn get_startup_measurement_config() -> StartupMeasurementConfig {
+    StartupMeasurementConfig {
+        enabled: startup_measurement_enabled(),
+        profile: startup_profile(),
+        run_label: std::env::var("COWORKANY_STARTUP_RUN_LABEL").unwrap_or_default(),
+    }
+}
+
+/// Record startup metric mark to .coworkany/startup-metrics/<profile>.jsonl
+#[tauri::command]
+pub async fn record_startup_metric(
+    app_handle: AppHandle,
+    input: StartupMetricInput,
+) -> Result<GenericIpcResult, String> {
+    init_startup_clock();
+
+    let enabled = startup_measurement_enabled();
+    let profile = startup_profile();
+    let run_label = std::env::var("COWORKANY_STARTUP_RUN_LABEL").unwrap_or_default();
+
+    let process_elapsed_ms = STARTUP_PROCESS_INSTANT
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis();
+    let process_start_epoch_ms = *STARTUP_PROCESS_EPOCH_MS.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    });
+    let now_epoch_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    let record = json!({
+        "runLabel": run_label,
+        "profile": profile,
+        "mark": input.mark,
+        "windowLabel": input.window_label,
+        "processStartEpochMs": process_start_epoch_ms,
+        "processElapsedMs": process_elapsed_ms,
+        "frontendElapsedMs": input.frontend_elapsed_ms,
+        "frontendPerfNowMs": input.perf_now_ms,
+        "timestampEpochMs": now_epoch_ms,
+    });
+
+    let path = startup_metrics_path(&app_handle, &profile)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(format!("{}\n", record).as_bytes())
+        .map_err(|e| e.to_string())?;
+    file.flush().map_err(|e| e.to_string())?;
+
+    if enabled && input.mark == "frontend_ready" {
+        let app_to_exit = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(220)).await;
+            app_to_exit.exit(0);
+        });
+    }
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: json!({ "recorded": true }),
+    })
+}
+
+/// Save sessions snapshot to the shared app data directory.
+#[tauri::command]
+pub async fn save_sessions(
+    app_handle: AppHandle,
+    input: SessionsSnapshot,
+) -> Result<SessionsSnapshotResult, String> {
+    let path = sessions_path(&app_handle)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
     let content = serde_json::to_string_pretty(&input).map_err(|e| e.to_string())?;
-    fs::write(&path, content).map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, content).await.map_err(|e| e.to_string())?;
 
     Ok(SessionsSnapshotResult {
         success: true,
@@ -772,7 +1064,7 @@ pub fn save_sessions(input: SessionsSnapshot) -> Result<SessionsSnapshotResult, 
 
 /// Get current workspace root (process cwd)
 #[tauri::command]
-pub fn get_workspace_root() -> Result<String, String> {
+pub async fn get_workspace_root() -> Result<String, String> {
     std::env::current_dir()
         .map_err(|e| e.to_string())
         .map(|path| path.to_string_lossy().to_string())
@@ -794,7 +1086,7 @@ pub async fn spawn_sidecar(
 
 /// Shutdown the sidecar
 #[tauri::command]
-pub fn shutdown_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
+pub async fn shutdown_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
     info!("shutdown_sidecar command received");
 
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
@@ -818,7 +1110,7 @@ pub async fn list_toolpacks(
         "includeDisabled": input.and_then(|v| v.include_disabled).unwrap_or(true)
     });
     let command = build_command("list_toolpacks", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -836,7 +1128,7 @@ pub async fn get_toolpack(
         "toolpackId": input.toolpack_id
     });
     let command = build_command("get_toolpack", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -858,7 +1150,7 @@ pub async fn install_toolpack(
         "overwrite": input.overwrite.unwrap_or(false),
     });
     let command = build_command("install_toolpack", payload);
-    let response = send_command_and_wait(&state, command, 5000)?;
+    let response = send_command_and_wait(&state, command, 5000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -877,7 +1169,7 @@ pub async fn set_toolpack_enabled(
         "enabled": input.enabled,
     });
     let command = build_command("set_toolpack_enabled", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -896,7 +1188,7 @@ pub async fn remove_toolpack(
         "deleteFiles": input.delete_files.unwrap_or(true),
     });
     let command = build_command("remove_toolpack", payload);
-    let response = send_command_and_wait(&state, command, 5000)?;
+    let response = send_command_and_wait(&state, command, 5000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -914,7 +1206,7 @@ pub async fn list_claude_skills(
         "includeDisabled": input.and_then(|v| v.include_disabled).unwrap_or(true)
     });
     let command = build_command("list_claude_skills", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -932,7 +1224,7 @@ pub async fn get_claude_skill(
         "skillId": input.skill_id
     });
     let command = build_command("get_claude_skill", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -953,7 +1245,7 @@ pub async fn import_claude_skill(
         "overwrite": input.overwrite.unwrap_or(false),
     });
     let command = build_command("import_claude_skill", payload);
-    let response = send_command_and_wait(&state, command, 5000)?;
+    let response = send_command_and_wait(&state, command, 5000).await?;
     if response
         .get("payload")
         .and_then(|p| p.get("success"))
@@ -980,7 +1272,7 @@ pub async fn set_claude_skill_enabled(
         "enabled": input.enabled,
     });
     let command = build_command("set_claude_skill_enabled", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     if response
         .get("payload")
         .and_then(|p| p.get("success"))
@@ -1007,7 +1299,7 @@ pub async fn remove_claude_skill(
         "deleteFiles": input.delete_files.unwrap_or(true),
     });
     let command = build_command("remove_claude_skill", payload);
-    let response = send_command_and_wait(&state, command, 5000)?;
+    let response = send_command_and_wait(&state, command, 5000).await?;
     if response
         .get("payload")
         .and_then(|p| p.get("success"))
@@ -1053,7 +1345,7 @@ pub async fn list_workspaces(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("list_workspaces", json!({}));
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1072,7 +1364,7 @@ pub async fn create_workspace(
         "path": input.path,
     });
     let command = build_command("create_workspace", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1081,8 +1373,13 @@ pub async fn create_workspace(
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpdateWorkspaceFields {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(rename = "autoNamed")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_named: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1103,7 +1400,7 @@ pub async fn update_workspace(
         "updates": input.updates,
     });
     let command = build_command("update_workspace", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1121,7 +1418,7 @@ pub async fn delete_workspace(
         "id": input.id,
     });
     let command = build_command("delete_workspace", payload);
-    let response = send_command_and_wait(&state, command, 3000)?;
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1142,7 +1439,7 @@ pub async fn install_from_github(
     });
     let command = build_command("install_from_github", payload);
     // GitHub downloads may take a while
-    let response = send_command_and_wait(&state, command, 30000)?;
+    let response = send_command_and_wait(&state, command, 30000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1166,7 +1463,7 @@ pub async fn scan_default_repos(
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("scan_default_repos", json!({}));
     // Scanning may take a while due to many API calls
-    let response = send_command_and_wait(&state, command, 60000)?;
+    let response = send_command_and_wait(&state, command, 60000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1182,7 +1479,7 @@ pub async fn scan_skills(
     ensure_sidecar_running(&state, &app_handle).await?;
     let payload = json!({ "source": input.source });
     let command = build_command("scan_skills", payload);
-    let response = send_command_and_wait(&state, command, 30000)?;
+    let response = send_command_and_wait(&state, command, 30000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1198,7 +1495,7 @@ pub async fn scan_mcp_servers(
     ensure_sidecar_running(&state, &app_handle).await?;
     let payload = json!({ "source": input.source });
     let command = build_command("scan_mcp_servers", payload);
-    let response = send_command_and_wait(&state, command, 30000)?;
+    let response = send_command_and_wait(&state, command, 30000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1214,7 +1511,7 @@ pub async fn validate_skill(
     ensure_sidecar_running(&state, &app_handle).await?;
     let payload = json!({ "source": input.source });
     let command = build_command("validate_skill", payload);
-    let response = send_command_and_wait(&state, command, 15000)?;
+    let response = send_command_and_wait(&state, command, 15000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1230,7 +1527,7 @@ pub async fn validate_mcp(
     ensure_sidecar_running(&state, &app_handle).await?;
     let payload = json!({ "source": input.source });
     let command = build_command("validate_mcp", payload);
-    let response = send_command_and_wait(&state, command, 15000)?;
+    let response = send_command_and_wait(&state, command, 15000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1256,7 +1553,7 @@ pub async fn validate_github_url(
         "type": input.validation_type,
     });
     let command = build_command("validate_github_url", payload);
-    let response = send_command_and_wait(&state, command, 15000)?;
+    let response = send_command_and_wait(&state, command, 15000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -1327,6 +1624,72 @@ pub fn start_all_services(
             )
         },
         errors: if errors.is_empty() { None } else { Some(errors) },
+    })
+}
+
+/// Start all registered services in background.
+/// Returns immediately so frontend startup-critical IPC is not blocked by
+/// service health checks (which can take multiple seconds).
+#[tauri::command]
+pub fn start_all_services_background(
+    state: State<'_, ProcessManagerState>,
+    app_handle: AppHandle,
+) -> Result<ServiceOperationResult, String> {
+    let manager_state = state.0.clone();
+    let app_for_emit = app_handle.clone();
+
+    {
+        let mut manager = manager_state.lock().map_err(|e| e.to_string())?;
+        manager.set_app_handle(app_handle);
+    }
+
+    std::thread::spawn(move || {
+        let mut errors = Vec::new();
+        let mut started = Vec::new();
+
+        let results = match manager_state.lock() {
+            Ok(mut manager) => manager.start_all(),
+            Err(err) => {
+                let _ = app_for_emit.emit(
+                    "services-warmup-finished",
+                    json!({
+                        "success": false,
+                        "message": format!("Failed to acquire manager lock: {}", err),
+                        "errors": [err.to_string()],
+                    }),
+                );
+                return;
+            }
+        };
+
+        for (name, result) in results {
+            match result {
+                Ok(()) => started.push(name),
+                Err(e) => errors.push(format!("{}: {}", name, e)),
+            }
+        }
+
+        let success = errors.is_empty();
+        let message = if success {
+            format!("Started {} service(s): {}", started.len(), started.join(", "))
+        } else {
+            format!("Started {} service(s), {} failed", started.len(), errors.len())
+        };
+
+        let _ = app_for_emit.emit(
+            "services-warmup-finished",
+            json!({
+                "success": success,
+                "message": message,
+                "errors": if success { Value::Null } else { json!(errors) },
+            }),
+        );
+    });
+
+    Ok(ServiceOperationResult {
+        success: true,
+        message: "Service warmup scheduled in background".to_string(),
+        errors: None,
     })
 }
 
@@ -1438,6 +1801,32 @@ pub fn health_check_service(
             service: name,
             healthy: false,
             error: Some(e.to_string()),
+        }),
+    }
+}
+
+/// Predownload embedding model for RAG on first-run setup.
+/// Uses persistent cache path so subsequent runs do not redownload.
+#[tauri::command]
+pub fn prepare_rag_embedding_model(
+    state: State<'_, ProcessManagerState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+    manager.set_app_handle(app_handle);
+
+    match manager.predownload_rag_model() {
+        Ok(message) => Ok(GenericIpcResult {
+            success: true,
+            payload: json!({
+                "message": message
+            }),
+        }),
+        Err(e) => Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": e.to_string()
+            }),
         }),
     }
 }

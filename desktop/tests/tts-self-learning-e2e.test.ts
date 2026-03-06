@@ -4,7 +4,7 @@
  * Tests the agent's self-learning capability to discover and implement TTS functionality:
  * 1. Launch CoworkAny desktop app (Tauri + WebView2)
  * 2. Connect Playwright to the WebView via CDP
- * 3. Send the message: "为coworkany增加说话的能力，将文字回复读出来。"
+ * 3. Send the message: "为coworkany增加说话的能力，将文字回复读出来�?
  * 4. Agent uses self-learning system to research and implement TTS solutions
  * 5. Agent implements TTS capability (voice_speak tool / Web Speech API / system TTS / etc.)
  * 6. Verify: TTS implementation, text read aloud, skill precipitation
@@ -41,7 +41,7 @@ import { test, expect, type TauriLogCollector } from './tauriFixture';
 // Config
 // ============================================================================
 
-const TASK_QUERY = '为coworkany增加说话的能力，将文字回复读出来。';
+const TASK_QUERY = '为coworkany增加说话的能力，将文字回复读出来�?;
 
 // TTS task may take longer due to research + implementation + testing
 const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -93,14 +93,9 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
 
         await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
         await page.waitForTimeout(3000);
-
-        const launcherInput = page.locator('input[placeholder="Ask CoworkAny..."]');
         const chatInput = page.locator('.chat-input');
-
-        const input = await Promise.race([
-            launcherInput.waitFor({ state: 'visible', timeout: 60_000 }).then(() => launcherInput),
-            chatInput.waitFor({ state: 'visible', timeout: 60_000 }).then(() => chatInput),
-        ]);
+        await chatInput.waitFor({ state: 'visible', timeout: 60_000 });
+        const input = chatInput;
         const placeholder = await input.getAttribute('placeholder');
         console.log(`[Test] UI loaded - input visible, placeholder="${placeholder}"`);
 
@@ -237,7 +232,7 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
             // ── TTS approach identification ───────────────────────────
             if (!ttsApproachIdentified) {
                 const postBaseline = tauriLogs.getRawSinceBaseline();
-                // voice_speak ACTUAL tool call — MUST be a TOOL_CALL event, NOT merely
+                // voice_speak ACTUAL tool call �?MUST be a TOOL_CALL event, NOT merely
                 // appearing in a TOOL_RESULT (e.g., when agent views voice.ts source code).
                 //
                 // TOOL_CALL events look like: {"type":"TOOL_CALL","payload":{"name":"voice_speak",...}}
@@ -258,7 +253,7 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
                 else if (tauriLogs.grepSinceBaseline('TOOL_RESULT').some(l => l.includes('voice_speak') || l.includes('voiceSpeakTool'))) {
                     ttsApproachIdentified = true;
                     ttsMethodDetected = 'voice_speak (discovered in code, NOT called)';
-                    // NOTE: voiceSpeakToolUsed stays FALSE — discovering is not using!
+                    // NOTE: voiceSpeakToolUsed stays FALSE �?discovering is not using!
                     console.log(`[Test] [${elapsed}s] TTS approach: voice_speak DISCOVERED in code (but NOT called)`);
                 }
                 // Web Speech API
@@ -500,7 +495,7 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
         // Step 5.5: Determine actual task success
         // ================================================================
         // PRIMARY criterion: voice_speak tool MUST be actually called.
-        // The user asked to "将文字回复读出来" — the text must be read aloud.
+        // The user asked to "将文字回复读出来" �?the text must be read aloud.
         //
         // SECONDARY (soft) criteria for diagnostics only:
         //   - Research conducted (web search, think tool)
@@ -512,7 +507,7 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
         // This led to false passes. Now we strictly require actual tool invocation.
         if (voiceSpeakToolUsed) {
             taskSucceeded = true;
-            console.log('[Test] ✅ Agent actually CALLED voice_speak tool — TTS delivered.');
+            console.log('[Test] �?Agent actually CALLED voice_speak tool �?TTS delivered.');
         } else if (ttsApproachIdentified && (codeWritten || runCommandUsed || ttsTestAttempted)) {
             // Agent implemented an alternative TTS method (not voice_speak)
             taskSucceeded = true;
@@ -522,11 +517,11 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
             // Agent only researched/discussed TTS but didn't actually produce audio
             taskSucceeded = false;
             if (ttsResearchDone) {
-                console.log('[Test] ❌ Agent researched TTS but did NOT actually call voice_speak.');
+                console.log('[Test] �?Agent researched TTS but did NOT actually call voice_speak.');
                 console.log('[Test]    This is the known bug: agent explains TTS exists but doesn\'t use it.');
             }
             if (ttsApproachIdentified) {
-                console.log(`[Test] ❌ Approach identified (${ttsMethodDetected}) but not executed.`);
+                console.log(`[Test] �?Approach identified (${ttsMethodDetected}) but not executed.`);
             }
         }
 
@@ -656,14 +651,14 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
         ).toBe(true);
 
         // 7d. CORE ASSERTION: voice_speak tool must be actually called
-        // This is the primary test objective — the user asked to "read text aloud".
+        // This is the primary test objective �?the user asked to "read text aloud".
         // The agent MUST call voice_speak, not just explain that TTS exists.
         //
         // BUG FIX: Previously, the test accepted "research + discussion" as success,
         // which allowed the agent to pass by merely viewing voice.ts code and
         // explaining TTS capabilities without ever calling voice_speak.
         if (!voiceSpeakToolUsed && !taskFailed) {
-            console.log('[Test] ❌ CRITICAL: voice_speak tool was NOT called via TOOL_CALL event.');
+            console.log('[Test] �?CRITICAL: voice_speak tool was NOT called via TOOL_CALL event.');
             console.log('[Test]    The agent may have discovered/discussed TTS but didn\'t invoke it.');
             if (ttsApproachIdentified) {
                 console.log(`[Test]    Approach detected: ${ttsMethodDetected}`);
@@ -729,3 +724,5 @@ test.describe('TTS (Text-to-Speech) Self-Learning E2E', () => {
         }
     });
 });
+
+

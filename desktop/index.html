@@ -9,12 +9,21 @@
   <!-- Preconnect for instant DNS/TLS resolution -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <!-- Non-blocking font load: Inter + JetBrains Mono -->
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'" />
-  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" /></noscript>
+  <!-- Non-blocking font load: Rajdhani + Manrope + JetBrains Mono -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'" />
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" /></noscript>
 </head>
 
 <body>
+  <div id="boot-skeleton" class="boot-skeleton" aria-hidden="true">
+    <div class="boot-skeleton__halo boot-skeleton__halo--one"></div>
+    <div class="boot-skeleton__halo boot-skeleton__halo--two"></div>
+    <div class="boot-skeleton__panel">
+      <div class="boot-skeleton__title"></div>
+      <div class="boot-skeleton__line"></div>
+      <div class="boot-skeleton__line boot-skeleton__line--short"></div>
+    </div>
+  </div>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>

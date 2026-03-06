@@ -1036,6 +1036,23 @@ export function formatErrorForAI(
     toolArgs: Record<string, unknown>,
     retryCount: number = 0
 ): string {
+    if (toolName === 'search_web') {
+        const query = typeof toolArgs.query === 'string' ? toolArgs.query : '';
+        const lines = [
+            '[Search Tool Failure]',
+            `Query: ${query || '(missing query)'}`,
+            'The web search tool exhausted its available providers in the current environment.',
+            'Do not retry search_web with rephrased queries for this task unless the user provides a configured search API.',
+            'Do not switch to browser automation for a plain search request.',
+            'If the user asked to save the result, write a short failure summary to the requested file.',
+            'Otherwise, explain that current web search is temporarily unavailable and ask for API configuration or a narrower request.',
+            '',
+            'Failure details:',
+            stderr,
+        ];
+        return lines.join('\n');
+    }
+
     const engine = getSelfCorrectionEngine();
     const result = engine.analyze({
         toolName,

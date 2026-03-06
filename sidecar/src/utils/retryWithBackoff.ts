@@ -10,6 +10,8 @@
  *   - Reports rate limit events to callers via callback
  */
 
+import { applyInsecureTlsToRequestInit } from './tls';
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -27,6 +29,8 @@ export interface FetchWithBackoffOptions {
     retryOnStatus?: number[];
     /** Callback when a retry is about to happen */
     onRetry?: (info: RetryInfo) => void;
+    /** Disable TLS certificate verification (unsafe, opt-in only) */
+    allowInsecureTls?: boolean;
 }
 
 export interface RetryInfo {
@@ -60,6 +64,7 @@ export async function fetchWithBackoff(
         maxDelay = 30000,
         retryOnStatus = RETRYABLE_STATUS_CODES,
         onRetry,
+        allowInsecureTls = false,
     } = opts;
 
     let lastError: Error | null = null;
@@ -70,10 +75,11 @@ export async function fetchWithBackoff(
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-            const response = await fetch(url, {
+            const requestInit = applyInsecureTlsToRequestInit({
                 ...options,
                 signal: controller.signal,
-            });
+            }, allowInsecureTls);
+            const response = await fetch(url, requestInit);
 
             clearTimeout(timeoutId);
 

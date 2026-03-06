@@ -68,7 +68,11 @@
     "apiKeySaved": "API key saved",
     "apiKeySavedDesc": "Your AI provider is configured.",
     "saveFailed": "Save failed",
-    "saveFailedDesc": "API key verified but could not save. Configure in Settings later."
+    "saveFailedDesc": "API key verified but could not save. Configure in Settings later.",
+    "ragReadyTitle": "RAG model ready",
+    "ragReadyDesc": "Embedding model cached locally. Future startups will not redownload it.",
+    "ragPrepareFailedTitle": "RAG model download failed",
+    "ragPrepareFailedDesc": "Please check proxy/network in Settings and retry."
   },
 
   "settings": {
@@ -85,6 +89,7 @@
     "settingsSaved": "Settings saved",
     "settingsError": "Settings Error",
     "searchSettingsSaved": "Search settings saved",
+    "proxySettingsSaved": "Proxy settings saved",
     "footerNote": "Settings are stored in sidecar/llm-config.json. The active profile will be used for all new chat tasks.",
     "addEditProfile": "Add/Edit Profile",
     "profileName": "Profile Name",
@@ -109,6 +114,7 @@
     "modelPlaceholderOllama": "llama3",
     "verifySaveProfile": "Verify & Save Profile",
     "configuredProfiles": "Configured Profiles",
+    "deleteProfileAction": "Delete profile",
     "active": "Active",
     "noProfiles": "No profiles configured yet.",
     "maxHistoryMessages": "Max History Messages",
@@ -132,10 +138,18 @@
     "braveApiKey": "Brave Search API Key",
     "bravePlaceholder": "BSA...",
     "getBraveKey": "Get Brave Search API Key",
-    "providerFallback": "Provider Fallback: If the selected provider fails, the system will automatically try other configured providers in order: Serper → Tavily → Brave → SearXNG. Configure multiple API keys for maximum reliability.",
+    "providerFallback": "Provider Fallback: If the selected provider fails, the system will automatically try other configured providers in order: Serper -> Tavily -> Brave -> SearXNG. Configure multiple API keys for maximum reliability.",
+    "proxySettings": "Proxy Settings",
+    "proxyDescription": "Configure HTTP(S) proxy for sidecar model requests.",
+    "proxyEnabled": "Proxy",
+    "proxyUrl": "Proxy URL",
+    "proxyUrlPlaceholder": "http://127.0.0.1:7890",
+    "proxyBypass": "No Proxy (Bypass List)",
+    "proxyBypassPlaceholder": "localhost,127.0.0.1,::1",
+    "proxyHint": "When enabled, sidecar will use this proxy URL for provider traffic. Use bypass list to keep local addresses direct.",
     "personalizedDirectives": "Personalized Directives",
     "directivesHint": "Define rules for your AI assistant.",
-    "addNewDirective": "+ Add New Directive",
+    "addNewDirective": "Add New Directive",
     "shortcuts": "Keyboard Shortcuts",
     "shortcutsHint": "Configure global keyboard shortcuts.",
     "toggleWindow": "Toggle Window",
@@ -223,12 +237,12 @@
     "welcomeToDashboard": "Welcome to Dashboard",
     "selectTab": "Select a tab from the sidebar.",
     "backToLauncher": "Back to Launcher",
-    "selectWorkspace": "Please select a workspace to view tasks.",
+    "selectWorkspace": "Please select a workspace to view the task board.",
     "errorLoading": "Error loading tasks:",
-    "tasks": "Tasks",
+    "tasks": "Task Board",
     "managedBy": "Managed by Unified Core Skills",
     "inProgress": "In Progress",
-    "noActiveTasks": "No active tasks. Ask the Agent to create one!",
+    "noActiveTasks": "No structured tasks in this workspace yet.",
     "completed": "Completed"
   },
 
@@ -246,14 +260,15 @@
     "chat": "Chat",
     "skills": "Skills",
     "mcpServers": "MCP Servers",
-    "tasks": "Tasks",
+    "tasks": "Task Board",
     "settings": "Settings",
     "workspaces": "Workspaces",
     "createNewWorkspace": "Create new workspace",
     "workspaceNamePlaceholder": "Workspace name",
     "workspacePathPlaceholder": "Workspace path",
     "noWorkspaces": "No workspaces. Click + to create one.",
-    "noSessions": "No sessions",
+    "runHistory": "Run History",
+    "noSessions": "No run records",
     "sidecarConnected": "Sidecar Connected",
     "disconnected": "Disconnected"
   },
@@ -349,7 +364,7 @@
     "createNewWorkspace": "Create New Workspace",
     "deleteConfirm": "Are you sure you want to delete workspace \"{{name}}\"?\n\nThis will remove the workspace from the list AND delete the directory:\n{{path}}",
     "deleteTooltip": "Delete Workspace (and files)",
-    "defaultHint": "Default workspace will be created in /workspaces"
+    "defaultHint": "New workspaces are created automatically in the app directory under /workspace. Leave the name empty to auto-name it from the first message."
   },
 
   "titlebar": {
@@ -357,7 +372,9 @@
     "minimize": "Minimize",
     "restore": "Restore",
     "maximize": "Maximize",
-    "close": "Close"
+    "close": "Close",
+    "closeWindow": "Close Window",
+    "quitApp": "Quit App"
   },
 
   "fluid": {
@@ -565,8 +582,8 @@
     "newTaskDesc": "Create a new AI task",
     "openProject": "Open Project",
     "openProjectDesc": "Choose a working directory",
-    "taskList": "Task List",
-    "taskListDesc": "View all tasks",
+    "taskList": "Task Board",
+    "taskListDesc": "Review structured tasks",
     "tipCommandPalette": "Press"
   },
 

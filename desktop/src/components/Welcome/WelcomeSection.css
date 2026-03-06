@@ -3,29 +3,156 @@
     align-items: center;
     justify-content: center;
     flex: 1;
-    padding: 48px 24px;
+    min-height: 0;
+    padding: 40px 24px 22px;
+    position: relative;
 }
 
 .welcome-content {
-    max-width: 540px;
+    max-width: 700px;
     width: 100%;
-    text-align: center;
+    text-align: left;
     animation: fadeInUp 0.35s ease-out;
+    padding: 34px;
+    border-radius: 28px;
+    border: 1px solid rgba(138, 232, 219, 0.12);
+    background:
+        radial-gradient(520px 220px at 100% 0%, rgba(45, 212, 191, 0.08), transparent 56%),
+        linear-gradient(160deg, rgba(8, 30, 31, 0.72), rgba(4, 18, 17, 0.62));
+    box-shadow:
+        var(--shadow-lg),
+        inset 0 1px 0 rgba(223, 255, 248, 0.06);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.welcome-kicker {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(138, 232, 219, 0.12);
+    background: rgba(7, 24, 26, 0.62);
+    font-family: var(--font-code);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
 }
 
 .welcome-headline {
     font-family: var(--font-heading);
-    font-size: 28px;
+    font-size: 42px;
+    line-height: 1.08;
     font-weight: 600;
     color: var(--text-primary);
-    margin: 0 0 var(--space-3) 0;
-    letter-spacing: -0.01em;
+    margin: 18px 0 12px;
+    letter-spacing: 0.03em;
+    text-shadow: 0 0 24px rgba(45, 212, 191, 0.12);
 }
 
 .welcome-hint {
-    font-size: 15px;
-    color: var(--text-tertiary);
+    max-width: 520px;
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--text-secondary);
     margin: 0;
+}
+
+.welcome-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 26px;
+}
+
+.welcome-action-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 92px;
+    padding: 16px 18px;
+    border-radius: 22px;
+    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(7, 24, 26, 0.62);
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+    transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.welcome-action-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(138, 232, 219, 0.2);
+    background: rgba(10, 37, 38, 0.8);
+    box-shadow: 0 16px 28px rgba(1, 15, 14, 0.24);
+}
+
+.welcome-action-card.primary {
+    border-color: rgba(249, 115, 22, 0.16);
+    background:
+        linear-gradient(135deg, rgba(249, 115, 22, 0.12), rgba(45, 212, 191, 0.08)),
+        rgba(7, 24, 26, 0.68);
+}
+
+.welcome-action-card.primary:hover {
+    border-color: rgba(249, 115, 22, 0.28);
+}
+
+.welcome-action-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.welcome-action-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.welcome-action-desc {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.welcome-action-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 14px;
+    border: 1px solid rgba(138, 232, 219, 0.12);
+    background: rgba(5, 18, 18, 0.56);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.welcome-signal-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+}
+
+.welcome-signal-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(5, 18, 18, 0.42);
+    color: var(--text-muted);
+    font-family: var(--font-code);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
 @keyframes fadeInUp {
@@ -33,14 +160,23 @@
         opacity: 0;
         transform: translateY(16px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
     }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 760px) {
+    .welcome-content {
+        padding: 24px 20px;
+    }
+
     .welcome-headline {
-        font-size: 22px;
+        font-size: 30px;
+    }
+
+    .welcome-actions {
+        grid-template-columns: 1fr;
     }
 }

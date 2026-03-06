@@ -20,21 +20,15 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Load tray icon
     let icon = Image::from_path("icons/icon.png")
         .or_else(|_| Image::from_path("icons/logo.ico"))
         .unwrap_or_else(|_| {
-            // Fallback to embedded minimal icon
             Image::from_bytes(include_bytes!("../icons/icon.png"))
                 .expect("Failed to load embedded tray icon")
         });
-    // Create menu items
+
     let open_main = MenuItemBuilder::new(t(app, "Open Main Window", "打开主窗口"))
         .id("open_main")
-        .build(app)?;
-
-    let quick_chat = MenuItemBuilder::new(t(app, "Quick Chat", "快速对话"))
-        .id("quick_chat")
         .build(app)?;
 
     let new_task = MenuItemBuilder::new(t(app, "New Task", "新建任务"))
@@ -61,11 +55,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .id("quit")
         .build(app)?;
 
-    // Build the menu
     let menu = MenuBuilder::new(app)
         .item(&open_main)
         .item(&separator1)
-        .item(&quick_chat)
         .item(&new_task)
         .item(&task_list)
         .item(&separator2)
@@ -75,7 +67,6 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .item(&quit)
         .build()?;
 
-    // Build the tray icon
     let _tray = TrayIconBuilder::new()
         .icon(icon)
         .menu(&menu)
@@ -88,16 +79,6 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.set_focus();
                 }
             }
-            "quick_chat" => {
-                let _ = app.emit(
-                    "command-executed",
-                    serde_json::json!({ "id": "quick-chat" }),
-                );
-                if let Some(window) = app.get_webview_window("quickchat") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
             "new_task" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -106,20 +87,24 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 let _ = app.emit("command-executed", serde_json::json!({ "id": "new-task" }));
             }
             "task_list" => {
-                let _ = app.emit("command-executed", serde_json::json!({ "id": "task-list" }));
-                if let Some(window) = app.get_webview_window("dashboard") {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                let _ = app.emit("command-executed", serde_json::json!({ "id": "task-list" }));
             }
             "settings" => {
-                let _ = app.emit("command-executed", serde_json::json!({ "id": "settings" }));
-                if let Some(window) = app.get_webview_window("settings") {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                let _ = app.emit("command-executed", serde_json::json!({ "id": "settings" }));
             }
             "shortcuts" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
                 let _ = app.emit("command-executed", serde_json::json!({ "id": "shortcuts" }));
             }
             "quit" => {

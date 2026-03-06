@@ -477,7 +477,13 @@ describe('BrowserService Mode Routing', () => {
         } catch (error) {
             // Should be a fetch/network error from BrowserUse, not Playwright
             const msg = (error as Error).message;
-            expect(msg.includes('fetch') || msg.includes('browser-use') || msg.includes('ECONNREFUSED') || msg.includes('Unable to connect')).toBe(true);
+            expect(
+                msg.includes('fetch') ||
+                msg.includes('browser-use') ||
+                msg.includes('ECONNREFUSED') ||
+                msg.includes('Unable to connect') ||
+                msg.includes('shared CDP Chrome session')
+            ).toBe(true);
         }
     });
 

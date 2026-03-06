@@ -211,6 +211,18 @@ export async function startAllServices(): Promise<ServiceOperationResult> {
 }
 
 /**
+ * Start all backend services in background.
+ * Falls back to blocking command if background command is unavailable.
+ */
+export async function startAllServicesBackground(): Promise<ServiceOperationResult> {
+    try {
+        return await invoke<ServiceOperationResult>('start_all_services_background');
+    } catch {
+        return startAllServices();
+    }
+}
+
+/**
  * Stop all backend services
  */
 export async function stopAllServices(): Promise<ServiceOperationResult> {

@@ -14,44 +14,45 @@ import { toast } from '../Common/ToastProvider';
 import { WelcomeStep } from './steps/WelcomeStep';
 import { ApiKeyStep } from './steps/ApiKeyStep';
 import { CompleteStep } from './steps/CompleteStep';
+import { buildSetupProfileConfig, getSetupProviderLabel, type SetupProvider } from './providerCatalog';
 import styles from './SetupWizard.module.css';
 
 interface SetupWizardProps {
     onComplete: () => void;
+    topOffset?: number;
 }
 
-export function SetupWizard({ onComplete }: SetupWizardProps) {
+export function SetupWizard({ onComplete, topOffset = 0 }: SetupWizardProps) {
     const { t } = useTranslation();
+    const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890';
     const [step, setStep] = useState(0); // 0=Welcome, 1=ApiKey, 2=Complete
     const [configuredProvider, setConfiguredProvider] = useState<string | null>(null);
     const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
 
     const totalSteps = 3;
 
-    const handleApiKeyConfigured = useCallback(async (provider: string, apiKey: string) => {
+    const handleApiKeyConfigured = useCallback(async (
+        provider: string,
+        apiKey: string,
+        proxy: { enabled: boolean; url?: string; bypass?: string },
+    ) => {
         setConfiguredProvider(provider);
         setApiKeyConfigured(true);
 
         // Save the profile to backend
         try {
             const profileId = crypto.randomUUID();
-            const profile: Record<string, unknown> = {
-                id: profileId,
-                name: `${provider === 'anthropic' ? 'Anthropic' : 'OpenRouter'} (Setup)`,
-                provider,
-            };
-
-            if (provider === 'anthropic') {
-                profile.anthropic = { apiKey };
-            } else {
-                profile.openrouter = { apiKey };
-            }
-
-            const config = {
-                provider,
-                profiles: [profile],
-                activeProfileId: profileId,
-            };
+            const setupProvider = provider as SetupProvider;
+            const config = buildSetupProfileConfig(setupProvider, apiKey, profileId) as Record<string, unknown>;
+            config.proxy = proxy.enabled
+                ? {
+                    enabled: true,
+                    url: (proxy.url?.trim() || DEFAULT_PROXY_URL),
+                    bypass: proxy.bypass?.trim() || undefined,
+                }
+                : {
+                    enabled: false,
+                };
 
             await invoke('save_llm_settings', { input: config });
 
@@ -61,11 +62,27 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             } catch { /* best effort */ }
 
             toast.success(t('setup.apiKeySaved'), t('setup.apiKeySavedDesc'));
+
+            const warmResult = await invoke<{ success: boolean; payload?: { message?: string; error?: string } }>(
+                'prepare_rag_embedding_model'
+            );
+            if (warmResult.success) {
+                toast.success(
+                    t('setup.ragReadyTitle', 'RAG model ready'),
+                    t('setup.ragReadyDesc', 'Embedding model cached locally. Future startups will not redownload it.')
+                );
+            } else {
+                toast.error(
+                    t('setup.ragPrepareFailedTitle', 'RAG model download failed'),
+                    warmResult.payload?.error
+                        ?? t('setup.ragPrepareFailedDesc', 'Please check proxy/network in Settings and retry.')
+                );
+            }
         } catch (err) {
             console.error('[SetupWizard] Failed to save profile:', err);
             toast.error(t('setup.saveFailed'), t('setup.saveFailedDesc'));
         }
-    }, []);
+    }, [t]);
 
     const handleFinish = useCallback(async () => {
         try {
@@ -94,7 +111,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     };
 
     return (
-        <div className={styles.backdrop}>
+        <div
+            className={styles.backdrop}
+            style={topOffset > 0 ? { top: `${topOffset}px` } : undefined}
+        >
             <div className={styles.container}>
                 {/* Step indicators */}
                 <div className={styles.steps}>
@@ -114,7 +134,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
                     {step === 1 && <ApiKeyStep onConfigured={handleApiKeyConfigured} />}
                     {step === 2 && (
                         <CompleteStep
-                            provider={configuredProvider}
+                            provider={getSetupProviderLabel(configuredProvider)}
                             apiKeyConfigured={apiKeyConfigured}
                         />
                     )}

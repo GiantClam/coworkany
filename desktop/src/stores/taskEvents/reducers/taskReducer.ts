@@ -61,12 +61,17 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             };
 
         case 'TASK_FAILED':
-            return {
+            return appendSystemMessage({
                 ...session,
                 status: 'failed',
                 summary: payload.error as string,
                 assistantDraft: undefined,
-            };
+            }, event, [
+                `Task failed: ${(payload.error as string) ?? 'Unknown error'}`,
+                typeof payload.suggestion === 'string' && payload.suggestion.trim().length > 0
+                    ? payload.suggestion.trim()
+                    : null,
+            ].filter(Boolean).join('\n'));
 
         case 'TASK_STATUS': {
             const status = payload.status as TaskStatus;

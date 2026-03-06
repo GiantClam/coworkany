@@ -42,9 +42,13 @@ def _get_chrome_user_data_dir() -> str:
     """Return the Chrome user data directory for the current OS."""
     system = platform.system()
     if system == "Windows":
-        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data")
+        return os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"
+        )
     elif system == "Darwin":
-        return os.path.join(Path.home(), "Library", "Application Support", "Google", "Chrome")
+        return os.path.join(
+            Path.home(), "Library", "Application Support", "Google", "Chrome"
+        )
     else:  # Linux
         return os.path.join(Path.home(), ".config", "google-chrome")
 
@@ -54,13 +58,27 @@ def _get_chrome_executable() -> Optional[str]:
     system = platform.system()
     candidates = []
     if system == "Windows":
-        for base in [os.environ.get("PROGRAMFILES", ""), os.environ.get("PROGRAMFILES(X86)", ""), os.environ.get("LOCALAPPDATA", "")]:
+        for base in [
+            os.environ.get("PROGRAMFILES", ""),
+            os.environ.get("PROGRAMFILES(X86)", ""),
+            os.environ.get("LOCALAPPDATA", ""),
+        ]:
             if base:
-                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+                candidates.append(
+                    os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")
+                )
     elif system == "Darwin":
-        candidates.append("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        candidates.append(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        )
     else:
-        candidates.extend(["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium-browser"])
+        candidates.extend(
+            [
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium-browser",
+            ]
+        )
 
     for path in candidates:
         if os.path.isfile(path):
@@ -72,10 +90,15 @@ def _get_chrome_executable() -> Optional[str]:
 # Request / Response models
 # ---------------------------------------------------------------------------
 
+
 class ConnectRequest(BaseModel):
-    profile_name: str = Field(default="Default", description="Chrome profile directory name")
+    profile_name: str = Field(
+        default="Default", description="Chrome profile directory name"
+    )
     headless: bool = Field(default=False, description="Run in headless mode")
-    cdp_url: Optional[str] = Field(default=None, description="Connect to existing browser via CDP URL")
+    cdp_url: Optional[str] = Field(
+        default=None, description="Connect to existing browser via CDP URL"
+    )
 
 
 class ConnectResponse(BaseModel):
@@ -86,7 +109,9 @@ class ConnectResponse(BaseModel):
 
 class NavigateRequest(BaseModel):
     url: str
-    wait_until: str = Field(default="domcontentloaded", description="load | domcontentloaded | networkidle")
+    wait_until: str = Field(
+        default="domcontentloaded", description="load | domcontentloaded | networkidle"
+    )
     timeout_ms: int = Field(default=30000)
 
 
@@ -98,14 +123,24 @@ class NavigateResponse(BaseModel):
 
 
 class ClickRequest(BaseModel):
-    instruction: str = Field(description="Natural language instruction for what to click, e.g. 'click the login button'")
-    selector: Optional[str] = Field(default=None, description="Optional CSS selector as hint")
+    instruction: str = Field(
+        description="Natural language instruction for what to click, e.g. 'click the login button'"
+    )
+    selector: Optional[str] = Field(
+        default=None, description="Optional CSS selector as hint"
+    )
 
 
 class FillRequest(BaseModel):
-    instruction: str = Field(description="Natural language instruction, e.g. 'type hello@email.com in the email field'")
-    selector: Optional[str] = Field(default=None, description="Optional CSS selector as hint")
-    value: Optional[str] = Field(default=None, description="Value to fill if not in instruction")
+    instruction: str = Field(
+        description="Natural language instruction, e.g. 'type hello@email.com in the email field'"
+    )
+    selector: Optional[str] = Field(
+        default=None, description="Optional CSS selector as hint"
+    )
+    value: Optional[str] = Field(
+        default=None, description="Value to fill if not in instruction"
+    )
 
 
 class UploadRequest(BaseModel):
@@ -114,7 +149,9 @@ class UploadRequest(BaseModel):
         default="click the file upload button and upload the file",
         description="Natural language instruction for finding the upload element",
     )
-    selector: Optional[str] = Field(default=None, description="Optional CSS selector for file input")
+    selector: Optional[str] = Field(
+        default=None, description="Optional CSS selector for file input"
+    )
 
 
 class UploadResponse(BaseModel):
@@ -132,7 +169,9 @@ class ScreenshotResponse(BaseModel):
 
 
 class ExtractRequest(BaseModel):
-    instruction: str = Field(description="What data to extract, e.g. 'extract all product names and prices'")
+    instruction: str = Field(
+        description="What data to extract, e.g. 'extract all product names and prices'"
+    )
     output_format: str = Field(default="json", description="json | text | markdown")
 
 
@@ -146,7 +185,9 @@ class TaskRequest(BaseModel):
     task: str = Field(description="Natural language task description")
     url: Optional[str] = Field(default=None, description="Optional starting URL")
     max_steps: int = Field(default=20, description="Maximum number of agent steps")
-    llm_model: Optional[str] = Field(default=None, description="Override LLM model for this task")
+    llm_model: Optional[str] = Field(
+        default=None, description="Override LLM model for this task"
+    )
 
 
 class TaskResponse(BaseModel):
@@ -158,7 +199,9 @@ class TaskResponse(BaseModel):
 
 class ActionRequest(BaseModel):
     action: str = Field(description="Natural language action to perform")
-    context: Optional[str] = Field(default=None, description="Additional context about the current page")
+    context: Optional[str] = Field(
+        default=None, description="Additional context about the current page"
+    )
 
 
 class ActionResponse(BaseModel):
@@ -179,22 +222,30 @@ class ContentResponse(BaseModel):
 # Global state
 # ---------------------------------------------------------------------------
 
+
 class BrowserState:
     """Holds the browser-use Browser and Agent instances."""
 
     def __init__(self):
-        self.browser = None  # browser_use.Browser
-        self.context = None  # browser_use.BrowserContext
+        self.browser = (
+            None  # browser_use.Browser (BrowserSession alias in new versions)
+        )
+        self.context = (
+            None  # kept for backward compatibility; equals browser when available
+        )
         self.connected = False
         self.profile_name = "Default"
 
     async def ensure_connected(self):
         if not self.connected or self.browser is None:
-            raise HTTPException(status_code=400, detail="Browser not connected. Call POST /connect first.")
+            raise HTTPException(
+                status_code=400,
+                detail="Browser not connected. Call POST /connect first.",
+            )
 
     async def connect(self, req: ConnectRequest):
         try:
-            from browser_use import Browser, BrowserConfig
+            from browser_use import Browser
         except ImportError:
             raise HTTPException(
                 status_code=500,
@@ -202,48 +253,54 @@ class BrowserState:
             )
 
         if self.connected and self.browser is not None:
-            return ConnectResponse(success=True, message="Already connected", profile=self.profile_name)
+            return ConnectResponse(
+                success=True, message="Already connected", profile=self.profile_name
+            )
 
         try:
-            config_kwargs = {}
+            # browser-use >=0.12 switched to BrowserSession API.
+            # Browser is now an alias of BrowserSession and takes cdp_url/headless directly.
+            init_kwargs = {}
 
             if req.cdp_url:
-                config_kwargs["cdp_url"] = req.cdp_url
+                init_kwargs["cdp_url"] = req.cdp_url
+                init_kwargs["is_local"] = False
             else:
+                init_kwargs["is_local"] = True
+                init_kwargs["headless"] = req.headless
+
                 chrome_path = _get_chrome_executable()
                 if chrome_path:
-                    config_kwargs["chrome_instance_path"] = chrome_path
+                    init_kwargs["executable_path"] = chrome_path
 
                 user_data_dir = _get_chrome_user_data_dir()
                 if os.path.isdir(user_data_dir):
-                    config_kwargs["new_context_config"] = {
-                        "user_data_dir": user_data_dir,
-                    }
+                    init_kwargs["user_data_dir"] = user_data_dir
 
-            config_kwargs["headless"] = req.headless
-
-            browser_config = BrowserConfig(**config_kwargs)
-            self.browser = Browser(config=browser_config)
-            self.context = await self.browser.new_context()
+            self.browser = Browser(**init_kwargs)
+            await self.browser.start()
+            self.context = self.browser
             self.connected = True
             self.profile_name = req.profile_name
 
             logger.info(f"Connected to browser with profile: {req.profile_name}")
-            return ConnectResponse(success=True, message="Connected to Chrome", profile=req.profile_name)
+            return ConnectResponse(
+                success=True, message="Connected to Chrome", profile=req.profile_name
+            )
 
         except Exception as e:
             logger.error(f"Failed to connect: {e}")
             self.connected = False
             self.browser = None
             self.context = None
-            raise HTTPException(status_code=500, detail=f"Failed to connect to browser: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to connect to browser: {str(e)}"
+            )
 
     async def disconnect(self):
         if self.browser:
             try:
-                if self.context:
-                    await self.context.close()
-                await self.browser.close()
+                await self.browser.stop()
             except Exception as e:
                 logger.warning(f"Error during disconnect: {e}")
             finally:
@@ -254,12 +311,10 @@ class BrowserState:
     async def get_page(self):
         """Get the current active page from the browser context."""
         await self.ensure_connected()
-        pages = self.context.pages if self.context else []
-        if not pages:
-            # Create a new page
-            page = await self.context.new_page()
-            return page
-        return pages[-1]
+        page = await self.browser.get_current_page()
+        if page is None:
+            page = await self.browser.new_page()
+        return page
 
 
 state = BrowserState()
@@ -267,6 +322,7 @@ state = BrowserState()
 # ---------------------------------------------------------------------------
 # LLM helper
 # ---------------------------------------------------------------------------
+
 
 def _get_llm(model_override: Optional[str] = None):
     """Get a LiteLLM-compatible LLM instance for browser-use."""
@@ -288,6 +344,7 @@ def _get_llm(model_override: Optional[str] = None):
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -313,6 +370,7 @@ app = FastAPI(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.get("/health")
 async def health():
     return {
@@ -337,9 +395,10 @@ async def disconnect():
 async def navigate(req: NavigateRequest):
     try:
         page = await state.get_page()
-        await page.goto(req.url, wait_until=req.wait_until, timeout=req.timeout_ms)
-        title = await page.title()
-        return NavigateResponse(success=True, url=page.url, title=title)
+        await page.goto(req.url)
+        title = await page.get_title()
+        url = await page.get_url()
+        return NavigateResponse(success=True, url=url, title=title)
     except Exception as e:
         logger.error(f"Navigate error: {e}")
         return NavigateResponse(success=False, error=str(e))
@@ -362,7 +421,6 @@ async def click(req: ClickRequest):
             task=f"On the current page, {instruction}. Do only this one action, then stop.",
             llm=llm,
             browser=state.browser,
-            browser_context=state.context,
         )
         history = await agent.run(max_steps=3)
         final = history.final_result() if history else None
@@ -392,7 +450,6 @@ async def fill(req: FillRequest):
             task=f"On the current page, {instruction}. Do only this one action, then stop.",
             llm=llm,
             browser=state.browser,
-            browser_context=state.context,
         )
         history = await agent.run(max_steps=3)
         final = history.final_result() if history else None
@@ -410,13 +467,18 @@ async def upload(req: UploadRequest):
         page = await state.get_page()
 
         if not os.path.isfile(req.file_path):
-            return UploadResponse(success=False, message="File not found", error=f"File does not exist: {req.file_path}")
+            return UploadResponse(
+                success=False,
+                message="File not found",
+                error=f"File does not exist: {req.file_path}",
+            )
 
         if req.selector:
-            # Direct Playwright approach with known selector
-            file_input = page.locator(req.selector)
-            await file_input.set_input_files(req.file_path)
-            return UploadResponse(success=True, message=f"File uploaded via selector: {req.selector}")
+            return UploadResponse(
+                success=False,
+                message="Selector-based upload is not supported in browser-use session mode",
+                error="Use natural-language instruction upload flow",
+            )
 
         # Use browser-use agent to find and interact with file upload
         from browser_use import Agent
@@ -426,7 +488,6 @@ async def upload(req: UploadRequest):
             task=f"On the current page, {req.instruction}. The file to upload is at: {req.file_path}",
             llm=llm,
             browser=state.browser,
-            browser_context=state.context,
         )
 
         # Set up file chooser handler
@@ -452,14 +513,12 @@ async def screenshot():
     """Take a screenshot of the current page."""
     try:
         page = await state.get_page()
-        buffer = await page.screenshot(full_page=False)
-        image_b64 = base64.b64encode(buffer).decode("utf-8")
-        viewport = page.viewport_size
+        image_b64 = await page.screenshot()
         return ScreenshotResponse(
             success=True,
             image_base64=image_b64,
-            width=viewport.get("width", 1280) if viewport else 1280,
-            height=viewport.get("height", 720) if viewport else 720,
+            width=1280,
+            height=720,
         )
     except Exception as e:
         logger.error(f"Screenshot error: {e}")
@@ -481,7 +540,6 @@ async def extract(req: ExtractRequest):
             task=task,
             llm=llm,
             browser=state.browser,
-            browser_context=state.context,
         )
         history = await agent.run(max_steps=5)
         final = history.final_result() if history else None
@@ -498,9 +556,13 @@ async def get_content(as_text: bool = True):
     try:
         page = await state.get_page()
         if as_text:
-            content = await page.inner_text("body")
+            content = await page.evaluate(
+                "(...args) => document.body ? document.body.innerText : ''"
+            )
         else:
-            content = await page.content()
+            content = await page.evaluate(
+                "(...args) => document.documentElement ? document.documentElement.outerHTML : ''"
+            )
 
         # Limit size
         content = content[:100000]
@@ -508,8 +570,8 @@ async def get_content(as_text: bool = True):
         return ContentResponse(
             success=True,
             content=content,
-            url=page.url,
-            title=await page.title(),
+            url=await page.get_url(),
+            title=await page.get_title(),
         )
     except Exception as e:
         logger.error(f"Content error: {e}")
@@ -528,13 +590,12 @@ async def run_task(req: TaskRequest):
         # Navigate to URL first if provided
         if req.url:
             page = await state.get_page()
-            await page.goto(req.url, wait_until="domcontentloaded")
+            await page.goto(req.url)
 
         agent = Agent(
             task=req.task,
             llm=llm,
             browser=state.browser,
-            browser_context=state.context,
         )
 
         history = await agent.run(max_steps=req.max_steps)
@@ -565,7 +626,6 @@ async def perform_action(req: ActionRequest):
             task=task,
             llm=llm,
             browser=state.browser,
-            browser_context=state.context,
         )
         history = await agent.run(max_steps=3)
         final = history.final_result() if history else None

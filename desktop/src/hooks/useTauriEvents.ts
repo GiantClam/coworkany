@@ -8,7 +8,7 @@
 import { useEffect } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useTaskEventStore, type TaskEvent, type IpcResponse, type AuditEvent, hydrateSessions } from '../stores/useTaskEventStore';
-import { isTauri } from '../lib/tauri';
+import { IS_STARTUP_BASELINE } from '../lib/startupProfile';
 
 // ============================================================================
 // Event Listener Hook
@@ -29,50 +29,85 @@ export function useTauriEvents() {
         let unlistenIpcResponse: UnlistenFn | undefined;
         let unlistenSidecarDisconnected: UnlistenFn | undefined;
         let unlistenAuditEvent: UnlistenFn | undefined;
+        let hydrationTimer: number | null = null;
+        let hydrationIdleHandle: number | null = null;
+        let setupRetryTimer: number | null = null;
+        let setupAttempts = 0;
 
-        async function setupListeners() {
-            if (!isTauri()) {
-                console.debug('[Tauri] Not running inside Tauri WebView — event listeners skipped');
+        const scheduleHydration = () => {
+            const runHydration = () => {
+                void hydrateSessions();
+            };
+
+            const requestIdle = (window as Window & {
+                requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+            }).requestIdleCallback;
+
+            if (typeof requestIdle === 'function' && !IS_STARTUP_BASELINE) {
+                hydrationIdleHandle = requestIdle(() => runHydration(), { timeout: 3000 });
                 return;
             }
-            await hydrateSessions();
-            // Listen for task events from sidecar
-            unlistenTaskEvent = await listen<TaskEvent>('task-event', (event) => {
-                console.log('[Tauri] Received task-event:', event.payload);
-                addEvent(event.payload);
-            });
 
-            // Listen for IPC responses (effect decisions, patch results)
-            unlistenIpcResponse = await listen<IpcResponse>('ipc-response', (event) => {
-                console.log('[Tauri] Received ipc-response:', event.payload);
-                handleIpcResponse(event.payload);
-            });
+            hydrationTimer = window.setTimeout(runHydration, IS_STARTUP_BASELINE ? 30 : 140);
+        };
 
-            // Listen for sidecar disconnection
-            unlistenSidecarDisconnected = await listen('sidecar-disconnected', () => {
-                console.warn('[Tauri] Sidecar disconnected');
-                setSidecarConnected(false);
-            });
+        async function setupListeners() {
+            try {
+                // Listen for task events from sidecar
+                unlistenTaskEvent = await listen<TaskEvent>('task-event', (event) => {
+                    addEvent(event.payload);
+                });
 
-            // Listen for audit events from Rust
-            unlistenAuditEvent = await listen<AuditEvent>('audit-event', (event) => {
-                addAuditEvent(event.payload);
-            });
+                // Listen for IPC responses (effect decisions, patch results)
+                unlistenIpcResponse = await listen<IpcResponse>('ipc-response', (event) => {
+                    handleIpcResponse(event.payload);
+                });
 
-            // Mark as connected (we assume connected on setup)
-            setSidecarConnected(true);
+                // Listen for sidecar disconnection
+                unlistenSidecarDisconnected = await listen('sidecar-disconnected', () => {
+                    console.warn('[Tauri] Sidecar disconnected');
+                    setSidecarConnected(false);
+                });
 
-            console.log('[Tauri] Event listeners registered');
+                // Listen for audit events from Rust
+                unlistenAuditEvent = await listen<AuditEvent>('audit-event', (event) => {
+                    addAuditEvent(event.payload);
+                });
+
+                // Mark as connected (we assume connected on setup)
+                setSidecarConnected(true);
+
+                // Hydrate history after listeners are active and initial frame has painted.
+                scheduleHydration();
+            } catch (error) {
+                setupAttempts += 1;
+                const canRetry = setupAttempts < 12;
+                console.debug('[Tauri] Event listeners unavailable in this runtime:', error);
+                if (canRetry) {
+                    setupRetryTimer = window.setTimeout(() => {
+                        setupRetryTimer = null;
+                        void setupListeners();
+                    }, Math.min(120 * setupAttempts, 600));
+                }
+            }
         }
 
-        setupListeners();
+        void setupListeners();
 
         return () => {
+            if (setupRetryTimer !== null) {
+                window.clearTimeout(setupRetryTimer);
+            }
+            if (hydrationTimer !== null) {
+                window.clearTimeout(hydrationTimer);
+            }
+            if (hydrationIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+                window.cancelIdleCallback(hydrationIdleHandle);
+            }
             unlistenTaskEvent?.();
             unlistenIpcResponse?.();
             unlistenSidecarDisconnected?.();
             unlistenAuditEvent?.();
-            console.log('[Tauri] Event listeners cleaned up');
         };
     }, [addEvent, setSidecarConnected, handleIpcResponse, addAuditEvent]);
 }

@@ -28,7 +28,7 @@ test.describe('Stock Research Self-Learning E2E', () => {
 
         // Try multiple input selectors
         const selectors = [
-            'input[placeholder="Ask CoworkAny..."]',
+            '.chat-input',
             '.chat-input input',
             'input[type="text"]',
         ];
@@ -158,3 +158,4 @@ test.describe('Stock Research Self-Learning E2E', () => {
         expect(stockInfoFound).toBe(true);
     });
 });
+

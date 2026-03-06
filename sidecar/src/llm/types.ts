@@ -13,6 +13,13 @@ import { z } from 'zod';
 export const LlmProviderSchema = z.enum([
     'anthropic',
     'openai',
+    'aiberm',
+    'nvidia',
+    'siliconflow',
+    'gemini',
+    'qwen',
+    'minimax',
+    'kimi',
     'azure',
     'openrouter',
     'ollama',

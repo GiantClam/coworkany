@@ -51,6 +51,7 @@ desktop/sidecar/llm-config.json
 desktop/src-tauri/target/
 
 browser-use-service/.venv
+browser-use-service/.venv311
 browser-use-service/venv
 desktop/node_modules/
 

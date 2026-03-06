@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import { isTauri } from '../lib/tauri';
+import { deleteConfig, getConfig, saveConfig } from '../lib/configStore';
 
 // ============================================================================
 // Types
@@ -12,6 +12,7 @@ export interface Workspace {
     path: string;
     createdAt: string;
     lastUsedAt?: string;
+    autoNamed?: boolean;
     defaultSkills: string[];
     defaultToolpacks: string[];
 }
@@ -27,12 +28,99 @@ interface WorkspaceState {
     isLoading: boolean;
     error: string | null;
 
-    // Actions
     loadWorkspaces: () => Promise<Workspace[]>;
-    createWorkspace: (name: string, path: string) => Promise<Workspace | null>;
-    updateWorkspace: (id: string, updates: { name?: string; path?: string }) => Promise<boolean>;
+    createWorkspace: (name?: string, path?: string) => Promise<Workspace | null>;
+    updateWorkspace: (id: string, updates: { name?: string; path?: string; autoNamed?: boolean }) => Promise<boolean>;
     deleteWorkspace: (id: string) => Promise<boolean>;
     selectWorkspace: (workspace: Workspace | null) => void;
+    syncWorkspace: (workspace: Workspace) => void;
+}
+
+function toPayload(result: IpcResult): any {
+    return typeof result.payload === 'string'
+        ? JSON.parse(result.payload)
+        : result.payload;
+}
+
+function unwrapPayload(payload: any): any {
+    let cursor = payload;
+    for (let i = 0; i < 3; i += 1) {
+        if (cursor && typeof cursor === 'object' && 'payload' in cursor) {
+            cursor = (cursor as { payload: unknown }).payload;
+            continue;
+        }
+        break;
+    }
+    return cursor;
+}
+
+function extractWorkspaces(payload: any): Workspace[] {
+    const unwrapped = unwrapPayload(payload);
+    const candidates = [
+        payload?.workspaces,
+        payload?.payload?.workspaces,
+        unwrapped?.workspaces,
+    ];
+
+    for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+            return candidate as Workspace[];
+        }
+    }
+
+    return [];
+}
+
+function extractWorkspace(payload: any): Workspace | undefined {
+    const unwrapped = unwrapPayload(payload);
+    const candidates = [
+        payload?.workspace,
+        payload?.payload?.workspace,
+        unwrapped?.workspace,
+        unwrapped,
+    ];
+
+    for (const candidate of candidates) {
+        if (
+            candidate &&
+            typeof candidate === 'object' &&
+            typeof candidate.id === 'string' &&
+            typeof candidate.path === 'string'
+        ) {
+            return candidate as Workspace;
+        }
+    }
+
+    return undefined;
+}
+
+function extractSuccess(payload: any): boolean {
+    const unwrapped = unwrapPayload(payload);
+    const values = [
+        payload?.success,
+        payload?.payload?.success,
+        unwrapped?.success,
+    ];
+
+    return values.some((value) => value === true);
+}
+
+function resolveActiveWorkspace(
+    list: Workspace[],
+    currentActive: Workspace | null,
+    savedId: string | null,
+): Workspace | null {
+    if (list.length === 0) return null;
+    if (currentActive) {
+        const fresh = list.find((workspace) => workspace.id === currentActive.id);
+        if (fresh) return fresh;
+    }
+
+    if (savedId) {
+        const saved = list.find((workspace) => workspace.id === savedId);
+        if (saved) return saved;
+    }
+    return list[0];
 }
 
 // ============================================================================
@@ -46,80 +134,56 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     error: null,
 
     loadWorkspaces: async () => {
-        if (!isTauri()) {
-            console.debug('[loadWorkspaces] Skipped — not running inside Tauri');
-            return [];
-        }
         set({ isLoading: true, error: null });
+
         try {
             const result = await invoke<IpcResult>('list_workspaces');
-            if (result.success && result.payload) {
-                const data = typeof result.payload === 'string'
-                    ? JSON.parse(result.payload)
-                    : result.payload;
-
-                // PAYLOAD FIX: Access data.payload.workspaces
-                const list = data.payload?.workspaces || [];
-                set({ workspaces: list });
-
-                // Restore active workspace if explicit, or default to first
-                const currentActive = get().activeWorkspace;
-                if (!currentActive && list.length > 0) {
-                    // Check localStorage
-                    const savedId = localStorage.getItem('activeWorkspaceId');
-                    if (savedId) {
-                        const saved = list.find((w: Workspace) => w.id === savedId);
-                        if (saved) set({ activeWorkspace: saved });
-                        else set({ activeWorkspace: list[0] });
-                    } else {
-                        set({ activeWorkspace: list[0] });
-                    }
-                } else if (currentActive) {
-                    // Update current active object with fresh data
-                    const fresh = list.find((w: Workspace) => w.id === currentActive.id);
-                    if (fresh) set({ activeWorkspace: fresh });
-                }
-
-                return list;
+            if (!result.success || !result.payload) {
+                set({ isLoading: false });
+                return [];
             }
-            return [];
+
+            const data = toPayload(result);
+            const list = extractWorkspaces(data);
+            const savedId = await getConfig<string>('activeWorkspaceId');
+
+            const activeWorkspace = resolveActiveWorkspace(list, get().activeWorkspace, savedId);
+            set({ activeWorkspace, workspaces: [] });
+
+            if (activeWorkspace) {
+                await saveConfig('activeWorkspaceId', activeWorkspace.id);
+            } else {
+                await deleteConfig('activeWorkspaceId');
+            }
+
+            set({ workspaces: list, isLoading: false });
+            return list;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            set({ error: message });
+            set({ error: message, isLoading: false });
             console.error('[loadWorkspaces] Error:', err);
             return [];
-        } finally {
-            set({ isLoading: false });
         }
     },
 
-    createWorkspace: async (name: string, path: string) => {
-        if (!isTauri()) return null;
+    createWorkspace: async (name = '', path = '') => {
         set({ isLoading: true, error: null });
         try {
             const result = await invoke<IpcResult>('create_workspace', {
                 input: { name, path },
             });
             if (result.success && result.payload) {
-                const data = typeof result.payload === 'string'
-                    ? JSON.parse(result.payload)
-                    : result.payload;
-
-                // PAYLOAD FIX: Access data.payload.workspace
-                const newWorkspace = data.payload?.workspace;
+                const data = toPayload(result);
+                const newWorkspace = extractWorkspace(data);
                 if (newWorkspace) {
                     set((state) => ({
                         workspaces: [...state.workspaces, newWorkspace],
-                        activeWorkspace: newWorkspace, // Auto-select new workspace
+                        activeWorkspace: newWorkspace,
                     }));
-
-                    // Save to localStorage
-                    localStorage.setItem('activeWorkspaceId', newWorkspace.id);
-
+                    await saveConfig('activeWorkspaceId', newWorkspace.id);
                     return newWorkspace;
                 }
                 console.error('[createWorkspace] Invalid payload, missing workspace data:', data);
-                return null;
             }
             return null;
         } catch (err) {
@@ -132,24 +196,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         }
     },
 
-    updateWorkspace: async (id: string, updates: { name?: string; path?: string }) => {
-        if (!isTauri()) return false;
+    updateWorkspace: async (id: string, updates: { name?: string; path?: string; autoNamed?: boolean }) => {
         set({ isLoading: true, error: null });
         try {
             const result = await invoke<IpcResult>('update_workspace', {
                 input: { id, updates },
             });
-
-            // PAYLOAD FIX: Check logic
             if (result.success && result.payload) {
-                const data = typeof result.payload === 'string'
-                    ? JSON.parse(result.payload)
-                    : result.payload;
-
-                if (data.payload?.success) {
+                const data = toPayload(result);
+                if (extractSuccess(data)) {
                     set((state) => {
-                        const updatedWorkspaces = state.workspaces.map((w) =>
-                            w.id === id ? { ...w, ...updates } : w
+                        const updatedWorkspaces = state.workspaces.map((workspace) =>
+                            workspace.id === id ? { ...workspace, ...updates } : workspace
                         );
                         const updatedActive = state.activeWorkspace?.id === id
                             ? { ...state.activeWorkspace, ...updates }
@@ -171,30 +229,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
 
     deleteWorkspace: async (id: string) => {
-        if (!isTauri()) return false;
         set({ isLoading: true, error: null });
         try {
             const result = await invoke<IpcResult>('delete_workspace', { input: { id } });
-
-            // PAYLOAD FIX: Check logic
             if (result.success && result.payload) {
-                const data = typeof result.payload === 'string'
-                    ? JSON.parse(result.payload)
-                    : result.payload;
-
-                if (data.payload?.success) {
+                const data = toPayload(result);
+                if (extractSuccess(data)) {
                     set((state) => {
-                        const newWorkspaces = state.workspaces.filter((w) => w.id !== id);
-                        let newActive = state.activeWorkspace;
-                        if (newActive?.id === id) {
-                            newActive = newWorkspaces.length > 0 ? newWorkspaces[0] : null;
-                            if (newActive) {
-                                localStorage.setItem('activeWorkspaceId', newActive.id);
+                        const newWorkspaces = state.workspaces.filter((workspace) => workspace.id !== id);
+                        let newActiveWorkspace = state.activeWorkspace;
+                        if (newActiveWorkspace?.id === id) {
+                            newActiveWorkspace = newWorkspaces.length > 0 ? newWorkspaces[0] : null;
+                            if (newActiveWorkspace) {
+                                void saveConfig('activeWorkspaceId', newActiveWorkspace.id);
                             } else {
-                                localStorage.removeItem('activeWorkspaceId');
+                                void deleteConfig('activeWorkspaceId');
                             }
                         }
-                        return { workspaces: newWorkspaces, activeWorkspace: newActive };
+                        return { workspaces: newWorkspaces, activeWorkspace: newActiveWorkspace };
                     });
                     return true;
                 }
@@ -213,9 +265,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     selectWorkspace: (workspace: Workspace | null) => {
         set({ activeWorkspace: workspace });
         if (workspace) {
-            localStorage.setItem('activeWorkspaceId', workspace.id);
+            void saveConfig('activeWorkspaceId', workspace.id);
         } else {
-            localStorage.removeItem('activeWorkspaceId');
+            void deleteConfig('activeWorkspaceId');
         }
-    }
+    },
+
+    syncWorkspace: (workspace: Workspace) => {
+        set((state) => {
+            const existingIndex = state.workspaces.findIndex((item) => item.id === workspace.id);
+            const merged = existingIndex >= 0
+                ? { ...state.workspaces[existingIndex], ...workspace }
+                : workspace;
+            const workspaces = existingIndex >= 0
+                ? state.workspaces.map((item) => (item.id === workspace.id ? merged : item))
+                : [...state.workspaces, merged];
+
+            const activeWorkspace = state.activeWorkspace?.id === workspace.id
+                ? { ...state.activeWorkspace, ...workspace }
+                : state.activeWorkspace;
+
+            return { workspaces, activeWorkspace };
+        });
+    },
 }));

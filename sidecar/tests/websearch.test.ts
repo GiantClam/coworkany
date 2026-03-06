@@ -61,7 +61,7 @@ describe('WS-01: Serper.dev 搜索', () => {
         expect(result.results.length).toBeGreaterThan(0);
         expect(result.results[0].title).toBeTruthy();
         expect(result.results[0].url).toMatch(/^https?:\/\//);
-    });
+    }, 30000);
 });
 
 // ============================================================================
@@ -100,7 +100,7 @@ describe('WS-02: Provider Fallback', () => {
             // If all fail (no valid keys), that's also acceptable for this test
             console.log('[INFO] All providers failed (expected if no valid API keys).');
         }
-    });
+    }, 30000);
 });
 
 // ============================================================================
@@ -138,7 +138,7 @@ describe('WS-03: DuckDuckGo CAPTCHA 检测', () => {
         } else if (result.results.length > 0) {
             console.log('[INFO] Search succeeded (no CAPTCHA encountered).');
         }
-    });
+    }, 30000);
 });
 
 // ============================================================================
@@ -217,5 +217,5 @@ describe('WS-05: 全部 Provider 失败时的错误消息', () => {
                            errorLower.includes('configure');
         console.log(`[Test] Error has configuration guidance: ${hasGuidance}`);
         expect(hasGuidance).toBe(true);
-    });
+    }, 30000);
 });

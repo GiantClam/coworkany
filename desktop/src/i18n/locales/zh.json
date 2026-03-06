@@ -66,7 +66,11 @@
     "apiKeySaved": "API 密钥已保存",
     "apiKeySavedDesc": "AI 服务商配置完成。",
     "saveFailed": "保存失败",
-    "saveFailedDesc": "API 密钥已验证但无法保存。请稍后在设置中配置。"
+    "saveFailedDesc": "API 密钥已验证但无法保存。请稍后在设置中配置。",
+    "ragReadyTitle": "RAG 模型已就绪",
+    "ragReadyDesc": "Embedding 模型已缓存到本地，后续启动不会重复下载。",
+    "ragPrepareFailedTitle": "RAG 模型下载失败",
+    "ragPrepareFailedDesc": "请检查代理或网络配置后重试。"
   },
 
   "settings": {
@@ -83,6 +87,7 @@
     "settingsSaved": "设置已保存",
     "settingsError": "设置错误",
     "searchSettingsSaved": "搜索设置已保存",
+    "proxySettingsSaved": "代理设置已保存",
     "footerNote": "设置存储在 sidecar/llm-config.json 中。活跃的配置文件将用于所有新的聊天任务。",
     "addEditProfile": "添加/编辑配置",
     "profileName": "配置名称",
@@ -106,7 +111,8 @@
     "modelPlaceholderOpenAI": "gpt-4o",
     "modelPlaceholderOllama": "llama3",
     "verifySaveProfile": "验证并保存配置",
-    "configuredProfiles": "已配置的文件",
+    "configuredProfiles": "已配置的模型配置",
+    "deleteProfileAction": "删除配置",
     "active": "活跃",
     "noProfiles": "尚未配置任何文件。",
     "maxHistoryMessages": "最大历史消息数",
@@ -131,9 +137,17 @@
     "bravePlaceholder": "BSA...",
     "getBraveKey": "获取 Brave Search API 密钥",
     "providerFallback": "服务商降级：如果选择的服务商失败，系统会自动按顺序尝试其他已配置的服务商：Serper → Tavily → Brave → SearXNG。配置多个 API 密钥以获得最大可靠性。",
+    "proxySettings": "代理设置",
+    "proxyDescription": "为 sidecar 模型请求配置 HTTP(S) 代理。",
+    "proxyEnabled": "代理开关",
+    "proxyUrl": "代理地址",
+    "proxyUrlPlaceholder": "http://127.0.0.1:7890",
+    "proxyBypass": "不走代理（绕过列表）",
+    "proxyBypassPlaceholder": "localhost,127.0.0.1,::1",
+    "proxyHint": "启用后，sidecar 会对模型请求使用该代理地址。可通过绕过列表让本地地址直连。",
     "personalizedDirectives": "个性化指令",
     "directivesHint": "为你的 AI 助手定义规则。",
-    "addNewDirective": "+ 添加新指令",
+    "addNewDirective": "添加新指令",
     "shortcuts": "键盘快捷键",
     "shortcutsHint": "配置全局键盘快捷键。",
     "toggleWindow": "切换窗口",
@@ -221,12 +235,12 @@
     "welcomeToDashboard": "欢迎来到仪表盘",
     "selectTab": "从侧边栏选择一个标签页。",
     "backToLauncher": "返回启动器",
-    "selectWorkspace": "请选择一个工作区以查看任务。",
+    "selectWorkspace": "请选择一个工作区以查看任务清单。",
     "errorLoading": "加载任务出错：",
-    "tasks": "任务",
+    "tasks": "任务清单",
     "managedBy": "由统一核心技能管理",
     "inProgress": "进行中",
-    "noActiveTasks": "暂无活跃任务。让 AI 助手创建一个！",
+    "noActiveTasks": "当前工作区还没有结构化任务。",
     "completed": "已完成"
   },
 
@@ -244,14 +258,15 @@
     "chat": "聊天",
     "skills": "技能",
     "mcpServers": "MCP 服务器",
-    "tasks": "任务",
+    "tasks": "任务清单",
     "settings": "设置",
     "workspaces": "工作区",
     "createNewWorkspace": "创建新工作区",
     "workspaceNamePlaceholder": "工作区名称",
     "workspacePathPlaceholder": "工作区路径",
     "noWorkspaces": "暂无工作区。点击 + 创建一个。",
-    "noSessions": "暂无会话",
+    "runHistory": "运行记录",
+    "noSessions": "暂无运行记录",
     "sidecarConnected": "Sidecar 已连接",
     "disconnected": "已断开"
   },
@@ -347,7 +362,7 @@
     "createNewWorkspace": "创建新工作区",
     "deleteConfirm": "确定要删除工作区 \"{{name}}\" 吗？\n\n这将从列表中移除工作区并删除目录：\n{{path}}",
     "deleteTooltip": "删除工作区（及文件）",
-    "defaultHint": "默认工作区将创建在 /workspaces"
+    "defaultHint": "新工作区会自动创建在程序目录下的 /workspace 中。名称可以留空，首条消息会自动生成工作区名称。"
   },
 
   "titlebar": {
@@ -355,7 +370,9 @@
     "minimize": "最小化",
     "restore": "还原",
     "maximize": "最大化",
-    "close": "关闭"
+    "close": "关闭",
+    "closeWindow": "关闭窗口",
+    "quitApp": "退出程序"
   },
 
   "fluid": {
@@ -563,8 +580,8 @@
     "newTaskDesc": "创建新的AI任务",
     "openProject": "打开项目",
     "openProjectDesc": "选择工作目录",
-    "taskList": "任务列表",
-    "taskListDesc": "查看所有任务",
+    "taskList": "任务清单",
+    "taskListDesc": "查看结构化任务",
     "tipCommandPalette": "按"
   },
 
@@ -575,3 +592,4 @@
     "failedDescription": "当前无法导出诊断信息。"
   }
 }
+

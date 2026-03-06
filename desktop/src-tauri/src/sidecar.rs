@@ -235,51 +235,57 @@ impl SidecarManager {
 
         info!("Spawning sidecar process...");
 
-        // Get sidecar path relative to app
-        // Get sidecar path relative to app (handle both project root and src-tauri CWD)
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let mut sidecar_path = cwd.join("../sidecar/src/main.ts");
-        
-        if !sidecar_path.exists() {
-             sidecar_path = cwd.join("../../sidecar/src/main.ts");
-             if !sidecar_path.exists() {
-                 warn!("Could not find sidecar main.ts at {:?} or ../{:?}", sidecar_path, sidecar_path);
-             }
-        }
+        let sidecar_path = Self::resolve_sidecar_entry_path()?;
+
+        let app_dir = Self::resolve_app_dir();
+        let app_data_dir = Self::resolve_app_data_dir(&app_handle);
 
         // Try to use bun for TypeScript execution (sidecar uses Bun runtime)
         let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
-        
-        let mut child = Command::new("bun")
+        info!("Resolved sidecar entry: {}", sidecar_path.display());
+
+        let mut bun_cmd = Command::new("bun");
+        bun_cmd
             .current_dir(sidecar_dir)
             .args(["run", "src/main.ts"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()) // Capture stderr
-            .spawn()
-            .or_else(|_| {
+            .env("COWORKANY_APP_DIR", &app_dir)
+            .env("COWORKANY_APP_DATA_DIR", &app_data_dir);
+        Self::apply_proxy_env(&mut bun_cmd);
+
+        let mut child = bun_cmd.spawn().or_else(|_| {
                 let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
                 let tsx_path = sidecar_dir.join("node_modules/tsx/dist/cli.mjs");
-                
+
                 // Fallback 1: Try local tsx with node (most robust)
                 if tsx_path.exists() {
-                    Command::new("node")
+                    let mut node_cmd = Command::new("node");
+                    node_cmd
                         .current_dir(sidecar_dir)
                         .args([tsx_path.to_str().unwrap(), "src/main.ts"])
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())
-                        .spawn()
+                        .env("COWORKANY_APP_DIR", &app_dir)
+                        .env("COWORKANY_APP_DATA_DIR", &app_data_dir);
+                    Self::apply_proxy_env(&mut node_cmd);
+                    node_cmd.spawn()
                 } else {
                     // Fallback 2: Try global npx (legacy)
                     let cmd = if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" };
-                    Command::new(cmd)
+                    let mut npx_cmd = Command::new(cmd);
+                    npx_cmd
                         .current_dir(sidecar_dir)
                         .args(["tsx", "src/main.ts"])
                         .stdin(Stdio::piped())
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())
-                        .spawn()
+                        .env("COWORKANY_APP_DIR", &app_dir)
+                        .env("COWORKANY_APP_DATA_DIR", &app_data_dir);
+                    Self::apply_proxy_env(&mut npx_cmd);
+                    npx_cmd.spawn()
                 }
             })?;
 
@@ -342,12 +348,11 @@ impl SidecarManager {
         Ok(())
     }
 
-    /// Send a command and wait for a matching ipc-response (by commandId).
-    pub fn send_and_wait(
+    /// Send a raw JSON command to the sidecar and return a receiver for the response
+    pub fn send_command_async(
         &self,
         command: serde_json::Value,
-        timeout_ms: u64,
-    ) -> Result<serde_json::Value, SidecarError> {
+    ) -> Result<Receiver<serde_json::Value>, SidecarError> {
         let command_id = command
             .get("id")
             .and_then(|v| v.as_str())
@@ -365,13 +370,7 @@ impl SidecarManager {
 
         self.send_raw_command(command)?;
 
-        match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-            Ok(response) => Ok(response),
-            Err(err) => Err(SidecarError::SendError(format!(
-                "response timeout: {}",
-                err
-            ))),
-        }
+        Ok(rx)
     }
 
     /// Shutdown the sidecar process
@@ -522,6 +521,116 @@ impl SidecarManager {
             }
         }
         debug!("Stderr reader loop ended");
+    }
+
+    fn resolve_app_dir() -> String {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn resolve_app_data_dir(app_handle: &AppHandle) -> String {
+        app_handle
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn resolve_sidecar_entry_path() -> Result<std::path::PathBuf, SidecarError> {
+        if let Ok(explicit) = std::env::var("COWORKANY_SIDECAR_ENTRY") {
+            let explicit_path = std::path::PathBuf::from(explicit);
+            if explicit_path.exists() {
+                return Ok(explicit_path);
+            }
+        }
+
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("../sidecar/src/main.ts"));
+            candidates.push(cwd.join("../../sidecar/src/main.ts"));
+        }
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                candidates.push(exe_dir.join("../../../../sidecar/src/main.ts"));
+                candidates.push(exe_dir.join("../../../sidecar/src/main.ts"));
+                candidates.push(exe_dir.join("../../sidecar/src/main.ts"));
+                candidates.push(exe_dir.join("../sidecar/src/main.ts"));
+            }
+        }
+
+        if let Some(path) = candidates.into_iter().find(|candidate| candidate.exists()) {
+            return Ok(path);
+        }
+
+        Err(SidecarError::SendError(
+            "Unable to locate sidecar/src/main.ts from current runtime paths".to_string(),
+        ))
+    }
+
+    fn first_non_empty_env(keys: &[&str]) -> Option<String> {
+        keys.iter()
+            .find_map(|key| std::env::var(key).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn sanitize_proxy_for_log(proxy_url: &str) -> String {
+        if let Some(at_pos) = proxy_url.rfind('@') {
+            let scheme_end = proxy_url.find("://").map(|pos| pos + 3).unwrap_or(0);
+            let tail = &proxy_url[at_pos + 1..];
+            if scheme_end > 0 {
+                return format!("{}***@{}", &proxy_url[..scheme_end], tail);
+            }
+            return format!("***@{}", tail);
+        }
+        proxy_url.to_string()
+    }
+
+    fn apply_proxy_env(command: &mut Command) {
+        // Priority:
+        // 1) explicit COWORKANY_PROXY_URL
+        // 2) standard proxy envs
+        // 3) global-agent envs
+        let proxy = Self::first_non_empty_env(&[
+            "COWORKANY_PROXY_URL",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "GLOBAL_AGENT_HTTPS_PROXY",
+            "GLOBAL_AGENT_HTTP_PROXY",
+        ]);
+
+        if let Some(proxy_url) = proxy {
+            // Populate both uppercase and lowercase to maximize runtime compatibility.
+            command
+                .env("HTTPS_PROXY", &proxy_url)
+                .env("https_proxy", &proxy_url)
+                .env("HTTP_PROXY", &proxy_url)
+                .env("http_proxy", &proxy_url)
+                .env("ALL_PROXY", &proxy_url)
+                .env("all_proxy", &proxy_url)
+                .env("GLOBAL_AGENT_HTTPS_PROXY", &proxy_url)
+                .env("GLOBAL_AGENT_HTTP_PROXY", &proxy_url);
+
+            let log_proxy = Self::sanitize_proxy_for_log(&proxy_url);
+            info!("Sidecar proxy enabled: {}", log_proxy);
+        }
+
+        let no_proxy = Self::first_non_empty_env(&["NO_PROXY", "no_proxy"])
+            .unwrap_or_else(|| "localhost,127.0.0.1,::1".to_string());
+        command
+            .env("NO_PROXY", &no_proxy)
+            .env("no_proxy", &no_proxy);
     }
 }
 

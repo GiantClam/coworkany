@@ -7,6 +7,7 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore } from '../stores/useTaskEventStore';
+import { useWorkspaceStore, type Workspace } from '../stores/useWorkspaceStore';
 
 // ============================================================================
 // Types
@@ -32,6 +33,7 @@ export interface StartTaskConfig {
 export interface StartTaskResult {
     success: boolean;
     taskId: string;
+    workspace?: Workspace;
     error?: string;
 }
 
@@ -54,6 +56,7 @@ export function useStartTask() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
+    const syncWorkspace = useWorkspaceStore((state) => state.syncWorkspace);
 
     const startTask = useCallback(
         async (input: StartTaskInput): Promise<StartTaskResult | null> => {
@@ -65,6 +68,9 @@ export function useStartTask() {
 
                 if (result.success) {
                     setActiveTask(result.taskId);
+                    if (result.workspace) {
+                        syncWorkspace(result.workspace);
+                    }
                 } else if (result.error) {
                     setError(result.error);
                 }
@@ -79,7 +85,7 @@ export function useStartTask() {
                 setIsLoading(false);
             }
         },
-        [setActiveTask]
+        [setActiveTask, syncWorkspace]
     );
 
     return {

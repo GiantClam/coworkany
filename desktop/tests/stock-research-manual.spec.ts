@@ -16,7 +16,7 @@ test.describe('Stock Research - Manual CoworkAny', () => {
         
         // 3. 找到输入框（尝试多个选择器）
         const selectors = [
-            'input[placeholder="Ask CoworkAny..."]',
+            '.chat-input',
             'input[placeholder="New instructions..."]',
             '.chat-input input',
             '.chat-input textarea',
@@ -47,20 +47,17 @@ test.describe('Stock Research - Manual CoworkAny', () => {
 
         console.log('[Test] Input ready, sending message...');
 
-        // 4. 发送任务
-        await input.fill(TASK_QUERY);
+        // 4. 发送任�?        await input.fill(TASK_QUERY);
         await input.press('Enter');
         console.log(`[Test] Sent: ${TASK_QUERY}`);
 
-        // 5. 等待Agent响应（最多10分钟）
-        console.log('[Test] Waiting for agent response (max 10 min)...');
+        // 5. 等待Agent响应（最�?0分钟�?        console.log('[Test] Waiting for agent response (max 10 min)...');
         let foundResponse = false;
         const startTime = Date.now();
         const MAX_WAIT = 10 * 60 * 1000; // 10分钟
         
         while (Date.now() - startTime < MAX_WAIT) {
-            await page.waitForTimeout(10000); // 每10秒检查一次
-            const elapsed = Math.round((Date.now() - startTime) / 1000);
+            await page.waitForTimeout(10000); // �?0秒检查一�?            const elapsed = Math.round((Date.now() - startTime) / 1000);
             
             try {
                 // 获取页面文本
@@ -70,8 +67,7 @@ test.describe('Stock Research - Manual CoworkAny', () => {
                 
                 const lowerText = pageText.toLowerCase();
                 
-                // 检查股票相关信息
-                const hasCloudflare = lowerText.includes('cloudflare') || lowerText.includes('net');
+                // 检查股票相关信�?                const hasCloudflare = lowerText.includes('cloudflare') || lowerText.includes('net');
                 const hasReddit = lowerText.includes('reddit') || lowerText.includes('rddt');
                 const hasNvidia = lowerText.includes('nvidia') || lowerText.includes('nvda');
                 const hasAnalysis = lowerText.includes('分析') || lowerText.includes('建议') || 
@@ -83,7 +79,7 @@ test.describe('Stock Research - Manual CoworkAny', () => {
                                  lowerText.includes('openai') || lowerText.includes('news');
                 
                 if ((hasCloudflare || hasReddit || hasNvidia) && hasAnalysis) {
-                    console.log(`[${elapsed}s] ✓ Found stock analysis!`);
+                    console.log(`[${elapsed}s] �?Found stock analysis!`);
                     console.log(`[${elapsed}s]   Cloudflare: ${hasCloudflare}`);
                     console.log(`[${elapsed}s]   Reddit: ${hasReddit}`);
                     console.log(`[${elapsed}s]   Nvidia: ${hasNvidia}`);
@@ -97,13 +93,12 @@ test.describe('Stock Research - Manual CoworkAny', () => {
                 
                 // 检查Agent是否拒绝
                 if (lowerText.includes('无法') && lowerText.includes('不能')) {
-                    console.log(`[${elapsed}s] ✗ Agent refused the request`);
+                    console.log(`[${elapsed}s] �?Agent refused the request`);
                     await page.screenshot({ path: 'test-results/stock-analysis-refused.png' });
                     break;
                 }
                 
-                // 每30秒报告进度
-                if (elapsed % 30 === 0) {
+                // �?0秒报告进�?                if (elapsed % 30 === 0) {
                     console.log(`[${elapsed}s] Still waiting... Checking page content`);
                 }
                 
@@ -127,3 +122,4 @@ test.describe('Stock Research - Manual CoworkAny', () => {
         expect(foundResponse, 'Agent should provide stock analysis').toBe(true);
     });
 });
+

@@ -6,28 +6,30 @@
 .workspace-selector-row {
     display: flex;
     align-items: center;
-    gap: var(--space-1);
+    gap: 6px;
 }
 
 .workspace-selector-button {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    background-color: var(--bg-element);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 12px;
+    background: rgba(12, 47, 45, 0.72);
+    border: 1px solid rgba(138, 232, 219, 0.14);
+    border-radius: 999px;
     color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
     white-space: nowrap;
 }
 
 .workspace-selector-button:hover:not(:disabled) {
-    background-color: var(--bg-element-hover);
-    border-color: var(--border-default);
+    background: rgba(15, 61, 58, 0.84);
+    border-color: rgba(138, 232, 219, 0.22);
+    transform: translateY(-1px);
 }
 
 .workspace-selector-button:disabled {
@@ -35,71 +37,89 @@
     cursor: not-allowed;
 }
 
-.workspace-selector-button.disabled {
-    opacity: 0.6;
-}
-
 .workspace-icon {
-    font-size: 14px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    color: var(--brand-600);
+    flex-shrink: 0;
 }
 
 .workspace-name {
-    max-width: 150px;
+    max-width: 170px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .workspace-arrow {
-    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-tertiary);
-    margin-left: var(--space-1);
+    flex-shrink: 0;
+}
+
+.workspace-arrow-icon {
+    transition: transform 160ms ease;
+}
+
+.workspace-arrow-icon.open {
+    transform: rotate(180deg);
 }
 
 .workspace-dropdown {
     position: absolute;
-    top: calc(100% + 4px);
+    top: calc(100% + 8px);
     left: 0;
-    min-width: 280px;
-    max-width: 400px;
-    background-color: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    z-index: 1000;
-    max-height: 300px;
+    min-width: 320px;
+    max-width: 420px;
+    background: rgba(7, 28, 27, 0.94);
+    border: 1px solid rgba(138, 232, 219, 0.14);
+    border-radius: 18px;
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-popover);
+    max-height: 320px;
     overflow-y: auto;
+    padding: 6px;
+    backdrop-filter: blur(14px) saturate(135%);
+    -webkit-backdrop-filter: blur(14px) saturate(135%);
 }
 
 .workspace-item {
-    padding: var(--space-3);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
     cursor: pointer;
-    border-bottom: 1px solid var(--border-subtle);
-    transition: background-color 0.15s ease;
-}
-
-.workspace-item:last-child {
-    border-bottom: none;
+    border-radius: 14px;
+    transition: background-color 160ms ease, transform 160ms ease;
 }
 
 .workspace-item:hover {
-    background-color: var(--bg-element-hover);
+    background: rgba(15, 56, 53, 0.72);
 }
 
 .workspace-item.active {
-    background-color: var(--accent-subtle);
+    background: rgba(20, 184, 166, 0.14);
+    box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.12);
 }
 
-.workspace-item.active .workspace-item-name {
-    color: var(--status-info);
-    font-weight: 600;
+.workspace-item-content {
+    min-width: 0;
+    flex: 1;
 }
 
 .workspace-item-name {
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text-primary);
-    margin-bottom: var(--space-1);
+    margin-bottom: 2px;
+}
+
+.workspace-item.active .workspace-item-name {
+    color: var(--brand-700);
 }
 
 .workspace-item-path {
@@ -111,58 +131,58 @@
     white-space: nowrap;
 }
 
-/* Create workspace button (+) */
 .btn-create-workspace {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-element);
+    border-radius: 999px;
+    border: 1px solid rgba(138, 232, 219, 0.14);
+    background: rgba(12, 47, 45, 0.6);
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+    transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
 .btn-create-workspace:hover {
-    background: var(--bg-element-hover);
-    border-color: var(--border-default);
+    background: rgba(15, 61, 58, 0.84);
+    border-color: rgba(138, 232, 219, 0.22);
+    transform: translateY(-1px);
 }
 
-/* Empty state hint */
 .workspace-empty-hint {
-    padding: var(--space-2);
+    padding: 10px 12px;
     color: var(--text-muted);
-    font-size: var(--font-size-xs);
+    font-size: 12px;
 }
 
-/* Rename input inside dropdown item */
 .workspace-rename-input {
     width: 100%;
-    padding: 4px var(--space-2);
+    padding: 6px 10px;
     font-size: 13px;
     font-family: var(--font-body);
     border: 1px solid var(--accent-primary);
-    border-radius: var(--radius-sm);
-    background: var(--bg-panel);
+    border-radius: 10px;
+    background: rgba(8, 31, 29, 0.84);
     color: var(--text-primary);
     outline: none;
 }
 
-/* Delete button */
 .workspace-delete-btn {
-    background: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
     border: none;
     cursor: pointer;
-    padding: 2px var(--space-1);
     color: var(--text-muted);
-    border-radius: var(--radius-sm);
+    border-radius: 10px;
     opacity: 0;
-    transition: opacity var(--transition-fast), color var(--transition-fast);
+    transition: opacity 160ms ease, color 160ms ease, background-color 160ms ease;
+    flex-shrink: 0;
 }
 
 .workspace-item:hover .workspace-delete-btn {
@@ -171,4 +191,5 @@
 
 .workspace-delete-btn:hover {
     color: var(--status-error);
+    background: rgba(251, 113, 133, 0.08);
 }

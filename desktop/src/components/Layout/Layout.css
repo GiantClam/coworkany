@@ -1,41 +1,54 @@
 .layout {
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    width: 100vw;
-    background-color: var(--bg-app);
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    background: transparent;
     color: var(--text-primary);
+    min-height: 0;
 }
 
 .layout-body {
     display: flex;
     flex: 1;
+    height: 100%;
     overflow: hidden;
     width: 100%;
+    min-width: 0;
+    min-height: 0;
+    padding: 16px 18px 18px;
+    box-sizing: border-box;
+    gap: 16px;
 }
 
 .layout-sidebar {
     flex-shrink: 0;
-    border-right: 1px solid var(--border-subtle);
     background-color: var(--bg-sidebar);
     display: flex;
     flex-direction: column;
     position: relative;
-    width: var(--sidebar-collapsed-width);
-    transition: width var(--ease-default);
-}
-
-.layout-sidebar:hover,
-.layout-sidebar:has(.sidebar:hover) {
     width: var(--sidebar-expanded-width);
+    border: 1px solid rgba(155, 239, 228, 0.12);
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgba(236, 255, 251, 0.06);
 }
 
 .layout-content {
     flex: 1;
+    height: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 0;
     position: relative;
-    background-color: var(--bg-app);
-    /* Or slightly lighter? No, consistent dark */
+    background:
+        radial-gradient(920px 340px at 50% -18%, rgba(94, 234, 212, 0.08), transparent 62%),
+        radial-gradient(640px 220px at 100% 0%, rgba(249, 115, 22, 0.05), transparent 58%),
+        linear-gradient(180deg, rgba(8, 35, 33, 0.84), rgba(5, 22, 21, 0.92));
+    border: 1px solid rgba(155, 239, 228, 0.14);
+    border-radius: 28px;
+    box-shadow: var(--shadow-float), inset 0 1px 0 rgba(236, 255, 251, 0.05);
 }

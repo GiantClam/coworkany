@@ -546,8 +546,13 @@ export const browserSetModeTool: ToolDefinition = {
             browserService.setMode(args.mode);
 
             let smartAvailable: boolean | undefined;
+            let smartUnavailableReason: string | undefined;
+            let sharedCdpUrl: string | undefined;
             if (args.mode === 'smart' || args.mode === 'auto') {
-                smartAvailable = await browserService.isBrowserUseAvailable();
+                const status = await browserService.getSmartModeStatus();
+                smartAvailable = status.available;
+                smartUnavailableReason = status.reason;
+                sharedCdpUrl = status.sharedCdpUrl;
             }
 
             return {
@@ -555,8 +560,9 @@ export const browserSetModeTool: ToolDefinition = {
                 previousMode,
                 currentMode: args.mode,
                 ...(smartAvailable !== undefined ? { smartModeAvailable: smartAvailable } : {}),
+                ...(sharedCdpUrl ? { sharedCdpUrl } : {}),
                 ...(args.mode === 'smart' && !smartAvailable ? {
-                    warning: 'browser-use-service is not running. Start it with: cd browser-use-service && python main.py',
+                    warning: smartUnavailableReason || 'Smart mode is unavailable.',
                 } : {}),
             };
         } catch (error) {

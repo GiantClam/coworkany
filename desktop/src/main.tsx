@@ -6,7 +6,9 @@ import { GlobalErrorBoundary } from './components/Common/AppErrorBoundary';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from './lib/tauri';
 import { initializeTheme } from './stores/themeStore';
-import './i18n'; // Initialize i18n before rendering
+import { hydrateLanguagePreference } from './i18n';
+import { getStartupMeasurementConfig, recordStartupMetric, type StartupMeasurementConfig } from './lib/startupMetrics';
+import './i18n';
 import './index.css';
 
 declare global {
@@ -14,73 +16,100 @@ declare global {
         __coworkanyPerf?: {
             appStart: number;
             firstPaint?: number;
+            windowLabel?: string;
+            startupMeasurement?: StartupMeasurementConfig;
         };
     }
 }
 
-// Apply persisted theme immediately to avoid flash
-initializeTheme();
+const defaultStartupMeasurement: StartupMeasurementConfig = {
+    enabled: false,
+    profile: 'optimized',
+    runLabel: '',
+};
 
-const renderApp = async () => {
-    window.__coworkanyPerf = {
-        appStart: performance.now(),
+function syncViewportCssVars() {
+    const root = document.documentElement;
+    root.style.setProperty('--app-vh', `${window.innerHeight}px`);
+    root.style.setProperty('--app-vw', `${window.innerWidth}px`);
+}
+
+let viewportCleanup: (() => void) | null = null;
+
+function ensureViewportSync() {
+    viewportCleanup?.();
+    syncViewportCssVars();
+    window.addEventListener('resize', syncViewportCssVars);
+    window.addEventListener('orientationchange', syncViewportCssVars);
+    viewportCleanup = () => {
+        window.removeEventListener('resize', syncViewportCssVars);
+        window.removeEventListener('orientationchange', syncViewportCssVars);
     };
+}
 
+function hideBootSkeleton() {
+    const boot = document.getElementById('boot-skeleton');
+    if (!boot) return;
+    boot.classList.add('boot-skeleton--hide');
+    window.setTimeout(() => {
+        boot.remove();
+    }, 220);
+}
+
+function renderApp() {
     let label = 'main';
     if (isTauri()) {
         try {
             label = getCurrentWindow().label;
-        } catch (e) {
-            console.warn('Failed to get window label, defaulting to main', e);
+        } catch (error) {
+            console.warn('Failed to get window label, defaulting to main', error);
         }
     }
 
+    const appStart = performance.now();
+    ensureViewportSync();
+    window.__coworkanyPerf = {
+        appStart,
+        windowLabel: label,
+        startupMeasurement: defaultStartupMeasurement,
+    };
+
     const root = ReactDOM.createRoot(document.getElementById('root')!);
+    root.render(
+        <React.StrictMode>
+            <GlobalErrorBoundary>
+                <ToastProvider>
+                    <App />
+                </ToastProvider>
+            </GlobalErrorBoundary>
+        </React.StrictMode>
+    );
+    hideBootSkeleton();
 
-    if (label === 'dashboard') {
-        const { DashboardView } = await import('./components/Dashboard/DashboardView');
-        root.render(
-            <React.StrictMode>
-                <GlobalErrorBoundary>
-                    <ToastProvider>
-                        <DashboardView />
-                    </ToastProvider>
-                </GlobalErrorBoundary>
-            </React.StrictMode>
-        );
-    } else if (label === 'settings') {
-        const { SettingsView } = await import('./components/Settings/SettingsView');
-        root.render(
-            <React.StrictMode>
-                <GlobalErrorBoundary>
-                    <ToastProvider>
-                        <SettingsView />
-                    </ToastProvider>
-                </GlobalErrorBoundary>
-            </React.StrictMode>
-        );
-    } else if (label === 'quickchat') {
-        const { QuickChatView } = await import('./components/QuickChat/QuickChatView');
-        root.render(
-            <React.StrictMode>
-                <GlobalErrorBoundary>
-                    <ToastProvider>
-                        <QuickChatView />
-                    </ToastProvider>
-                </GlobalErrorBoundary>
-            </React.StrictMode>
-        );
-    } else {
-        root.render(
-            <React.StrictMode>
-                <GlobalErrorBoundary>
-                    <ToastProvider>
-                        <App />
-                    </ToastProvider>
-                </GlobalErrorBoundary>
-            </React.StrictMode>
-        );
-    }
-};
+    void (async () => {
+        const startupMeasurement = await getStartupMeasurementConfig();
+        if (window.__coworkanyPerf) {
+            window.__coworkanyPerf.startupMeasurement = startupMeasurement;
+        }
+        await recordStartupMetric('frontend_bootstrap', 0, performance.now(), label);
+    })();
+}
 
-renderApp();
+void (async () => {
+    await Promise.all([
+        initializeTheme(),
+        hydrateLanguagePreference(),
+    ]);
+    renderApp();
+})();
+
+const hot = (import.meta as ImportMeta & {
+    hot?: { dispose: (cb: () => void) => void };
+}).hot;
+
+if (hot) {
+    hot.dispose(() => {
+        viewportCleanup?.();
+        viewportCleanup = null;
+    });
+}

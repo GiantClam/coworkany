@@ -5,10 +5,18 @@
  * Voice input uses the Web Speech API via useVoiceInput hook.
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVoiceInput } from '../../../hooks/useVoiceInput';
+import type { FileAttachment } from '../../../hooks/useFileAttachment';
 import { getCurrentLanguage } from '../../../i18n';
+import { AttachmentPreview } from './AttachmentPreview';
+
+interface LlmProfile {
+    id: string;
+    name: string;
+    provider: string;
+}
 
 interface InputAreaProps {
     query: string;
@@ -16,6 +24,15 @@ interface InputAreaProps {
     disabled: boolean;
     onQueryChange: (value: string) => void;
     onSubmit: (e: React.FormEvent) => void;
+    attachments: FileAttachment[];
+    attachmentError: string | null;
+    onRemoveAttachment: (id: string) => void;
+    onSelectFiles: (files: FileList | null) => void | Promise<void>;
+    onPaste: React.ClipboardEventHandler<HTMLDivElement>;
+    onDrop: React.DragEventHandler<HTMLFormElement>;
+    llmProfiles: LlmProfile[];
+    activeProfileId?: string;
+    onSelectProfile: (id: string) => void;
 }
 
 const InputAreaComponent: React.FC<InputAreaProps> = ({
@@ -24,9 +41,19 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     disabled,
     onQueryChange,
     onSubmit,
+    attachments,
+    attachmentError,
+    onRemoveAttachment,
+    onSelectFiles,
+    onPaste,
+    onDrop,
+    llmProfiles,
+    activeProfileId,
+    onSelectProfile,
 }) => {
     const { t } = useTranslation();
     const voiceInput = useVoiceInput(getCurrentLanguage());
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Track the previous transcript so we only append new text
     const prevTranscriptRef = useRef('');
@@ -42,15 +69,80 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     }, [voiceInput.transcript, onQueryChange, query]);
 
     const voiceLabel = voiceInput.isListening ? t('voice.stopRecording') : t('voice.startRecording');
+    const canSubmit = query.trim().length > 0 || attachments.length > 0;
+
+    const attachmentErrorText = useMemo(() => {
+        if (!attachmentError) return '';
+        if (attachmentError === 'file_too_large') {
+            return t('multimodal.fileTooLarge', { max: 10 });
+        }
+        if (attachmentError === 'max_files_reached') {
+            return 'Maximum 5 files reached';
+        }
+        return 'Failed to attach file';
+    }, [attachmentError, t]);
+
+    const handleOpenPicker = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = (event) => {
+        void onSelectFiles(event.target.files);
+        event.target.value = '';
+    };
+
+    const handleProfileChange: React.ChangeEventHandler<HTMLSelectElement> = (event) => {
+        const id = event.target.value;
+        if (id) {
+            onSelectProfile(id);
+        }
+    };
+
+    const handlePasteEvent: React.ClipboardEventHandler<HTMLDivElement> = (event) => {
+        if (disabled) return;
+        onPaste(event);
+    };
+
+    const handleDropEvent: React.DragEventHandler<HTMLFormElement> = (event) => {
+        if (disabled) {
+            event.preventDefault();
+            return;
+        }
+        onDrop(event);
+    };
 
     return (
-        <div className="input-area">
+        <div className="input-area" onPaste={handlePasteEvent}>
             {voiceInput.isListening && voiceInput.interimTranscript && (
                 <div className="voice-interim">
                     {voiceInput.interimTranscript}
                 </div>
             )}
-            <form onSubmit={onSubmit} className="input-container" aria-busy={disabled}>
+            {attachmentErrorText && (
+                <div className="attachment-error">{attachmentErrorText}</div>
+            )}
+            <AttachmentPreview
+                attachments={attachments}
+                onRemove={onRemoveAttachment}
+            />
+            <form
+                onSubmit={onSubmit}
+                onDrop={handleDropEvent}
+                onDragOver={(event) => event.preventDefault()}
+                className="input-container"
+                aria-busy={disabled}
+            >
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="file-input-hidden"
+                    onChange={handleFileChange}
+                    disabled={disabled}
+                    aria-hidden="true"
+                    tabIndex={-1}
+                />
                 <input
                     type="text"
                     className="chat-input"
@@ -60,6 +152,19 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                     disabled={disabled}
                     aria-label={placeholder}
                 />
+                <button
+                    type="button"
+                    className="attach-button"
+                    onClick={handleOpenPicker}
+                    disabled={disabled}
+                    title={t('multimodal.attachFile')}
+                    aria-label={t('multimodal.attachFile')}
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
                 {voiceInput.isSupported && (
                     <button
                         type="button"
@@ -81,7 +186,7 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                 <button
                     type="submit"
                     className="send-button"
-                    disabled={!query.trim() || disabled}
+                    disabled={!canSubmit || disabled}
                     aria-label={t('chat.sendMessage')}
                 >
                     <svg
@@ -100,6 +205,28 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                     </svg>
                 </button>
             </form>
+            <div className="input-meta-row">
+                <span className="input-mode-badge">Build</span>
+                <label className="llm-select-wrap">
+                    <span className="llm-select-icon" aria-hidden="true">AI</span>
+                    <select
+                        className="llm-select"
+                        value={activeProfileId ?? ''}
+                        onChange={handleProfileChange}
+                        disabled={disabled || llmProfiles.length === 0}
+                        aria-label={t('chat.llmSettings')}
+                    >
+                        {llmProfiles.length === 0 && (
+                            <option value="">{t('chat.noProfiles')}</option>
+                        )}
+                        {llmProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                                {profile.name}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            </div>
         </div>
     );
 };
@@ -110,7 +237,11 @@ const arePropsEqual = (prevProps: InputAreaProps, nextProps: InputAreaProps): bo
     return (
         prevProps.query === nextProps.query &&
         prevProps.placeholder === nextProps.placeholder &&
-        prevProps.disabled === nextProps.disabled
+        prevProps.disabled === nextProps.disabled &&
+        prevProps.attachmentError === nextProps.attachmentError &&
+        prevProps.activeProfileId === nextProps.activeProfileId &&
+        prevProps.attachments.map((item) => item.id).join('|') === nextProps.attachments.map((item) => item.id).join('|') &&
+        JSON.stringify(prevProps.llmProfiles) === JSON.stringify(nextProps.llmProfiles)
     );
 };
 

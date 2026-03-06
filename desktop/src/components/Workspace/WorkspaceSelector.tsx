@@ -7,6 +7,43 @@ interface WorkspaceSelectorProps {
     className?: string;
 }
 
+const FolderIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+    </svg>
+);
+
+const ChevronDown = ({ open }: { open: boolean }) => (
+    <svg
+        width="12"
+        height="12"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`workspace-arrow-icon ${open ? 'open' : ''}`}
+        aria-hidden="true"
+    >
+        <polyline points="6 9 12 15 18 9"></polyline>
+    </svg>
+);
+
+const PlusIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+    </svg>
+);
+
+const TrashIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+    </svg>
+);
+
 export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className }) => {
     const { t } = useTranslation();
     const { workspaces, activeWorkspace, selectWorkspace, createWorkspace, updateWorkspace, deleteWorkspace, isLoading } = useWorkspace();
@@ -16,19 +53,17 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
     const dropdownRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    // Focus input when editing starts
     useEffect(() => {
         if (editingId && inputRef.current) {
             inputRef.current.focus();
         }
     }, [editingId]);
 
-    // Close dropdown when clicking outside
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
                 setIsOpen(false);
-                setEditingId(null); // Cancel edit on close
+                setEditingId(null);
             }
         };
 
@@ -42,7 +77,7 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
     }, [isOpen]);
 
     const handleSelect = (workspace: Workspace) => {
-        if (editingId) return; // Don't select while editing
+        if (editingId) return;
         selectWorkspace(workspace);
         setIsOpen(false);
     };
@@ -53,47 +88,44 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
         }
     };
 
-    const handleQuickCreate = async (e: React.MouseEvent) => {
-        e.stopPropagation();
-        // Request default path by passing empty string
-        const newWorkspace = await createWorkspace('new workspace', '');
+    const handleQuickCreate = async (event: React.MouseEvent) => {
+        event.stopPropagation();
+        const newWorkspace = await createWorkspace();
         if (newWorkspace) {
             selectWorkspace(newWorkspace);
-            setIsOpen(true); // Open dropdown to show it
-            // Optional: immediately enter edit mode? User said "allow double click", not "auto enter edit".
+            setIsOpen(true);
         }
     };
 
-    const handleDoubleClick = (e: React.MouseEvent, workspace: Workspace) => {
-        e.stopPropagation();
+    const handleDoubleClick = (event: React.MouseEvent, workspace: Workspace) => {
+        event.stopPropagation();
         setEditingId(workspace.id);
         setEditName(workspace.name);
     };
 
-    const handleRenameSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
+    const handleRenameSubmit = async (event: React.FormEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
         if (editingId && editName.trim()) {
-            await updateWorkspace(editingId, { name: editName.trim() });
+            await updateWorkspace(editingId, { name: editName.trim(), autoNamed: false });
             setEditingId(null);
         }
     };
 
-    const handleDelete = async (e: React.MouseEvent, workspace: Workspace) => {
-        e.stopPropagation();
+    const handleDelete = async (event: React.MouseEvent, workspace: Workspace) => {
+        event.stopPropagation();
         if (window.confirm(t('workspace.deleteConfirm', { name: workspace.name, path: workspace.path }))) {
             await deleteWorkspace(workspace.id);
         }
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Escape') {
+    const handleKeyDown = (event: React.KeyboardEvent) => {
+        if (event.key === 'Escape') {
             setEditingId(null);
         }
     };
 
     const displayName = activeWorkspace?.name || t('workspace.noWorkspace');
-    // Always enable button to allow creating new workspace even if list is empty
     const hasWorkspaces = workspaces.length > 0;
 
     return (
@@ -107,9 +139,13 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
                     aria-haspopup="listbox"
                     aria-expanded={isOpen}
                 >
-                    <span className="workspace-icon" aria-hidden="true">📁</span>
+                    <span className="workspace-icon">
+                        <FolderIcon />
+                    </span>
                     <span className="workspace-name">{displayName}</span>
-                    <span className="workspace-arrow" aria-hidden="true">{isOpen ? '▲' : '▼'}</span>
+                    <span className="workspace-arrow">
+                        <ChevronDown open={isOpen} />
+                    </span>
                 </button>
                 <button
                     className="btn-create-workspace"
@@ -117,7 +153,7 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
                     title={t('workspace.createNewWorkspace')}
                     aria-label={t('workspace.createNewWorkspace')}
                 >
-                    +
+                    <PlusIcon />
                 </button>
             </div>
 
@@ -135,21 +171,21 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
                             aria-selected={activeWorkspace?.id === workspace.id}
                             tabIndex={0}
                             onClick={() => handleSelect(workspace)}
-                            onDoubleClick={(e) => handleDoubleClick(e, workspace)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
+                            onDoubleClick={(event) => handleDoubleClick(event, workspace)}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
                                     handleSelect(workspace);
                                 }
                             }}
                         >
                             {editingId === workspace.id ? (
-                                <form onSubmit={handleRenameSubmit} onClick={e => e.stopPropagation()}>
+                                <form onSubmit={handleRenameSubmit} onClick={(event) => event.stopPropagation()}>
                                     <input
                                         ref={inputRef}
                                         className="workspace-rename-input"
                                         value={editName}
-                                        onChange={e => setEditName(e.target.value)}
+                                        onChange={(event) => setEditName(event.target.value)}
                                         onBlur={() => setEditingId(null)}
                                         onKeyDown={handleKeyDown}
                                     />
@@ -162,11 +198,11 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
                                     </div>
                                     <button
                                         className="workspace-delete-btn"
-                                        onClick={(e) => handleDelete(e, workspace)}
+                                        onClick={(event) => handleDelete(event, workspace)}
                                         title={t('workspace.deleteTooltip')}
                                         aria-label={t('workspace.deleteWorkspace', { name: workspace.name })}
                                     >
-                                        🗑️
+                                        <TrashIcon />
                                     </button>
                                 </>
                             )}
@@ -181,5 +217,3 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
         </div>
     );
 };
-
-// Verified: Workspace deletion logic implemented

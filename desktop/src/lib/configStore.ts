@@ -5,6 +5,8 @@
  * Provides typed helpers for API keys, settings, and first-run detection.
  *
  * In non-Tauri environments (dev browser), falls back to localStorage.
+ * In Tauri runtime, never fall back to origin-bound localStorage because that
+ * would reintroduce dev/release divergence.
  */
 
 import { isTauri } from './tauri';
@@ -22,33 +24,52 @@ interface StoreBackend {
 
 let _store: StoreBackend | null = null;
 
+function createMemoryBackend(): StoreBackend {
+    const memory = new Map<string, unknown>();
+    return {
+        get: async <T>(key: string) => (memory.has(key) ? (memory.get(key) as T) : null),
+        set: async (key: string, value: unknown) => {
+            memory.set(key, value);
+        },
+        delete: async (key: string) => {
+            memory.delete(key);
+        },
+        save: async () => { /* noop for in-memory */ },
+    };
+}
+
 async function getStore(): Promise<StoreBackend> {
     if (_store) return _store;
 
-    if (isTauri()) {
-        try {
-            const { load } = await import('@tauri-apps/plugin-store');
-            const tauriStore = await load('settings.json', { defaults: {}, autoSave: true });
-            _store = {
-                get: async <T>(key: string) => {
-                    const val = await tauriStore.get<T>(key);
-                    return val ?? null;
-                },
-                set: async (key: string, value: unknown) => {
-                    await tauriStore.set(key, value);
-                },
-                delete: async (key: string) => {
-                    await tauriStore.delete(key);
-                },
-                save: async () => {
-                    await tauriStore.save();
-                },
-            };
-        } catch (e) {
-            console.warn('[configStore] Failed to initialize Tauri Store, falling back to localStorage', e);
+    try {
+        const { load } = await import('@tauri-apps/plugin-store');
+        const tauriStore = await load('settings.json', { defaults: {}, autoSave: true });
+        _store = {
+            get: async <T>(key: string) => {
+                const val = await tauriStore.get<T>(key);
+                return val ?? null;
+            },
+            set: async (key: string, value: unknown) => {
+                await tauriStore.set(key, value);
+            },
+            delete: async (key: string) => {
+                await tauriStore.delete(key);
+            },
+            save: async () => {
+                await tauriStore.save();
+            },
+        };
+    } catch (e) {
+        if (isTauri()) {
+            console.warn('[configStore] Failed to initialize Tauri Store, falling back to in-memory backend for this session', e);
+            _store = createMemoryBackend();
+        } else {
+            console.debug('[configStore] Tauri Store unavailable outside Tauri runtime, using localStorage backend');
             _store = createLocalStorageBackend();
         }
-    } else {
+    }
+
+    if (!_store) {
         _store = createLocalStorageBackend();
     }
 
@@ -73,6 +94,26 @@ function createLocalStorageBackend(): StoreBackend {
     };
 }
 
+function getLegacyLocalStorageValue<T>(key: string): T | null {
+    try {
+        const raw = localStorage.getItem(`coworkany:${key}`);
+        if (raw === null) {
+            return null;
+        }
+        return JSON.parse(raw) as T;
+    } catch {
+        return null;
+    }
+}
+
+function clearLegacyLocalStorageValue(key: string): void {
+    try {
+        localStorage.removeItem(`coworkany:${key}`);
+    } catch {
+        // Ignore cleanup failures.
+    }
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -80,7 +121,21 @@ function createLocalStorageBackend(): StoreBackend {
 /** Get a typed value from the store */
 export async function getConfig<T>(key: string): Promise<T | null> {
     const store = await getStore();
-    return store.get<T>(key);
+    const value = await store.get<T>(key);
+    if (value !== null) {
+        return value;
+    }
+
+    if (isTauri()) {
+        const legacy = getLegacyLocalStorageValue<T>(key);
+        if (legacy !== null) {
+            await store.set(key, legacy);
+            clearLegacyLocalStorageValue(key);
+            return legacy;
+        }
+    }
+
+    return null;
 }
 
 /** Set a value in the store */
@@ -119,7 +174,6 @@ export interface ShortcutConfig {
     openSettings: string;
     commandPalette: string;
     showShortcuts: string;
-    quickChat: string;
 }
 
 export const DEFAULT_SHORTCUTS: ShortcutConfig = {
@@ -128,7 +182,6 @@ export const DEFAULT_SHORTCUTS: ShortcutConfig = {
     openSettings: 'Ctrl+,',
     commandPalette: 'Ctrl+K',
     showShortcuts: 'Ctrl+/',
-    quickChat: 'Ctrl+Shift+J',
 };
 
 /** Get the current shortcut configuration */

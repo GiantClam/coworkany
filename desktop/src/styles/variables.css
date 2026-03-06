@@ -15,43 +15,39 @@
     --c-ink-900: #0f172a;
     --c-ink-950: #020617;
 
-    --bg-app: #ffffff;
-    --bg-sidebar: var(--c-ink-100);
-    --bg-panel: #ffffff;
-    --bg-element: var(--c-ink-100);
-    --bg-element-hover: var(--c-ink-200);
-    --bg-subtle: var(--c-ink-50);
+    --bg-app: #051716;
+    --bg-sidebar: rgba(6, 31, 30, 0.94);
+    --bg-panel: rgba(8, 35, 33, 0.92);
+    --bg-element: rgba(16, 52, 49, 0.9);
+    --bg-element-hover: rgba(24, 72, 68, 0.96);
+    --bg-subtle: rgba(10, 41, 38, 0.88);
 
     /* Borders */
-    --border-subtle: var(--c-ink-200);
-    --border-strong: var(--c-ink-400);
+    --border-subtle: rgba(114, 211, 197, 0.2);
+    --border-strong: rgba(157, 239, 229, 0.42);
 
     /* Text */
-    --text-primary: var(--c-ink-900);
-    --text-secondary: var(--c-ink-600);
-    --text-tertiary: var(--c-ink-400);
-    --text-muted: var(--c-ink-400);
-    --text-inverse: #ffffff;
-    --text-on-dark: var(--c-ink-50);
+    --text-primary: #ecfffb;
+    --text-secondary: #b8e8e1;
+    --text-tertiary: #7ec8bc;
+    --text-muted: #6ba99f;
+    --text-inverse: #06201e;
+    --text-on-dark: #ecfffb;
 
     /* Accents - Enterprise Blue */
-    --accent-primary: #2563eb;
-    --accent-hover: #1d4ed8;
-    --accent-subtle: rgba(37, 99, 235, 0.08);
+    --accent-primary: #14b8a6;
+    --accent-hover: #2dd4bf;
+    --accent-subtle: rgba(20, 184, 166, 0.18);
 
     /* Status - Muted/Natural */
-    --status-success: #4d7c0f;
-    /* Green-700 */
-    --status-error: #be123c;
-    /* Rose-700 */
-    --status-warning: #b45309;
-    /* Amber-700 */
-    --status-info: #0369a1;
-    /* Sky-700 */
+    --status-success: #34d399;
+    --status-error: #fb7185;
+    --status-warning: #f59e0b;
+    --status-info: #2dd4bf;
 
     /* Typography — Inter for clean modern look, system-ui as instant fallback */
-    --font-heading: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-body: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-heading: 'Rajdhani', 'Segoe UI', sans-serif;
+    --font-body: 'Manrope', 'Segoe UI', sans-serif;
     --font-code: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
 
     /* Spacing */
@@ -71,10 +67,10 @@
     --radius-full: 9999px;
 
     /* Shadows - Soft and Warm */
-    --shadow-sm: 0 1px 2px 0 rgba(28, 25, 23, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(28, 25, 23, 0.06), 0 2px 4px -2px rgba(28, 25, 23, 0.06);
-    --shadow-lg: 0 10px 15px -3px rgba(28, 25, 23, 0.08), 0 4px 6px -4px rgba(28, 25, 23, 0.08);
-    --shadow-float: 0 20px 25px -5px rgba(28, 25, 23, 0.1), 0 8px 10px -6px rgba(28, 25, 23, 0.1);
+    --shadow-sm: 0 8px 20px rgba(1, 15, 14, 0.22);
+    --shadow-md: 0 14px 34px rgba(1, 15, 14, 0.32);
+    --shadow-lg: 0 22px 52px rgba(1, 15, 14, 0.4);
+    --shadow-float: 0 28px 68px rgba(1, 15, 14, 0.46), 0 0 0 1px rgba(124, 229, 214, 0.12);
 
     /* Typography - Font Sizes */
     --font-size-xs: 0.75rem;    /* 12px */
@@ -123,78 +119,82 @@
     --input-height: 40px;
     --button-height: 40px;
     --header-height: 48px;
-    --sidebar-width: 280px;
+    --sidebar-width: 304px;
     
     /* Collapsible Sidebar */
     --sidebar-collapsed-width: 56px;
-    --sidebar-expanded-width: 220px;
+    --sidebar-expanded-width: 304px;
     
     /* Brand Colors (Enterprise Blue) */
-    --brand-50: #eff6ff;
-    --brand-100: #dbeafe;
-    --brand-200: #bfdbfe;
-    --brand-300: #93c5fd;
-    --brand-400: #60a5fa;
-    --brand-500: #3b82f6;
-    --brand-600: #2563eb;
-    --brand-700: #1d4ed8;
+    --brand-50: #042f2e;
+    --brand-100: #0f4f4c;
+    --brand-200: #0d766e;
+    --brand-300: #0f9e94;
+    --brand-400: #14b8a6;
+    --brand-500: #2dd4bf;
+    --brand-600: #5eead4;
+    --brand-700: #99f6e4;
     
     /* Glass Effect */
-    --glass-bg: rgba(255, 255, 255, 0.8);
-    --glass-bg-dark: rgba(0, 0, 0, 0.8);
-    --glass-blur: blur(12px);
+    --glass-bg: rgba(7, 34, 32, 0.78);
+    --glass-bg-dark: rgba(4, 22, 21, 0.9);
+    --glass-border: rgba(134, 229, 216, 0.2);
+    --glass-glow: rgba(45, 212, 191, 0.24);
+    --glass-blur: blur(14px) saturate(135%);
 }
 
 /* Dark Theme */
 [data-theme="dark"] {
     /* Inverted Ink Scale for Dark Mode */
-    --bg-app: var(--c-ink-900);
-    --bg-sidebar: var(--c-ink-800);
-    --bg-panel: var(--c-ink-800);
-    --bg-element: var(--c-ink-700);
-    --bg-element-hover: var(--c-ink-600);
-    --bg-subtle: #211f1d;
+    --bg-app: #041211;
+    --bg-sidebar: rgba(5, 24, 23, 0.95);
+    --bg-panel: rgba(6, 28, 27, 0.94);
+    --bg-element: rgba(14, 46, 43, 0.9);
+    --bg-element-hover: rgba(22, 67, 63, 0.94);
+    --bg-subtle: rgba(9, 36, 34, 0.9);
 
-    --border-subtle: var(--c-ink-700);
-    --border-strong: var(--c-ink-500);
+    --border-subtle: rgba(113, 207, 193, 0.18);
+    --border-strong: rgba(155, 239, 228, 0.34);
 
-    --text-primary: var(--c-ink-50);
-    --text-secondary: var(--c-ink-300);
-    --text-tertiary: var(--c-ink-400);
-    --text-muted: var(--c-ink-500);
-    --text-inverse: var(--c-ink-900);
-    --text-on-dark: var(--c-ink-50);
+    --text-primary: #effffb;
+    --text-secondary: #c0ece5;
+    --text-tertiary: #93d2c8;
+    --text-muted: #73b2a8;
+    --text-inverse: #041817;
+    --text-on-dark: #effffb;
 
     /* Slightly brighter accent in dark mode */
-    --accent-primary: #e88667;
-    --accent-hover: #f29877;
-    --accent-subtle: rgba(232, 134, 103, 0.12);
+    --accent-primary: #2dd4bf;
+    --accent-hover: #5eead4;
+    --accent-subtle: rgba(45, 212, 191, 0.16);
 
     /* Status colors — slightly brighter in dark mode */
-    --status-success: #65a30d;
-    --status-error: #e11d48;
-    --status-warning: #d97706;
-    --status-info: #0ea5e9;
+    --status-success: #6ee7b7;
+    --status-error: #fb7185;
+    --status-warning: #f59e0b;
+    --status-info: #5eead4;
 
     /* Shadows — darker in dark mode */
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
-    --shadow-float: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    --shadow-sm: 0 8px 18px rgba(0, 8, 7, 0.42);
+    --shadow-md: 0 16px 36px rgba(0, 8, 7, 0.5);
+    --shadow-lg: 0 28px 58px rgba(0, 8, 7, 0.58);
+    --shadow-float: 0 34px 72px rgba(0, 8, 7, 0.64), 0 0 0 1px rgba(129, 234, 219, 0.12);
     
     /* Brand Colors - Brighter in dark mode */
-    --brand-50: #1e3a5f;
-    --brand-100: #1e40af;
-    --brand-200: #1d4ed8;
-    --brand-300: #2563eb;
-    --brand-400: #3b82f6;
-    --brand-500: #60a5fa;
-    --brand-600: #93c5fd;
-    --brand-700: #bfdbfe;
+    --brand-50: #053b39;
+    --brand-100: #0b5e5a;
+    --brand-200: #0d7f78;
+    --brand-300: #10a89e;
+    --brand-400: #1fcdb9;
+    --brand-500: #5eead4;
+    --brand-600: #89f3e1;
+    --brand-700: #b8faee;
     
     /* Glass Effect - Dark mode */
-    --glass-bg: rgba(30, 30, 30, 0.8);
-    --glass-bg-dark: rgba(0, 0, 0, 0.8);
+    --glass-bg: rgba(6, 27, 26, 0.84);
+    --glass-bg-dark: rgba(3, 16, 15, 0.92);
+    --glass-border: rgba(138, 232, 219, 0.18);
+    --glass-glow: rgba(45, 212, 191, 0.2);
 
     /* Focus ring — brighter in dark mode */
     --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-primary);

@@ -11,8 +11,7 @@ test.describe('Stock Research - Check Logs & UI', () => {
         page.on('console', msg => {
             const text = msg.text();
             consoleLogs.push(text);
-            // 只显示关键日志
-            if (text.includes('TASK_') || text.includes('search_web') || 
+            // 只显示关键日�?            if (text.includes('TASK_') || text.includes('search_web') || 
                 text.includes('TEXT_DELTA') || text.includes('error') ||
                 text.includes('cloudflare') || text.includes('reddit') || text.includes('nvidia')) {
                 console.log(`[Browser Console] ${text.substring(0, 200)}`);
@@ -43,12 +42,10 @@ test.describe('Stock Research - Check Logs & UI', () => {
         await page.waitForTimeout(20000);
         console.log('[Test] UI should be ready');
         
-        // 先截图看看当前状态
-        await page.screenshot({ path: 'test-results/01-initial-state.png' });
+        // 先截图看看当前状�?        await page.screenshot({ path: 'test-results/01-initial-state.png' });
         
-        // 3. 找到输入框
-        const selectors = [
-            'input[placeholder="Ask CoworkAny..."]',
+        // 3. 找到输入�?        const selectors = [
+            '.chat-input',
             'input[placeholder="New instructions..."]',
             '.chat-input input',
             '.chat-input textarea',
@@ -64,7 +61,7 @@ test.describe('Stock Research - Check Logs & UI', () => {
                     await locator.waitFor({ state: 'visible', timeout: 5000 });
                     input = locator;
                     usedSelector = selector;
-                    console.log(`[Test] ✓ Found input: ${selector}`);
+                    console.log(`[Test] �?Found input: ${selector}`);
                     break;
                 }
             } catch {
@@ -74,20 +71,18 @@ test.describe('Stock Research - Check Logs & UI', () => {
 
         if (!input) {
             await page.screenshot({ path: 'test-results/02-no-input-found.png' });
-            console.log('[Test] ✗ Available selectors tried:', selectors);
-            console.log('[Test] ✗ Console logs so far:', consoleLogs.slice(-10));
+            console.log('[Test] �?Available selectors tried:', selectors);
+            console.log('[Test] �?Console logs so far:', consoleLogs.slice(-10));
             throw new Error('Could not find any input field');
         }
 
-        // 4. 发送任务
-        console.log(`[Test] Sending: ${TASK_QUERY}`);
+        // 4. 发送任�?        console.log(`[Test] Sending: ${TASK_QUERY}`);
         await input.fill(TASK_QUERY);
         await input.press('Enter');
         await page.screenshot({ path: 'test-results/03-message-sent.png' });
-        console.log('[Test] ✓ Message sent');
+        console.log('[Test] �?Message sent');
 
-        // 5. 等待并检查响应
-        console.log('[Test] Monitoring response (max 10 min)...');
+        // 5. 等待并检查响�?        console.log('[Test] Monitoring response (max 10 min)...');
         let foundResponse = false;
         let foundError = false;
         const startTime = Date.now();
@@ -97,14 +92,12 @@ test.describe('Stock Research - Check Logs & UI', () => {
             await page.waitForTimeout(5000);
             const elapsed = Math.round((Date.now() - startTime) / 1000);
             
-            // 检查浏览器控制台日志
-            const recentLogs = consoleLogs.slice(-20).join(' ').toLowerCase();
+            // 检查浏览器控制台日�?            const recentLogs = consoleLogs.slice(-20).join(' ').toLowerCase();
             const hasTaskFinished = recentLogs.includes('task_finished') || recentLogs.includes('task completed');
             const hasTaskFailed = recentLogs.includes('task_failed') || recentLogs.includes('error');
             const hasSearchWeb = recentLogs.includes('search_web');
             
-            // 检查页面内容
-            let pageText = '';
+            // 检查页面内�?            let pageText = '';
             try {
                 pageText = (await page.textContent('body', { timeout: 3000 })) || '';
             } catch {
@@ -123,8 +116,7 @@ test.describe('Stock Research - Check Logs & UI', () => {
             // 检查Agent是否拒绝
             const hasRefusal = lowerText.includes('无法') && lowerText.includes('不能');
             
-            // 每30秒报告一次详细状态
-            if (elapsed % 30 === 0) {
+            // �?0秒报告一次详细状�?            if (elapsed % 30 === 0) {
                 console.log(`\n[${elapsed}s] === Status Report ===`);
                 console.log(`[${elapsed}s] Console logs count: ${consoleLogs.length}`);
                 console.log(`[${elapsed}s] Has search_web: ${hasSearchWeb}`);
@@ -146,9 +138,8 @@ test.describe('Stock Research - Check Logs & UI', () => {
                 }
             }
             
-            // 成功条件：找到股票分析
-            if ((hasCloudflare || hasReddit || hasNvidia) && (hasAnalysis || hasAINews)) {
-                console.log(`\n[${elapsed}s] ✓✓✓ SUCCESS! Found stock analysis!`);
+            // 成功条件：找到股票分�?            if ((hasCloudflare || hasReddit || hasNvidia) && (hasAnalysis || hasAINews)) {
+                console.log(`\n[${elapsed}s] ✓✓�?SUCCESS! Found stock analysis!`);
                 console.log(`[${elapsed}s] Stocks found: Cloudflare=${hasCloudflare}, Reddit=${hasReddit}, Nvidia=${hasNvidia}`);
                 console.log(`[${elapsed}s] Has analysis: ${hasAnalysis}, Has AI news: ${hasAINews}`);
                 foundResponse = true;
@@ -158,7 +149,7 @@ test.describe('Stock Research - Check Logs & UI', () => {
             
             // 失败条件：任务失败或Agent拒绝
             if (hasTaskFailed || hasRefusal) {
-                console.log(`\n[${elapsed}s] ✗✗✗ FAILED! Task failed or agent refused`);
+                console.log(`\n[${elapsed}s] ✗✗�?FAILED! Task failed or agent refused`);
                 console.log(`[${elapsed}s] Has task_failed: ${hasTaskFailed}`);
                 console.log(`[${elapsed}s] Has refusal: ${hasRefusal}`);
                 foundError = true;
@@ -166,19 +157,16 @@ test.describe('Stock Research - Check Logs & UI', () => {
                 break;
             }
             
-            // 如果任务完成但没有找到分析内容
-            if (hasTaskFinished && !foundResponse) {
-                console.log(`\n[${elapsed}s] ⚠ Task finished but no stock analysis found in UI`);
+            // 如果任务完成但没有找到分析内�?            if (hasTaskFinished && !foundResponse) {
+                console.log(`\n[${elapsed}s] �?Task finished but no stock analysis found in UI`);
                 console.log(`[${elapsed}s] Page content preview: ${pageText.substring(0, 500)}...`);
                 await page.screenshot({ path: 'test-results/07-task-finished-no-analysis.png' });
-                // 不break，继续等待看看是否有延迟加载的内容
-            }
+                // 不break，继续等待看看是否有延迟加载的内�?            }
         }
 
         const totalTime = Math.round((Date.now() - startTime) / 1000);
         
-        // 最终报告
-        console.log('\n' + '='.repeat(70));
+        // 最终报�?        console.log('\n' + '='.repeat(70));
         console.log('FINAL TEST REPORT');
         console.log('='.repeat(70));
         console.log(`Total duration: ${totalTime}s`);
@@ -200,3 +188,4 @@ test.describe('Stock Research - Check Logs & UI', () => {
         expect(foundResponse, 'Should provide stock analysis').toBe(true);
     });
 });
+

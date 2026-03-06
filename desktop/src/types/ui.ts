@@ -5,18 +5,6 @@
  */
 
 // ============================================================================
-// View & Navigation Types
-// ============================================================================
-
-export type ViewMode = 'launcher' | 'panel' | 'dashboard';
-
-export interface NavigationState {
-    viewMode: ViewMode;
-    isTaskWindowOpen: boolean;
-    isDetailWindowOpen: boolean;
-}
-
-// ============================================================================
 // Workspace Types
 // ============================================================================
 
@@ -26,6 +14,7 @@ export interface Workspace {
     path: string;
     createdAt: string;
     lastUsedAt?: string;
+    autoNamed?: boolean;
     defaultSkills: string[];
     defaultToolpacks: string[];
 }
@@ -70,10 +59,28 @@ export interface SearchSettings {
     serperApiKey?: string;
 }
 
+export interface ProxySettings {
+    enabled?: boolean;
+    url?: string;
+    bypass?: string;
+}
+
 export interface LlmProfile {
     id: string;
     name: string;
-    provider: 'anthropic' | 'openrouter' | 'openai' | 'ollama' | 'custom';
+    provider:
+        | 'anthropic'
+        | 'openrouter'
+        | 'openai'
+        | 'aiberm'
+        | 'nvidia'
+        | 'siliconflow'
+        | 'gemini'
+        | 'qwen'
+        | 'minimax'
+        | 'kimi'
+        | 'ollama'
+        | 'custom';
     anthropic?: AnthropicProviderSettings;
     openrouter?: OpenRouterProviderSettings;
     openai?: OpenAIProviderSettings;
@@ -93,6 +100,7 @@ export interface LlmConfig {
     activeProfileId?: string;
     maxHistoryMessages?: number;
     search?: SearchSettings;
+    proxy?: ProxySettings;
 }
 
 // ============================================================================

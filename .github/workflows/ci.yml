@@ -32,9 +32,13 @@ jobs:
         working-directory: sidecar
         run: bun install
         
-      - name: Run sidecar tests
+      - name: TypeScript type check (sidecar)
         working-directory: sidecar
-        run: bun test tests/token-usage.test.ts
+        run: npm run typecheck
+
+      - name: Run sidecar CI tests
+        working-directory: sidecar
+        run: npm run test:ci
 
   test-desktop:
     runs-on: ubuntu-latest

@@ -73,20 +73,12 @@ test.describe('小红书发帖 - Tauri 桌面客户端 E2E', () => {
         await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
         await page.waitForTimeout(3000); // Extra time for React hydration
 
-        // The fixture selects the MAIN window page (not dashboard/settings).
-        // The main window starts in 'launcher' mode with a Launcher input.
-        // After typing and pressing Enter, it switches to 'panel' mode with ChatInterface.
-        //
-        // The Launcher input has placeholder "Ask CoworkAny..." — we look for it specifically
-        // to avoid accidentally interacting with Settings or Dashboard inputs.
-        const launcherInput = page.locator('input[placeholder="Ask CoworkAny..."]');
+        // The fixture selects the main app window and the app uses a single chat shell.
         const chatInput = page.locator('.chat-input');
 
-        // Wait for either the Launcher input or the ChatInterface input to appear
-        const input = await Promise.race([
-            launcherInput.waitFor({ state: 'visible', timeout: 60_000 }).then(() => launcherInput),
-            chatInput.waitFor({ state: 'visible', timeout: 60_000 }).then(() => chatInput),
-        ]);
+        // Wait for the chat composer to appear
+        await chatInput.waitFor({ state: 'visible', timeout: 60_000 });
+        const input = chatInput;
         const placeholder = await input.getAttribute('placeholder');
         console.log(`[Test] UI loaded - input visible, placeholder="${placeholder}"`);
 

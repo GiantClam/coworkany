@@ -8,11 +8,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+use std::fs;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
@@ -121,6 +122,20 @@ pub struct RagService {
     last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RagProxySettings {
+    enabled: Option<bool>,
+    url: Option<String>,
+    bypass: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RagLlmConfig {
+    proxy: Option<RagProxySettings>,
+}
+
 impl RagService {
     pub fn new() -> Self {
         Self {
@@ -142,7 +157,7 @@ impl RagService {
         }
     }
 
-    fn find_python(&self) -> Option<String> {
+    fn find_python() -> Option<String> {
         // Try different Python commands
         for cmd in &["python3", "python", "py"] {
             if let Ok(output) = Command::new(cmd)
@@ -155,6 +170,138 @@ impl RagService {
             }
         }
         None
+    }
+
+    fn first_non_empty_env(keys: &[&str]) -> Option<String> {
+        keys.iter()
+            .find_map(|key| std::env::var(key).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn sanitize_proxy_for_log(proxy_url: &str) -> String {
+        if let Some(at_pos) = proxy_url.rfind('@') {
+            let scheme_end = proxy_url.find("://").map(|pos| pos + 3).unwrap_or(0);
+            let tail = &proxy_url[at_pos + 1..];
+            if scheme_end > 0 {
+                return format!("{}***@{}", &proxy_url[..scheme_end], tail);
+            }
+            return format!("***@{}", tail);
+        }
+        proxy_url.to_string()
+    }
+
+    fn llm_config_path(app_handle: &AppHandle) -> Option<std::path::PathBuf> {
+        app_handle
+            .path()
+            .app_data_dir()
+            .ok()
+            .map(|dir| dir.join("llm-config.json"))
+    }
+
+    fn proxy_from_llm_config(app_handle: &AppHandle) -> Option<(String, Option<String>)> {
+        let path = Self::llm_config_path(app_handle)?;
+        let raw = fs::read_to_string(path).ok()?;
+        let config: RagLlmConfig = serde_json::from_str(&raw).ok()?;
+        let proxy = config.proxy?;
+        if proxy.enabled != Some(true) {
+            return None;
+        }
+        let url = proxy.url?.trim().to_string();
+        if url.is_empty() {
+            return None;
+        }
+        let bypass = proxy
+            .bypass
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        Some((url, bypass))
+    }
+
+    fn apply_proxy_env(command: &mut Command, app_handle: &AppHandle) {
+        let proxy_from_config = Self::proxy_from_llm_config(app_handle);
+        let proxy = proxy_from_config
+            .as_ref()
+            .map(|(url, _)| url.to_string())
+            .or_else(|| {
+                Self::first_non_empty_env(&[
+                    "COWORKANY_PROXY_URL",
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                    "HTTP_PROXY",
+                    "http_proxy",
+                    "GLOBAL_AGENT_HTTPS_PROXY",
+                    "GLOBAL_AGENT_HTTP_PROXY",
+                ])
+            });
+
+        if let Some(proxy_url) = proxy {
+            command
+                .env("HTTPS_PROXY", &proxy_url)
+                .env("https_proxy", &proxy_url)
+                .env("HTTP_PROXY", &proxy_url)
+                .env("http_proxy", &proxy_url)
+                .env("ALL_PROXY", &proxy_url)
+                .env("all_proxy", &proxy_url)
+                .env("GLOBAL_AGENT_HTTPS_PROXY", &proxy_url)
+                .env("GLOBAL_AGENT_HTTP_PROXY", &proxy_url);
+
+            let log_proxy = Self::sanitize_proxy_for_log(&proxy_url);
+            if proxy_from_config.is_some() {
+                info!("[RAG] Proxy enabled from llm-config: {}", log_proxy);
+            } else {
+                info!("[RAG] Proxy enabled from environment: {}", log_proxy);
+            }
+        }
+
+        let no_proxy = proxy_from_config
+            .as_ref()
+            .and_then(|(_, bypass)| bypass.clone())
+            .or_else(|| Self::first_non_empty_env(&["NO_PROXY", "no_proxy"]))
+            .unwrap_or_else(|| "localhost,127.0.0.1,::1".to_string());
+        command.env("NO_PROXY", &no_proxy).env("no_proxy", &no_proxy);
+    }
+
+    fn model_cache_dirs() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let base = dirs::home_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+            .join(".coworkany")
+            .join("models");
+        let hf_home = base.join("hf");
+        let sentence_transformers_home = base.join("sentence-transformers");
+        let transformers_cache = hf_home.join("hub");
+
+        if let Err(e) = fs::create_dir_all(&hf_home) {
+            warn!("[RAG] Failed to create HF_HOME directory {:?}: {}", hf_home, e);
+        }
+        if let Err(e) = fs::create_dir_all(&sentence_transformers_home) {
+            warn!(
+                "[RAG] Failed to create SENTENCE_TRANSFORMERS_HOME directory {:?}: {}",
+                sentence_transformers_home, e
+            );
+        }
+        if let Err(e) = fs::create_dir_all(&transformers_cache) {
+            warn!(
+                "[RAG] Failed to create TRANSFORMERS_CACHE directory {:?}: {}",
+                transformers_cache, e
+            );
+        }
+
+        (hf_home, sentence_transformers_home, transformers_cache)
+    }
+
+    fn apply_model_cache_env(command: &mut Command) {
+        let (hf_home, sentence_transformers_home, transformers_cache) = Self::model_cache_dirs();
+        command
+            .env("HF_HOME", hf_home.to_string_lossy().as_ref())
+            .env(
+                "SENTENCE_TRANSFORMERS_HOME",
+                sentence_transformers_home.to_string_lossy().as_ref(),
+            )
+            .env("TRANSFORMERS_CACHE", transformers_cache.to_string_lossy().as_ref());
     }
 
     fn get_rag_service_path(&self) -> std::path::PathBuf {
@@ -202,6 +349,51 @@ impl RagService {
         warn!("[RAG] Could not find rag-service directory, using default");
         std::path::PathBuf::from(r"d:\private\coworkany\rag-service")
     }
+
+    pub fn predownload_embedding_model(app_handle: &AppHandle) -> Result<String, ProcessError> {
+        let python = Self::find_python().ok_or_else(|| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Python not found. Please install Python 3.8+",
+            ))
+        })?;
+
+        let rag_path = Self::new().get_rag_service_path();
+        let model_name = std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
+        info!("[RAG] Predownloading embedding model: {}", model_name);
+
+        let mut cmd = Command::new(&python);
+        cmd.current_dir(&rag_path)
+            .arg("-c")
+            .arg(
+                "from sentence_transformers import SentenceTransformer; import os; m=os.getenv('EMBEDDING_MODEL','all-MiniLM-L6-v2'); model=SentenceTransformer(m); print(f'model_ready:{m}:{model.get_sentence_embedding_dimension()}')",
+            )
+            .env("EMBEDDING_MODEL", &model_name)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        Self::apply_proxy_env(&mut cmd, app_handle);
+        Self::apply_model_cache_env(&mut cmd);
+
+        let output = cmd.output()?;
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let message = stdout
+                .lines()
+                .rev()
+                .find(|line| line.contains("model_ready:"))
+                .unwrap_or("model_ready")
+                .to_string();
+            info!("[RAG] Predownload complete: {}", message);
+            Ok(message)
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Err(ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("RAG model predownload failed: {}", stderr),
+            )))
+        }
+    }
 }
 
 impl ManagedService for RagService {
@@ -224,7 +416,7 @@ impl ManagedService for RagService {
         // the health-check from succeeding against an orphaned process.
         Self::kill_stale_process_on_port(8787);
 
-        let python = self.find_python().ok_or_else(|| {
+        let python = Self::find_python().ok_or_else(|| {
             ProcessError::SpawnError(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Python not found. Please install Python 3.8+",
@@ -262,6 +454,8 @@ impl ManagedService for RagService {
             .env("RAG_PORT", "8787")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        Self::apply_proxy_env(&mut cmd, _app_handle);
+        Self::apply_model_cache_env(&mut cmd);
 
         let mut child = cmd.spawn()?;
         let pid = child.id();
@@ -583,6 +777,16 @@ impl ProcessManager {
                 name
             )))
         }
+    }
+
+    pub fn predownload_rag_model(&mut self) -> Result<String, ProcessError> {
+        let app_handle = self.app_handle.clone().ok_or_else(|| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "No app handle set",
+            ))
+        })?;
+        RagService::predownload_embedding_model(&app_handle)
     }
 }
 

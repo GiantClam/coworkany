@@ -7,12 +7,20 @@
 import { useMemo } from 'react';
 import type { TaskSession, TimelineItemType } from '../../../../types';
 
+export interface TimelineItemsResult {
+    items: TimelineItemType[];
+    hiddenEventCount: number;
+}
+
 /**
  * Process session events into timeline items
  * Handles event aggregation, streaming text, and status updates
  */
-export function useTimelineItems(session: TaskSession): TimelineItemType[] {
+export function useTimelineItems(session: TaskSession, maxRecentEvents?: number): TimelineItemsResult {
     return useMemo(() => {
+        const sourceEvents = typeof maxRecentEvents === 'number' && maxRecentEvents > 0
+            ? session.events.slice(Math.max(0, session.events.length - maxRecentEvents))
+            : session.events;
         const items: TimelineItemType[] = [];
         const toolMap = new Map<string, TimelineItemType & { type: 'tool_call' }>();
         const effectMap = new Map<string, TimelineItemType & { type: 'effect_request' }>();
@@ -20,7 +28,7 @@ export function useTimelineItems(session: TaskSession): TimelineItemType[] {
 
         let currentDraftId: string | null = null;
 
-        for (const event of session.events) {
+        for (const event of sourceEvents) {
             const payload = event.payload as any;
 
             switch (event.type) {
@@ -153,6 +161,9 @@ export function useTimelineItems(session: TaskSession): TimelineItemType[] {
                     break;
             }
         }
-        return items;
-    }, [session.events]);
+        return {
+            items,
+            hiddenEventCount: session.events.length - sourceEvents.length,
+        };
+    }, [maxRecentEvents, session.events]);
 }

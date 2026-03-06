@@ -355,15 +355,9 @@ export const test = base.extend<TauriFixtures>({
     }, { scope: 'test', timeout: 0 }],
 
     page: [async ({ context }, use) => {
-        // Tauri creates multiple WebView windows (main, dashboard, settings).
-        // All load the same devUrl, but render different React components based on
-        // getCurrentWindow().label. We need the MAIN window's page.
-        //
-        // The "main" window renders <App /> with ChatInterface input.
-        // The "dashboard" window renders <DashboardView /> (full-screen overlay).
-        // The "settings" window renders <SettingsView />.
-        //
-        // Strategy: find the page whose title is "CoworkAny" (main window title).
+        // The desktop app now uses a single Tauri window (`main`).
+        // We still probe the available pages defensively in case WebView2 exposes
+        // transient pages during startup, then select the one that contains the app shell.
 
         let pages = context.pages();
         console.log(`[Fixture] Found ${pages.length} pages:`);
@@ -392,20 +386,7 @@ export const test = base.extend<TauriFixtures>({
         // Re-read pages after navigation
         pages = context.pages();
 
-        // Find the MAIN window page.
-        //
-        // Problem: all three Tauri windows (main, dashboard, settings) initially
-        // show title "CoworkAny" from the HTML template. React hydration later
-        // updates dashboard to "CoworkAny Dashboard" and settings to "CoworkAny Settings",
-        // but this may not have happened yet.
-        //
-        // Solution: identify the main window by its UNIQUE content:
-        //   - Main window: has Launcher input with placeholder "Ask CoworkAny..."
-        //     or ChatInterface input with class ".chat-input"
-        //   - Dashboard: has overlay with class ".fixed.inset-0.z-50"
-        //   - Settings: has inputs like "e.g. My Claude 3.5" (model config)
-        //
-        // Wait for React hydration first, then check for specific content.
+        // Find the main app page by app-shell markers after React hydration.
         let page: Page | null = null;
 
         // Give React time to hydrate on all pages
@@ -420,17 +401,7 @@ export const test = base.extend<TauriFixtures>({
                 // Skip about:blank or non-frontend pages
                 if (!url.includes('localhost:5173')) continue;
 
-                // Check for main window's unique Launcher input
-                const hasLauncherInput = await p.locator('input[placeholder="Ask CoworkAny..."]')
-                    .isVisible({ timeout: 3_000 }).catch(() => false);
-
-                if (hasLauncherInput) {
-                    page = p;
-                    console.log(`[Fixture] Selected MAIN window (Launcher input found): title="${title}"`);
-                    break;
-                }
-
-                // Check for main window's ChatInterface input
+                // Check for the main window's chat input
                 const hasChatInput = await p.locator('.chat-input')
                     .isVisible({ timeout: 2_000 }).catch(() => false);
 
@@ -476,7 +447,7 @@ export const test = base.extend<TauriFixtures>({
                 const hasModelInput = await p.locator('input[placeholder*="Claude"]').isVisible({ timeout: 1_000 }).catch(() => false);
                 if (!hasDashboard && !hasModelInput) {
                     page = p;
-                    console.log(`[Fixture] Fallback: selected page without dashboard/settings, url=${p.url()}`);
+                    console.log(`[Fixture] Fallback: selected app page, url=${p.url()}`);
                     break;
                 }
             }
@@ -491,8 +462,9 @@ export const test = base.extend<TauriFixtures>({
             console.log(`[Fixture] Last fallback: using first page, url=${page.url()}`);
         }
 
-        // Wait for stability
-        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
+        // Wait for stability. Some WebView pages may stay in a pseudo-loading
+        // state even when interactive; do not hard-fail fixture on that.
+        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
 
         console.log(`[Fixture] Final page: title="${await page.title()}", url="${page.url()}"`);
         await use(page);

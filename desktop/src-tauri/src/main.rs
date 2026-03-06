@@ -12,7 +12,6 @@
 mod diff;
 mod git_integration;
 mod ipc;
-mod magnetic_window;
 mod policy;
 mod process_manager;
 mod shadow_fs;
@@ -31,6 +30,16 @@ use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 use tracing::{info, warn, error};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+const APP_IDENTIFIER: &str = "com.coworkany.desktop";
+
+fn shared_app_data_dir() -> std::path::PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        })
+        .join(APP_IDENTIFIER)
+}
 
 /// IPC command to update the global shortcut for toggling the main window.
 /// Unregisters the old shortcut and registers the new one.
@@ -55,12 +64,12 @@ fn update_global_shortcut(
 }
 
 fn main() {
+    ipc::init_startup_clock();
+
     // ---------- Log directory setup ----------
-    // Logs go to .coworkany/logs/ under the current working directory.
-    let log_dir = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join(".coworkany")
-        .join("logs");
+    // Logs go to the shared application data directory so dev and release
+    // write to the same location.
+    let log_dir = shared_app_data_dir().join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
 
     // Daily-rotated file appender: desktop-YYYY-MM-DD.log
@@ -88,7 +97,6 @@ fn main() {
         .manage(ProcessManagerState::new())
         .manage::<ShadowFsState>(Arc::new(Mutex::new(None)))
         .manage(PolicyEngineState::new(Box::new(ConsoleAuditSink)))
-        .manage(magnetic_window::MagneticWindowState::new()) // Added
         .invoke_handler(tauri::generate_handler![
             // Sidecar commands
             ipc::start_task,
@@ -103,6 +111,8 @@ fn main() {
             ipc::get_workspace_root,
             ipc::load_sessions,
             ipc::save_sessions,
+            ipc::get_startup_measurement_config,
+            ipc::record_startup_metric,
             ipc::spawn_sidecar,
             ipc::shutdown_sidecar,
             ipc::list_toolpacks,
@@ -146,17 +156,16 @@ fn main() {
             policy::commands::report_runtime_security_alert,
             // Service management commands
             ipc::start_all_services,
+            ipc::start_all_services_background,
             ipc::stop_all_services,
             ipc::start_service,
             ipc::stop_service,
             ipc::get_all_services_status,
             ipc::get_service_status,
             ipc::health_check_service,
+            ipc::prepare_rag_embedding_model,
             // Window commands
-            window_manager::set_window_state,
-            window_manager::open_quickchat,
-            window_manager::close_quickchat,
-            magnetic_window::sync_window_positions, // Added
+            window_manager::quit_app,
             // Git commands
             git_integration::git_status,
             git_integration::git_commit,
@@ -321,19 +330,6 @@ fn main() {
                     }
                 });
                 info!("Sidecar watchdog thread started");
-            }
-
-            // Listen for move events on main window
-            if let Some(main_window) = app.get_webview_window("main") {
-                let handle = app_handle.clone();
-                main_window.on_window_event(move |event| {
-                    match event {
-                        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
-                            magnetic_window::update_secondary_windows(&handle);
-                        }
-                        _ => {}
-                    }
-                });
             }
 
             // Initialize system tray

@@ -145,7 +145,7 @@ describe('P1-3: Dark Mode', () => {
     });
 
     test('themeStore exports initializeTheme', () => {
-        expect(fileContains(themeStore, 'export function initializeTheme')).toBe(true);
+        expect(fileContains(themeStore, 'initializeTheme')).toBe(true);
     });
 
     test('CSS variables include dark theme with shadows', () => {

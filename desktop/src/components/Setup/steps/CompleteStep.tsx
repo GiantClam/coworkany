@@ -28,9 +28,7 @@ export function CompleteStep({ provider, apiKeyConfigured }: CompleteStepProps) 
                     <span className={styles.summaryLabel}>{t('setup.aiProvider')}</span>
                     <span className={styles.summaryValue}>
                         {apiKeyConfigured
-                            ? provider === 'openrouter'
-                                ? 'OpenRouter'
-                                : 'Anthropic (Claude)'
+                            ? provider
                             : t('setup.notConfigured')}
                     </span>
                 </div>

@@ -20,6 +20,7 @@
     ],
     "scripts": {
         "dev": "vite",
+        "dev:tauri-server": "node scripts/start-tauri-dev-server.mjs",
         "build": "tsc && vite build",
         "preview": "vite preview",
         "tauri": "tauri",

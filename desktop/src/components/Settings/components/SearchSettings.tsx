@@ -1,7 +1,7 @@
 /**
  * SearchSettings Component
  *
- * Configuration for web search providers
+ * Configuration for web search providers.
  */
 
 import { useTranslation } from 'react-i18next';
@@ -14,11 +14,17 @@ interface SearchSettingsProps {
     saved: boolean;
 }
 
+const CheckIcon = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="20 6 9 17 4 12" />
+    </svg>
+);
+
 export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps) {
     const { t } = useTranslation();
 
-    const handleSave = (newSettings: SearchSettingsType) => {
-        void onSave(newSettings);
+    const handleSave = (next: SearchSettingsType) => {
+        void onSave(next);
     };
 
     return (
@@ -26,13 +32,14 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
             <div className={styles.sectionHeader}>
                 <div>
                     <h3>{t('settings.webSearchSettings')}</h3>
-                    <p>
-                        {t('settings.searchDescription')}
-                    </p>
+                    <p>{t('settings.searchDescription')}</p>
                 </div>
                 {saved && (
                     <span className={styles.savedIndicator}>
-                        ✓ {t('settings.saved')}
+                        <span className={styles.savedIndicatorIcon}>
+                            <CheckIcon />
+                        </span>
+                        {t('settings.saved')}
                     </span>
                 )}
             </div>
@@ -43,8 +50,8 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                         <select
                             className={styles.inputField}
                             value={settings.provider ?? 'searxng'}
-                            onChange={(e) => {
-                                const provider = e.target.value as SearchSettingsType['provider'];
+                            onChange={(event) => {
+                                const provider = event.target.value as SearchSettingsType['provider'];
                                 handleSave({ ...settings, provider });
                             }}
                         >
@@ -61,7 +68,7 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                                 className={styles.inputField}
                                 type="text"
                                 value={settings.searxngUrl ?? ''}
-                                onChange={(e) => handleSave({ ...settings, searxngUrl: e.target.value || undefined })}
+                                onChange={(event) => handleSave({ ...settings, searxngUrl: event.target.value || undefined })}
                                 placeholder={t('settings.searxngPlaceholder')}
                             />
                         </Field>
@@ -74,7 +81,7 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                             className={styles.inputField}
                             type="password"
                             value={settings.serperApiKey ?? ''}
-                            onChange={(e) => handleSave({ ...settings, serperApiKey: e.target.value || undefined })}
+                            onChange={(event) => handleSave({ ...settings, serperApiKey: event.target.value || undefined })}
                             placeholder={t('settings.serperPlaceholder')}
                         />
                         <a href="https://serper.dev" target="_blank" rel="noopener noreferrer" className={styles.link}>
@@ -87,7 +94,7 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                             className={styles.inputField}
                             type="password"
                             value={settings.tavilyApiKey ?? ''}
-                            onChange={(e) => handleSave({ ...settings, tavilyApiKey: e.target.value || undefined })}
+                            onChange={(event) => handleSave({ ...settings, tavilyApiKey: event.target.value || undefined })}
                             placeholder={t('settings.tavilyPlaceholder')}
                         />
                         <a href="https://tavily.com" target="_blank" rel="noopener noreferrer" className={styles.link}>
@@ -100,7 +107,7 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                             className={styles.inputField}
                             type="password"
                             value={settings.braveApiKey ?? ''}
-                            onChange={(e) => handleSave({ ...settings, braveApiKey: e.target.value || undefined })}
+                            onChange={(event) => handleSave({ ...settings, braveApiKey: event.target.value || undefined })}
                             placeholder={t('settings.bravePlaceholder')}
                         />
                         <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer" className={styles.link}>
@@ -110,9 +117,7 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                 </div>
             </div>
 
-            <div className={styles.infoBox}>
-                {t('settings.providerFallback')}
-            </div>
+            <div className={styles.infoBox}>{t('settings.providerFallback')}</div>
         </div>
     );
 }

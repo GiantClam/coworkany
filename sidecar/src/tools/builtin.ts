@@ -40,6 +40,75 @@ interface MemoryStore {
     entries: MemoryEntry[];
 }
 
+function normalizeMemoryEntry(entry: unknown): MemoryEntry | null {
+    if (!entry || typeof entry !== 'object') return null;
+    const candidate = entry as Partial<MemoryEntry>;
+    if (typeof candidate.key !== 'string' || typeof candidate.value !== 'string') {
+        return null;
+    }
+
+    return {
+        key: candidate.key,
+        value: candidate.value,
+        category: typeof candidate.category === 'string' ? candidate.category : undefined,
+        timestamp: typeof candidate.timestamp === 'string'
+            ? candidate.timestamp
+            : new Date().toISOString(),
+    };
+}
+
+function normalizeMemoryStore(raw: unknown): MemoryStore {
+    if (Array.isArray(raw)) {
+        return {
+            entries: raw
+                .map(normalizeMemoryEntry)
+                .filter((entry): entry is MemoryEntry => entry !== null),
+        };
+    }
+
+    if (raw && typeof raw === 'object' && Array.isArray((raw as { entries?: unknown[] }).entries)) {
+        return {
+            entries: (raw as { entries: unknown[] }).entries
+                .map(normalizeMemoryEntry)
+                .filter((entry): entry is MemoryEntry => entry !== null),
+        };
+    }
+
+    return { entries: [] };
+}
+
+function tokenizeMemoryText(value: string): string[] {
+    return value
+        .toLowerCase()
+        .replace(/favorite_lang/g, 'favorite language')
+        .replace(/\blang\b/g, 'language')
+        .replace(/_/g, ' ')
+        .match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) ?? [];
+}
+
+function scoreMemoryMatch(entry: MemoryEntry, query: string): number {
+    const haystack = `${entry.key} ${entry.value} ${entry.category ?? ''}`.toLowerCase();
+    const queryLower = query.toLowerCase();
+
+    if (haystack.includes(queryLower)) {
+        return 100;
+    }
+
+    const queryTokens = tokenizeMemoryText(query)
+        .filter(token => token.length > 1)
+        .filter((token, index, tokens) => tokens.indexOf(token) === index);
+    const entryTokens = new Set(tokenizeMemoryText(haystack));
+
+    let score = 0;
+    for (const token of queryTokens) {
+        if (entryTokens.has(token)) {
+            score += token.length >= 4 ? 3 : 1;
+        }
+    }
+
+    return score;
+}
+
 function getMemoryStorePath(workspacePath: string): string {
     const coworkanyDir = path.join(workspacePath, '.coworkany');
     if (!fs.existsSync(coworkanyDir)) {
@@ -53,7 +122,7 @@ function loadMemoryStore(workspacePath: string): MemoryStore {
     try {
         if (fs.existsSync(storePath)) {
             const content = fs.readFileSync(storePath, 'utf-8');
-            return JSON.parse(content) as MemoryStore;
+            return normalizeMemoryStore(JSON.parse(content));
         }
     } catch (error) {
         console.error('[Memory] Failed to load memory store:', error);
@@ -64,7 +133,8 @@ function loadMemoryStore(workspacePath: string): MemoryStore {
 function saveMemoryStore(workspacePath: string, store: MemoryStore): void {
     const storePath = getMemoryStorePath(workspacePath);
     try {
-        fs.writeFileSync(storePath, JSON.stringify(store, null, 2), 'utf-8');
+        // Persist as a flat array to remain compatible with older local test data.
+        fs.writeFileSync(storePath, JSON.stringify(store.entries, null, 2), 'utf-8');
     } catch (error) {
         console.error('[Memory] Failed to save memory store:', error);
     }
@@ -145,7 +215,7 @@ export const recallTool: ToolDefinition = {
     handler: async (args: { query: string; key?: string; category?: string }, context: ToolContext) => {
         const store = loadMemoryStore(context.workspacePath);
 
-        let results = store.entries;
+        let results = [...store.entries];
 
         // Filter by key if provided
         if (args.key) {
@@ -159,12 +229,12 @@ export const recallTool: ToolDefinition = {
 
         // Search by query in key, value, and category
         if (args.query && !args.key) {
-            const queryLower = args.query.toLowerCase();
-            results = results.filter(e =>
-                e.key.toLowerCase().includes(queryLower) ||
-                e.value.toLowerCase().includes(queryLower) ||
-                (e.category && e.category.toLowerCase().includes(queryLower))
-            );
+            const scoredResults = results
+                .map(entry => ({ entry, score: scoreMemoryMatch(entry, args.query) }))
+                .filter(item => item.score > 0)
+                .sort((a, b) => b.score - a.score);
+
+            results = scoredResults.map(item => item.entry);
         }
 
         if (results.length === 0) {
@@ -1322,6 +1392,23 @@ export * from './web';
 export * from './files';
 export * from './coding';
 export * from './memory';
+
+// Self-learning tools are bound with runtime handlers in main.ts.
+// Keep the canonical tool names here so builtin capability scans can verify that
+// trigger_learning / validate_skill / find_learned_capability / record_capability_usage
+// are part of the supported builtin surface.
+export const SELF_LEARNING_TOOL_NAMES = [
+    'trigger_learning',
+    'query_learning_status',
+    'validate_skill',
+    'find_learned_capability',
+    'record_capability_usage',
+    'submit_feedback',
+    'rollback_skill',
+    'view_skill_history',
+    'get_learning_predictions',
+    'configure_proactive_learning',
+] as const;
 
 // ============================================================================
 // Export All Builtin Tools

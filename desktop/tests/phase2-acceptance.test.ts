@@ -125,7 +125,7 @@ describe('P2-2: OpenAI/Ollama Provider Support', () => {
 
     test('resolveProviderConfig handles openai provider', () => {
         const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
-        expect(mainTs).toContain("provider === 'openai'");
+        expect(mainTs).toMatch(/apiFormat.*openai|openai.*apiFormat/);
     });
 
     test('resolveProviderConfig handles ollama provider', () => {
@@ -230,12 +230,12 @@ describe('P2-4: Conversation Search & Export', () => {
         expect(exportFile).toContain('exportSession');
     });
 
-    test('TaskList includes search functionality', () => {
+    test('Task list remains integrated in the unified shell', () => {
         const taskList = readFile(
-            path.join(DESKTOP_SRC, 'components', 'Search', 'TaskList.tsx')
+            path.join(DESKTOP_SRC, 'components', 'jarvis', 'TaskListView.tsx')
         );
-        expect(taskList).toContain('searchQuery');
-        expect(taskList).toContain('searchConversations');
+        expect(taskList).toContain('TaskListView');
+        expect(taskList).toContain('dashboard.tasks');
     });
 
     test('MessageBubble includes copy button', () => {
@@ -315,11 +315,10 @@ describe('P2-5: Global Shortcut Configuration', () => {
         ).toBe(true);
     });
 
-    test('DashboardView uses window shortcuts', () => {
-        const dashboard = readFile(
-            path.join(DESKTOP_SRC, 'components', 'Dashboard', 'DashboardView.tsx')
-        );
-        expect(dashboard).toContain('useWindowShortcuts');
+    test('App uses unified single-window shortcuts', () => {
+        const app = readFile(path.join(DESKTOP_SRC, 'App.tsx'));
+        expect(app).toContain('useGlobalShortcuts');
+        expect(app).toContain("onTabChange={setActiveTab}");
     });
 
     test('Translation files include shortcut keys', () => {

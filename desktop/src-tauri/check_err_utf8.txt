@@ -1,0 +1,652 @@
+﻿cargo :     Checking coworkany-desktop v0.
+1.0 (D:\private\coworkany\desktop\src-taur
+i)
+所在位置 行:1 字符: 1
++ cargo check 2> check_err.txt; Get-Conten
+t check_err.txt | Select-Stri ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified
+:     (    Checking co...ktop\src-tauri):S
+tr    ing) [], RemoteException
+    + FullyQualifiedErrorId : NativeComman
+d    Error
+ 
+warning: unused import: `std::fs`
+ --> src\ipc.rs:8:5
+  |
+8 | use std::fs;
+  |     ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part 
+of `#[warn(unused)]`) on by default
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:832:20
+    |
+832 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+832 |     let response = send_command_and_
+wait(&state, command, 3000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:850:20
+    |
+850 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+850 |     let response = send_command_and_
+wait(&state, command, 3000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:872:20
+    |
+872 |     let response = send_command_and_
+wait(&state, command, 5000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+872 |     let response = send_command_and_
+wait(&state, command, 5000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:891:20
+    |
+891 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+891 |     let response = send_command_and_
+wait(&state, command, 3000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:910:20
+    |
+910 |     let response = send_command_and_
+wait(&state, command, 5000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+910 |     let response = send_command_and_
+wait(&state, command, 5000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:928:20
+    |
+928 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+928 |     let response = send_command_and_
+wait(&state, command, 3000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:946:20
+    |
+946 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+946 |     let response = send_command_and_
+wait(&state, command, 3000).await?;
+    |                                     
+                           ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:967:20
+    |
+967 |     let response = send_command_and_
+wait(&state, command, 5000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+967 |     let response = send_command_and_
+wait(&state, command, 5000).await?;
+    |                                     
+                           ++++++
+
+error[E0282]: type annotations needed
+   --> src\ipc.rs:967:9
+    |
+967 |     let response = send_command_and_
+wait(&state, command, 5000)?;
+    |         ^^^^^^^^
+968 |     if response
+    |        -------- type must be known a
+t this point
+    |
+help: consider giving `response` an explic
+it type
+    |
+967 |     let response: /* Type */ = send_
+command_and_wait(&state, command, 5000)?;
+    |                 ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src\ipc.rs:970:20
+    |
+970 |         .and_then(|p| p.get("success
+"))
+    |                    ^  - type must be
+ known at this point
+    |
+help: consider giving this closure paramet
+er an explicit type
+    |
+970 |         .and_then(|p: /* Type */| p.
+get("success"))
+    |                     ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src\ipc.rs:971:20
+    |
+971 |         .and_then(|v| v.as_bool())
+    |                    ^  - type must be
+ known at this point
+    |
+help: consider giving this closure paramet
+er an explicit type
+    |
+971 |         .and_then(|v: /* Type */| v.
+as_bool())
+    |                     ++++++++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+   --> src\ipc.rs:994:20
+    |
+994 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |                    ^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` opera
+tor cannot be applied to type `impl std::f
+uture::Future<Output = Result<serde_json::
+Value, std::string::String>>`
+    |
+    = help: the trait `Try` is not impleme
+nted for `impl std::future::Future<Output 
+= Result<serde_json::Value, std::string::S
+tring>>`
+help: consider `await`ing on the `Future`
+    |
+994 |     let response = send_command_and_
+wait(&state, command, 3000).await?;
+    |                                     
+                           ++++++
+
+error[E0282]: type annotations needed
+   --> src\ipc.rs:994:9
+    |
+994 |     let response = send_command_and_
+wait(&state, command, 3000)?;
+    |         ^^^^^^^^
+995 |     if response
+    |        -------- type must be known a
+t this point
+    |
+help: consider giving `response` an explic
+it type
+    |
+994 |     let response: /* Type */ = send_
+command_and_wait(&state, command, 3000)?;
+    |                 ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src\ipc.rs:997:20
+    |
+997 |         .and_then(|p| p.get("success
+"))
+    |                    ^  - type must be
+ known at this point
+    |
+help: consider giving this closure paramet
+er an explicit type
+    |
+997 |         .and_then(|p: /* Type */| p.
+get("success"))
+    |                     ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src\ipc.rs:998:20
+    |
+998 |         .and_then(|v| v.as_bool())
+    |                    ^  - type must be
+ known at this point
+    |
+help: consider giving this closure paramet
+er an explicit type
+    |
+998 |         .and_then(|v: /* Type */| v.
+as_bool())
+    |                     ++++++++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1021:20
+     |
+1021 |     let response = send_command_and
+_wait(&state, command, 5000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` oper
+ator cannot be applied to type `impl std::
+future::Future<Output = Result<serde_json:
+:Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1021 |     let response = send_command_and
+_wait(&state, command, 5000).await?;
+     |                                    
+                            ++++++
+
+error[E0282]: type annotations needed
+    --> src\ipc.rs:1021:9
+     |
+1021 |     let response = send_command_and
+_wait(&state, command, 5000)?;
+     |         ^^^^^^^^
+1022 |     if response
+     |        -------- type must be known 
+at this point
+     |
+help: consider giving `response` an explic
+it type
+     |
+1021 |     let response: /* Type */ = send
+_command_and_wait(&state, command, 5000)?;
+     |                 ++++++++++++
+
+error[E0282]: type annotations needed
+    --> src\ipc.rs:1024:20
+     |
+1024 |         .and_then(|p| p.get("succes
+s"))
+     |                    ^  - type must b
+e known at this point
+     |
+help: consider giving this closure paramet
+er an explicit type
+     |
+1024 |         .and_then(|p: /* Type */| p
+.get("success"))
+     |                     ++++++++++++
+
+error[E0282]: type annotations needed
+    --> src\ipc.rs:1025:20
+     |
+1025 |         .and_then(|v| v.as_bool())
+     |                    ^  - type must b
+e known at this point
+     |
+help: consider giving this closure paramet
+er an explicit type
+     |
+1025 |         .and_then(|v: /* Type */| v
+.as_bool())
+     |                     ++++++++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1067:20
+     |
+1067 |     let response = send_command_and
+_wait(&state, command, 3000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` oper
+ator cannot be applied to type `impl std::
+future::Future<Output = Result<serde_json:
+:Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1067 |     let response = send_command_and
+_wait(&state, command, 3000).await?;
+     |                                    
+                            ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1086:20
+     |
+1086 |     let response = send_command_and
+_wait(&state, command, 3000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` oper
+ator cannot be applied to type `impl std::
+future::Future<Output = Result<serde_json:
+:Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1086 |     let response = send_command_and
+_wait(&state, command, 3000).await?;
+     |                                    
+                            ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1117:20
+     |
+1117 |     let response = send_command_and
+_wait(&state, command, 3000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` oper
+ator cannot be applied to type `impl std::
+future::Future<Output = Result<serde_json:
+:Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1117 |     let response = send_command_and
+_wait(&state, command, 3000).await?;
+     |                                    
+                            ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1135:20
+     |
+1135 |     let response = send_command_and
+_wait(&state, command, 3000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` oper
+ator cannot be applied to type `impl std::
+future::Future<Output = Result<serde_json:
+:Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1135 |     let response = send_command_and
+_wait(&state, command, 3000).await?;
+     |                                    
+                            ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1156:20
+     |
+1156 |     let response = send_command_and
+_wait(&state, command, 30000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1156 |     let response = send_command_and
+_wait(&state, command, 30000).await?;
+     |                                    
+                             ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1180:20
+     |
+1180 |     let response = send_command_and
+_wait(&state, command, 60000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1180 |     let response = send_command_and
+_wait(&state, command, 60000).await?;
+     |                                    
+                             ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1196:20
+     |
+1196 |     let response = send_command_and
+_wait(&state, command, 30000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1196 |     let response = send_command_and
+_wait(&state, command, 30000).await?;
+     |                                    
+                             ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1212:20
+     |
+1212 |     let response = send_command_and
+_wait(&state, command, 30000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1212 |     let response = send_command_and
+_wait(&state, command, 30000).await?;
+     |                                    
+                             ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1228:20
+     |
+1228 |     let response = send_command_and
+_wait(&state, command, 15000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1228 |     let response = send_command_and
+_wait(&state, command, 15000).await?;
+     |                                    
+                             ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1244:20
+     |
+1244 |     let response = send_command_and
+_wait(&state, command, 15000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1244 |     let response = send_command_and
+_wait(&state, command, 15000).await?;
+     |                                    
+                             ++++++
+
+error[E0277]: the `?` operator can only be
+ applied to values that implement `Try`
+    --> src\ipc.rs:1270:20
+     |
+1270 |     let response = send_command_and
+_wait(&state, command, 15000)?;
+     |                    ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` ope
+rator cannot be applied to type `impl std:
+:future::Future<Output = Result<serde_json
+::Value, std::string::String>>`
+     |
+     = help: the trait `Try` is not implem
+ented for `impl std::future::Future<Output
+ = Result<serde_json::Value, std::string::
+String>>`
+help: consider `await`ing on the `Future`
+     |
+1270 |     let response = send_command_and
+_wait(&state, command, 15000).await?;
+     |                                    
+                             ++++++
+
+Some errors have detailed explanations: E0
+277, E0282.
+For more information about an error, try `
+rustc --explain E0277`.
+warning: `coworkany-desktop` (lib) generat
+ed 1 warning
+error: could not compile `coworkany-deskto
+p` (lib) due to 30 previous errors; 1 warn
+ing emitted

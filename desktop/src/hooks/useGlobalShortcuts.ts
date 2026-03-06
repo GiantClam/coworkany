@@ -2,7 +2,7 @@
  * useGlobalShortcuts Hook
  *
  * Listens for application-level keyboard shortcuts and invokes the appropriate callbacks.
- * Supports: Cmd+K (command palette), Cmd+N (new task), Cmd+/ (shortcuts), Cmd+Shift+J (quick chat)
+ * Supports: Cmd+K (command palette), Cmd+N (new task), Cmd+/ (shortcuts)
  */
 
 import { useEffect, useCallback, useRef } from 'react';
@@ -12,8 +12,7 @@ export type GlobalShortcutAction =
     | 'newTask' 
     | 'openSettings' 
     | 'commandPalette' 
-    | 'showShortcuts' 
-    | 'quickChat';
+    | 'showShortcuts';
 
 function matchEvent(e: KeyboardEvent): string | null {
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return null;
@@ -68,9 +67,6 @@ export function useGlobalShortcuts(
         } else if (combo === shortcuts.showShortcuts && callbacks.showShortcuts) {
             e.preventDefault();
             callbacks.showShortcuts();
-        } else if (combo === shortcuts.quickChat && callbacks.quickChat) {
-            e.preventDefault();
-            callbacks.quickChat();
         } else if (combo === shortcuts.openSettings && callbacks.openSettings) {
             e.preventDefault();
             callbacks.openSettings();

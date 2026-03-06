@@ -21,7 +21,8 @@ import { ModalDialog } from '../Common/ModalDialog';
 import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
-import { useUIStore } from '../../stores/uiStore';
+import { IS_STARTUP_BASELINE } from '../../lib/startupProfile';
+import { useFileAttachment } from '../../hooks/useFileAttachment';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('../Skills/SkillsView');
@@ -45,6 +46,7 @@ type LlmProfile = {
     provider: string;
     anthropic?: { model?: string };
     openrouter?: { model?: string };
+    openai?: { model?: string };
     custom?: { model?: string };
     verified: boolean;
 };
@@ -59,12 +61,14 @@ interface ChatInterfaceProps {
     onOpenSkills?: () => void;
     onOpenMcp?: () => void;
     onOpenSettings?: () => void;
+    onOpenTasks?: () => void;
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenSkills,
     onOpenMcp,
     onOpenSettings,
+    onOpenTasks,
 }) => {
     const { t } = useTranslation();
     const [query, setQuery] = useState('');
@@ -78,12 +82,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
-    const { skills } = useSkills();
-    const { toolpacks } = useToolpacks();
-    const { activeWorkspace, createWorkspace, selectWorkspace, updateWorkspace } = useWorkspace();
+    const {
+        skills,
+        initialized: skillsInitialized,
+        refresh: refreshSkills,
+    } = useSkills({ autoLoad: IS_STARTUP_BASELINE });
+    const {
+        toolpacks,
+        initialized: toolpacksInitialized,
+        refresh: refreshToolpacks,
+    } = useToolpacks({ autoLoad: IS_STARTUP_BASELINE });
+    const { activeWorkspace, createWorkspace, selectWorkspace } = useWorkspace({ autoLoad: IS_STARTUP_BASELINE });
     const [llmConfig, setLlmConfig] = useState<LlmConfig>({});
-    const { switchToLauncher, openDashboard } = useUIStore();
-
+    const {
+        attachments,
+        error: attachmentError,
+        addFiles,
+        removeAttachment,
+        clearAttachments,
+        handlePaste,
+        buildContentWithAttachments,
+    } = useFileAttachment();
     useEffect(() => {
         let mounted = true;
         let unlistenSettings: UnlistenFn | undefined;
@@ -158,20 +177,62 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         await clearHistory({ taskId: activeSession.taskId });
     }, [activeSession?.taskId, clearHistory]);
 
+    const handleSelectFiles = useCallback(async (files: FileList | null) => {
+        if (!files || files.length === 0) return;
+        const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+        if (imageFiles.length === 0) return;
+        await addFiles(imageFiles);
+    }, [addFiles]);
+
+    const handleInputPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+        void handlePaste(event.nativeEvent);
+    }, [handlePaste]);
+
+    const handleInputDrop = useCallback((event: React.DragEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return;
+        const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+        if (imageFiles.length === 0) return;
+        void addFiles(imageFiles);
+    }, [addFiles]);
+
     const handleSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!query.trim()) return;
+        const trimmedQuery = query.trim();
+        if (!trimmedQuery && attachments.length === 0) return;
+        const requestContent = buildContentWithAttachments(query);
+        const titleSource = trimmedQuery || attachments[0]?.name || t('chat.currentTask');
+
+        let effectiveSkills = skills;
+        if (!skillsInitialized) {
+            effectiveSkills = await refreshSkills();
+        }
+        let effectiveToolpacks = toolpacks;
+        if (!toolpacksInitialized) {
+            effectiveToolpacks = await refreshToolpacks();
+        }
+        const enabledSkillsForRequest = effectiveSkills
+            .filter((skill) => skill.enabled)
+            .map((skill) => skill.manifest.id);
+        const enabledToolpacksForRequest = effectiveToolpacks
+            .filter((tp) => tp.enabled)
+            .map((tp) => tp.manifest.id);
+
         if (activeSession?.taskId) {
-            await sendMessage({
+            const result = await sendMessage({
                 taskId: activeSession.taskId,
-                content: query,
+                content: requestContent,
                 config: {
-                    enabledClaudeSkills: enabledSkills,
-                    enabledToolpacks,
-                    enabledSkills,
+                    enabledClaudeSkills: enabledSkillsForRequest,
+                    enabledToolpacks: enabledToolpacksForRequest,
+                    enabledSkills: enabledSkillsForRequest,
                 },
             });
-            setQuery('');
+            if (result?.success) {
+                setQuery('');
+                clearAttachments();
+            }
             return;
         }
 
@@ -188,13 +249,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     }
                 }
 
-                const newWorkspace = await createWorkspace('new workspace', '');
+                const newWorkspace = await createWorkspace();
                 if (newWorkspace) {
                     selectWorkspace(newWorkspace);
                     currentWorkspace = newWorkspace;
                 }
             } catch (err) {
-                console.error("Failed to auto-create workspace", err);
+                console.error('Failed to auto-create workspace', err);
             }
         }
 
@@ -204,24 +265,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             return;
         }
 
-        if (currentWorkspace && currentWorkspace.name === 'new workspace') {
-            const summary = query.trim().slice(0, 30) + (query.length > 30 ? '...' : '');
-            void updateWorkspace(currentWorkspace.id, { name: summary });
-        }
-
         setWorkspaceError(null);
-        await startTask({
-            title: query.trim().slice(0, 60),
-            userQuery: query,
+        const result = await startTask({
+            title: titleSource.slice(0, 60),
+            userQuery: requestContent,
             workspacePath: currentPath,
             config: {
-                enabledClaudeSkills: enabledSkills,
-                enabledToolpacks,
-                enabledSkills,
+                enabledClaudeSkills: enabledSkillsForRequest,
+                enabledToolpacks: enabledToolpacksForRequest,
+                enabledSkills: enabledSkillsForRequest,
             },
         });
-        setQuery('');
-    }, [query, activeSession?.taskId, sendMessage, enabledSkills, enabledToolpacks, activeWorkspace, createWorkspace, selectWorkspace, updateWorkspace, startTask]);
+        if (result?.success) {
+            setQuery('');
+            clearAttachments();
+        }
+    }, [query, attachments, buildContentWithAttachments, t, skills, skillsInitialized, refreshSkills, toolpacks, toolpacksInitialized, refreshToolpacks, activeSession?.taskId, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask]);
 
     const handleCancel = useCallback(async () => {
         if (activeSession?.taskId) {
@@ -256,16 +315,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleCloseSettings = useCallback(() => setShowSettingsDialog(false), []);
     const handleCloseSkills = useCallback(() => setShowSkillsDialog(false), []);
     const handleCloseMcp = useCallback(() => setShowMcpDialog(false), []);
+    const focusComposer = useCallback(() => {
+        window.requestAnimationFrame(() => {
+            document.querySelector<HTMLInputElement>('.chat-input')?.focus();
+        });
+    }, []);
 
     if (!activeSession) {
         return (
             <div className="chat-interface">
                 <WelcomeSection
-                    onNewTask={() => switchToLauncher()}
-                    onOpenProject={() => {
-                        // TODO: Implement project picker
-                    }}
-                    onTaskList={() => openDashboard()}
+                    onNewTask={focusComposer}
+                    onOpenProject={() => {}}
+                    onTaskList={onOpenTasks ?? (() => {})}
                 />
                 {(workspaceError || startError || cancelError || sendError || clearError) && (
                     <div className="chat-error">
@@ -278,6 +340,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     disabled={isStarting}
                     onQueryChange={setQuery}
                     onSubmit={handleSubmit}
+                    attachments={attachments}
+                    attachmentError={attachmentError}
+                    onRemoveAttachment={removeAttachment}
+                    onSelectFiles={handleSelectFiles}
+                    onPaste={handleInputPaste}
+                    onDrop={handleInputDrop}
+                    llmProfiles={llmConfig.profiles ?? []}
+                    activeProfileId={llmConfig.activeProfileId}
+                    onSelectProfile={setActiveProfile}
                 />
             </div>
         );
@@ -317,6 +388,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 disabled={activeSession.status === 'running' || isSending}
                 onQueryChange={setQuery}
                 onSubmit={handleSubmit}
+                attachments={attachments}
+                attachmentError={attachmentError}
+                onRemoveAttachment={removeAttachment}
+                onSelectFiles={handleSelectFiles}
+                onPaste={handleInputPaste}
+                onDrop={handleInputDrop}
+                llmProfiles={llmConfig.profiles ?? []}
+                activeProfileId={llmConfig.activeProfileId}
+                onSelectProfile={setActiveProfile}
             />
 
             {/* Dialogs */}

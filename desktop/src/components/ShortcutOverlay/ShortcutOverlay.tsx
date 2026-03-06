@@ -7,7 +7,6 @@ interface ShortcutOverlayProps {
     shortcuts: {
         commandPalette: string;
         newTask: string;
-        quickChat: string;
         openSettings: string;
         showShortcuts: string;
         esc: string;
@@ -97,10 +96,6 @@ export const ShortcutOverlay: React.FC<ShortcutOverlayProps> = ({ open, onClose,
                     <div className="flex justify-between py-2 border-b border-subtle">
                         <span className="text-secondary">{t('shortcutsOverlay.newTask')}</span>
                         <kbd className="px-2 py-1 bg-element rounded text-xs">{shortcuts.newTask}</kbd>
-                    </div>
-                    <div className="flex justify-between py-2 border-b border-subtle">
-                        <span className="text-secondary">{t('shortcutsOverlay.quickChat')}</span>
-                        <kbd className="px-2 py-1 bg-element rounded text-xs">{shortcuts.quickChat}</kbd>
                     </div>
                     <div className="flex justify-between py-2 border-b border-subtle">
                         <span className="text-secondary">{t('shortcutsOverlay.openSettings')}</span>

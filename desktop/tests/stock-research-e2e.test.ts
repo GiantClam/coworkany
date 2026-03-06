@@ -25,7 +25,7 @@ test.describe('Stock Research Self-Learning E2E', () => {
 
         // Find input - try multiple selectors
         const selectors = [
-            'input[placeholder="Ask CoworkAny..."]',
+            '.chat-input',
             'input[placeholder="New instructions..."]',
             '.chat-input input',
             '.chat-input textarea',
@@ -86,13 +86,13 @@ test.describe('Stock Research Self-Learning E2E', () => {
             // Check research activities
             if (!finished && hasTaskFinished) {
                 finished = true;
-                console.log(`[${elapsed}s] ✓ Task finished event detected`);
+                console.log(`[${elapsed}s] �?Task finished event detected`);
                 lastActivityTime = Date.now();
             }
             
             if (!failed && hasTaskFailed) {
                 failed = true;
-                console.log(`[${elapsed}s] ✗ Task failed event detected`);
+                console.log(`[${elapsed}s] �?Task failed event detected`);
                 break;
             }
             
@@ -118,7 +118,7 @@ test.describe('Stock Research Self-Learning E2E', () => {
             
             if (hasStockMention && hasInvestmentAdvice && !researchCompleted) {
                 researchCompleted = true;
-                console.log(`[${elapsed}s] ✓ Research and investment advice detected`);
+                console.log(`[${elapsed}s] �?Research and investment advice detected`);
                 lastActivityTime = Date.now();
             }
             
@@ -174,9 +174,10 @@ test.describe('Stock Research Self-Learning E2E', () => {
         
         // Core check: Agent must NOT refuse the request
         const hasRefusal = finalLogs.includes('无法') && finalLogs.includes('不能') && 
-                          (finalLogs.includes('拒绝') || finalLogs.includes('不支持'));
+                          (finalLogs.includes('拒绝') || finalLogs.includes('不支�?));
         expect(hasRefusal, 'Should NOT refuse user request').toBe(false);
         
-        console.log('[Test] ✓ Test completed successfully');
+        console.log('[Test] �?Test completed successfully');
     });
 });
+

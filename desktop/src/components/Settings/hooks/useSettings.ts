@@ -14,6 +14,7 @@ import type {
     OpenRouterProviderSettings,
     CustomProviderSettings,
     SearchSettings,
+    ProxySettings,
     ValidationMessage,
 } from '../../../types';
 
@@ -28,6 +29,23 @@ interface ValidationResult {
     payload: {
         error?: string;
     };
+}
+
+const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890';
+
+function normalizeProxySettings(proxy?: ProxySettings): ProxySettings {
+    if (!proxy) {
+        return { enabled: false };
+    }
+
+    if (proxy.enabled === true) {
+        return {
+            ...proxy,
+            url: proxy.url?.trim() || DEFAULT_PROXY_URL,
+        };
+    }
+
+    return proxy;
 }
 
 export function useSettings() {
@@ -49,6 +67,8 @@ export function useSettings() {
     // Search settings state
     const [searchSettings, setSearchSettings] = useState<SearchSettings>({ provider: 'serper' });
     const [searchSaved, setSearchSaved] = useState(false);
+    const [proxySettings, setProxySettings] = useState<ProxySettings>({ enabled: false });
+    const [proxySaved, setProxySaved] = useState(false);
 
     /**
      * Load configuration from backend
@@ -58,17 +78,23 @@ export function useSettings() {
         setError(null);
         setSaved(false);
         setSearchSaved(false);
+        setProxySaved(false);
         try {
             const result = await invoke<IpcResult>('get_llm_settings');
             const data = result.payload ?? { provider: 'anthropic', profiles: [] };
-            setConfig(data);
+            const normalizedData: LlmConfig = {
+                ...data,
+                proxy: normalizeProxySettings(data.proxy),
+            };
+            setConfig(normalizedData);
 
             // Load search settings
-            setSearchSettings(data.search ?? { provider: 'serper' });
+            setSearchSettings(normalizedData.search ?? { provider: 'serper' });
+            setProxySettings(normalizedData.proxy ?? { enabled: false });
 
             // Set defaults for editor from current selection or first profile
-            if (data.activeProfileId) {
-                const active = data.profiles?.find(p => p.id === data.activeProfileId);
+            if (normalizedData.activeProfileId) {
+                const active = normalizedData.profiles?.find(p => p.id === normalizedData.activeProfileId);
                 if (active) {
                     setEditProvider(active.provider);
                     setEditName(active.name);
@@ -118,6 +144,7 @@ export function useSettings() {
                 provider: profile.provider,
                 anthropic: profile.anthropic,
                 openrouter: profile.openrouter,
+                openai: profile.openai,
                 custom: profile.custom,
             };
 
@@ -192,6 +219,22 @@ export function useSettings() {
     }, [config, saveConfig]);
 
     /**
+     * Save proxy settings
+     */
+    const saveProxySettings = useCallback(async (newProxy: ProxySettings) => {
+        setProxySaved(false);
+        try {
+            const normalizedProxy = normalizeProxySettings(newProxy);
+            await saveConfig({ ...config, proxy: normalizedProxy });
+            setProxySettings(normalizedProxy);
+            setProxySaved(true);
+            setTimeout(() => setProxySaved(false), 2000);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to save proxy settings');
+        }
+    }, [config, saveConfig]);
+
+    /**
      * Update max history messages
      */
     const updateMaxHistoryMessages = useCallback(async (value: number | undefined) => {
@@ -227,6 +270,8 @@ export function useSettings() {
         // Search settings state
         searchSettings,
         searchSaved,
+        proxySettings,
+        proxySaved,
 
         // Actions
         refresh,
@@ -235,6 +280,7 @@ export function useSettings() {
         switchProfile,
         deleteProfile,
         saveSearchSettings,
+        saveProxySettings,
         updateMaxHistoryMessages,
     };
 }

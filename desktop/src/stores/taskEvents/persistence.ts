@@ -28,7 +28,7 @@ async function persistSessions(snapshot: SessionsSnapshot): Promise<void> {
 }
 
 /**
- * Schedule persistence with debounce (500ms)
+ * Schedule persistence with debounce (1200ms)
  */
 export function schedulePersist(snapshot: SessionsSnapshot): void {
     if (persistTimer) {
@@ -37,7 +37,7 @@ export function schedulePersist(snapshot: SessionsSnapshot): void {
     persistTimer = setTimeout(() => {
         persistTimer = null;
         void persistSessions(snapshot);
-    }, 500);
+    }, 1200);
 }
 
 /**

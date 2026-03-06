@@ -35,6 +35,10 @@ interface IpcResult {
     payload: Record<string, unknown>;
 }
 
+interface UseToolpacksOptions {
+    autoLoad?: boolean;
+}
+
 function extractPayload(result: IpcResult): Record<string, unknown> {
     const payload = result.payload ?? {};
     const nested = (payload as Record<string, unknown>).payload;
@@ -48,12 +52,14 @@ function extractPayload(result: IpcResult): Record<string, unknown> {
 // Hook
 // ============================================================================
 
-export function useToolpacks() {
+export function useToolpacks(options: UseToolpacksOptions = {}) {
+    const { autoLoad = true } = options;
     const [toolpacks, setToolpacks] = useState<ToolpackRecord[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [initialized, setInitialized] = useState(false);
 
-    const refresh = useCallback(async () => {
+    const refresh = useCallback(async (): Promise<ToolpackRecord[]> => {
         setLoading(true);
         setError(null);
         try {
@@ -62,11 +68,16 @@ export function useToolpacks() {
             });
             const payload = extractPayload(result);
             if (Array.isArray(payload.toolpacks)) {
-                setToolpacks(payload.toolpacks as ToolpackRecord[]);
+                const nextToolpacks = payload.toolpacks as ToolpackRecord[];
+                setToolpacks(nextToolpacks);
+                return nextToolpacks;
             }
+            return [];
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
+            return [];
         } finally {
+            setInitialized(true);
             setLoading(false);
         }
     }, []);
@@ -129,13 +140,16 @@ export function useToolpacks() {
 
     // Load on mount
     useEffect(() => {
-        refresh();
-    }, [refresh]);
+        if (autoLoad) {
+            void refresh();
+        }
+    }, [autoLoad, refresh]);
 
     return {
         toolpacks,
         loading,
         error,
+        initialized,
         refresh,
         install,
         toggle,

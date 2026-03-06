@@ -2,9 +2,6 @@
  * ShortcutSettings Component
  *
  * Displays and allows editing of keyboard shortcuts.
- * - Toggle Window (global, managed by Tauri)
- * - New Task (window-level, managed by React)
- * - Open Settings (window-level, managed by React)
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -33,25 +30,27 @@ const SHORTCUT_ENTRIES: ShortcutEntry[] = [
     { key: 'openSettings', labelKey: 'settings.openSettings', scope: 'window' },
 ];
 
-/** Convert a KeyboardEvent to a shortcut string like "Ctrl+Shift+K" */
-function eventToShortcutString(e: KeyboardEvent): string | null {
-    // Ignore standalone modifier keys
-    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+const ResetIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="1 4 1 10 7 10" />
+        <path d="M3.51 15a9 9 0 1 0 .49-9L1 10" />
+    </svg>
+);
+
+function eventToShortcutString(event: KeyboardEvent): string | null {
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) {
         return null;
     }
 
     const parts: string[] = [];
-    if (e.ctrlKey || e.metaKey) parts.push('Ctrl');
-    if (e.altKey) parts.push('Alt');
-    if (e.shiftKey) parts.push('Shift');
+    if (event.ctrlKey || event.metaKey) parts.push('Ctrl');
+    if (event.altKey) parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
 
-    // Normalize key name
-    let key = e.key;
+    let key = event.key;
     if (key === ' ') key = 'Space';
-    else if (key === ',') key = ',';
     else if (key.length === 1) key = key.toUpperCase();
 
-    // Must have at least one modifier
     if (parts.length === 0) return null;
 
     parts.push(key);
@@ -64,48 +63,43 @@ export function ShortcutSettings() {
     const [recording, setRecording] = useState<ShortcutKey | null>(null);
     const [loaded, setLoaded] = useState(false);
 
-    // Load shortcuts on mount
     useEffect(() => {
-        void getShortcuts().then((s) => {
-            setShortcuts(s);
+        void getShortcuts().then((nextShortcuts) => {
+            setShortcuts(nextShortcuts);
             setLoaded(true);
         });
     }, []);
 
-    // Keyboard capture when recording
     useEffect(() => {
         if (!recording) return;
 
-        const handler = (e: KeyboardEvent) => {
-            e.preventDefault();
-            e.stopPropagation();
+        const handler = (event: KeyboardEvent) => {
+            event.preventDefault();
+            event.stopPropagation();
 
-            // Escape cancels recording
-            if (e.key === 'Escape') {
+            if (event.key === 'Escape') {
                 setRecording(null);
                 return;
             }
 
-            const combo = eventToShortcutString(e);
+            const combo = eventToShortcutString(event);
             if (!combo) return;
 
-            // Check for conflicts with other shortcuts
             const conflict = SHORTCUT_ENTRIES.find(
                 (entry) => entry.key !== recording && shortcuts[entry.key] === combo
             );
+
             if (conflict) {
                 toast.error(t('settings.shortcutConflict'));
                 return;
             }
 
-            // Update and save
             const updated = { ...shortcuts, [recording]: combo };
             setShortcuts(updated);
             setRecording(null);
 
             void (async () => {
                 try {
-                    // If this is the global toggle window shortcut, update via Tauri IPC
                     if (recording === 'toggleWindow' && isTauri()) {
                         const { invoke } = await import('@tauri-apps/api/core');
                         await invoke('update_global_shortcut', {
@@ -113,14 +107,14 @@ export function ShortcutSettings() {
                             newShortcut: combo,
                         });
                     }
+
                     await saveShortcuts(updated);
                     toast.success(t('settings.shortcutUpdated'));
-                } catch (err) {
-                    // Revert on failure
+                } catch (error) {
                     setShortcuts(shortcuts);
                     toast.error(
                         t('common.error'),
-                        err instanceof Error ? err.message : String(err)
+                        error instanceof Error ? error.message : String(error)
                     );
                 }
             })();
@@ -130,135 +124,77 @@ export function ShortcutSettings() {
         return () => window.removeEventListener('keydown', handler, true);
     }, [recording, shortcuts, t]);
 
-    const handleReset = useCallback(
-        async (key: ShortcutKey) => {
-            const defaultValue = DEFAULT_SHORTCUTS[key];
-            const updated = { ...shortcuts, [key]: defaultValue };
-            setShortcuts(updated);
+    const handleReset = useCallback(async (key: ShortcutKey) => {
+        const defaultValue = DEFAULT_SHORTCUTS[key];
+        const updated = { ...shortcuts, [key]: defaultValue };
+        setShortcuts(updated);
 
-            try {
-                if (key === 'toggleWindow' && isTauri()) {
-                    const { invoke } = await import('@tauri-apps/api/core');
-                    await invoke('update_global_shortcut', {
-                        oldShortcut: shortcuts.toggleWindow,
-                        newShortcut: defaultValue,
-                    });
-                }
-                await saveShortcuts(updated);
-                toast.success(t('settings.shortcutUpdated'));
-            } catch (err) {
-                setShortcuts(shortcuts);
-                toast.error(
-                    t('common.error'),
-                    err instanceof Error ? err.message : String(err)
-                );
+        try {
+            if (key === 'toggleWindow' && isTauri()) {
+                const { invoke } = await import('@tauri-apps/api/core');
+                await invoke('update_global_shortcut', {
+                    oldShortcut: shortcuts.toggleWindow,
+                    newShortcut: defaultValue,
+                });
             }
-        },
-        [shortcuts, t]
-    );
+            await saveShortcuts(updated);
+            toast.success(t('settings.shortcutUpdated'));
+        } catch (error) {
+            setShortcuts(shortcuts);
+            toast.error(
+                t('common.error'),
+                error instanceof Error ? error.message : String(error)
+            );
+        }
+    }, [shortcuts, t]);
 
     if (!loaded) return null;
 
     return (
         <div className={styles.section}>
             <div className={styles.sectionHeader}>
-                <h3>{t('settings.shortcuts')}</h3>
-                <p>{t('settings.shortcutsHint')}</p>
+                <div>
+                    <h3>{t('settings.shortcuts')}</h3>
+                    <p>{t('settings.shortcutsHint')}</p>
+                </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+
+            <div className={styles.stack}>
                 {SHORTCUT_ENTRIES.map((entry) => (
-                    <div
-                        key={entry.key}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '8px 12px',
-                            border: '1px solid var(--border-subtle)',
-                            borderRadius: 'var(--radius-md)',
-                            background: 'var(--bg-panel)',
-                        }}
-                    >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span
-                                style={{
-                                    fontSize: '10px',
-                                    padding: '1px 5px',
-                                    borderRadius: 4,
-                                    background:
-                                        entry.scope === 'global'
-                                            ? 'var(--accent-subtle)'
-                                            : 'var(--bg-surface)',
-                                    color:
-                                        entry.scope === 'global'
-                                            ? 'var(--accent-primary)'
-                                            : 'var(--text-secondary)',
-                                    border: '1px solid var(--border-subtle)',
-                                    fontWeight: 500,
-                                }}
-                            >
+                    <div key={entry.key} className={styles.shortcutRow}>
+                        <div className={styles.shortcutInfo}>
+                            <span className={`${styles.scopeBadge} ${entry.scope === 'global' ? styles.scopeBadgeGlobal : styles.scopeBadgeWindow}`}>
                                 {entry.scope === 'global'
                                     ? t('settings.globalShortcut')
                                     : t('settings.windowShortcut')}
                             </span>
-                            <span
-                                style={{
-                                    fontFamily: 'var(--font-body)',
-                                    fontSize: 'var(--font-size-sm)',
-                                    color: 'var(--text-primary)',
-                                }}
-                            >
-                                {t(entry.labelKey)}
-                            </span>
+                            <div className={styles.shortcutCopy}>
+                                <span className={styles.shortcutLabel}>{t(entry.labelKey)}</span>
+                                <span className={styles.shortcutHint}>
+                                    {recording === entry.key ? t('settings.pressKeys') : shortcuts[entry.key]}
+                                </span>
+                            </div>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div className={styles.shortcutActions}>
                             <button
-                                onClick={() =>
-                                    setRecording(recording === entry.key ? null : entry.key)
-                                }
-                                style={{
-                                    padding: '4px 10px',
-                                    border:
-                                        recording === entry.key
-                                            ? '2px solid var(--accent-primary)'
-                                            : '1px solid var(--border-subtle)',
-                                    borderRadius: 'var(--radius-sm)',
-                                    background:
-                                        recording === entry.key
-                                            ? 'var(--accent-subtle)'
-                                            : 'var(--bg-surface)',
-                                    color: 'var(--text-primary)',
-                                    cursor: 'pointer',
-                                    fontFamily: 'var(--font-mono, monospace)',
-                                    fontSize: 'var(--font-size-xs)',
-                                    fontWeight: 600,
-                                    minWidth: 100,
-                                    textAlign: 'center',
-                                    transition: 'var(--transition-fast)',
-                                }}
+                                type="button"
+                                className={`${styles.shortcutCapture} ${recording === entry.key ? styles.shortcutCaptureRecording : ''}`}
+                                onClick={() => setRecording(recording === entry.key ? null : entry.key)}
+                                aria-pressed={recording === entry.key}
                             >
-                                {recording === entry.key
-                                    ? t('settings.pressKeys')
-                                    : shortcuts[entry.key]}
+                                {recording === entry.key ? t('settings.pressKeys') : shortcuts[entry.key]}
                             </button>
 
                             {shortcuts[entry.key] !== DEFAULT_SHORTCUTS[entry.key] && (
                                 <button
+                                    type="button"
+                                    className={styles.iconButton}
                                     onClick={() => void handleReset(entry.key)}
                                     title={t('settings.resetDefault')}
-                                    style={{
-                                        padding: '4px 6px',
-                                        border: '1px solid var(--border-subtle)',
-                                        borderRadius: 'var(--radius-sm)',
-                                        background: 'transparent',
-                                        color: 'var(--text-tertiary)',
-                                        cursor: 'pointer',
-                                        fontSize: '11px',
-                                        lineHeight: 1,
-                                    }}
+                                    aria-label={t('settings.resetDefault')}
                                 >
-                                    ↺
+                                    <ResetIcon />
                                 </button>
                             )}
                         </div>

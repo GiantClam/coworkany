@@ -9,11 +9,17 @@
         "apiKey": "your-openrouter-api-key-here",
         "model": "anthropic/claude-sonnet-4.5"
     },
+    "openai": {
+        "apiKey": "your-provider-api-key-here",
+        "baseUrl": "https://api.openai.com/v1/chat/completions",
+        "model": "gpt-4o"
+    },
     "custom": {
         "apiKey": "your-aiberm-api-key-here",
         "baseUrl": "https://aiberm.com/v1/chat/completions",
         "model": "claude-sonnet-4-5-20250929-thinking",
-        "apiFormat": "openai"
+        "apiFormat": "openai",
+        "allowInsecureTls": false
     },
     "maxHistoryMessages": 20,
     "search": {
@@ -22,6 +28,11 @@
         "searxngUrl": "",
         "tavilyApiKey": "",
         "braveApiKey": ""
+    },
+    "proxy": {
+        "enabled": false,
+        "url": "http://127.0.0.1:7890",
+        "bypass": "localhost,127.0.0.1,::1"
     },
     "browserUse": {
         "enabled": true,

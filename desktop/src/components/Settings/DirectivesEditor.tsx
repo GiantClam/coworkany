@@ -1,7 +1,6 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-// import { invoke } from '@tauri-apps/api/core';
+import styles from './SettingsView.module.css';
 
 interface Directive {
     id: string;
@@ -11,59 +10,71 @@ interface Directive {
     priority: number;
 }
 
+const PlusIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+);
+
 export const DirectivesEditor: React.FC = () => {
     const { t } = useTranslation();
     const [directives, setDirectives] = useState<Directive[]>([]);
-    // const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadDirectives();
     }, []);
 
     const loadDirectives = async () => {
-        // In real app, call backend
-        // const data = await invoke('get_directives');
-        // Mock for now as we haven't exposed IPC for this yet
         setDirectives([
             { id: '1', name: 'No Any', content: 'Do not use "any"', enabled: true, priority: 1 },
-            { id: '2', name: 'Concise', content: 'Be concise', enabled: false, priority: 0 }
+            { id: '2', name: 'Concise', content: 'Be concise', enabled: false, priority: 0 },
         ]);
-        // setLoading(false);
     };
 
     const toggleDirective = (id: string) => {
-        setDirectives(prev => prev.map(d =>
-            d.id === id ? { ...d, enabled: !d.enabled } : d
+        setDirectives((prev) => prev.map((directive) =>
+            directive.id === id ? { ...directive, enabled: !directive.enabled } : directive
         ));
     };
 
     return (
-        <div className="p-4 space-y-4">
-            <h2 className="text-xl font-bold">{t('settings.personalizedDirectives')}</h2>
-            <p className="text-gray-400 text-sm">{t('settings.directivesHint')}</p>
+        <div>
+            <div className={styles.sectionHeader}>
+                <div>
+                    <h3>{t('settings.personalizedDirectives')}</h3>
+                    <p>{t('settings.directivesHint')}</p>
+                </div>
+            </div>
 
-            <div className="space-y-2">
-                {directives.map(d => (
-                    <div key={d.id} className="flex items-center justify-between bg-gray-800 p-3 rounded border border-gray-700">
-                        <div>
-                            <div className="font-medium text-white">{d.name}</div>
-                            <div className="text-sm text-gray-400">{d.content}</div>
+            <div className={styles.stack}>
+                {directives.map((directive) => (
+                    <div key={directive.id} className={styles.directiveCard}>
+                        <div className={styles.directiveInfo}>
+                            <span className={styles.priorityBadge}>P{directive.priority}</span>
+                            <div className={styles.directiveCopy}>
+                                <span className={styles.directiveName}>{directive.name}</span>
+                                <span className={styles.directiveContent}>{directive.content}</span>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500">P{d.priority}</span>
+
+                        <div className={styles.directiveActions}>
                             <button
-                                onClick={() => toggleDirective(d.id)}
-                                className={`px-2 py-1 rounded text-xs ${d.enabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                                type="button"
+                                className={`${styles.toggleInline} ${directive.enabled ? styles.toggleInlineActive : ''}`}
+                                aria-pressed={directive.enabled}
+                                onClick={() => toggleDirective(directive.id)}
                             >
-                                {d.enabled ? 'ON' : 'OFF'}
+                                {directive.enabled ? t('common.on') : t('common.off')}
                             </button>
                         </div>
                     </div>
                 ))}
             </div>
 
-            <button className="w-full py-2 bg-blue-600 rounded hover:bg-blue-700 text-sm">
-                + {t('settings.addNewDirective')}
+            <button type="button" className={`${styles.verifyButton} ${styles.sectionCta}`}>
+                <PlusIcon />
+                <span>{t('settings.addNewDirective')}</span>
             </button>
         </div>
     );

@@ -11,7 +11,16 @@
             "type": "string",
             "enum": [
                 "anthropic",
+                "openai",
+                "aiberm",
+                "nvidia",
+                "siliconflow",
+                "gemini",
+                "qwen",
+                "minimax",
+                "kimi",
                 "openrouter",
+                "ollama",
                 "custom"
             ],
             "description": "Active LLM provider"
@@ -52,6 +61,49 @@
                 "apiKey"
             ]
         },
+        "openai": {
+            "type": "object",
+            "description": "OpenAI-compatible settings used by OpenAI and built-in compatible providers such as Aiberm, NVIDIA NIM, SiliconFlow, Gemini, Qwen, MiniMax, and Kimi",
+            "properties": {
+                "apiKey": {
+                    "type": "string",
+                    "description": "API key for the selected OpenAI-compatible provider"
+                },
+                "baseUrl": {
+                    "type": "string",
+                    "description": "Full chat completions endpoint URL for the selected provider"
+                },
+                "model": {
+                    "type": "string",
+                    "default": "gpt-4o",
+                    "description": "Model ID for the selected OpenAI-compatible provider"
+                },
+                "allowInsecureTls": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Disable TLS certificate verification for this provider (unsafe, use only in trusted internal environments)."
+                }
+            },
+            "required": [
+                "apiKey"
+            ]
+        },
+        "ollama": {
+            "type": "object",
+            "description": "Ollama local model settings",
+            "properties": {
+                "baseUrl": {
+                    "type": "string",
+                    "default": "http://localhost:11434/v1/chat/completions",
+                    "description": "Full Ollama chat completions endpoint URL"
+                },
+                "model": {
+                    "type": "string",
+                    "default": "llama3",
+                    "description": "Local Ollama model ID"
+                }
+            }
+        },
         "custom": {
             "type": "object",
             "description": "Custom third-party provider (base URL is configurable)",
@@ -76,6 +128,11 @@
                     ],
                     "default": "openai",
                     "description": "API format: openai or anthropic"
+                },
+                "allowInsecureTls": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Disable TLS certificate verification for this provider (unsafe, use only in trusted internal environments)."
                 }
             },
             "required": [
@@ -115,6 +172,26 @@
                 "braveApiKey": {
                     "type": "string",
                     "description": "Brave Search API key. Get at https://brave.com/search/api/"
+                }
+            }
+        },
+        "proxy": {
+            "type": "object",
+            "description": "Outbound HTTP(S) proxy settings for sidecar model requests",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable explicit proxy settings. When false, sidecar clears proxy env values from settings."
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Proxy URL, e.g. http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
+                },
+                "bypass": {
+                    "type": "string",
+                    "default": "localhost,127.0.0.1,::1",
+                    "description": "Comma-separated NO_PROXY hosts/domains that should bypass the proxy"
                 }
             }
         },

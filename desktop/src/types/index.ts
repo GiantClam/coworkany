@@ -54,8 +54,6 @@ export {
 
 // UI types
 export type {
-    ViewMode,
-    NavigationState,
     Workspace,
     AnthropicProviderSettings,
     OpenRouterProviderSettings,
@@ -63,6 +61,7 @@ export type {
     OllamaProviderSettings,
     CustomProviderSettings,
     SearchSettings,
+    ProxySettings,
     LlmProfile,
     LlmConfig,
     IpcResult,

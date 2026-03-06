@@ -1,15 +1,35 @@
 /* Global Styles */
+html,
 body {
     margin: 0;
     padding: 0;
+    width: 100%;
     font-family: var(--font-body);
-    background-color: var(--bg-app);
+    background:
+        radial-gradient(980px 620px at 8% -12%, rgba(45, 212, 191, 0.18), transparent 58%),
+        radial-gradient(780px 480px at 88% 10%, rgba(249, 115, 22, 0.1), transparent 54%),
+        radial-gradient(1120px 700px at 50% 118%, rgba(20, 184, 166, 0.14), transparent 60%),
+        linear-gradient(145deg, #031211 0%, #051917 44%, #082220 100%);
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow: hidden;
-    /* App-like feel */
-    height: 100vh;
+    height: var(--app-vh, 100vh);
+    min-height: var(--app-vh, 100vh);
+    overscroll-behavior: none;
+}
+
+:root {
+    --titlebar-height: 44px;
+}
+
+#root {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 h1,
@@ -89,6 +109,100 @@ button {
 :focus-visible {
     outline: 2px solid var(--brand-500);
     outline-offset: 2px;
+}
+
+.app-shell {
+    position: relative;
+    isolation: isolate;
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    overflow: hidden;
+    overflow: clip;
+    background: var(--bg-app);
+}
+
+.app-aurora {
+    position: absolute;
+    inset: auto;
+    border-radius: 9999px;
+    filter: blur(42px);
+    opacity: 0.32;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.app-aurora-one {
+    width: 320px;
+    height: 320px;
+    top: -70px;
+    left: -80px;
+    background: radial-gradient(circle at 35% 35%, rgba(45, 212, 191, 0.74), rgba(45, 212, 191, 0.02));
+}
+
+.app-aurora-two {
+    width: 360px;
+    height: 360px;
+    right: -110px;
+    top: 110px;
+    background: radial-gradient(circle at 55% 45%, rgba(249, 115, 22, 0.38), rgba(249, 115, 22, 0.02));
+}
+
+.app-aurora-three {
+    width: 420px;
+    height: 420px;
+    left: 24%;
+    bottom: -220px;
+    background: radial-gradient(circle at 50% 50%, rgba(20, 184, 166, 0.44), rgba(20, 184, 166, 0.02));
+}
+
+.app-noise-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.18;
+    background-image:
+        radial-gradient(rgba(183, 223, 255, 0.34) 0.5px, transparent 0.5px);
+    background-size: 3px 3px;
+    mix-blend-mode: screen;
+}
+
+.app-content {
+    position: absolute;
+    inset: var(--titlebar-height) 0 0 0;
+    z-index: 1;
+    width: auto;
+    height: auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background:
+        radial-gradient(920px 520px at 0% 0%, rgba(45, 212, 191, 0.06), transparent 58%),
+        radial-gradient(680px 460px at 100% 12%, rgba(249, 115, 22, 0.05), transparent 56%),
+        linear-gradient(180deg, rgba(4, 18, 17, 0.98), rgba(3, 16, 15, 1));
+}
+
+.app-main-pane {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+@supports (height: 100dvh) {
+    html,
+    body {
+        height: var(--app-vh, 100dvh);
+        min-height: var(--app-vh, 100dvh);
+    }
 }
 
 /* UI Components */

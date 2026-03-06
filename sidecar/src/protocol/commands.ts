@@ -57,6 +57,7 @@ export const StartTaskCommandSchema = BaseCommandSchema.extend({
             enabledToolpacks: z.array(z.string()).optional(),
             // Backward-compatible alias
             enabledSkills: z.array(z.string()).optional(),
+            disabledTools: z.array(z.string()).optional(),
         }).optional(),
     }),
 });
@@ -67,6 +68,13 @@ export const StartTaskResponseSchema = BaseResponseSchema.extend({
         success: z.boolean(),
         taskId: z.string().uuid(),
         error: z.string().optional(),
+        workspace: z.object({
+            id: z.string(),
+            name: z.string(),
+            path: z.string(),
+            autoNamed: z.boolean().optional(),
+            createdAt: z.string().optional(),
+        }).optional(),
     }),
 });
 
@@ -123,6 +131,7 @@ export const SendTaskMessageCommandSchema = BaseCommandSchema.extend({
             enabledClaudeSkills: z.array(z.string()).optional(),
             enabledToolpacks: z.array(z.string()).optional(),
             enabledSkills: z.array(z.string()).optional(),
+            disabledTools: z.array(z.string()).optional(),
         }).optional(),
     }),
 });
@@ -745,6 +754,7 @@ export const ListWorkspacesResponseSchema = BaseResponseSchema.extend({
             id: z.string(),
             name: z.string(),
             path: z.string(),
+            autoNamed: z.boolean().optional(),
             lastUsedAt: z.string().datetime().optional(),
         })).default([]),
     }),
@@ -835,6 +845,7 @@ export const UpdateWorkspaceCommandSchema = BaseCommandSchema.extend({
         updates: z.object({
             name: z.string().optional(),
             path: z.string().nullable().optional(),
+            autoNamed: z.boolean().optional(),
         }),
     }),
 });
@@ -1082,5 +1093,3 @@ export type InstallFromGitHubCommand = z.infer<typeof InstallFromGitHubCommandSc
 export type InstallFromGitHubResponse = z.infer<typeof InstallFromGitHubResponseSchema>;
 export type GetTasksCommand = z.infer<typeof GetTasksCommandSchema>;
 export type GetTasksResponse = z.infer<typeof GetTasksResponseSchema>;
-
-

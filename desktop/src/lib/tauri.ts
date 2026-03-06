@@ -11,7 +11,28 @@
  * Safe to call at module-level or inside components.
  */
 export function isTauri(): boolean {
-    return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    const tauriWindow = window as Window & {
+        __TAURI__?: unknown;
+        __TAURI_INTERNALS__?: unknown;
+    };
+
+    if (typeof tauriWindow.__TAURI_INTERNALS__ !== 'undefined') {
+        return true;
+    }
+
+    if (typeof tauriWindow.__TAURI__ !== 'undefined') {
+        return true;
+    }
+
+    try {
+        return typeof navigator !== 'undefined' && /\bTauri\b/i.test(navigator.userAgent);
+    } catch {
+        return false;
+    }
 }
 
 /**

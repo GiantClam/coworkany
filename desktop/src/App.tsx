@@ -1,30 +1,32 @@
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { useTranslation } from 'react-i18next';
 import { useTauriEvents } from './hooks/useTauriEvents';
 import { useEffectConfirmation } from './hooks/useEffectConfirmation';
 import { EffectConfirmationDialog } from './components/EffectConfirmationDialog';
-import { DashboardView } from './components/Dashboard/DashboardView';
-import { useUIStore } from './stores/uiStore';
 import { ChatInterface } from './components/Chat/ChatInterface';
 import { SectionErrorBoundary } from './components/Common/AppErrorBoundary';
 import { UpdateChecker } from './components/Common/UpdateChecker';
 import { OfflineBanner } from './components/Common/OfflineBanner';
 import { SetupWizard } from './components/Setup/SetupWizard';
-import { isFirstRun } from './lib/configStore';
+import { MainLayout } from './components/Layout/Layout';
+import type { SidebarTab } from './components/Sidebar/Sidebar';
+import { TitleBar } from './components/TitleBar/TitleBar';
+import { isFirstRun, DEFAULT_SHORTCUTS, getShortcuts } from './lib/configStore';
 import { CommandPalette } from './components/CommandPalette/CommandPalette';
 import { ShortcutOverlay } from './components/ShortcutOverlay/ShortcutOverlay';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { useTranslation } from 'react-i18next';
-import { DEFAULT_SHORTCUTS } from './lib/configStore';
 import { formatShortcutForDisplay } from './lib/shortcuts';
 import { createCommandRegistry } from './lib/commandRegistry';
 import type { AppCommandId } from './lib/commandRegistry';
 import { ModalDialog } from './components/Common/ModalDialog';
-import { getFeatureFlag, setFeatureFlag } from './lib/uiPreferences';
-import { getShortcuts } from './lib/configStore';
+import { StartupSkeleton } from './components/Common/StartupSkeleton';
 import { toast } from './components/Common/ToastProvider';
-import { startAllServices } from './hooks/useServiceManager';
+import { startAllServices, startAllServicesBackground } from './hooks/useServiceManager';
+import { IS_STARTUP_BASELINE } from './lib/startupProfile';
+import { recordStartupMetric } from './lib/startupMetrics';
+import { isTauri } from './lib/tauri';
+import { TaskListView } from './components/jarvis/TaskListView';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('./components/Skills/SkillsView');
@@ -45,75 +47,109 @@ function App() {
     const { t } = useTranslation();
     const commandPaletteShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.commandPalette);
     const newTaskShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.newTask);
-    const quickChatShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.quickChat);
     const openSettingsShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.openSettings);
     const showShortcutsShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.showShortcuts);
 
-    // Initialize Tauri event listeners
     useTauriEvents();
 
-    // First-run detection — sync fast-path from localStorage avoids Loading state
-    const [showSetup, setShowSetup] = useState<boolean>(() => {
-        // Synchronous check: if key exists, setup was already completed
-        try {
-            const raw = localStorage.getItem('coworkany:setupCompleted');
-            if (raw !== null) return false; // already done — no wizard
-        } catch { /* ignore */ }
-        return true; // first run (Tauri store will confirm async below)
-    });
-    const [newShellEnabled, setNewShellEnabled] = useState(true);
+    const [showSetup, setShowSetup] = useState(false);
+    const [setupStateResolved, setSetupStateResolved] = useState(false);
 
-    // Command palette state
     const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
     const [shortcutsOverlayOpen, setShortcutsOverlayOpen] = useState(false);
     const [skillsDialogOpen, setSkillsDialogOpen] = useState(false);
     const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
     const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
-
-    const { viewMode, switchToLauncher, openDashboard } = useUIStore();
+    const [startupReadySent, setStartupReadySent] = useState(false);
+    const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
+    const [activeTab, setActiveTab] = useState<SidebarTab>('chat');
+    const startupSkeletonStartRef = useRef<number>(performance.now());
 
     useEffect(() => {
-        // Confirm with Tauri store async (corrects sync guess if needed)
+        let cancelled = false;
         isFirstRun()
-            .then(first => setShowSetup(first))
-            .catch(() => setShowSetup(false));
-    }, []);
-
-    useEffect(() => {
-        let mounted = true;
-        void getFeatureFlag('newShellEnabled', true)
-            .then((enabled) => {
-                if (mounted) {
-                    setNewShellEnabled(enabled);
-                }
+            .then((first) => {
+                if (cancelled) return;
+                setShowSetup(first);
+                setSetupStateResolved(true);
             })
             .catch(() => {
-                if (mounted) {
-                    setNewShellEnabled(true);
-                }
+                if (cancelled) return;
+                setShowSetup(false);
+                setSetupStateResolved(true);
             });
 
         return () => {
-            mounted = false;
+            cancelled = true;
         };
     }, []);
 
     useEffect(() => {
-        // Record first meaningful app paint timing for runtime diagnostics.
         if (window.__coworkanyPerf && !window.__coworkanyPerf.firstPaint) {
             window.__coworkanyPerf.firstPaint = performance.now();
-            console.info('[perf] app_first_paint_ms', Math.round(window.__coworkanyPerf.firstPaint - window.__coworkanyPerf.appStart));
+            const elapsed = window.__coworkanyPerf.firstPaint - window.__coworkanyPerf.appStart;
+            const windowLabel = window.__coworkanyPerf.windowLabel ?? 'main';
+            console.info('[perf] app_first_paint_ms', Math.round(elapsed));
+            void recordStartupMetric('app_first_paint', elapsed, window.__coworkanyPerf.firstPaint, windowLabel);
         }
     }, []);
 
     useEffect(() => {
-        // Warm backend services in background to keep first interaction snappy.
-        let cancelled = false;
         const timer = window.setTimeout(() => {
-            void startAllServices()
+            const now = performance.now();
+            const appStart = window.__coworkanyPerf?.appStart ?? now;
+            const windowLabel = window.__coworkanyPerf?.windowLabel ?? 'main';
+            void recordStartupMetric('frontend_ready', now - appStart, now, windowLabel);
+            setStartupReadySent(true);
+        }, 450);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, []);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            setShowStartupSkeleton(false);
+        }, 2400);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!startupReadySent) {
+            return;
+        }
+
+        const minVisibleMs = 160;
+        const elapsed = performance.now() - startupSkeletonStartRef.current;
+        const remaining = Math.max(0, minVisibleMs - elapsed);
+        const timer = window.setTimeout(() => {
+            setShowStartupSkeleton(false);
+        }, remaining);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [startupReadySent]);
+
+    useEffect(() => {
+        if (!setupStateResolved || showSetup) {
+            return;
+        }
+
+        if (!IS_STARTUP_BASELINE && !startupReadySent) {
+            return;
+        }
+
+        let cancelled = false;
+        const runWarmup = () => {
+            const starter = IS_STARTUP_BASELINE ? startAllServices : startAllServicesBackground;
+            void starter()
                 .then((result) => {
-                    if (cancelled) return;
-                    if (!result.success) {
+                    if (!cancelled && !result.success) {
                         console.warn('[services] warmup failed:', result.message);
                     }
                 })
@@ -122,21 +158,34 @@ function App() {
                         console.warn('[services] warmup error:', err);
                     }
                 });
-        }, 800);
+        };
+
+        let timer: number | null = null;
+        let idleHandle: number | null = null;
+        if (IS_STARTUP_BASELINE) {
+            timer = window.setTimeout(runWarmup, 800);
+        } else {
+            const requestIdle = (window as Window & {
+                requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+            }).requestIdleCallback;
+
+            if (typeof requestIdle === 'function') {
+                idleHandle = requestIdle(() => runWarmup(), { timeout: 3500 });
+            } else {
+                timer = window.setTimeout(runWarmup, 1500);
+            }
+        }
 
         return () => {
             cancelled = true;
-            window.clearTimeout(timer);
+            if (timer !== null) {
+                window.clearTimeout(timer);
+            }
+            if (idleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+                window.cancelIdleCallback(idleHandle);
+            }
         };
-    }, []);
-
-    const toggleNewShell = useCallback(() => {
-        setNewShellEnabled((prev) => {
-            const next = !prev;
-            void setFeatureFlag('newShellEnabled', next);
-            return next;
-        });
-    }, []);
+    }, [startupReadySent, setupStateResolved, showSetup]);
 
     const exportDiagnostics = useCallback(async () => {
         try {
@@ -145,9 +194,9 @@ function App() {
                 timestamp: new Date().toISOString(),
                 locale: navigator.language,
                 shell: {
-                    newShellEnabled,
+                    singleWindowShell: true,
                 },
-                viewMode,
+                activeTab,
                 overlays: {
                     commandPaletteOpen,
                     shortcutsOverlayOpen,
@@ -166,8 +215,7 @@ function App() {
             toast.error(t('diagnostics.failedTitle'), t('diagnostics.failedDescription'));
         }
     }, [
-        newShellEnabled,
-        viewMode,
+        activeTab,
         commandPaletteOpen,
         shortcutsOverlayOpen,
         skillsDialogOpen,
@@ -176,15 +224,6 @@ function App() {
         t,
     ]);
 
-    const openQuickChat = useCallback(async () => {
-        try {
-            await invoke('open_quickchat');
-        } catch (e) {
-            console.error('Failed to open quick chat:', e);
-        }
-    }, []);
-
-    // Effect confirmation logic
     const {
         pendingRequest,
         isDialogOpen,
@@ -193,21 +232,18 @@ function App() {
         closeDialog,
     } = useEffectConfirmation();
 
-    // Command definitions: single registry for all command sources.
     const commands = useMemo(() => createCommandRegistry(
         t,
         {
-            onNewTask: () => { void switchToLauncher(); },
+            onNewTask: () => setActiveTab('chat'),
             onOpenProject: () => {
-                // TODO: Implement project picker
+                // TODO: implement project picker
             },
-            onTaskList: () => { void openDashboard(); },
+            onTaskList: () => setActiveTab('tasks'),
             onOpenSkills: () => setSkillsDialogOpen(true),
             onOpenMcp: () => setMcpDialogOpen(true),
             onOpenSettings: () => setSettingsDialogOpen(true),
             onShowShortcuts: () => setShortcutsOverlayOpen(true),
-            onOpenQuickChat: () => { void openQuickChat(); },
-            onToggleNewShell: toggleNewShell,
             onExportDiagnostics: () => { void exportDiagnostics(); },
         },
         {
@@ -215,24 +251,14 @@ function App() {
             commandPalette: commandPaletteShortcut,
             openSettings: openSettingsShortcut,
             showShortcuts: showShortcutsShortcut,
-            quickChat: quickChatShortcut,
-        },
-        {
-            newShellEnabled,
         }
     ), [
         t,
-        switchToLauncher,
-        openDashboard,
-        openQuickChat,
-        toggleNewShell,
         exportDiagnostics,
-        newShellEnabled,
         newTaskShortcut,
         commandPaletteShortcut,
         openSettingsShortcut,
         showShortcutsShortcut,
-        quickChatShortcut,
     ]);
 
     const commandHandlers = useMemo(() => {
@@ -251,6 +277,10 @@ function App() {
     }, [commandHandlers]);
 
     useEffect(() => {
+        if (!isTauri()) {
+            return;
+        }
+
         const unlistenCommandExecuted = listen<{ id?: string }>('command-executed', (event) => {
             const id = event.payload?.id;
             if (id) {
@@ -263,59 +293,84 @@ function App() {
         };
     }, [runCommandById]);
 
-    // Global shortcuts
     useGlobalShortcuts({
         commandPalette: useCallback(() => setCommandPaletteOpen(true), []),
-        newTask: useCallback(() => switchToLauncher(), [switchToLauncher]),
+        newTask: useCallback(() => setActiveTab('chat'), []),
         showShortcuts: useCallback(() => setShortcutsOverlayOpen(true), []),
         openSettings: useCallback(() => setSettingsDialogOpen(true), []),
-        quickChat: useCallback(() => {
-            void openQuickChat();
-        }, [openQuickChat]),
     });
 
-    // Show Setup Wizard for first-time users
+    if (!setupStateResolved) {
+        return (
+            <div className="app-shell bg-app font-sans text-primary">
+                <TitleBar />
+                <div className="app-content">
+                    <StartupSkeleton visible />
+                </div>
+            </div>
+        );
+    }
+
     if (showSetup) {
-        return <SetupWizard onComplete={() => setShowSetup(false)} />;
+        return (
+            <div className="app-shell bg-app font-sans text-primary">
+                <TitleBar />
+                <div className="app-content">
+                    <SetupWizard onComplete={() => setShowSetup(false)} topOffset={0} />
+                </div>
+            </div>
+        );
     }
 
     return (
-        <div className="h-screen w-screen overflow-hidden bg-app relative font-sans text-primary">
+        <div className="app-shell bg-app font-sans text-primary">
+            <div className="app-aurora app-aurora-one" />
+            <div className="app-aurora app-aurora-two" />
+            <div className="app-aurora app-aurora-three" />
+            <div className="app-noise-overlay" />
+            <TitleBar />
+            <div className="app-content">
+                <StartupSkeleton visible={showStartupSkeleton} />
 
-            {/* Command Palette */}
-            <CommandPalette
-                open={commandPaletteOpen}
-                onOpenChange={setCommandPaletteOpen}
-                commands={commands}
-            />
+                <CommandPalette
+                    open={commandPaletteOpen}
+                    onOpenChange={setCommandPaletteOpen}
+                    commands={commands}
+                />
 
-            {newShellEnabled && (
                 <ShortcutOverlay
                     open={shortcutsOverlayOpen}
                     onClose={() => setShortcutsOverlayOpen(false)}
                     shortcuts={{
                         commandPalette: commandPaletteShortcut,
                         newTask: newTaskShortcut,
-                        quickChat: quickChatShortcut,
                         openSettings: openSettingsShortcut,
                         showShortcuts: showShortcutsShortcut,
                         esc: t('shortcutsOverlay.esc'),
                     }}
                 />
-            )}
 
-            {/* Main Interactive Layer - Chat Interface is now primary */}
-            <SectionErrorBoundary resetKeys={[viewMode]}>
-                <div className="h-full w-full overflow-hidden">
-                    <ChatInterface
-                        onOpenSkills={newShellEnabled ? () => setSkillsDialogOpen(true) : undefined}
-                        onOpenMcp={newShellEnabled ? () => setMcpDialogOpen(true) : undefined}
-                        onOpenSettings={newShellEnabled ? () => setSettingsDialogOpen(true) : undefined}
-                    />
-                </div>
-            </SectionErrorBoundary>
+                <MainLayout
+                    activeTab={activeTab}
+                    onTabChange={setActiveTab}
+                    onOpenSettings={() => setSettingsDialogOpen(true)}
+                >
+                    <SectionErrorBoundary resetKeys={[activeTab]}>
+                        <div className="app-main-pane">
+                            {activeTab === 'tasks' ? (
+                                <TaskListView />
+                            ) : (
+                                <ChatInterface
+                                    onOpenSkills={() => setSkillsDialogOpen(true)}
+                                    onOpenMcp={() => setMcpDialogOpen(true)}
+                                    onOpenSettings={() => setSettingsDialogOpen(true)}
+                                    onOpenTasks={() => setActiveTab('tasks')}
+                                />
+                            )}
+                        </div>
+                    </SectionErrorBoundary>
+                </MainLayout>
 
-            {newShellEnabled && (
                 <ModalDialog
                     open={skillsDialogOpen}
                     onClose={() => setSkillsDialogOpen(false)}
@@ -327,9 +382,7 @@ function App() {
                         </div>
                     </Suspense>
                 </ModalDialog>
-            )}
 
-            {newShellEnabled && (
                 <ModalDialog
                     open={mcpDialogOpen}
                     onClose={() => setMcpDialogOpen(false)}
@@ -341,9 +394,7 @@ function App() {
                         </div>
                     </Suspense>
                 </ModalDialog>
-            )}
 
-            {newShellEnabled && (
                 <ModalDialog
                     open={settingsDialogOpen}
                     onClose={() => setSettingsDialogOpen(false)}
@@ -355,29 +406,18 @@ function App() {
                         </div>
                     </Suspense>
                 </ModalDialog>
-            )}
 
-            {/* Dashboard View (Overlay) */}
-            {viewMode === 'dashboard' && (
-                <SectionErrorBoundary>
-                    <DashboardView />
-                </SectionErrorBoundary>
-            )}
+                <EffectConfirmationDialog
+                    request={pendingRequest}
+                    open={isDialogOpen}
+                    onApprove={approve}
+                    onDeny={deny}
+                    onClose={closeDialog}
+                />
 
-            {/* Effect Confirmation Dialog - Always on top */}
-            <EffectConfirmationDialog
-                request={pendingRequest}
-                open={isDialogOpen}
-                onApprove={approve}
-                onDeny={deny}
-                onClose={closeDialog}
-            />
-
-            {/* Offline Banner - top center */}
-            <OfflineBanner />
-
-            {/* Update Checker - bottom-right notification */}
-            <UpdateChecker />
+                <OfflineBanner />
+                <UpdateChecker />
+            </div>
         </div>
     );
 }

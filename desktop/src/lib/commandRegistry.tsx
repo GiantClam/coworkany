@@ -5,12 +5,10 @@ export type AppCommandId =
     | 'new-task'
     | 'open-project'
     | 'task-list'
-    | 'quick-chat'
     | 'skills'
     | 'mcp'
     | 'settings'
     | 'shortcuts'
-    | 'toggle-shell'
     | 'export-diagnostics';
 
 type CommandActionContext = {
@@ -21,8 +19,6 @@ type CommandActionContext = {
     onOpenMcp: () => void;
     onOpenSettings: () => void;
     onShowShortcuts: () => void;
-    onOpenQuickChat: () => void;
-    onToggleNewShell: () => void;
     onExportDiagnostics: () => void;
 };
 
@@ -31,7 +27,6 @@ type CommandShortcutMap = {
     commandPalette: string;
     openSettings: string;
     showShortcuts: string;
-    quickChat: string;
 };
 
 const PlusIcon = () => (
@@ -94,12 +89,6 @@ const SettingsIcon = () => (
     </svg>
 );
 
-const ChatIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-    </svg>
-);
-
 const InfoIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="10"></circle>
@@ -111,13 +100,8 @@ const InfoIcon = () => (
 export function createCommandRegistry(
     t: TFunction,
     actions: CommandActionContext,
-    shortcuts: CommandShortcutMap,
-    options?: {
-        newShellEnabled?: boolean;
-    }
+    shortcuts: CommandShortcutMap
 ): Command[] {
-    const newShellEnabled = options?.newShellEnabled ?? true;
-
     return [
         {
             id: 'new-task',
@@ -140,14 +124,6 @@ export function createCommandRegistry(
             icon: <ListIcon />,
             category: 'primary',
             action: actions.onTaskList,
-        },
-        {
-            id: 'quick-chat',
-            label: t('quickChat.title'),
-            icon: <ChatIcon />,
-            shortcut: shortcuts.quickChat,
-            category: 'secondary',
-            action: actions.onOpenQuickChat,
         },
         {
             id: 'skills',
@@ -178,13 +154,6 @@ export function createCommandRegistry(
             shortcut: shortcuts.showShortcuts,
             category: 'settings',
             action: actions.onShowShortcuts,
-        },
-        {
-            id: 'toggle-shell',
-            label: newShellEnabled ? t('settings.disableNewShell') : t('settings.enableNewShell'),
-            icon: <SettingsIcon />,
-            category: 'settings',
-            action: actions.onToggleNewShell,
         },
         {
             id: 'export-diagnostics',

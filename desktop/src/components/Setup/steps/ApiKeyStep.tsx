@@ -2,24 +2,39 @@
  * ApiKeyStep — Step 2 of Setup Wizard
  *
  * Lets users configure their LLM provider API key.
- * Supports Anthropic and OpenRouter, with validation.
+ * Supports built-in default providers, with validation.
  */
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import styles from '../SetupWizard.module.css';
+import {
+    buildSetupValidationInput,
+    getSetupProviderPreset,
+    setupProviderOptions,
+    type SetupProvider,
+} from '../providerCatalog';
 
 interface ApiKeyStepProps {
-    onConfigured: (provider: string, apiKey: string) => void;
+    onConfigured: (
+        provider: string,
+        apiKey: string,
+        proxy: { enabled: boolean; url?: string; bypass?: string }
+    ) => Promise<void>;
 }
 
 export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
     const { t } = useTranslation();
-    const [provider, setProvider] = useState<'anthropic' | 'openrouter'>('anthropic');
+    const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890';
+    const [provider, setProvider] = useState<SetupProvider>('anthropic');
     const [apiKey, setApiKey] = useState('');
+    const [proxyEnabled, setProxyEnabled] = useState(false);
+    const [proxyUrl, setProxyUrl] = useState(DEFAULT_PROXY_URL);
+    const [proxyBypass, setProxyBypass] = useState('localhost,127.0.0.1,::1');
     const [isValidating, setIsValidating] = useState(false);
     const [validationResult, setValidationResult] = useState<{ ok: boolean; msg: string } | null>(null);
+    const preset = getSetupProviderPreset(provider);
 
     const handleValidate = async () => {
         if (!apiKey.trim()) return;
@@ -27,9 +42,7 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
         setValidationResult(null);
 
         try {
-            const input = provider === 'anthropic'
-                ? { provider: 'anthropic', anthropic: { apiKey: apiKey.trim() } }
-                : { provider: 'openrouter', openrouter: { apiKey: apiKey.trim() } };
+            const input = buildSetupValidationInput(provider, apiKey.trim());
 
             const result = await invoke<{ success: boolean; payload?: { error?: string } }>(
                 'validate_llm_settings',
@@ -38,7 +51,11 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
 
             if (result.success) {
                 setValidationResult({ ok: true, msg: t('setup.apiKeyVerified') });
-                onConfigured(provider, apiKey.trim());
+                await onConfigured(provider, apiKey.trim(), {
+                    enabled: proxyEnabled,
+                    url: proxyEnabled ? (proxyUrl.trim() || DEFAULT_PROXY_URL) : undefined,
+                    bypass: proxyEnabled ? (proxyBypass.trim() || undefined) : undefined,
+                });
             } else {
                 setValidationResult({ ok: false, msg: result.payload?.error || t('setup.verificationFailed') });
             }
@@ -67,23 +84,36 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
                     className={styles.formSelect}
                     value={provider}
                     onChange={(e) => {
-                        setProvider(e.target.value as 'anthropic' | 'openrouter');
+                        setProvider(e.target.value as SetupProvider);
                         setValidationResult(null);
                     }}
                 >
-                    <option value="anthropic">{t('setup.anthropicOption')}</option>
-                    <option value="openrouter">{t('setup.openRouterOption')}</option>
+                    {setupProviderOptions.map((option) => (
+                        <option key={option.provider} value={option.provider}>
+                            {option.provider === 'anthropic'
+                                ? t('setup.anthropicOption')
+                                : option.provider === 'openrouter'
+                                    ? t('setup.openRouterOption')
+                                    : option.label}
+                        </option>
+                    ))}
                 </select>
             </div>
 
             <div className={styles.formGroup}>
                 <label className={styles.formLabel}>
-                    {provider === 'anthropic' ? t('setup.anthropicApiKey') : t('setup.openRouterApiKey')}
+                    {provider === 'anthropic'
+                        ? t('setup.anthropicApiKey')
+                        : provider === 'openrouter'
+                            ? t('setup.openRouterApiKey')
+                            : preset.apiKeyLabel}
                 </label>
                 <p className={styles.formHint}>
                     {provider === 'anthropic'
                         ? t('setup.anthropicHint')
-                        : t('setup.openRouterHint')}
+                        : provider === 'openrouter'
+                            ? t('setup.openRouterHint')
+                            : preset.hint}
                 </p>
                 <input
                     type="password"
@@ -93,8 +123,43 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
                         setApiKey(e.target.value);
                         setValidationResult(null);
                     }}
-                    placeholder={provider === 'anthropic' ? t('setup.anthropicPlaceholder') : t('setup.openRouterPlaceholder')}
+                    placeholder={provider === 'anthropic'
+                        ? t('setup.anthropicPlaceholder')
+                        : provider === 'openrouter'
+                            ? t('setup.openRouterPlaceholder')
+                            : preset.placeholder}
                 />
+            </div>
+
+            <div className={styles.formGroup}>
+                <label className={styles.formLabel}>{t('settings.proxySettings')}</label>
+                <p className={styles.formHint}>{t('settings.proxyHint')}</p>
+                <label className={styles.checkboxLabel}>
+                    <input
+                        type="checkbox"
+                        checked={proxyEnabled}
+                        onChange={(e) => setProxyEnabled(e.target.checked)}
+                    />
+                    <span>{t('settings.proxyEnabled')}</span>
+                </label>
+                {proxyEnabled && (
+                    <div className={styles.proxyGroup}>
+                        <input
+                            type="text"
+                            className={styles.formInput}
+                            value={proxyUrl}
+                            onChange={(e) => setProxyUrl(e.target.value)}
+                            placeholder={t('settings.proxyUrlPlaceholder')}
+                        />
+                        <input
+                            type="text"
+                            className={styles.formInput}
+                            value={proxyBypass}
+                            onChange={(e) => setProxyBypass(e.target.value)}
+                            placeholder={t('settings.proxyBypassPlaceholder')}
+                        />
+                    </div>
+                )}
             </div>
 
             <button
