@@ -32,10 +32,6 @@ interface IpcResult {
     payload: Record<string, unknown>;
 }
 
-interface UseSkillsOptions {
-    autoLoad?: boolean;
-}
-
 function extractPayload(result: IpcResult): Record<string, unknown> {
     const payload = result.payload ?? {};
     const nested = (payload as Record<string, unknown>).payload;
@@ -49,14 +45,17 @@ function extractPayload(result: IpcResult): Record<string, unknown> {
 // Hook
 // ============================================================================
 
+interface UseSkillsOptions {
+    autoRefresh?: boolean;
+}
+
 export function useSkills(options: UseSkillsOptions = {}) {
-    const { autoLoad = true } = options;
+    const { autoRefresh = true } = options;
     const [skills, setSkills] = useState<SkillRecord[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [initialized, setInitialized] = useState(false);
 
-    const refresh = useCallback(async (): Promise<SkillRecord[]> => {
+    const refresh = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -65,16 +64,11 @@ export function useSkills(options: UseSkillsOptions = {}) {
             });
             const payload = extractPayload(result);
             if (Array.isArray(payload.skills)) {
-                const nextSkills = payload.skills as SkillRecord[];
-                setSkills(nextSkills);
-                return nextSkills;
+                setSkills(payload.skills as SkillRecord[]);
             }
-            return [];
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
-            return [];
         } finally {
-            setInitialized(true);
             setLoading(false);
         }
     }, []);
@@ -136,12 +130,12 @@ export function useSkills(options: UseSkillsOptions = {}) {
 
     // Load on mount + refresh on skills-updated
     useEffect(() => {
+        if (!autoRefresh) return;
+
         let unlisten: UnlistenFn | undefined;
-        if (autoLoad) {
-            void refresh();
-        }
+        refresh();
         listen('skills-updated', () => {
-            void refresh();
+            refresh();
         })
             .then((fn) => {
                 unlisten = fn;
@@ -152,13 +146,12 @@ export function useSkills(options: UseSkillsOptions = {}) {
         return () => {
             unlisten?.();
         };
-    }, [autoLoad, refresh]);
+    }, [refresh, autoRefresh]);
 
     return {
         skills,
         loading,
         error,
-        initialized,
         refresh,
         importSkill,
         toggle,

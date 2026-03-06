@@ -5,6 +5,7 @@ import '../../styles/variables.css';
 import { useGitHubValidation } from '../../hooks/useGitHubValidation';
 import { SkillRepositoryView } from './SkillRepositoryView';
 import { RuntimeBadge } from '../Common/RuntimeBadge';
+import { MarketplaceView } from '../Marketplace/MarketplaceView';
 
 type SkillRecord = {
     manifest: {
@@ -42,7 +43,7 @@ export function SkillsView() {
     const [importPath, setImportPath] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'install' | 'browse'>('install');
+    const [activeTab, setActiveTab] = useState<'install' | 'browse' | 'market'>('install');
 
     // GitHub URL validation
     const { validating, result: validationResult } = useGitHubValidation(importPath, 'skill');
@@ -141,6 +142,21 @@ export function SkillsView() {
                 >
                     {t('skills.browseRepositories')}
                 </button>
+                <button
+                    onClick={() => setActiveTab('market')}
+                    style={{
+                        padding: '8px 16px',
+                        border: 'none',
+                        background: 'transparent',
+                        color: activeTab === 'market' ? 'var(--status-info)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === 'market' ? '2px solid var(--status-info)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        fontWeight: activeTab === 'market' ? 600 : 400,
+                        transition: 'all 0.2s'
+                    }}
+                >
+                    Market
+                </button>
             </div>
 
             {/* Import Bar */}
@@ -216,7 +232,13 @@ export function SkillsView() {
             {error && <div style={{ color: 'var(--status-error)', fontSize: '14px' }}>{error}</div>}
 
             {/* Tab Content */}
-            {activeTab === 'browse' ? (
+            {activeTab === 'market' ? (
+                <MarketplaceView
+                    initialType="skill"
+                    installedSources={new Set(skills.map(s => s.source))}
+                    onInstallComplete={refresh}
+                />
+            ) : activeTab === 'browse' ? (
                 <SkillRepositoryView
                     onInstallComplete={refresh}
                     installedSkillIds={new Set(skills.map(s => s.source))}

@@ -80,10 +80,19 @@ async function connectCDP(params) {
 async function launch(params) {
     const headless = params.headless || false;
     const userDataDir = params.userDataDir;
+    const executablePath = params.executablePath;
 
     if (browser || context) {
         return { alreadyConnected: true };
     }
+
+    const commonLaunchArgs = [
+        '--disable-blink-features=AutomationControlled',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-infobars',
+        '--disable-dev-shm-usage',
+    ];
 
     if (userDataDir) {
         // Persistent context — preserves login sessions
@@ -95,32 +104,41 @@ async function launch(params) {
         context = await chromium.launchPersistentContext(userDataDir, {
             headless,
             timeout: 30000,
-            args: [
-                '--disable-blink-features=AutomationControlled',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--disable-infobars',
-                '--disable-dev-shm-usage',
-            ],
+            args: commonLaunchArgs,
             viewport: { width: 1920, height: 1080 },
             ignoreDefaultArgs: ['--enable-automation'],
+            ...(executablePath ? { executablePath } : {}),
+        });
+
+        // Anti-bot hardening: align with real-user browser fingerprints.
+        await context.addInitScript(() => {
+            try {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                if (!window.chrome) {
+                    Object.defineProperty(window, 'chrome', { value: { runtime: {} }, configurable: true });
+                }
+                const originalQuery = window.navigator.permissions?.query;
+                if (originalQuery) {
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters && parameters.name === 'notifications'
+                            ? Promise.resolve({ state: Notification.permission })
+                            : originalQuery(parameters)
+                    );
+                }
+            } catch {}
         });
 
         const pages = context.pages();
-        page = pages.length > 0 ? pages[0] : await context.newPage();
+        // Always use a fresh page to avoid stale/closed pre-existing tab state.
+        page = await context.newPage();
         log(`Persistent context launched with ${pages.length} pages`);
     } else {
         // Fresh browser
         browser = await chromium.launch({
             headless,
             timeout: 30000,
-            args: [
-                '--disable-blink-features=AutomationControlled',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--disable-infobars',
-                '--disable-dev-shm-usage',
-            ],
+            args: commonLaunchArgs,
+            ...(executablePath ? { executablePath } : {}),
         });
 
         context = await browser.newContext({
@@ -181,11 +199,29 @@ async function navigate(params) {
         }
     }
 
+    // X/Twitter anti-bot/error interstitial sometimes appears transiently.
+    // Retry one hard reload before returning control to caller.
+    const xTransientError =
+        bodyText.includes('出错了。请尝试重新加载') ||
+        bodyText.includes('Something went wrong. Try reloading.');
+    if (xTransientError) {
+        log('Detected transient X error page, attempting one reload...');
+        try {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+            await page.waitForTimeout(1500);
+            bodyText = await page.evaluate(() => (document.body?.innerText || '').trim());
+            log(`After reload: bodyLen=${bodyText.length}`);
+        } catch (e) {
+            log(`Reload after X error failed: ${e.message}`);
+        }
+    }
+
     return {
         url: page.url(),
         title: await page.title(),
         status: response ? response.status() : null,
         bodyLength: bodyText.length,
+        xTransientError,
     };
 }
 

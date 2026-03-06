@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ChatInterface Component
  *
  * Main chat interface using child components
@@ -21,7 +21,6 @@ import { ModalDialog } from '../Common/ModalDialog';
 import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
-import { IS_STARTUP_BASELINE } from '../../lib/startupProfile';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
 
 const SkillsViewLazy = lazy(async () => {
@@ -82,17 +81,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
-    const {
-        skills,
-        initialized: skillsInitialized,
-        refresh: refreshSkills,
-    } = useSkills({ autoLoad: IS_STARTUP_BASELINE });
-    const {
-        toolpacks,
-        initialized: toolpacksInitialized,
-        refresh: refreshToolpacks,
-    } = useToolpacks({ autoLoad: IS_STARTUP_BASELINE });
-    const { activeWorkspace, createWorkspace, selectWorkspace } = useWorkspace({ autoLoad: IS_STARTUP_BASELINE });
+    const { skills } = useSkills({ autoRefresh: true });
+    const { toolpacks } = useToolpacks({ autoRefresh: true });
+    const { activeWorkspace, createWorkspace, selectWorkspace } = useWorkspace({ autoLoad: true });
     const [llmConfig, setLlmConfig] = useState<LlmConfig>({});
     const {
         attachments,
@@ -203,21 +194,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!trimmedQuery && attachments.length === 0) return;
         const requestContent = buildContentWithAttachments(query);
         const titleSource = trimmedQuery || attachments[0]?.name || t('chat.currentTask');
-
-        let effectiveSkills = skills;
-        if (!skillsInitialized) {
-            effectiveSkills = await refreshSkills();
-        }
-        let effectiveToolpacks = toolpacks;
-        if (!toolpacksInitialized) {
-            effectiveToolpacks = await refreshToolpacks();
-        }
-        const enabledSkillsForRequest = effectiveSkills
-            .filter((skill) => skill.enabled)
-            .map((skill) => skill.manifest.id);
-        const enabledToolpacksForRequest = effectiveToolpacks
-            .filter((tp) => tp.enabled)
-            .map((tp) => tp.manifest.id);
+        const enabledSkillsForRequest = enabledSkills;
+        const enabledToolpacksForRequest = enabledToolpacks;
 
         if (activeSession?.taskId) {
             const result = await sendMessage({
@@ -280,7 +258,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setQuery('');
             clearAttachments();
         }
-    }, [query, attachments, buildContentWithAttachments, t, skills, skillsInitialized, refreshSkills, toolpacks, toolpacksInitialized, refreshToolpacks, activeSession?.taskId, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask]);
+    }, [query, attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession?.taskId, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask]);
 
     const handleCancel = useCallback(async () => {
         if (activeSession?.taskId) {

@@ -73,7 +73,7 @@ const CloseIcon = () => (
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpenSettings }) => {
     const { t } = useTranslation();
     const sidecarConnected = useTaskEventStore((state) => state.sidecarConnected);
-    const sessionsHydrating = useTaskEventStore((state) => state.isHydratingSessions);
+    const sessionsHydrating = false;
     const sessions = useTaskEventStore((state) => state.sessions);
     const activeSession = useActiveSession();
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);

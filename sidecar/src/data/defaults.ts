@@ -792,6 +792,151 @@ description: 投资研究助手 — 检索新闻、分析股票、提供投资�
 - **绝对不要因为搜索失败就拒绝提供分析**
 `;
 
+const SKILL_BROWSER_AUTOMATION = `---
+name: browser-automation
+description: 浏览器自动化任务 - 发帖、填写表单、点击按钮、浏览网页等。使用前必须规划，失败后必须反思调整。
+triggers:
+  - 发帖
+  - 发微博
+  - 发推特
+  - tweet
+  - post
+  - 浏览器
+  - browser
+  - 网页操作
+  - 点击
+  - click
+  - 填写
+  - fill
+  - 发布
+  - publish
+  - 在X上
+  - 在x上
+  - 在推特
+---
+
+# 浏览器自动化工作流
+
+## 核心原则
+
+\`\`\`
+规划先行 → 小步执行 → 验证结果 → 失败反思 → 调整策略
+\`\`\`
+
+## 第一步：任务分析
+
+执行任何浏览器操作前，先明确：
+
+1. **提取目标内容** - 用户要发什么内容？做什么操作？
+   - 例: "在X上发帖，内容是'hello world'" → 内容 = "hello world"
+   
+2. **确定目标网站** - 哪个网站？什么操作？
+   - 例: X/Twitter 发帖 → 需要: 导航 → 登录检查 → 发帖
+
+3. **使用 plan_step 记录计划**
+   \`\`\`
+   plan_step: {
+     step: "1. 导航到 x.com",
+     status: "pending"
+   }
+   \`\`\`
+
+## 第二步：导航策略
+
+**错误做法** ❌:
+- 直接导航到深层URL如 \`x.com/compose/post\`（会超时或需要登录）
+
+**正确做法** ✅:
+- 先导航到首页 \`x.com\`
+- 等待页面加载完成 (\`browser_wait\`)
+- 检查页面状态 (\`browser_screenshot\` + \`browser_get_content\`)
+
+\`\`\`
+// 正确的导航流程
+browser_navigate({ url: "https://x.com" })
+browser_wait({ selector: "body", timeout_ms: 5000 })
+browser_screenshot({}) // 查看当前页面状态
+\`\`\`
+
+## 第三步：检查登录状态
+
+通过截图或内容分析判断：
+- 已登录 → 继续操作
+- 未登录 → 提示用户登录或停止
+
+## 第四步：执行操作
+
+### X/Twitter 发帖流程
+
+\`\`\`
+1. 点击发帖按钮: browser_click({ text: "发帖" }) 或 browser_click({ text: "Post" })
+2. 等待输入框: browser_wait({ selector: "[data-testid='tweetTextarea_0']" })
+3. 填充内容: browser_fill({ 
+     selector: "[data-testid='tweetTextarea_0']", 
+     value: "用户指定的内容" 
+   })
+4. 点击发送: browser_click({ text: "发帖" }) 或 browser_click({ text: "Post" })
+\`\`\`
+
+### 使用 browser_ai_action (推荐用于复杂操作)
+
+如果页面结构复杂，使用自然语言描述：
+\`\`\`
+browser_ai_action({ 
+  action: "在发帖框中输入 'hello world' 并点击发送按钮",
+  context: "当前在 X 首页" 
+})
+\`\`\`
+
+## 第五步：验证成功
+
+- \`browser_screenshot\` 查看结果
+- 检查是否出现成功提示
+- 如果失败，截图并分析原因
+
+## 失败处理策略
+
+### 循环检测
+如果同一个工具调用 3 次以上失败：
+1. **停止** - 不要继续重复
+2. **截图分析** - \`browser_screenshot\` 查看页面状态
+3. **换方法** - 尝试不同的选择器或工具
+
+### 页面加载超时
+\`\`\`
+// 不要这样
+browser_navigate({ url: "https://x.com/compose/post" }) // 超时！
+
+// 要这样
+browser_navigate({ url: "https://x.com" }) // 首页更稳定
+browser_wait({ state: "networkidle" })
+\`\`\`
+
+### 找不到元素
+\`\`\`
+// 不要假设选择器正确
+browser_click({ selector: "#submit" }) // 可能不存在
+
+// 要先等待并截图验证
+browser_wait({ selector: "[type='submit']", timeout_ms: 5000 })
+browser_screenshot({})
+browser_click({ text: "提交" }) // 用文本更可靠
+\`\`\`
+
+## 工具选择优先级
+
+1. **browser_ai_action** - 复杂操作首选，AI 自动处理
+2. **browser_click + browser_fill** - 简单操作，精确控制
+3. **browser_execute_script** - 最后手段，直接执行 JS
+
+## 记住
+
+- **永远先导航首页，再操作**
+- **用户内容必须从任务中提取，不能凭空猜测**
+- **失败 3 次必须换方法**
+- **每个步骤都要验证结果**
+`;
+
 /**
  * Built-in Agent Skills (Claude Plugins)
  * These are strictly enforced as enabled and read-only.
@@ -950,6 +1095,23 @@ export const BUILTIN_SKILLS: BuiltinSkillManifest[] = [
             '美股', '分析', '研究', '新闻总结', '行情',
             'stock analysis', 'investment advice', 'stock research',
             '财报', '目标价', 'target price', 'rating',
+        ],
+    },
+    {
+        id: 'browser-automation',
+        name: 'browser-automation',
+        version: '1.0.0',
+        description: '浏览器自动化任务 - 发帖、填写表单、点击按钮、浏览网页等。使用前必须规划，失败后必须反思调整。',
+        directory: '',
+        content: SKILL_BROWSER_AUTOMATION,
+        tags: ['builtin', 'browser', 'automation'],
+        allowedTools: ['browser_connect', 'browser_navigate', 'browser_click', 'browser_fill', 'browser_wait', 'browser_screenshot', 'browser_get_content', 'browser_execute_script', 'browser_ai_action', 'think', 'plan_step', 'log_finding'],
+        triggers: [
+            '发帖', '发微博', '发推特', 'tweet', 'post',
+            '浏览器', 'browser', '网页操作', '点击', 'click',
+            '填写', 'fill', '发布', 'publish',
+            '在X上', '在x上', '在推特', '在微博',
+            '小红书', 'facebook', 'linkedin',
         ],
     },
 ];

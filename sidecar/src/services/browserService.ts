@@ -46,6 +46,7 @@ export interface BrowserConnection {
 export interface ConnectOptions {
     profileName?: string;
     headless?: boolean;
+    requireUserProfile?: boolean;
     /** CDP URL to connect to an existing browser instance (used for sharing browser between backends) */
     cdpUrl?: string;
 }
@@ -176,7 +177,22 @@ export class PlaywrightBackend implements BrowserBackend {
     private connection: BrowserConnection | null = null;
 
     isConnected(): boolean {
-        return this.connection !== null && this.connection.browser?.isConnected() !== false;
+        if (!this.connection) return false;
+
+        // Bridge mode provides a lightweight context proxy without browser().
+        // Treat any live connection object as connected in that case.
+        const ctx = this.connection.context as unknown as { browser?: () => { isConnected?: () => boolean } };
+        if (!ctx || typeof ctx.browser !== 'function') {
+            return true;
+        }
+
+        try {
+            return ctx.browser()?.isConnected?.() !== false;
+        } catch {
+            // If browser() exists but throws due to backend mismatch, keep the
+            // connection alive and let concrete operations surface errors.
+            return true;
+        }
     }
 
     /**
@@ -196,8 +212,12 @@ export class PlaywrightBackend implements BrowserBackend {
      * It launches a separate Chrome process with its own user-data-dir.
      */
     async connect(options: ConnectOptions = {}): Promise<BrowserConnection> {
+        const requireUserProfile = !!options.requireUserProfile;
         if (this.connection) {
             console.error('[PlaywrightBackend] Returning existing connection');
+            if (requireUserProfile && !this.connection.isUserProfile) {
+                throw new Error('Connected via persistent_profile; requireUserProfile=true. Start Chrome with --remote-debugging-port=9222 and reconnect.');
+            }
             return this.connection;
         }
 
@@ -210,8 +230,11 @@ export class PlaywrightBackend implements BrowserBackend {
         // Fast path: if CDP is known to be broken on this system, go straight
         // to the persistent context fallback (saves 15-30s of futile retries).
         if (this._cdpHealthStatus === 'broken') {
-            console.error('[PlaywrightBackend] CDP previously failed on this system, trying Node bridge directly');
-            return this._launchViaBridge(headless);
+            console.error('[PlaywrightBackend] CDP previously failed on this system, using persistent context directly');
+            if (requireUserProfile) {
+                throw new Error('CDP unavailable and requireUserProfile=true. Start Chrome with --remote-debugging-port=9222 and retry.');
+            }
+            return this._fallbackLaunchPersistentContext(headless);
         }
 
         // ------------------------------------------------------------------
@@ -249,9 +272,28 @@ export class PlaywrightBackend implements BrowserBackend {
 
         if (cdpEndpointAvailable) {
             // A CDP endpoint exists but Playwright can't connect (Bun WS issue).
-            // Go DIRECTLY to Bridge path — do NOT launch new Chrome (Strategy 2).
+            // Go DIRECTLY to Bridge path — do NOT launch new Chrome (Strategy 2)
+            // because that would kill the existing Chrome with user's cookies.
             console.error('[PlaywrightBackend] CDP endpoint found but WS failed — using Bridge for CDP connection (preserves user Chrome)');
-            return this._launchViaBridge(headless);
+            const viaBridge = await this._fallbackLaunchPersistentContext(headless);
+            if (requireUserProfile && !viaBridge.isUserProfile) {
+                throw new Error('Bridge fallback did not attach to user profile while requireUserProfile=true. Ensure Chrome debug port 9222 is enabled.');
+            }
+            return viaBridge;
+        }
+
+        // Bun runtime note:
+        // In Bun, direct connectOverCDP websocket frequently fails even when CDP HTTP is up.
+        // Strategy 2 (launch Chrome with CDP and reconnect) tends to waste time and can leave
+        // the agent appearing stalled. Prefer bridge/persistent fallback directly.
+        const isBunRuntime = typeof (process as any).versions?.bun !== 'undefined';
+        if (isBunRuntime) {
+            this._cdpHealthStatus = 'broken';
+            console.error('[PlaywrightBackend] Bun runtime detected with no reusable CDP endpoint; skipping CDP launch strategy and using bridge fallback');
+            if (requireUserProfile) {
+                throw new Error('No reusable CDP endpoint found with requireUserProfile=true. Start Chrome with --remote-debugging-port=9222.');
+            }
+            return this._fallbackLaunchPersistentContext(headless);
         }
 
         // ------------------------------------------------------------------
@@ -292,23 +334,7 @@ export class PlaywrightBackend implements BrowserBackend {
                     return this.connection;
                 }
 
-                // Bun runtime may fail direct CDP WebSocket while Node.js bridge works.
-                // Try bridge-based CDP connection BEFORE killing this launched Chrome.
-                console.error(`[PlaywrightBackend] CDP WS failed on port ${port}; trying Node bridge CDP before cleanup`);
-                try {
-                    const bridgeConnection = await this._launchViaBridge(headless);
-                    this.connection = bridgeConnection;
-                    if (this._activeCdpPort === null) {
-                        this._activeCdpPort = port;
-                    }
-                    this._cdpHealthStatus = 'works';
-                    console.error(`[PlaywrightBackend] Bridge CDP connected via launched Chrome on port ${port}`);
-                    return this.connection;
-                } catch (bridgeErr) {
-                    console.error(`[PlaywrightBackend] Bridge CDP failed on port ${port}: ${bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr)}`);
-                }
-
-                console.error(`[PlaywrightBackend] Cleaning up failed CDP process on port ${port}`);
+                console.error(`[PlaywrightBackend] CDP WS failed on port ${port}, cleaning up`);
                 await this._killProcessOnPort(port);
             }
         } else {
@@ -467,6 +493,10 @@ export class PlaywrightBackend implements BrowserBackend {
      *  - Bridge process is killed when we disconnect
      */
     private async _fallbackLaunchPersistentContext(headless: boolean): Promise<BrowserConnection> {
+        // Kill any Chrome instances WE spawned during CDP attempts
+        await this._killChromeByProfileDir().catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         // --- Approach A: Node.js bridge (recommended for Bun environments) ---
         try {
             return await this._launchViaBridge(headless);
@@ -583,7 +613,6 @@ export class PlaywrightBackend implements BrowserBackend {
                     if (cdpResult.success) {
                         console.error(`[PlaywrightBackend] Bridge: CDP connected on port ${cdpPort}! (user profile with cookies)`);
                         this._cdpHealthStatus = 'works';
-                        this._activeCdpPort = cdpPort;
 
                         const bridgePage = this._createBridgePageProxy();
                         const bridgeContext = {
@@ -617,12 +646,16 @@ export class PlaywrightBackend implements BrowserBackend {
         const launchResult = await this._bridgeSend('launch', {
             headless,
             userDataDir: persistentDir,
+            executablePath: getChromeExecutable() || undefined,
         });
 
         if (!launchResult.success) {
             // Try without persistent dir
             console.error(`[PlaywrightBackend] Persistent launch failed: ${launchResult.error}, trying fresh...`);
-            const freshResult = await this._bridgeSend('launch', { headless });
+            const freshResult = await this._bridgeSend('launch', {
+                headless,
+                executablePath: getChromeExecutable() || undefined,
+            });
             if (!freshResult.success) {
                 bridgeProc.kill();
                 throw new Error(`Bridge launch failed: ${freshResult.error}`);
@@ -743,10 +776,12 @@ export class PlaywrightBackend implements BrowserBackend {
      * by delegating to the bridge process via IPC.
      */
     private _bridgeLastUrl = 'about:blank';
+    private _bridgeLastNavMeta: any = null;
 
     private _createBridgePageProxy(): any {
         const self = this;
         return {
+            _isBridgeProxy: true,
             goto: async (url: string, options?: any) => {
                 // Pass the page-level timeout to the IPC layer so it doesn't
                 // cut off long navigation waits (e.g., networkidle on X.com).
@@ -759,6 +794,7 @@ export class PlaywrightBackend implements BrowserBackend {
                 if (!result.success) throw new Error(result.error);
                 // Store the actual URL returned by the bridge (page.url() after goto)
                 self._bridgeLastUrl = result.result?.url || url;
+                self._bridgeLastNavMeta = result.result || null;
                 return { status: () => result.result?.status };
             },
             url: () => self._bridgeLastUrl,
@@ -807,6 +843,14 @@ export class PlaywrightBackend implements BrowserBackend {
                     timeout: options?.timeout,
                     state: options?.state,
                 });
+                if (!result.success) throw new Error(result.error);
+            },
+            waitForTimeout: async (ms: number) => {
+                // Bridge parity for Playwright Page.waitForTimeout()
+                const delay = Math.max(0, Number(ms) || 0);
+                const result = await self._bridgeSend('executeScript', {
+                    script: `new Promise(resolve => setTimeout(resolve, ${delay}))`,
+                }, delay + 5000);
                 if (!result.success) throw new Error(result.error);
             },
             // ============================================================
@@ -1212,6 +1256,10 @@ export class PlaywrightBackend implements BrowserBackend {
         return this._activeCdpPort;
     }
 
+    getConnection(): BrowserConnection | null {
+        return this.connection;
+    }
+
     async getPage(): Promise<Page> {
         if (!this.connection) {
             throw new Error('Browser not connected. Call browser_connect first.');
@@ -1221,6 +1269,17 @@ export class PlaywrightBackend implements BrowserBackend {
 
     async navigate(url: string, options: NavigateOptions = {}): Promise<NavigateResult> {
         const page = await this.getPage();
+        if ((page as any)?._isBridgeProxy) {
+            // Bridge handles SPA hydration and retry logic internally.
+            const { waitUntil = 'domcontentloaded', timeout = 30000 } = options;
+            await page.goto(url, { waitUntil, timeout });
+            const navMeta = this._bridgeLastNavMeta || {};
+            return {
+                url: page.url(),
+                title: await page.title(),
+                warning: navMeta?.xTransientError ? 'x_transient_error_detected' : undefined,
+            };
+        }
         const { waitUntil = 'domcontentloaded', timeout = 30000 } = options;
 
         console.error(`[PlaywrightBackend] Navigating to: ${url}`);
@@ -1579,7 +1638,6 @@ export class BrowserUseBackend implements BrowserBackend {
     readonly name = 'browser-use';
     private serviceUrl: string;
     private connected: boolean = false;
-    private connectedCdpUrl: string | null = null;
 
     constructor(serviceUrl: string = 'http://localhost:8100') {
         this.serviceUrl = serviceUrl;
@@ -1624,21 +1682,7 @@ export class BrowserUseBackend implements BrowserBackend {
         return this.connected;
     }
 
-    getConnectedCdpUrl(): string | null {
-        return this.connectedCdpUrl;
-    }
-
     async connect(options: ConnectOptions = {}): Promise<BrowserConnection> {
-        if (this.connected) {
-            return {
-                browser: null,
-                context: null as unknown as BrowserContext,
-                page: null as unknown as Page,
-                isUserProfile: true,
-                profilePath: getChromeUserDataDir(),
-            };
-        }
-
         const result = await this.post<{ success: boolean; message: string; profile: string }>('/connect', {
             profile_name: options.profileName || 'Default',
             headless: options.headless ?? false,
@@ -1652,7 +1696,6 @@ export class BrowserUseBackend implements BrowserBackend {
         }
 
         this.connected = true;
-        this.connectedCdpUrl = options.cdpUrl || null;
 
         // Return a synthetic BrowserConnection (no actual Playwright objects)
         return {
@@ -1671,7 +1714,6 @@ export class BrowserUseBackend implements BrowserBackend {
             console.error('[BrowserUseBackend] Disconnect error:', error);
         }
         this.connected = false;
-        this.connectedCdpUrl = null;
     }
 
     async navigate(url: string, options: NavigateOptions = {}): Promise<NavigateResult> {
@@ -1868,7 +1910,6 @@ export class BrowserService {
     private browserUseBackend: BrowserUseBackend;
     private _mode: BrowserMode = 'auto';
     private _browserUseAvailable: boolean | null = null; // Cached availability
-    private _activeSharedCdpUrl: string | null = null;
 
     constructor(browserUseServiceUrl?: string) {
         this.playwrightBackend = new PlaywrightBackend();
@@ -1923,8 +1964,29 @@ export class BrowserService {
         }
 
         if (this._mode === 'smart') {
-            await this.ensureSmartBackendConnected();
-            return smartFn();
+            // In smart mode, still keep Playwright as a hard fallback if browser-use
+            // backend is disconnected or returns a connection-state error.
+            if (!this.browserUseBackend.isConnected()) {
+                console.error(`[BrowserService] Smart mode requested for ${operation}, but browser-use is not connected. Falling back to Playwright.`);
+                return preciseFn();
+            }
+
+            try {
+                return await smartFn();
+            } catch (smartError) {
+                const msg = smartError instanceof Error ? smartError.message : String(smartError);
+                const isConnectionStateError =
+                    msg.includes('Browser not connected') ||
+                    msg.includes('Call POST /connect first') ||
+                    msg.includes('browser-use-service error (400)');
+
+                if (isConnectionStateError) {
+                    console.error(`[BrowserService] Smart backend connection-state error for ${operation}. Falling back to Playwright. Error: ${msg}`);
+                    return preciseFn();
+                }
+
+                throw smartError;
+            }
         }
 
         // Auto mode: try precise first, fallback to smart
@@ -1942,7 +2004,6 @@ export class BrowserService {
             }
 
             try {
-                await this.ensureSmartBackendConnected();
                 const result = await smartFn();
                 console.error(`[BrowserService] Smart mode succeeded for ${operation}`);
                 return result;
@@ -1952,36 +2013,6 @@ export class BrowserService {
                 throw preciseError;
             }
         }
-    }
-
-    /**
-     * Ensure BrowserUse is connected and reuses the same CDP-backed browser session
-     * whenever possible. If Playwright is not CDP-backed, smart mode is considered
-     * unavailable to avoid split-brain browser sessions.
-     */
-    private async ensureSmartBackendConnected(options: ConnectOptions = {}): Promise<void> {
-        const available = await this.isBrowserUseAvailable();
-        if (!available) {
-            throw new Error('browser-use-service is not available. Start it with: cd browser-use-service && python main.py');
-        }
-
-        const cdpUrl = this._activeSharedCdpUrl;
-        if (!cdpUrl) {
-            throw new Error('Smart mode requires a shared CDP Chrome session. Current Playwright connection is not CDP-backed, so smart mode is disabled to prevent browser instance mismatch.');
-        }
-
-        const alreadyConnected = this.browserUseBackend.isConnected();
-        const currentCdpUrl = this.browserUseBackend.getConnectedCdpUrl();
-
-        if (alreadyConnected && currentCdpUrl === cdpUrl) {
-            return;
-        }
-
-        if (alreadyConnected && currentCdpUrl !== cdpUrl) {
-            await this.browserUseBackend.disconnect().catch(() => {});
-        }
-
-        await this.browserUseBackend.connect({ ...options, cdpUrl });
     }
 
     // ========================================================================
@@ -2007,7 +2038,10 @@ export class BrowserService {
     }
 
     /**
-     * Return whether smart mode can be safely used with shared browser instance.
+     * Return whether smart mode can be used for the current browser session.
+     * Smart mode requires:
+     * 1) browser-use-service available
+     * 2) an active shared CDP-backed Playwright session
      */
     async getSmartModeStatus(): Promise<{ available: boolean; reason?: string; sharedCdpUrl?: string }> {
         const available = await this.isBrowserUseAvailable();
@@ -2018,16 +2052,17 @@ export class BrowserService {
             };
         }
 
-        if (!this._activeSharedCdpUrl) {
+        const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
+        if (!activeCdpPort) {
             return {
                 available: false,
-                reason: 'No shared CDP Chrome session. Smart mode is disabled to prevent Playwright/browser-use instance mismatch.',
+                reason: 'No shared CDP Chrome session. Connect browser first to enable smart mode.',
             };
         }
 
         return {
             available: true,
-            sharedCdpUrl: this._activeSharedCdpUrl,
+            sharedCdpUrl: `http://localhost:${activeCdpPort}`,
         };
     }
 
@@ -2037,6 +2072,19 @@ export class BrowserService {
 
     isConnected(): boolean {
         return this.playwrightBackend.isConnected() || this.browserUseBackend.isConnected();
+    }
+
+    getConnectionInfo(): { connected: boolean; isUserProfile: boolean; mode: 'cdp_user_profile' | 'persistent_profile' | 'disconnected'; profilePath?: string } {
+        const conn = this.playwrightBackend.getConnection();
+        if (!conn) {
+            return { connected: false, isUserProfile: false, mode: 'disconnected' };
+        }
+        return {
+            connected: true,
+            isUserProfile: !!conn.isUserProfile,
+            mode: conn.isUserProfile ? 'cdp_user_profile' : 'persistent_profile',
+            profilePath: conn.profilePath,
+        };
     }
 
     getChromeUserDataDir(): string {
@@ -2091,20 +2139,19 @@ export class BrowserService {
         // Always connect Playwright backend (primary)
         const connection = await this.playwrightBackend.connect(options);
 
-        const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
-        this._activeSharedCdpUrl = activeCdpPort ? `http://localhost:${activeCdpPort}` : null;
-
         // Try to connect browser-use backend in the background (non-blocking)
         // Pass CDP URL so browser-use connects to the SAME Chrome instance launched by Playwright.
-        // This prevents Playwright/BrowserUse operating on different browser instances.
-        if (this._activeSharedCdpUrl) {
-            const available = await this.isBrowserUseAvailable();
-            if (available) {
-                this.browserUseBackend.connect({ ...options, cdpUrl: this._activeSharedCdpUrl }).catch(err => {
-                    console.error('[BrowserService] BrowserUse background connect failed (non-critical):', err);
-                });
-            }
+        const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
+        if (activeCdpPort) {
+            const cdpUrl = `http://localhost:${activeCdpPort}`;
+            this.browserUseBackend.connect({ ...options, cdpUrl }).catch(err => {
+                console.error('[BrowserService] BrowserUse background connect failed (non-critical):', err);
+            });
         }
+
+        // Best-effort small delay to give browser-use backend time to attach when available.
+        // This reduces transient race where first smart operation happens before background connect completes.
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         return connection;
     }
@@ -2171,7 +2218,6 @@ export class BrowserService {
             this.playwrightBackend.disconnect(),
             this.browserUseBackend.disconnect().catch(() => {}),
         ]);
-        this._activeSharedCdpUrl = null;
     }
 
     // ========================================================================
@@ -2194,12 +2240,11 @@ export class BrowserService {
      * Used by browser_ai_action tool.
      */
     async aiAction(options: AiActionOptions): Promise<AiActionResult> {
-        try {
-            await this.ensureSmartBackendConnected();
-        } catch (error) {
+        const available = await this.isBrowserUseAvailable();
+        if (!available) {
             return {
                 success: false,
-                error: error instanceof Error ? error.message : String(error),
+                error: 'browser-use-service is not available. Start it with: cd browser-use-service && python main.py',
             };
         }
         return this.browserUseBackend.aiAction(options);
@@ -2213,12 +2258,11 @@ export class BrowserService {
         maxSteps?: number;
         llmModel?: string;
     } = {}): Promise<{ success: boolean; result?: string; stepsTaken?: number; error?: string }> {
-        try {
-            await this.ensureSmartBackendConnected();
-        } catch (error) {
+        const available = await this.isBrowserUseAvailable();
+        if (!available) {
             return {
                 success: false,
-                error: error instanceof Error ? error.message : String(error),
+                error: 'browser-use-service is not available. Start it with: cd browser-use-service && python main.py',
             };
         }
         return this.browserUseBackend.runTask(task, options);

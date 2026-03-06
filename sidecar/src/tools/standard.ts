@@ -324,8 +324,63 @@ const runCommand: ToolDefinition = {
     handler: async (args: { command: string; cwd?: string; timeout_ms?: number }, context) => {
         // Command sandbox: check for dangerous patterns before execution
         const safetyCheck = checkCommand(args.command);
+        
+        // BLOCKED commands - never execute, return instructions
         if (!safetyCheck.allowed) {
-            return `⛔ COMMAND BLOCKED: ${safetyCheck.reason}\n\nThe command "${args.command}" was blocked because it matches a dangerous pattern (risk: ${safetyCheck.riskLevel}).\n\nIf this command is necessary, the user must execute it manually.`;
+            return `⛔ COMMAND BLOCKED: ${safetyCheck.reason}\n\nThe command "${args.command}" was blocked because it matches a dangerous pattern (risk: ${safetyCheck.riskLevel}).\n\nIf this command is absolutely necessary, you must execute it manually in your terminal.`;
+        }
+
+        // Commands needing user interaction - open in terminal for user input
+        if (safetyCheck.needsInteraction) {
+            const cwd = args.cwd
+                ? path.resolve(context.workspacePath, args.cwd)
+                : context.workspacePath;
+            const platform = process.platform;
+            
+            // Open in system terminal for interactive commands
+            // This allows user to enter passwords, confirm actions, etc.
+            let terminalCommand: string;
+            
+            if (platform === 'darwin') {
+                // macOS: Open Terminal.app with the command
+                terminalCommand = `osascript -e 'tell application "Terminal" to do script "cd '${cwd}' && ${args.command.replace(/'/g, "'\\''")}"'`;
+            } else if (platform === 'linux') {
+                // Linux: Try common terminal emulators
+                terminalCommand = `which gnome-terminal >/dev/null 2>&1 && gnome-terminal -- bash -c "cd '${cwd}' && ${args.command}; exec bash" || which xterm >/dev/null 2>&1 && xterm -e "cd '${cwd}' && ${args.command}" || which konsole >/dev/null 2>&1 && konsole -e "cd '${cwd}' && ${args.command}" || ${args.command}`;
+            } else if (platform === 'win32') {
+                // Windows: Open cmd window
+                terminalCommand = `start cmd /k "cd /d ${cwd} && ${args.command}"`;
+            } else {
+                terminalCommand = args.command;
+            }
+
+            return new Promise((resolve) => {
+                const child = spawn(terminalCommand, {
+                    shell: true,
+                    cwd,
+                    stdio: 'ignore',
+                    detached: true,  // Detach so terminal stays open
+                });
+
+                // Unref the child to allow parent to continue
+                child.unref();
+
+                // Return immediately - the terminal window handles the rest
+                resolve({
+                    command: args.command,
+                    status: 'opened_in_terminal',
+                    message: `✅ 已在终端中打开命令，请在终端窗口中输入密码或进行操作。`,
+                    interaction_hint: safetyCheck.interactionHint,
+                    platform: platform,
+                    cwd: cwd,
+                    instructions: [
+                        `1. 终端窗口已打开`,
+                        `2. 如果需要密码，请在终端中输入`,
+                        `3. 命令执行完成后，终端窗口会保持打开`,
+                    ],
+                    exit_code: 0,
+                });
+            });
         }
 
         let safetyWarning = '';

@@ -49,13 +49,18 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
                 type: 'boolean',
                 description: 'Run in headless mode (no visible window). Default: false (shows browser).',
             },
+            require_user_profile: {
+                type: 'boolean',
+                description: 'Require connecting to user Chrome profile via CDP (no persistent-profile fallback). Use for login-required websites.',
+            },
         },
     },
-    handler: async (args: { profile_name?: string; headless?: boolean }) => {
+    handler: async (args: { profile_name?: string; headless?: boolean; require_user_profile?: boolean }) => {
         try {
             const connection = await browserService.connect({
                 profileName: args.profile_name,
                 headless: args.headless,
+                requireUserProfile: args.require_user_profile,
             });
 
             const profiles = await browserService.getAvailableProfiles();
@@ -65,6 +70,7 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
                 success: true,
                 message: `Connected to browser via ${mode}`,
                 connectionMode: mode,
+                connectionModeId: connection.isUserProfile ? 'cdp_user_profile' : 'persistent_profile',
                 profile: args.profile_name || 'Default',
                 isUserProfile: connection.isUserProfile,
                 availableProfiles: profiles,
@@ -76,7 +82,9 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
             return {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
-                tip: 'Browser connection failed unexpectedly. This should not happen as Playwright fallback is always available.',
+                tip: args.require_user_profile
+                    ? 'User-profile mode required but unavailable. Start Chrome with --remote-debugging-port=9222 and retry browser_connect.'
+                    : 'Browser connection failed unexpectedly. This should not happen as Playwright fallback is usually available.',
             };
         }
     },

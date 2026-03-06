@@ -35,10 +35,6 @@ interface IpcResult {
     payload: Record<string, unknown>;
 }
 
-interface UseToolpacksOptions {
-    autoLoad?: boolean;
-}
-
 function extractPayload(result: IpcResult): Record<string, unknown> {
     const payload = result.payload ?? {};
     const nested = (payload as Record<string, unknown>).payload;
@@ -52,14 +48,17 @@ function extractPayload(result: IpcResult): Record<string, unknown> {
 // Hook
 // ============================================================================
 
+interface UseToolpacksOptions {
+    autoRefresh?: boolean;
+}
+
 export function useToolpacks(options: UseToolpacksOptions = {}) {
-    const { autoLoad = true } = options;
+    const { autoRefresh = true } = options;
     const [toolpacks, setToolpacks] = useState<ToolpackRecord[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [initialized, setInitialized] = useState(false);
 
-    const refresh = useCallback(async (): Promise<ToolpackRecord[]> => {
+    const refresh = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -68,16 +67,11 @@ export function useToolpacks(options: UseToolpacksOptions = {}) {
             });
             const payload = extractPayload(result);
             if (Array.isArray(payload.toolpacks)) {
-                const nextToolpacks = payload.toolpacks as ToolpackRecord[];
-                setToolpacks(nextToolpacks);
-                return nextToolpacks;
+                setToolpacks(payload.toolpacks as ToolpackRecord[]);
             }
-            return [];
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
-            return [];
         } finally {
-            setInitialized(true);
             setLoading(false);
         }
     }, []);
@@ -140,16 +134,14 @@ export function useToolpacks(options: UseToolpacksOptions = {}) {
 
     // Load on mount
     useEffect(() => {
-        if (autoLoad) {
-            void refresh();
-        }
-    }, [autoLoad, refresh]);
+        if (!autoRefresh) return;
+        refresh();
+    }, [refresh, autoRefresh]);
 
     return {
         toolpacks,
         loading,
         error,
-        initialized,
         refresh,
         install,
         toggle,

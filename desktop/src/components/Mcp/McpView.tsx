@@ -5,6 +5,7 @@ import '../../styles/variables.css'; // Ensure variables are available if using 
 import { useGitHubValidation } from '../../hooks/useGitHubValidation';
 import { McpRepositoryView } from './McpRepositoryView';
 import { RuntimeBadge } from '../Common/RuntimeBadge';
+import { MarketplaceView } from '../Marketplace/MarketplaceView';
 
 type ToolpackRecord = {
     manifest: {
@@ -44,7 +45,7 @@ export function McpView() {
     const [installPath, setInstallPath] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'install' | 'browse'>('install');
+    const [activeTab, setActiveTab] = useState<'install' | 'browse' | 'market'>('install');
 
     // GitHub URL validation
     const { validating, result: validationResult } = useGitHubValidation(installPath, 'mcp');
@@ -149,6 +150,21 @@ export function McpView() {
                 >
                     {t('mcp.browseRepositories')}
                 </button>
+                <button
+                    onClick={() => setActiveTab('market')}
+                    style={{
+                        padding: '8px 16px',
+                        border: 'none',
+                        background: 'transparent',
+                        color: activeTab === 'market' ? 'var(--status-info)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === 'market' ? '2px solid var(--status-info)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        fontWeight: activeTab === 'market' ? 600 : 400,
+                        transition: 'all 0.2s'
+                    }}
+                >
+                    Market
+                </button>
             </div>
 
             {/* Install Bar */}
@@ -236,7 +252,13 @@ export function McpView() {
             {error && <div style={{ color: 'var(--status-error)', fontSize: '14px' }}>{error}</div>}
 
             {/* Tab Content */}
-            {activeTab === 'browse' ? (
+            {activeTab === 'market' ? (
+                <MarketplaceView
+                    initialType="mcp"
+                    installedSources={new Set(toolpacks.map(tp => tp.source))}
+                    onInstallComplete={refresh}
+                />
+            ) : activeTab === 'browse' ? (
                 <McpRepositoryView onInstallComplete={refresh} />
             ) : (
                 <div style={{ display: 'flex', gap: '24px', flex: 1, overflow: 'hidden' }}>

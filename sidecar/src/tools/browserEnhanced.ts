@@ -24,6 +24,48 @@ export function createEnhancedBrowserTools(
     suspendResumeManager: SuspendResumeManager,
     taskIdGetter: () => string | undefined
 ): ToolDefinition[] {
+    const isXDomain = (urlOrHost: string): boolean => {
+        const lower = (urlOrHost || '').toLowerCase();
+        return lower.includes('x.com') || lower.includes('twitter.com');
+    };
+
+    const isLoginSensitiveDomain = (urlOrHost: string): boolean => {
+        const lower = (urlOrHost || '').toLowerCase();
+        return [
+            'x.com', 'twitter.com', 'facebook.com', 'instagram.com',
+            'linkedin.com', 'github.com', 'reddit.com',
+        ].some((d) => lower.includes(d));
+    };
+
+    const detectXLoginState = async (): Promise<{ needsLogin: boolean; loggedIn: boolean }> => {
+        try {
+            const state = await browserService.executeScript<{
+                hasPrimaryHome: boolean;
+                hasComposer: boolean;
+                hasAuthInputs: boolean;
+                hasLoginCta: boolean;
+                hasLoginFlowPath: boolean;
+            }>(`(() => {
+                const hasPrimaryHome = !!document.querySelector('[data-testid="primaryColumn"], [data-testid="AppTabBar_Home_Link"]');
+                const hasComposer = !!document.querySelector('[data-testid="SideNav_NewTweet_Button"], [data-testid="tweetTextarea_0"]');
+                const hasAuthInputs = !!document.querySelector('input[name="text"], input[autocomplete="username"], input[name="session[username_or_email]"], input[type="password"]');
+                const hasLoginCta = Array.from(document.querySelectorAll('a,button')).some((el) => {
+                    const t = (el.textContent || '').trim();
+                    return /^(log\s*in|sign\s*in|登录)$/i.test(t);
+                });
+                const p = (location.pathname || '').toLowerCase();
+                const hasLoginFlowPath = p.includes('/i/flow/login') || p.includes('/login') || p.includes('/signin');
+                return { hasPrimaryHome, hasComposer, hasAuthInputs, hasLoginCta, hasLoginFlowPath };
+            })()`);
+
+            const loggedIn = !!(state.hasPrimaryHome || state.hasComposer);
+            const needsLogin = !loggedIn && !!(state.hasAuthInputs || state.hasLoginCta || state.hasLoginFlowPath);
+            return { needsLogin, loggedIn };
+        } catch {
+            return { needsLogin: false, loggedIn: false };
+        }
+    };
+
     // Get original browser tools
     const originalTools = BROWSER_TOOLS;
 
@@ -80,6 +122,32 @@ export function createEnhancedBrowserTools(
                     // Check if authentication is required
                     if (result.success && taskId) {
                         try {
+                            // Guardrail: if this is a login-sensitive site and we're on
+                            // persistent_profile mode, require explicit user confirmation.
+                            const connInfo = browserService.getConnectionInfo();
+                            if (
+                                isLoginSensitiveDomain(args.url || '') &&
+                                connInfo.mode === 'persistent_profile'
+                            ) {
+                                await suspendResumeManager.suspend(
+                                    taskId,
+                                    'user_profile_recommended',
+                                    '当前连接为 persistent_profile（非系统Chrome登录态）。若需要复用你已登录账号，请先启动 Chrome 9222 并重新 browser_connect(require_user_profile=true)。若继续使用当前自动化窗口登录，请回复“继续”。',
+                                    ResumeConditions.manual(),
+                                    {
+                                        domain: args.url,
+                                        connectionMode: connInfo.mode,
+                                    }
+                                );
+
+                                return {
+                                    ...result,
+                                    suspended: true,
+                                    reason: 'waiting_for_user_profile_confirmation',
+                                    message: 'Task suspended: login-sensitive site detected under persistent_profile. Awaiting user confirmation.',
+                                };
+                            }
+
                             // Check for login indicators using page content
                             // This works with both CDP-connected pages and Bridge proxy pages
                             const contentResult = await browserService.getContent(true);
@@ -95,8 +163,16 @@ export function createEnhancedBrowserTools(
                             const hasLoginUrl = loginUrlPatterns.some(pat => currentUrl.toLowerCase().includes(pat));
                             const hasLoggedInKeyword = loggedInKeywords.some(kw => pageText.includes(kw));
 
-                            // Only trigger suspension if login is detected AND user is NOT already logged in
-                            const needsLogin = (hasLoginKeyword || hasLoginUrl) && !hasLoggedInKeyword;
+                            // Domain-specific hardening for X/Twitter: use DOM state first, then fallback.
+                            let needsLogin = (hasLoginKeyword || hasLoginUrl) && !hasLoggedInKeyword;
+                            if (isXDomain(currentUrl || args.url || '')) {
+                                const xState = await detectXLoginState();
+                                if (xState.loggedIn) {
+                                    needsLogin = false;
+                                } else if (xState.needsLogin) {
+                                    needsLogin = true;
+                                }
+                            }
 
                             if (needsLogin) {
                                 // Suspend task and wait for user to login
@@ -120,13 +196,23 @@ export function createEnhancedBrowserTools(
                                                 const checkText = checkContent.content || '';
                                                 const checkUrl = checkContent.url || '';
 
-                                                // Check if login keywords are gone or logged-in keywords appeared
+                                                if (isXDomain(checkUrl || args.url || '')) {
+                                                    const xState = await detectXLoginState();
+                                                    // For X/Twitter, avoid generic fallback heuristics that can
+                                                    // produce false positives during redirects/hydration.
+                                                    // Only resume when explicit logged-in signals are present.
+                                                    return xState.loggedIn;
+                                                }
+
+                                                // Generic fallback for other websites
                                                 const stillHasLogin = loginKeywords.some(kw => checkText.includes(kw));
                                                 const nowLoggedIn = loggedInKeywords.some(kw => checkText.includes(kw));
                                                 const urlChanged = !loginUrlPatterns.some(pat => checkUrl.toLowerCase().includes(pat));
-
-                                                // Resume if: logged-in keywords appear, OR login keywords gone and URL changed
-                                                return nowLoggedIn || (!stillHasLogin && urlChanged);
+                                                // Avoid false-positive auto-resume on transient redirects/hydration.
+                                                // Require either explicit logged-in signal, or both URL transition and
+                                                // meaningful non-login content.
+                                                const hasMeaningfulContent = (checkText || '').trim().length > 200;
+                                                return nowLoggedIn || (!stillHasLogin && urlChanged && hasMeaningfulContent);
                                             } catch {
                                                 return false;
                                             }
