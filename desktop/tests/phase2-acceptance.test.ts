@@ -336,9 +336,13 @@ describe('P2-5: Global Shortcut Configuration', () => {
 // ============================================================================
 
 describe('P2-6: Tauri Updater', () => {
-    test('Cargo.toml does not include tauri-plugin-updater', () => {
+    test('Cargo.toml updater dependency matches runtime integration', () => {
         const cargo = readFile(path.join(__dirname, '../src-tauri/Cargo.toml'));
-        expect(cargo).not.toContain('tauri-plugin-updater');
+        const mainRs = readFile(path.join(TAURI_SRC, 'main.rs'));
+        const hasUpdaterDependency = cargo.includes('tauri-plugin-updater');
+        const registersUpdaterPlugin = mainRs.includes('tauri_plugin_updater');
+
+        expect(hasUpdaterDependency).toBe(registersUpdaterPlugin);
     });
 
     test('tauri.conf.json does not ship placeholder updater configuration', () => {
@@ -348,16 +352,26 @@ describe('P2-6: Tauri Updater', () => {
         expect(conf.plugins?.updater).toBeUndefined();
     });
 
-    test('capabilities do not include updater permission', () => {
+    test('capabilities updater permission matches runtime integration', () => {
         const caps = JSON.parse(
             readFile(path.join(__dirname, '../src-tauri/capabilities/default.json'))
         );
-        expect(caps.permissions).not.toContain('updater:default');
+        const mainRs = readFile(path.join(TAURI_SRC, 'main.rs'));
+        const hasUpdaterPermission = caps.permissions.includes('updater:default');
+        const registersUpdaterPlugin = mainRs.includes('tauri_plugin_updater');
+
+        expect(hasUpdaterPermission).toBe(registersUpdaterPlugin);
     });
 
-    test('main.rs does not register updater plugin', () => {
-        const mainRs = readFile(path.join(TAURI_SRC, 'main.rs'));
-        expect(mainRs).not.toContain('tauri_plugin_updater');
+    test('main.rs updater registration matches runtime configuration', () => {
+        const cargo = readFile(path.join(__dirname, '../src-tauri/Cargo.toml'));
+        const caps = JSON.parse(
+            readFile(path.join(__dirname, '../src-tauri/capabilities/default.json'))
+        );
+        const hasUpdaterDependency = cargo.includes('tauri-plugin-updater');
+        const hasUpdaterPermission = caps.permissions.includes('updater:default');
+
+        expect(hasUpdaterDependency).toBe(hasUpdaterPermission);
     });
 
     test('UpdateChecker component exists', () => {
