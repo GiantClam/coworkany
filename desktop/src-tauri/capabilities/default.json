@@ -23,6 +23,7 @@
         "core:webview:allow-set-webview-zoom",
         "shell:allow-open",
         "store:default",
-        "global-shortcut:default"
+        "global-shortcut:default",
+        "updater:default"
     ]
 }
