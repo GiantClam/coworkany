@@ -83,7 +83,7 @@ jobs:
       - name: Build desktop bundle
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
         working-directory: desktop
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        run: npx tauri build --target ${{ matrix.target }}
 
       - name: Upload desktop bundle
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
