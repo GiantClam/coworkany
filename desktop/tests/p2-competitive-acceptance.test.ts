@@ -199,7 +199,7 @@ describe('#19: CI/CD Pipeline', () => {
 
     test('CI workflow runs tests', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
-        expect(/npm test|bun test/.test(content)).toBe(true);
+        expect(/npm test|npm run test:ci|bun test/.test(content)).toBe(true);
     });
 
     test('CI workflow builds Tauri for multiple platforms', () => {
@@ -232,10 +232,10 @@ describe('#19: CI/CD Pipeline', () => {
         expect(content).toContain('draft');
     });
 
-    test('Release workflow uses tauri-action and uploads artifacts', () => {
+    test('Release workflow builds bundles and uploads artifacts', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'release.yml'));
-        expect(content).toContain('tauri-apps/tauri-action');
-        expect(content).toContain('TAURI_SIGNING_PRIVATE_KEY');
+        expect(content).toContain('npm run tauri build');
+        expect(content).toContain('softprops/action-gh-release');
         expect(content).toContain('actions/upload-artifact');
         expect(content).toContain('RELEASE_TAG');
         expect(content).toContain('coworkany-release-');
