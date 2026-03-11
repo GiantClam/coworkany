@@ -206,8 +206,8 @@ describe('#19: CI/CD Pipeline', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
         expect(content).toContain('ubuntu-latest');
         expect(content).toContain('windows-latest');
-        expect(content).toContain('macos-13');
-        expect(content).toContain('macos-14');
+        expect(content).toContain('macos-15-intel');
+        expect(content).toContain('macos-15');
     });
 
     test('Desktop package workflow supports workflow_dispatch and artifacts', () => {
@@ -218,8 +218,8 @@ describe('#19: CI/CD Pipeline', () => {
         expect(content).toContain('actions/upload-artifact');
         expect(content).toContain('npm run tauri build');
         expect(content).toContain('windows-latest');
-        expect(content).toContain('macos-13');
-        expect(content).toContain('macos-14');
+        expect(content).toContain('macos-15-intel');
+        expect(content).toContain('macos-15');
     });
 
     test('Release workflow triggers on version tags', () => {
@@ -239,8 +239,8 @@ describe('#19: CI/CD Pipeline', () => {
         expect(content).toContain('actions/upload-artifact');
         expect(content).toContain('RELEASE_TAG');
         expect(content).toContain('coworkany-release-');
-        expect(content).toContain('macos-13');
-        expect(content).toContain('macos-14');
+        expect(content).toContain('macos-15-intel');
+        expect(content).toContain('macos-15');
     });
 });
 
