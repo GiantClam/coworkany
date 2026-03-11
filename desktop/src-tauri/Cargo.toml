@@ -38,6 +38,7 @@ image = "0.24"
 base64 = "0.22"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-store = "2.4.2"
+tauri-plugin-updater = "2.10.0"
 
 
 [features]
