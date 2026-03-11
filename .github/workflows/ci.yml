@@ -59,7 +59,7 @@ jobs:
 
       - name: Run desktop acceptance suite
         working-directory: desktop
-        run: npm test
+        run: npm run test:ci
 
   build-tauri:
     needs: [lint-and-typecheck, test-desktop]
@@ -104,12 +104,8 @@ jobs:
         run: npm ci
         
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: desktop
-          args: --target ${{ matrix.target }}
+        working-directory: desktop
+        run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Upload CI desktop bundle
         uses: actions/upload-artifact@v4

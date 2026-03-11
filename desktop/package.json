@@ -26,6 +26,7 @@
         "preview": "vite preview",
         "tauri": "tauri",
         "test": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
+        "test:ci": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/p2-competitive-acceptance.test.ts",
         "test:e2e": "playwright test",
         "test:e2e:x-following": "playwright test tests/x-following-posts-query-e2e.test.ts tests/x-following-posts-suspend-e2e.test.ts"
     },
