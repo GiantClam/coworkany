@@ -336,30 +336,28 @@ describe('P2-5: Global Shortcut Configuration', () => {
 // ============================================================================
 
 describe('P2-6: Tauri Updater', () => {
-    test('Cargo.toml includes tauri-plugin-updater', () => {
+    test('Cargo.toml does not include tauri-plugin-updater', () => {
         const cargo = readFile(path.join(__dirname, '../src-tauri/Cargo.toml'));
-        expect(cargo).toContain('tauri-plugin-updater');
+        expect(cargo).not.toContain('tauri-plugin-updater');
     });
 
-    test('tauri.conf.json includes updater configuration', () => {
+    test('tauri.conf.json does not ship placeholder updater configuration', () => {
         const conf = JSON.parse(
             readFile(path.join(__dirname, '../src-tauri/tauri.conf.json'))
         );
-        expect(conf.plugins.updater).toBeDefined();
-        expect(conf.plugins.updater.endpoints).toBeDefined();
-        expect(conf.plugins.updater.pubkey).toBeDefined();
+        expect(conf.plugins?.updater).toBeUndefined();
     });
 
-    test('capabilities include updater permission', () => {
+    test('capabilities do not include updater permission', () => {
         const caps = JSON.parse(
             readFile(path.join(__dirname, '../src-tauri/capabilities/default.json'))
         );
-        expect(caps.permissions).toContain('updater:default');
+        expect(caps.permissions).not.toContain('updater:default');
     });
 
-    test('main.rs registers updater plugin', () => {
+    test('main.rs does not register updater plugin', () => {
         const mainRs = readFile(path.join(TAURI_SRC, 'main.rs'));
-        expect(mainRs).toContain('tauri_plugin_updater');
+        expect(mainRs).not.toContain('tauri_plugin_updater');
     });
 
     test('UpdateChecker component exists', () => {

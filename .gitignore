@@ -91,3 +91,10 @@ sidecar/factorials_*.txt
 sidecar/test.txt
 sidecar/test@#$%^&.txt
 sidecar/.npmrc
+
+# Local beta packaging scratch/state
+/.tmp/
+/tmp/
+/workspaces.json
+sidecar/workspace/
+sidecar/src/*.bak

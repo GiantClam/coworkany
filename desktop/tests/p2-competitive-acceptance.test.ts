@@ -184,6 +184,10 @@ describe('#19: CI/CD Pipeline', () => {
         expect(fileExists(path.join(ROOT, '.github', 'workflows', 'ci.yml'))).toBe(true);
     });
 
+    test('Desktop package workflow file exists', () => {
+        expect(fileExists(path.join(ROOT, '.github', 'workflows', 'package-desktop.yml'))).toBe(true);
+    });
+
     test('Release workflow file exists', () => {
         expect(fileExists(path.join(ROOT, '.github', 'workflows', 'release.yml'))).toBe(true);
     });
@@ -195,26 +199,48 @@ describe('#19: CI/CD Pipeline', () => {
 
     test('CI workflow runs tests', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
-        expect(content).toContain('bun test');
+        expect(/npm test|bun test/.test(content)).toBe(true);
     });
 
     test('CI workflow builds Tauri for multiple platforms', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
         expect(content).toContain('ubuntu-latest');
         expect(content).toContain('windows-latest');
-        expect(content).toContain('macos-latest');
+        expect(content).toContain('macos-13');
+        expect(content).toContain('macos-14');
+    });
+
+    test('Desktop package workflow supports workflow_dispatch and artifacts', () => {
+        const content = readFile(path.join(ROOT, '.github', 'workflows', 'package-desktop.yml'));
+        expect(content).toContain('workflow_dispatch');
+        expect(content).toContain('platform:');
+        expect(content).toContain('version_label');
+        expect(content).toContain('actions/upload-artifact');
+        expect(content).toContain('npm run tauri build');
+        expect(content).toContain('windows-latest');
+        expect(content).toContain('macos-13');
+        expect(content).toContain('macos-14');
     });
 
     test('Release workflow triggers on version tags', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'release.yml'));
         expect(content).toContain("tags:");
         expect(content).toContain("- 'v*'");
+        expect(content).toContain('workflow_dispatch');
+        expect(content).toContain('tag_name');
+        expect(content).toContain('prerelease');
+        expect(content).toContain('draft');
     });
 
-    test('Release workflow uses tauri-action', () => {
+    test('Release workflow uses tauri-action and uploads artifacts', () => {
         const content = readFile(path.join(ROOT, '.github', 'workflows', 'release.yml'));
         expect(content).toContain('tauri-apps/tauri-action');
         expect(content).toContain('TAURI_SIGNING_PRIVATE_KEY');
+        expect(content).toContain('actions/upload-artifact');
+        expect(content).toContain('RELEASE_TAG');
+        expect(content).toContain('coworkany-release-');
+        expect(content).toContain('macos-13');
+        expect(content).toContain('macos-14');
     });
 });
 

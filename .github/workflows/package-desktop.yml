@@ -1,0 +1,92 @@
+name: Package Desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to package"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - linux-x64
+          - windows-x64
+          - macos-x64
+          - macos-arm64
+      version_label:
+        description: "Optional label added to artifact names"
+        required: false
+        default: manual
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-desktop-${{ inputs.version_label || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
+    name: Package ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x64
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: macos-x64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            libappindicator3-dev
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build desktop bundle
+        working-directory: desktop
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: coworkany-${{ inputs.version_label || 'manual' }}-${{ matrix.artifact_name }}
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
+          if-no-files-found: error
+          retention-days: 14
