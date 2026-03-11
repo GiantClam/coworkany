@@ -6,7 +6,6 @@
 .workspace-selector-row {
     display: flex;
     align-items: center;
-    gap: 6px;
 }
 
 .workspace-selector-button {
@@ -14,12 +13,12 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
-    padding: 8px 12px;
+    padding: 6px 10px;
     background: rgba(12, 47, 45, 0.72);
     border: 1px solid rgba(138, 232, 219, 0.14);
     border-radius: 999px;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
     transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
@@ -48,7 +47,7 @@
 }
 
 .workspace-name {
-    max-width: 170px;
+    max-width: 148px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -129,26 +128,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.btn-create-workspace {
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.14);
-    background: rgba(12, 47, 45, 0.6);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
-}
-
-.btn-create-workspace:hover {
-    background: rgba(15, 61, 58, 0.84);
-    border-color: rgba(138, 232, 219, 0.22);
-    transform: translateY(-1px);
 }
 
 .workspace-empty-hint {

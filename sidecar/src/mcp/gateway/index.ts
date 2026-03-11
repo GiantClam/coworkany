@@ -242,8 +242,8 @@ export class MCPGateway {
                 return {
                     allow: true,
                     scopeRestrictions: response.modifiedScope ? {
-                        allowlist: response.modifiedScope.commandAllowlist,
-                        denylist: response.modifiedScope.commandBlocklist,
+                        allowlist: response.modifiedScope.commandAllowlist ?? undefined,
+                        denylist: response.modifiedScope.commandBlocklist ?? undefined,
                     } : this.buildRestrictions(effectType),
                 };
             } catch (error) {

@@ -6,6 +6,7 @@ import { useGitHubValidation } from '../../hooks/useGitHubValidation';
 import { SkillRepositoryView } from './SkillRepositoryView';
 import { RuntimeBadge } from '../Common/RuntimeBadge';
 import { MarketplaceView } from '../Marketplace/MarketplaceView';
+import { OpenClawStoreTab } from './OpenClawStoreTab';
 
 type SkillRecord = {
     manifest: {
@@ -43,7 +44,7 @@ export function SkillsView() {
     const [importPath, setImportPath] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'install' | 'browse' | 'market'>('install');
+    const [activeTab, setActiveTab] = useState<'install' | 'browse' | 'market' | 'clawhub'>('install');
 
     // GitHub URL validation
     const { validating, result: validationResult } = useGitHubValidation(importPath, 'skill');
@@ -99,6 +100,7 @@ export function SkillsView() {
     };
 
     const selectedSkill = skills.find(s => s.manifest.id === selectedId);
+    const showImportBar = activeTab === 'install';
 
     return (
         <div style={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -157,9 +159,25 @@ export function SkillsView() {
                 >
                     Market
                 </button>
+                <button
+                    onClick={() => setActiveTab('clawhub')}
+                    style={{
+                        padding: '8px 16px',
+                        border: 'none',
+                        background: 'transparent',
+                        color: activeTab === 'clawhub' ? 'var(--status-info)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === 'clawhub' ? '2px solid var(--status-info)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        fontWeight: activeTab === 'clawhub' ? 600 : 400,
+                        transition: 'all 0.2s'
+                    }}
+                >
+                    ClawHub
+                </button>
             </div>
 
             {/* Import Bar */}
+            {showImportBar && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, position: 'relative' }}>
@@ -229,6 +247,7 @@ export function SkillsView() {
                     </div>
                 )}
             </div>
+            )}
             {error && <div style={{ color: 'var(--status-error)', fontSize: '14px' }}>{error}</div>}
 
             {/* Tab Content */}
@@ -236,6 +255,12 @@ export function SkillsView() {
                 <MarketplaceView
                     initialType="skill"
                     installedSources={new Set(skills.map(s => s.source))}
+                    onInstallComplete={refresh}
+                />
+            ) : activeTab === 'clawhub' ? (
+                <OpenClawStoreTab
+                    store="clawhub"
+                    installedSkillIds={new Set(skills.map(s => s.manifest.id))}
                     onInstallComplete={refresh}
                 />
             ) : activeTab === 'browse' ? (

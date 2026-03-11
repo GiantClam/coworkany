@@ -19,6 +19,7 @@ const ADAPTIVE_RETRY_TOOLS = [
     'browser_navigate',
 
     // Command execution (may need retries for transient errors)
+    'run_command',
     'execute_command',
     'bash',
 

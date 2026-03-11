@@ -4,13 +4,13 @@
  * Main chat interface using child components
  */
 
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './ChatInterface.css';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useStartTask, useCancelTask } from '../../hooks/useStartTask';
-import { useActiveSession } from '../../stores/useTaskEventStore';
+import { useActiveSession, useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
 import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
@@ -22,6 +22,8 @@ import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
+import type { SystemEventAction } from '../../types';
+import { toast } from '../Common/ToastProvider';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('../Skills/SkillsView');
@@ -43,10 +45,11 @@ type LlmProfile = {
     id: string;
     name: string;
     provider: string;
-    anthropic?: { model?: string };
-    openrouter?: { model?: string };
-    openai?: { model?: string };
-    custom?: { model?: string };
+    anthropic?: { apiKey?: string; model?: string };
+    openrouter?: { apiKey?: string; model?: string };
+    openai?: { apiKey?: string; baseUrl?: string; model?: string };
+    custom?: { apiKey?: string; baseUrl?: string; model?: string; apiFormat?: 'anthropic' | 'openai' };
+    ollama?: { baseUrl?: string; model?: string };
     verified: boolean;
 };
 
@@ -55,6 +58,48 @@ type LlmConfig = {
     activeProfileId?: string;
     maxHistoryMessages?: number;
 };
+
+type ValidateLlmInput = {
+    provider: string;
+    anthropic?: LlmProfile['anthropic'];
+    openrouter?: LlmProfile['openrouter'];
+    openai?: LlmProfile['openai'];
+    custom?: LlmProfile['custom'];
+};
+
+type ValidateLlmResult = {
+    success: boolean;
+    payload?: {
+        message?: string;
+        error?: string;
+    };
+};
+
+type ModelConnectionStatus = 'unknown' | 'checking' | 'connected' | 'failed' | 'unsupported' | 'no_profile';
+
+function buildValidateInput(profile: LlmProfile | undefined): ValidateLlmInput | null {
+    if (!profile) return null;
+    if (profile.provider === 'ollama') return null;
+
+    return {
+        provider: profile.provider,
+        anthropic: profile.anthropic,
+        openrouter: profile.openrouter,
+        openai: profile.openai,
+        custom: profile.custom,
+    };
+}
+
+function isModelTransportError(error: string | null | undefined): boolean {
+    if (!error) return false;
+    return /MODEL_STREAM_ERROR|openai_error|No output generated|certificate|Improperly formed request|AI_APICallError|Request failed/i.test(error);
+}
+
+function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+        window.setTimeout(resolve, ms);
+    });
+}
 
 interface ChatInterfaceProps {
     onOpenSkills?: () => void;
@@ -75,8 +120,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showSkillsDialog, setShowSkillsDialog] = useState(false);
     const [showMcpDialog, setShowMcpDialog] = useState(false);
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
+    const [modelConnectionStatus, setModelConnectionStatus] = useState<ModelConnectionStatus>('unknown');
+    const [modelConnectionError, setModelConnectionError] = useState<string | null>(null);
+    const [isRetryingModelConnection, setIsRetryingModelConnection] = useState(false);
+    const modelConnectionCheckSeq = useRef(0);
 
     const activeSession = useActiveSession();
+    const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
@@ -139,6 +189,119 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         [toolpacks]
     );
 
+    const activeProfile = useMemo(
+        () => llmConfig.profiles?.find((profile) => profile.id === llmConfig.activeProfileId),
+        [llmConfig.profiles, llmConfig.activeProfileId]
+    );
+
+    const runModelConnectionCheck = useCallback(async (
+        profile: LlmProfile | undefined,
+        options?: { manual?: boolean; initialDelayMs?: number; maxAttempts?: number },
+    ) => {
+        const checkSeq = ++modelConnectionCheckSeq.current;
+
+        if (!profile) {
+            setModelConnectionStatus('no_profile');
+            setModelConnectionError(null);
+            setIsRetryingModelConnection(false);
+            return;
+        }
+
+        const input = buildValidateInput(profile);
+        if (!input) {
+            setModelConnectionStatus('unsupported');
+            setModelConnectionError(null);
+            setIsRetryingModelConnection(false);
+            return;
+        }
+
+        const isManual = Boolean(options?.manual);
+        const maxAttempts = options?.maxAttempts ?? (isManual ? 2 : 3);
+
+        if (!isManual && options?.initialDelayMs) {
+            await wait(options.initialDelayMs);
+            if (checkSeq !== modelConnectionCheckSeq.current) return;
+        }
+
+        setIsRetryingModelConnection(isManual);
+        setModelConnectionStatus('checking');
+        setModelConnectionError(null);
+
+        let lastError = 'Connection failed';
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+                const result = await invoke<ValidateLlmResult>('validate_llm_settings', { input });
+                if (checkSeq !== modelConnectionCheckSeq.current) return;
+                if (result.success) {
+                    setModelConnectionStatus('connected');
+                    setModelConnectionError(null);
+                    setIsRetryingModelConnection(false);
+                    return;
+                }
+                lastError = result.payload?.error ?? 'Connection failed';
+            } catch (err) {
+                lastError = err instanceof Error ? err.message : String(err);
+            }
+
+            if (attempt < maxAttempts) {
+                await wait(700 * attempt);
+                if (checkSeq !== modelConnectionCheckSeq.current) return;
+            }
+        }
+
+        if (checkSeq !== modelConnectionCheckSeq.current) return;
+        setModelConnectionStatus('failed');
+        setModelConnectionError(lastError);
+        setIsRetryingModelConnection(false);
+    }, []);
+
+    const activeProfileFingerprint = activeProfile
+        ? JSON.stringify({
+            id: activeProfile.id,
+            provider: activeProfile.provider,
+            anthropic: activeProfile.anthropic ?? null,
+            openrouter: activeProfile.openrouter ?? null,
+            openai: activeProfile.openai ?? null,
+            custom: activeProfile.custom ?? null,
+        })
+        : 'no-profile';
+
+    useEffect(() => {
+        void runModelConnectionCheck(activeProfile, { initialDelayMs: 600 });
+    }, [activeProfileFingerprint, runModelConnectionCheck]);
+
+    const retryModelConnection = useCallback(() => {
+        void runModelConnectionCheck(activeProfile, { manual: true, maxAttempts: 2 });
+    }, [activeProfile, runModelConnectionCheck]);
+
+    useEffect(() => {
+        const errorCandidates = [startError, sendError, cancelError, clearError];
+        const firstModelError = errorCandidates.find((item) => isModelTransportError(item ?? null));
+        if (firstModelError) {
+            setModelConnectionStatus('failed');
+            setModelConnectionError(firstModelError);
+        }
+    }, [startError, sendError, cancelError, clearError]);
+
+    const modelConnectionLabel = useMemo(() => {
+        switch (modelConnectionStatus) {
+            case 'checking':
+                return t('common.loading');
+            case 'connected':
+                return 'Connected';
+            case 'failed':
+                return 'Failed - Retry';
+            case 'unsupported':
+                return 'Unsupported';
+            case 'no_profile':
+                return t('chat.noProfiles');
+            default:
+                return t('common.unknown');
+        }
+    }, [modelConnectionStatus, t]);
+
+    const canRetryModelConnection = modelConnectionStatus !== 'checking' && modelConnectionStatus !== 'unsupported' && modelConnectionStatus !== 'no_profile';
+
     const setActiveProfile = useCallback(async (id: string) => {
         try {
             const newConfig = { ...llmConfig, activeProfileId: id };
@@ -147,20 +310,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             console.error('Failed to switch profile:', err);
         }
     }, [llmConfig]);
-
-    const statusLabel = useMemo(() => {
-        if (!activeSession) return '';
-        switch (activeSession.status) {
-            case 'running':
-                return t('chat.statusInProgress');
-            case 'finished':
-                return t('chat.statusReady');
-            case 'failed':
-                return t('chat.statusFailed');
-            default:
-                return t('chat.statusIdle');
-        }
-    }, [activeSession]);
 
     const handleClearHistory = useCallback(async () => {
         if (!activeSession?.taskId) return;
@@ -201,6 +350,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             const result = await sendMessage({
                 taskId: activeSession.taskId,
                 content: requestContent,
+                workspacePath: activeWorkspace?.path,
                 config: {
                     enabledClaudeSkills: enabledSkillsForRequest,
                     enabledToolpacks: enabledToolpacksForRequest,
@@ -299,6 +449,43 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         });
     }, []);
 
+    const handleCreateSession = useCallback(() => {
+        setActiveTask(null);
+        setWorkspaceError(null);
+        setQuery('');
+        clearAttachments();
+        focusComposer();
+    }, [setActiveTask, clearAttachments, focusComposer]);
+
+    const handleSystemAction = useCallback(async (action: SystemEventAction) => {
+        if (action.kind === 'copy_text') {
+            try {
+                await navigator.clipboard.writeText(action.value);
+                toast.success('已复制', '启动已登录浏览器所需内容已复制。到系统终端粘贴运行后，再回到这里继续。');
+            } catch {
+                toast.error('复制失败', '无法复制所需内容，请稍后重试。');
+            }
+            return;
+        }
+
+        if (action.kind === 'send_message') {
+            if (!activeSession?.taskId) return;
+            const result = await sendMessage({
+                taskId: activeSession.taskId,
+                content: action.value,
+                workspacePath: activeWorkspace?.path || activeSession.workspacePath,
+                config: {
+                    enabledClaudeSkills: enabledSkills,
+                    enabledToolpacks,
+                    enabledSkills,
+                },
+            });
+            if (result?.success) {
+                toast.success('Sent', 'Follow-up instruction sent.');
+            }
+        }
+    }, [activeSession?.taskId, activeSession?.workspacePath, activeWorkspace?.path, enabledSkills, enabledToolpacks, sendMessage]);
+
     if (!activeSession) {
         return (
             <div className="chat-interface">
@@ -337,16 +524,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Header
                 title={activeSession?.title || t('chat.currentTask')}
                 status={activeSession.status}
-                statusLabel={statusLabel}
+                modelConnectionStatus={modelConnectionStatus}
+                modelConnectionLabel={modelConnectionLabel}
+                modelConnectionError={modelConnectionError}
+                canRetryModelConnection={canRetryModelConnection}
+                isRetryingModelConnection={isRetryingModelConnection}
                 llmConfig={llmConfig}
                 enabledSkillsCount={enabledSkills.length}
                 enabledToolpacksCount={enabledToolpacks.length}
                 isClearing={isClearing}
                 isCancelling={isCancelling}
-                onSetActiveProfile={setActiveProfile}
+                onCreateSession={handleCreateSession}
                 onShowSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowMcp={handleShowMcp}
+                onRetryModelConnection={retryModelConnection}
                 onClearHistory={handleClearHistory}
                 onCancel={handleCancel}
             />
@@ -358,7 +550,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             )}
 
             {/* Timeline Area */}
-            <Timeline session={activeSession} />
+            <Timeline session={activeSession} onSystemAction={handleSystemAction} />
 
             <InputArea
                 query={query}

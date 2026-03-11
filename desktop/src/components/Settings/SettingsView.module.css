@@ -272,6 +272,60 @@
     color: var(--text-tertiary);
 }
 
+.selectField {
+    min-height: 44px;
+    padding: 0 14px;
+    background: rgba(4, 18, 17, 0.82);
+    border: 1px solid rgba(138, 232, 219, 0.1);
+    border-radius: 14px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--text-primary);
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+.selectField:hover:not(:disabled) {
+    border-color: rgba(138, 232, 219, 0.18);
+}
+
+.selectField:focus {
+    outline: none;
+    border-color: rgba(45, 212, 191, 0.28);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.08);
+}
+
+.selectField:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.textAreaField {
+    min-height: 120px;
+    padding: 12px 14px;
+    resize: vertical;
+    background: rgba(4, 18, 17, 0.82);
+    border: 1px solid rgba(138, 232, 219, 0.1);
+    border-radius: 14px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--text-primary);
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+.textAreaField:hover:not(:disabled) {
+    border-color: rgba(138, 232, 219, 0.18);
+}
+
+.textAreaField:focus {
+    outline: none;
+    border-color: rgba(45, 212, 191, 0.28);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.08);
+}
+
+.textAreaField::placeholder {
+    color: var(--text-tertiary);
+}
+
 .hint {
     font-size: 11px;
     line-height: 1.5;
@@ -410,6 +464,12 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 20px;
+}
+
+.policyGrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
 }
 
 .savedIndicator {
@@ -675,6 +735,133 @@
     color: var(--text-primary);
 }
 
+.commandApprovalList {
+    display: grid;
+    gap: 12px;
+}
+
+.auditToolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr);
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.auditList {
+    display: grid;
+    gap: 12px;
+}
+
+.auditItem {
+    display: grid;
+    gap: 8px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(4, 18, 17, 0.58);
+}
+
+.auditHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.auditTimestamp {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.auditPrimary {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.auditMeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.auditNote {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.commandApprovalItem {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(4, 18, 17, 0.58);
+}
+
+.commandApprovalName {
+    font-family: var(--font-code);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.commandApprovalMeta {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.ghostButton {
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid rgba(138, 232, 219, 0.12);
+    border-radius: 12px;
+    background: rgba(4, 18, 17, 0.44);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.ghostButton:hover {
+    transform: translateY(-1px);
+    border-color: rgba(138, 232, 219, 0.2);
+    background: rgba(8, 30, 31, 0.76);
+}
+
+.ghostButton:disabled {
+    opacity: 0.56;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.inlineActions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.inlineMeta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 .sectionCta {
     width: 100%;
     margin-top: 14px;
@@ -720,7 +907,9 @@
 
 @media (max-width: 1024px) {
     .grid,
-    .searchGrid {
+    .searchGrid,
+    .policyGrid,
+    .auditToolbar {
         grid-template-columns: 1fr;
     }
 }
@@ -747,5 +936,14 @@
     .optionBtn {
         min-width: 0;
         width: 100%;
+    }
+
+    .commandApprovalItem {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .inlineActions {
+        justify-content: stretch;
     }
 }

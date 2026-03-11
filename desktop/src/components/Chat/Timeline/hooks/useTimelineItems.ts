@@ -159,6 +159,32 @@ export function useTimelineItems(session: TaskSession, maxRecentEvents?: number)
                         timestamp: event.timestamp,
                     });
                     break;
+
+                case 'TASK_SUSPENDED':
+                    items.push({
+                        type: 'system_event',
+                        id: event.id,
+                        content: payload.userMessage || `Task suspended: ${payload.reason || 'waiting for user action'}`,
+                        timestamp: event.timestamp,
+                        actions: Array.isArray(payload.actions) ? payload.actions : undefined,
+                    });
+                    currentDraftId = null;
+                    break;
+
+                case 'TASK_RESUMED': {
+                    const seconds = typeof payload.suspendDurationMs === 'number'
+                        ? Math.max(1, Math.round(payload.suspendDurationMs / 1000))
+                        : undefined;
+                    const resumeReason = payload.resumeReason ? ` (${payload.resumeReason})` : '';
+                    items.push({
+                        type: 'system_event',
+                        id: event.id,
+                        content: `Task resumed${resumeReason}${seconds ? ` after ${seconds}s` : ''}.`,
+                        timestamp: event.timestamp,
+                    });
+                    currentDraftId = null;
+                    break;
+                }
             }
         }
         return {

@@ -124,6 +124,7 @@ export const SendTaskMessageCommandSchema = BaseCommandSchema.extend({
     payload: z.object({
         taskId: z.string().uuid(),
         content: z.string(),
+        workspacePath: z.string().optional(),
         config: z.object({
             modelId: z.string().optional(),
             maxTokens: z.number().optional(),
@@ -590,6 +591,59 @@ export const RemoveClaudeSkillResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+export const OpenClawSkillStoreSchema = z.enum(['clawhub']);
+
+export const OpenClawStoreSkillSchema = z.object({
+    name: z.string(),
+    description: z.string().default(''),
+    author: z.string().optional(),
+    version: z.string().optional(),
+    downloads: z.number().optional(),
+    stars: z.number().optional(),
+    tags: z.array(z.string()).optional(),
+    repoUrl: z.string().optional(),
+    files: z.array(z.string()).optional(),
+    skillMdUrl: z.string().optional(),
+});
+
+export const SearchOpenClawSkillStoreCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('search_openclaw_skill_store'),
+    payload: z.object({
+        store: OpenClawSkillStoreSchema,
+        query: z.string(),
+        limit: z.number().int().positive().max(100).default(20).optional(),
+    }),
+});
+
+export const SearchOpenClawSkillStoreResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('search_openclaw_skill_store_response'),
+    payload: z.object({
+        success: z.boolean(),
+        store: OpenClawSkillStoreSchema,
+        skills: z.array(OpenClawStoreSkillSchema),
+        error: z.string().optional(),
+    }),
+});
+
+export const InstallOpenClawSkillCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('install_openclaw_skill'),
+    payload: z.object({
+        store: OpenClawSkillStoreSchema,
+        skillName: z.string(),
+    }),
+});
+
+export const InstallOpenClawSkillResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('install_openclaw_skill_response'),
+    payload: z.object({
+        success: z.boolean(),
+        store: OpenClawSkillStoreSchema,
+        skillName: z.string(),
+        path: z.string().optional(),
+        error: z.string().optional(),
+    }),
+});
+
 
 // ============================================================================
 // Identity and Security Reporting Commands
@@ -966,6 +1020,8 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillCommandSchema,
     SetClaudeSkillEnabledCommandSchema,
     RemoveClaudeSkillCommandSchema,
+    SearchOpenClawSkillStoreCommandSchema,
+    InstallOpenClawSkillCommandSchema,
     RegisterAgentIdentityCommandSchema,
     RecordAgentDelegationCommandSchema,
     ReportMcpGatewayDecisionCommandSchema,
@@ -1013,6 +1069,8 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillResponseSchema,
     SetClaudeSkillEnabledResponseSchema,
     RemoveClaudeSkillResponseSchema,
+    SearchOpenClawSkillStoreResponseSchema,
+    InstallOpenClawSkillResponseSchema,
     RegisterAgentIdentityResponseSchema,
     RecordAgentDelegationResponseSchema,
     ReportMcpGatewayDecisionResponseSchema,
@@ -1069,6 +1127,12 @@ export type SetClaudeSkillEnabledCommand = z.infer<typeof SetClaudeSkillEnabledC
 export type SetClaudeSkillEnabledResponse = z.infer<typeof SetClaudeSkillEnabledResponseSchema>;
 export type RemoveClaudeSkillCommand = z.infer<typeof RemoveClaudeSkillCommandSchema>;
 export type RemoveClaudeSkillResponse = z.infer<typeof RemoveClaudeSkillResponseSchema>;
+export type OpenClawSkillStore = z.infer<typeof OpenClawSkillStoreSchema>;
+export type OpenClawStoreSkill = z.infer<typeof OpenClawStoreSkillSchema>;
+export type SearchOpenClawSkillStoreCommand = z.infer<typeof SearchOpenClawSkillStoreCommandSchema>;
+export type SearchOpenClawSkillStoreResponse = z.infer<typeof SearchOpenClawSkillStoreResponseSchema>;
+export type InstallOpenClawSkillCommand = z.infer<typeof InstallOpenClawSkillCommandSchema>;
+export type InstallOpenClawSkillResponse = z.infer<typeof InstallOpenClawSkillResponseSchema>;
 export type RegisterAgentIdentityCommand = z.infer<typeof RegisterAgentIdentityCommandSchema>;
 export type RegisterAgentIdentityResponse = z.infer<typeof RegisterAgentIdentityResponseSchema>;
 export type RecordAgentDelegationCommand = z.infer<typeof RecordAgentDelegationCommandSchema>;

@@ -6,12 +6,9 @@
 
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from '../Timeline.module.css';
 import type { ToolCallItem } from '../../../../types';
+import { MarkdownContent } from '../../../Common/MarkdownContent';
 
 interface ToolCardProps {
     item: ToolCallItem;
@@ -21,12 +18,47 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
     const { t } = useTranslation();
     const [expanded, setExpanded] = useState(false);
 
-    // Detect "soft" errors in text results (e.g. "## ❌ Search Failed")
+    const structuredResult = useMemo(() => {
+        if (!item.result || typeof item.result !== 'string') {
+            return typeof item.result === 'object' ? item.result as Record<string, any> : null;
+        }
+
+        try {
+            return JSON.parse(item.result) as Record<string, any>;
+        } catch {
+            return null;
+        }
+    }, [item.result]);
+
+    const commandLearningSummary = useMemo(() => {
+        if (!structuredResult) return null;
+
+        const systemContext = structuredResult.systemContext as Record<string, any> | undefined;
+        const commandKnowledge = structuredResult.commandKnowledge as Record<string, any> | undefined;
+        const learningPath = structuredResult.learningPath as Record<string, any> | undefined;
+        const baseCommand = structuredResult.baseCommand as string | undefined;
+
+        if (!systemContext && !commandKnowledge && !learningPath && !baseCommand) {
+            return null;
+        }
+
+        return {
+            baseCommand,
+            platformName: systemContext?.platformName as string | undefined,
+            shellFamily: systemContext?.shellFamily as string | undefined,
+            category: commandKnowledge?.category as string | undefined,
+            reason: commandKnowledge?.reason as string | undefined,
+            helpHints: Array.isArray(commandKnowledge?.helpHints) ? commandKnowledge.helpHints as string[] : [],
+            sequence: Array.isArray(learningPath?.sequence) ? learningPath.sequence as string[] : [],
+            executable: structuredResult.resolved_executable as string | undefined,
+        };
+    }, [structuredResult]);
+
+    // Detect "soft" errors in text results (e.g. "## Search Failed")
     const isSoftError = useMemo(() => {
         if (item.status === 'failed') return true;
         if (typeof item.result === 'string') {
-            return item.result.includes('❌') ||
-                item.result.includes('Search Failed') ||
+            return item.result.includes('Search Failed') ||
                 item.result.startsWith('Error:');
         }
         return false;
@@ -74,33 +106,45 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
                         {item.result && (
                             <div className={styles.outputSection}>
                                 <div className={styles.sectionLabel}>{t('chat.output')}</div>
+                                {commandLearningSummary && (
+                                    <div className={styles.commandLearningPanel}>
+                                        <div className={styles.commandLearningRow}>
+                                            {commandLearningSummary.baseCommand && (
+                                                <span className={styles.commandChip}>cmd: {commandLearningSummary.baseCommand}</span>
+                                            )}
+                                            {commandLearningSummary.platformName && (
+                                                <span className={styles.commandChip}>os: {commandLearningSummary.platformName}</span>
+                                            )}
+                                            {commandLearningSummary.shellFamily && (
+                                                <span className={styles.commandChip}>shell: {commandLearningSummary.shellFamily}</span>
+                                            )}
+                                            {commandLearningSummary.category && (
+                                                <span className={styles.commandChip}>type: {commandLearningSummary.category}</span>
+                                            )}
+                                        </div>
+                                        {commandLearningSummary.reason && (
+                                            <div className={styles.commandLearningReason}>{commandLearningSummary.reason}</div>
+                                        )}
+                                        {commandLearningSummary.helpHints.length > 0 && (
+                                            <div className={styles.commandLearningHints}>
+                                                Help: {commandLearningSummary.helpHints.join(' | ')}
+                                            </div>
+                                        )}
+                                        {commandLearningSummary.sequence.length > 0 && (
+                                            <div className={styles.commandLearningHints}>
+                                                Path: {commandLearningSummary.sequence.join(' -> ')}
+                                            </div>
+                                        )}
+                                        {commandLearningSummary.executable && (
+                                            <div className={styles.commandLearningHints}>
+                                                Exec: {commandLearningSummary.executable}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                                 <div className={styles.markdownBody}>
                                     {typeof item.result === 'string' ? (
-                                        <ReactMarkdown
-                                            remarkPlugins={[remarkGfm]}
-                                            components={{
-                                                code(props) {
-                                                    const { children, className, node, ref, ...rest } = props as any;
-                                                    const match = /language-(\w+)/.exec(className || '');
-                                                    return match ? (
-                                                        <SyntaxHighlighter
-                                                            {...rest}
-                                                            PreTag="div"
-                                                            children={String(children).replace(/\n$/, '')}
-                                                            language={match[1]}
-                                                            style={oneLight}
-                                                            customStyle={{ margin: 0, borderRadius: 'var(--radius-md)', fontSize: '12px', border: '1px solid var(--border-subtle)' }}
-                                                        />
-                                                    ) : (
-                                                        <code {...props} className={className}>
-                                                            {children}
-                                                        </code>
-                                                    );
-                                                }
-                                            }}
-                                        >
-                                            {item.result}
-                                        </ReactMarkdown>
+                                        <MarkdownContent content={item.result} />
                                     ) : (
                                         <pre className={styles.codeBlock}>
                                             {JSON.stringify(item.result, null, 2)}

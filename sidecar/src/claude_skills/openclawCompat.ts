@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
+import { parse as parseYaml } from 'yaml';
 import { SkillManifest, SkillRequirements } from './types';
 
 // ============================================================================
@@ -67,16 +68,59 @@ export interface DependencyCheckResult {
     installCommands?: string[];
 }
 
-export interface ClawHubSkillInfo {
+export type OpenClawStore = 'clawhub';
+
+export interface OpenClawStoreSkillInfo {
     name: string;
+    slug?: string;
+    displayName?: string;
     description: string;
-    author: string;
-    version: string;
-    downloads: number;
-    stars: number;
-    tags: string[];
-    repoUrl: string;
-    files: string[];
+    author?: string;
+    version?: string;
+    downloads?: number;
+    stars?: number;
+    tags?: string[];
+    repoUrl?: string;
+    files?: string[];
+    skillMdUrl?: string;
+    raw?: Record<string, unknown>;
+}
+
+export type ClawHubSkillInfo = OpenClawStoreSkillInfo;
+
+const OPENCLAW_STORE_CONFIGS: Record<
+    OpenClawStore,
+    {
+        baseUrl: string;
+        searchPaths: string[];
+        detailPaths: string[];
+    }
+> = {
+    clawhub: {
+        baseUrl: 'https://clawhub.ai',
+        searchPaths: [
+            '/api/v1/search?q={query}&limit={limit}',
+            '/api/search?q={query}&limit={limit}',
+            '/api/skills/search?q={query}&limit={limit}',
+            '/api/v1/skills/search?q={query}&limit={limit}',
+            '/skills/search?q={query}&limit={limit}',
+        ],
+        detailPaths: [
+            '/api/v1/skills/{skillName}',
+            '/api/skill?slug={skillName}',
+            '/api/skills/{skillName}',
+            '/api/v1/skills/{skillName}',
+            '/skills/{skillName}',
+        ],
+    },
+};
+
+function getStoreBaseUrl(store: OpenClawStore): string {
+    const envOverride = process.env.OPENCLAW_STORE_CLAWHUB_BASE_URL || process.env.CLAWHUB_BASE_URL;
+
+    const fallback = OPENCLAW_STORE_CONFIGS[store].baseUrl;
+    const raw = (envOverride || fallback).trim();
+    return raw.replace(/\/$/, '');
 }
 
 // ============================================================================
@@ -105,6 +149,18 @@ export class OpenClawCompatLayer {
     parseOpenClawSkill(content: string, directory: string): SkillManifest {
         const { frontmatter, body } = this.extractFrontmatter(content);
         const openclawManifest = this.parseYamlFrontmatter(frontmatter);
+        const frontmatterData = openclawManifest as unknown as Record<string, unknown>;
+        const allowedTools = this.normalizeStringArray(
+            frontmatterData['allowed-tools']
+                ?? frontmatterData.allowedTools
+                ?? frontmatterData.allowed_tools
+        );
+        const triggers = this.normalizeStringArray(frontmatterData.triggers);
+        const tags = this.normalizeStringArray(frontmatterData.tags);
+
+        const topLevelRequires = this.normalizeRequires(frontmatterData.requires);
+        const metadataRequires = this.normalizeRequires(openclawManifest.metadata?.openclaw?.requires);
+        const mergedRequires = this.mergeRequirements(topLevelRequires, metadataRequires);
 
         // Map to Coworkany SkillManifest format
         const manifest: SkillManifest = {
@@ -116,24 +172,25 @@ export class OpenClawCompatLayer {
             // OpenClaw extensions
             author: 'OpenClaw Community',
             homepage: openclawManifest.homepage,
-            tags: [],
-            allowedTools: [],
+            tags,
+            allowedTools,
 
             // Control flags
             userInvocable: openclawManifest['user-invocable'] ?? true,
             disableModelInvocation: openclawManifest['disable-model-invocation'] ?? false,
 
             // Requirements
-            requires: this.mapRequirements(openclawManifest.metadata?.openclaw?.requires),
+            requires: mergedRequires,
 
-            // Triggers (empty for now, can be extended)
-            triggers: [],
+            // Triggers
+            triggers,
 
             // OpenClaw-specific metadata (including embedded content)
             metadata: {
                 openclaw: openclawManifest.metadata?.openclaw,
                 source: 'openclaw',
                 content: body,
+                frontmatter: openclawManifest,
             },
         };
 
@@ -166,99 +223,91 @@ export class OpenClawCompatLayer {
      * Parse YAML frontmatter (simple implementation)
      */
     private parseYamlFrontmatter(yaml: string): OpenClawSkillManifest {
-        const result: any = {};
-        const lines = yaml.split('\n');
-        let currentKey = '';
-        let currentIndent = 0;
-        let inNestedObject = false;
-        let nestedObject: any = {};
-        let nestedKey = '';
-
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-
-            const indent = line.search(/\S/);
-
-            // Handle nested objects
-            if (indent > currentIndent && currentKey) {
-                inNestedObject = true;
-                nestedKey = currentKey;
-                nestedObject = {};
+        try {
+            const parsed = parseYaml(yaml);
+            if (parsed && typeof parsed === 'object') {
+                return parsed as OpenClawSkillManifest;
             }
-
-            if (inNestedObject && indent <= currentIndent) {
-                result[nestedKey] = nestedObject;
-                inNestedObject = false;
-            }
-
-            // Parse key-value pairs
-            const colonIndex = trimmed.indexOf(':');
-            if (colonIndex > 0) {
-                const key = trimmed.slice(0, colonIndex).trim();
-                let value = trimmed.slice(colonIndex + 1).trim();
-
-                // Handle various value types
-                if (value === '') {
-                    currentKey = key;
-                    currentIndent = indent;
-                } else if (value === 'true') {
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, true, inNestedObject);
-                } else if (value === 'false') {
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, false, inNestedObject);
-                } else if (value.startsWith('[') && value.endsWith(']')) {
-                    // Array value
-                    const arrayContent = value.slice(1, -1);
-                    const arrayValues = arrayContent.split(',').map(v => v.trim().replace(/^['"]|['"]$/g, ''));
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, arrayValues, inNestedObject);
-                } else if (value.startsWith('"') || value.startsWith("'")) {
-                    // Quoted string
-                    value = value.slice(1, -1);
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, value, inNestedObject);
-                } else {
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, value, inNestedObject);
-                }
-            } else if (trimmed.startsWith('-')) {
-                // Array item
-                const item = trimmed.slice(1).trim().replace(/^['"]|['"]$/g, '');
-                if (!result[currentKey]) {
-                    result[currentKey] = [];
-                }
-                if (Array.isArray(result[currentKey])) {
-                    result[currentKey].push(item);
-                }
-            }
-        }
-
-        // Handle any remaining nested object
-        if (inNestedObject) {
-            result[nestedKey] = nestedObject;
-        }
-
-        return result as OpenClawSkillManifest;
-    }
-
-    private setNestedValue(root: any, target: any, key: string, value: any, isNested: boolean): void {
-        if (isNested) {
-            target[key] = value;
-        } else {
-            root[key] = value;
+            return {} as OpenClawSkillManifest;
+        } catch (error) {
+            console.error('[OpenClawCompat] Failed to parse YAML frontmatter:', error);
+            return {} as OpenClawSkillManifest;
         }
     }
 
-    /**
-     * Map OpenClaw requirements to Coworkany format
-     */
-    private mapRequirements(
-        openclawRequires?: OpenClawMetadata['requires']
-    ): SkillRequirements {
+    private normalizeStringArray(value: unknown): string[] {
+        if (Array.isArray(value)) {
+            return value
+                .map((item) => (typeof item === 'string' ? item.trim() : String(item)))
+                .filter((item) => item.length > 0);
+        }
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            return trimmed ? [trimmed] : [];
+        }
+        return [];
+    }
+
+    private normalizeRequires(value: unknown): SkillRequirements | undefined {
+        if (!value) {
+            return undefined;
+        }
+
+        if (Array.isArray(value)) {
+            const env = value
+                .map((item) => (typeof item === 'string' ? item.trim() : ''))
+                .filter(Boolean)
+                .map((entry) => entry.split(/\s|\(/, 1)[0])
+                .filter(Boolean);
+            return { tools: [], capabilities: [], bins: [], env, config: [] };
+        }
+
+        if (typeof value === 'string') {
+            const token = value.trim().split(/\s|\(/, 1)[0];
+            return token
+                ? { tools: [], capabilities: [], bins: [], env: [token], config: [] }
+                : undefined;
+        }
+
+        const record = value as Record<string, unknown>;
         return {
+            tools: this.normalizeStringArray(record.tools),
+            capabilities: this.normalizeStringArray(record.capabilities),
+            bins: this.normalizeStringArray(record.bins),
+            env: this.normalizeStringArray(record.env),
+            config: this.normalizeStringArray(record.config),
+        };
+    }
+
+    private mergeRequirements(
+        primary?: SkillRequirements,
+        secondary?: SkillRequirements
+    ): SkillRequirements {
+        const merged: SkillRequirements = {
             tools: [],
             capabilities: [],
-            bins: openclawRequires?.bins ?? [],
-            env: openclawRequires?.env ?? [],
-            config: openclawRequires?.config ?? [],
+            bins: [],
+            env: [],
+            config: [],
         };
+        const pushUnique = (target: string[], source?: string[]) => {
+            for (const item of source ?? []) {
+                if (item && !target.includes(item)) {
+                    target.push(item);
+                }
+            }
+        };
+        pushUnique(merged.tools, primary?.tools);
+        pushUnique(merged.tools, secondary?.tools);
+        pushUnique(merged.capabilities, primary?.capabilities);
+        pushUnique(merged.capabilities, secondary?.capabilities);
+        pushUnique(merged.bins, primary?.bins);
+        pushUnique(merged.bins, secondary?.bins);
+        pushUnique(merged.env, primary?.env);
+        pushUnique(merged.env, secondary?.env);
+        pushUnique(merged.config, primary?.config);
+        pushUnique(merged.config, secondary?.config);
+        return merged;
     }
 
     // ========================================================================
@@ -408,97 +457,149 @@ export class OpenClawCompatLayer {
     }
 
     // ========================================================================
-    // ClawHub Integration
+    // Store Integration
     // ========================================================================
 
     /**
-     * Search skills on ClawHub
+     * Search skills from a configured OpenClaw-compatible store.
      */
-    async searchClawHub(query: string, limit: number = 10): Promise<ClawHubSkillInfo[]> {
+    async searchStore(
+        store: OpenClawStore,
+        query: string,
+        limit: number = 10
+    ): Promise<OpenClawStoreSkillInfo[]> {
+        const config = OPENCLAW_STORE_CONFIGS[store];
+        if (!config) {
+            return [];
+        }
+        const baseUrl = getStoreBaseUrl(store);
+
+        const encodedQuery = encodeURIComponent(query.trim());
+        const urls = config.searchPaths.map((pattern) => {
+            const pathWithQuery = pattern
+                .replace('{query}', encodedQuery)
+                .replace('{limit}', String(limit));
+            return `${baseUrl}${pathWithQuery}`;
+        });
+
+        const payload = await this.fetchFirstJson(urls);
+        if (!payload) {
+            return [];
+        }
+
         try {
-            const response = await fetch(
-                `https://clawhub.ai/api/skills/search?q=${encodeURIComponent(query)}&limit=${limit}`
-            );
-
-            if (!response.ok) {
-                throw new Error(`ClawHub search failed: ${response.status}`);
-            }
-
-            const data = await response.json() as { skills: ClawHubSkillInfo[] };
-            return data.skills;
+            const skills = this.extractSkillList(payload);
+            return skills.slice(0, Math.max(1, limit));
         } catch (error) {
-            console.error('[OpenClawCompat] ClawHub search failed:', error);
+            console.error(`[OpenClawCompat] ${store} search parse failed:`, error);
             return [];
         }
     }
 
     /**
-     * Get skill details from ClawHub
+     * Get skill details from a configured store.
      */
-    async getClawHubSkill(skillName: string): Promise<ClawHubSkillInfo | null> {
+    async getStoreSkill(
+        store: OpenClawStore,
+        skillName: string
+    ): Promise<OpenClawStoreSkillInfo | null> {
+        const config = OPENCLAW_STORE_CONFIGS[store];
+        if (!config) {
+            return null;
+        }
+        const baseUrl = getStoreBaseUrl(store);
+
+        const encodedSkillName = encodeURIComponent(skillName.trim());
+        const urls = config.detailPaths.map((pattern) => {
+            const pathWithSkill = pattern.replace('{skillName}', encodedSkillName);
+            return `${baseUrl}${pathWithSkill}`;
+        });
+
+        const payload = await this.fetchFirstJson(urls);
+        if (!payload) {
+            return null;
+        }
+
         try {
-            const response = await fetch(
-                `https://clawhub.ai/api/skills/${encodeURIComponent(skillName)}`
-            );
-
-            if (!response.ok) {
-                if (response.status === 404) {
-                    return null;
-                }
-                throw new Error(`ClawHub fetch failed: ${response.status}`);
+            const normalized = this.normalizeSkillInfo(payload, skillName);
+            if (!normalized.name) {
+                return null;
             }
-
-            return await response.json() as ClawHubSkillInfo;
+            return normalized;
         } catch (error) {
-            console.error('[OpenClawCompat] ClawHub fetch failed:', error);
+            console.error(`[OpenClawCompat] ${store} detail parse failed:`, error);
             return null;
         }
     }
 
     /**
-     * Install skill from ClawHub
+     * Install skill from a configured store.
      */
-    async installFromClawHub(
+    async installFromStore(
+        store: OpenClawStore,
         skillName: string,
         targetDir: string
     ): Promise<{ success: boolean; path?: string; error?: string }> {
         try {
-            const skillInfo = await this.getClawHubSkill(skillName);
+            const skillInfo = await this.getStoreSkill(store, skillName);
             if (!skillInfo) {
-                return { success: false, error: 'Skill not found on ClawHub' };
+                return { success: false, error: `Skill not found on ${store}` };
             }
 
-            // Download skill files
-            const skillDir = path.join(targetDir, skillName);
+            if (store === 'clawhub') {
+                const clawHubInstall = await this.installFromClawHubApiSkill(
+                    skillInfo,
+                    targetDir,
+                    getStoreBaseUrl(store),
+                    store
+                );
+                if (clawHubInstall.success) {
+                    return clawHubInstall;
+                }
+                console.warn(`[OpenClawCompat] ${store} API install failed, falling back to repo/raw mode:`, clawHubInstall.error);
+            }
+
+            const safeFolderName = this.sanitizeFolderName(skillInfo.name || skillName);
+            const skillDir = path.join(targetDir, safeFolderName);
             if (!fs.existsSync(skillDir)) {
                 fs.mkdirSync(skillDir, { recursive: true });
             }
 
-            // Download SKILL.md
-            const skillMdUrl = `${skillInfo.repoUrl}/raw/main/SKILL.md`;
-            const response = await fetch(skillMdUrl);
-            if (!response.ok) {
-                throw new Error(`Failed to download SKILL.md: ${response.status}`);
+            const skillMdUrl = this.resolveSkillMdUrl(skillInfo);
+            if (!skillMdUrl) {
+                return {
+                    success: false,
+                    error: `No downloadable SKILL.md URL available for ${skillName}`,
+                };
             }
 
-            const content = await response.text();
-            fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content);
+            const skillMdResponse = await fetch(skillMdUrl);
+            if (!skillMdResponse.ok) {
+                throw new Error(`Failed to download SKILL.md: ${skillMdResponse.status}`);
+            }
+            const skillMdContent = await skillMdResponse.text();
+            fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMdContent);
 
-            // Download additional files if any
-            for (const file of skillInfo.files) {
-                if (file !== 'SKILL.md') {
-                    const fileUrl = `${skillInfo.repoUrl}/raw/main/${file}`;
-                    const fileResponse = await fetch(fileUrl);
-                    if (fileResponse.ok) {
-                        const fileContent = await fileResponse.text();
-                        const filePath = path.join(skillDir, file);
-                        const fileDir = path.dirname(filePath);
-                        if (!fs.existsSync(fileDir)) {
-                            fs.mkdirSync(fileDir, { recursive: true });
-                        }
-                        fs.writeFileSync(filePath, fileContent);
-                    }
+            const files = Array.isArray(skillInfo.files) ? skillInfo.files : [];
+            for (const file of files) {
+                if (file.toLowerCase() === 'skill.md') {
+                    continue;
                 }
+
+                const fileUrl = this.resolveAdditionalFileUrl(file, skillInfo);
+                if (!fileUrl) continue;
+
+                const fileResponse = await fetch(fileUrl);
+                if (!fileResponse.ok) continue;
+
+                const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
+                const normalizedFilePath = /^skill\.md$/i.test(file) ? 'SKILL.md' : file;
+                const filePath = path.join(skillDir, normalizedFilePath);
+                const fileDir = path.dirname(filePath);
+                if (!fs.existsSync(fileDir)) {
+                    fs.mkdirSync(fileDir, { recursive: true });
+                }
+                fs.writeFileSync(filePath, fileBuffer);
             }
 
             return { success: true, path: skillDir };
@@ -508,6 +609,266 @@ export class OpenClawCompatLayer {
                 error: error instanceof Error ? error.message : String(error),
             };
         }
+    }
+
+    private async installFromClawHubApiSkill(
+        skillInfo: OpenClawStoreSkillInfo,
+        targetDir: string,
+        baseUrl: string,
+        store: OpenClawStore
+    ): Promise<{ success: boolean; path?: string; error?: string }> {
+        const slug = this.pickString(skillInfo.slug, skillInfo.name);
+        if (!slug) {
+            return { success: false, error: `Missing ${store} skill slug` };
+        }
+
+        const resolvedVersion = this.pickString(skillInfo.version) ?? await this.resolveClawHubLatestVersion(baseUrl, slug);
+        if (!resolvedVersion) {
+            return { success: false, error: `Missing version for ${store} skill: ${slug}` };
+        }
+
+        const safeFolderName = this.sanitizeFolderName(skillInfo.name || slug);
+        const skillDir = path.join(targetDir, safeFolderName);
+        if (!fs.existsSync(skillDir)) {
+            fs.mkdirSync(skillDir, { recursive: true });
+        }
+
+        const versionFiles = await this.fetchClawHubVersionFileList(baseUrl, slug, resolvedVersion);
+        const candidates = versionFiles.length > 0 ? versionFiles : ['SKILL.md', '_meta.json'];
+
+        let wroteSkillMd = false;
+        for (const entry of candidates) {
+            const canonicalPath = /^skill\.md$/i.test(entry) ? 'SKILL.md' : entry;
+            const fileText = await this.fetchClawHubSkillFile(baseUrl, slug, canonicalPath, resolvedVersion);
+            if (fileText == null) {
+                continue;
+            }
+
+            const outputPath = path.join(skillDir, canonicalPath);
+            const outputDir = path.dirname(outputPath);
+            if (!fs.existsSync(outputDir)) {
+                fs.mkdirSync(outputDir, { recursive: true });
+            }
+            fs.writeFileSync(outputPath, fileText, 'utf-8');
+
+            if (canonicalPath.toLowerCase() === 'skill.md') {
+                wroteSkillMd = true;
+            }
+        }
+
+        if (!wroteSkillMd) {
+            return { success: false, error: `Failed to download SKILL.md from ${store} for ${slug}` };
+        }
+
+        return { success: true, path: skillDir };
+    }
+
+    async searchClawHub(query: string, limit: number = 10): Promise<ClawHubSkillInfo[]> {
+        return this.searchStore('clawhub', query, limit);
+    }
+
+    async getClawHubSkill(skillName: string): Promise<ClawHubSkillInfo | null> {
+        return this.getStoreSkill('clawhub', skillName);
+    }
+
+    async installFromClawHub(
+        skillName: string,
+        targetDir: string
+    ): Promise<{ success: boolean; path?: string; error?: string }> {
+        return this.installFromStore('clawhub', skillName, targetDir);
+    }
+
+    private async fetchFirstJson(urls: string[]): Promise<unknown | null> {
+        for (const url of urls) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    continue;
+                }
+                return await response.json();
+            } catch {
+                continue;
+            }
+        }
+        return null;
+    }
+
+    private async resolveClawHubLatestVersion(baseUrl: string, slug: string): Promise<string | undefined> {
+        const encoded = encodeURIComponent(slug);
+        const payload = await this.fetchFirstJson([
+            `${baseUrl}/api/v1/skills/${encoded}`,
+            `${baseUrl}/api/skills/${encoded}`,
+            `${baseUrl}/api/skill?slug=${encoded}`,
+        ]);
+        const record = this.asRecord(payload);
+        const latest = this.asRecord(record?.latestVersion);
+        return this.pickString(latest?.version, this.asRecord(record?.version)?.version);
+    }
+
+    private async fetchClawHubVersionFileList(baseUrl: string, slug: string, version: string): Promise<string[]> {
+        const encodedSlug = encodeURIComponent(slug);
+        const encodedVersion = encodeURIComponent(version);
+        const payload = await this.fetchFirstJson([
+            `${baseUrl}/api/v1/skills/${encodedSlug}/versions/${encodedVersion}`,
+            `${baseUrl}/api/skills/${encodedSlug}/versions/${encodedVersion}`,
+        ]);
+        const root = this.asRecord(payload);
+        const versionRecord = this.asRecord(root?.version);
+        const files = versionRecord?.files;
+        if (!Array.isArray(files)) {
+            return [];
+        }
+        const list: string[] = [];
+        for (const file of files) {
+            const fileRecord = this.asRecord(file);
+            const filePath = this.pickString(fileRecord?.path);
+            if (filePath) {
+                list.push(filePath);
+            }
+        }
+        return list;
+    }
+
+    private async fetchClawHubSkillFile(
+        baseUrl: string,
+        slug: string,
+        filePath: string,
+        version: string
+    ): Promise<string | null> {
+        const encodedSlug = encodeURIComponent(slug);
+        const urls = [
+            `${baseUrl}/api/v1/skills/${encodedSlug}/file?path=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`,
+            `${baseUrl}/api/skills/${encodedSlug}/file?path=${encodeURIComponent(filePath)}&version=${encodeURIComponent(version)}`,
+        ];
+
+        for (const url of urls) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    continue;
+                }
+                return await response.text();
+            } catch {
+                continue;
+            }
+        }
+        return null;
+    }
+
+    private extractSkillList(payload: unknown): OpenClawStoreSkillInfo[] {
+        if (Array.isArray(payload)) {
+            return payload.map((item) => this.normalizeSkillInfo(item));
+        }
+        if (payload && typeof payload === 'object') {
+            const asRecord = payload as Record<string, unknown>;
+            const candidates = [asRecord.skills, asRecord.items, asRecord.data, asRecord.results];
+            for (const candidate of candidates) {
+                if (Array.isArray(candidate)) {
+                    return candidate.map((item) => this.normalizeSkillInfo(item));
+                }
+            }
+        }
+        return [];
+    }
+
+    private normalizeSkillInfo(entry: unknown, fallbackName: string = ''): OpenClawStoreSkillInfo {
+        if (!entry || typeof entry !== 'object') {
+            return {
+                name: fallbackName,
+                description: '',
+            };
+        }
+
+        const data = entry as Record<string, unknown>;
+        const skill = this.asRecord(data.skill);
+        const latestVersion = this.asRecord(data.latestVersion);
+        const versionBlock = this.asRecord(data.version);
+        const stats = this.asRecord(data.stats) ?? this.asRecord(skill?.stats);
+
+        const slug = this.pickString(data.slug, skill?.slug, data.id, fallbackName);
+        const version = this.pickString(data.version, latestVersion?.version, versionBlock?.version);
+        const tagsRecord = this.asRecord(data.tags) ?? this.asRecord(skill?.tags);
+        const tags = Array.isArray(data.tags)
+            ? data.tags.map((tag) => String(tag))
+            : (tagsRecord ? Object.keys(tagsRecord).filter((tag) => tag.length > 0) : undefined);
+
+        return {
+            name: this.pickString(data.name, slug, fallbackName) ?? '',
+            slug: slug || undefined,
+            displayName: this.pickString(data.displayName, skill?.displayName),
+            description: this.pickString(data.description, data.summary, skill?.summary) ?? '',
+            author: data.author ? String(data.author) : undefined,
+            version: version || undefined,
+            downloads: this.toOptionalNumber(data.downloads) ?? this.toOptionalNumber(stats?.downloads),
+            stars: this.toOptionalNumber(data.stars) ?? this.toOptionalNumber(stats?.stars),
+            tags,
+            repoUrl: this.pickString(data.repoUrl, data.repositoryUrl),
+            files: Array.isArray(data.files)
+                ? data.files.map((file) => String(file))
+                : (Array.isArray(versionBlock?.files)
+                    ? versionBlock.files
+                        .map((file) => this.pickString(this.asRecord(file)?.path))
+                        .filter((filePath): filePath is string => Boolean(filePath))
+                    : undefined),
+            skillMdUrl: data.skillMdUrl
+                ? String(data.skillMdUrl)
+                : (data.downloadUrl ? String(data.downloadUrl) : undefined),
+            raw: data,
+        };
+    }
+
+    private asRecord(value: unknown): Record<string, unknown> | null {
+        return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+    }
+
+    private pickString(...values: unknown[]): string | undefined {
+        for (const value of values) {
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (trimmed.length > 0) {
+                    return trimmed;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    private toOptionalNumber(value: unknown): number | undefined {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
+        }
+        if (typeof value === 'string') {
+            const parsed = Number(value);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+        }
+        return undefined;
+    }
+
+    private sanitizeFolderName(name: string): string {
+        const sanitized = name.trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+        return sanitized.length > 0 ? sanitized : 'openclaw_skill';
+    }
+
+    private resolveSkillMdUrl(skill: OpenClawStoreSkillInfo): string | null {
+        if (skill.skillMdUrl && /^https?:\/\//i.test(skill.skillMdUrl)) {
+            return skill.skillMdUrl;
+        }
+
+        if (skill.repoUrl && /^https?:\/\//i.test(skill.repoUrl)) {
+            const directSkillUrl = `${skill.repoUrl.replace(/\/$/, '')}/raw/main/SKILL.md`;
+            return directSkillUrl;
+        }
+
+        return null;
+    }
+
+    private resolveAdditionalFileUrl(filePath: string, skill: OpenClawStoreSkillInfo): string | null {
+        if (!skill.repoUrl || !/^https?:\/\//i.test(skill.repoUrl)) {
+            return null;
+        }
+        return `${skill.repoUrl.replace(/\/$/, '')}/raw/main/${filePath}`;
     }
 
     // ========================================================================

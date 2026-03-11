@@ -9,6 +9,7 @@ import { useEffect } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useTaskEventStore, type TaskEvent, type IpcResponse, type AuditEvent, hydrateSessions } from '../stores/useTaskEventStore';
 import { isTauri } from '../lib/tauri';
+import { toast } from '../components/Common/ToastProvider';
 
 // ============================================================================
 // Event Listener Hook
@@ -38,6 +39,14 @@ export function useTauriEvents() {
 
             // Listen for task events from sidecar
             unlistenTaskEvent = await listen<TaskEvent>('task-event', (event) => {
+                const payload = event.payload.payload as Record<string, unknown>;
+                if (
+                    event.payload.type === 'TASK_FINISHED' &&
+                    typeof payload.summary === 'string' &&
+                    payload.summary.startsWith('[Reminder] ')
+                ) {
+                    toast.info('Reminder', payload.summary.slice('[Reminder] '.length));
+                }
                 addEvent(event.payload);
             });
 

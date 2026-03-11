@@ -65,6 +65,43 @@ export interface ProxySettings {
     bypass?: string;
 }
 
+export interface PolicyLists {
+    commands: string[];
+    domains: string[];
+    paths: string[];
+}
+
+export interface PolicyConfig {
+    defaultPolicies?: Record<string, string>;
+    allowlists: PolicyLists;
+    blocklists: PolicyLists;
+    deniedEffects?: string[];
+}
+
+export interface PolicyAuditRequestPayload {
+    command?: string;
+    path?: string;
+    cwd?: string;
+    url?: string;
+    description?: string;
+}
+
+export interface PolicyAuditRequest {
+    id: string;
+    effectType: string;
+    source: string;
+    sourceId?: string;
+    payload: PolicyAuditRequestPayload;
+}
+
+export interface PolicyAuditEvent {
+    id: string;
+    timestamp: string;
+    eventType: string;
+    note?: string;
+    request: PolicyAuditRequest;
+}
+
 export interface LlmProfile {
     id: string;
     name: string;

@@ -123,20 +123,40 @@
     font-size: 12px;
 }
 
-.remember-checkbox {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: #4b5563;
-    cursor: pointer;
+.approval-mode-group {
     margin-bottom: 20px;
 }
 
-.remember-checkbox input {
-    width: 16px;
-    height: 16px;
+.approval-mode-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-bottom: 8px;
+}
+
+.approval-mode-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.approval-mode-option {
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+    border-radius: 999px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.approval-mode-option.is-selected {
+    border-color: #2563eb;
+    background: rgba(37, 99, 235, 0.12);
+    color: #1d4ed8;
 }
 
 .effect-dialog-actions {

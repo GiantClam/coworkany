@@ -6,7 +6,6 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { WorkspaceSelector } from '../../Workspace/WorkspaceSelector';
 
 interface LlmProfile {
     id: string;
@@ -22,16 +21,21 @@ interface LlmConfig {
 interface HeaderProps {
     title: string;
     status: 'idle' | 'running' | 'finished' | 'failed';
-    statusLabel: string;
+    modelConnectionStatus: 'unknown' | 'checking' | 'connected' | 'failed' | 'unsupported' | 'no_profile';
+    modelConnectionLabel: string;
+    modelConnectionError?: string | null;
+    canRetryModelConnection: boolean;
+    isRetryingModelConnection: boolean;
     llmConfig: LlmConfig;
     enabledSkillsCount: number;
     enabledToolpacksCount: number;
     isClearing: boolean;
     isCancelling: boolean;
-    onSetActiveProfile: (id: string) => void;
+    onCreateSession: () => void;
     onShowSettings: () => void;
     onShowSkills: () => void;
     onShowMcp: () => void;
+    onRetryModelConnection: () => void;
     onClearHistory: () => void;
     onCancel: () => void;
 }
@@ -39,15 +43,21 @@ interface HeaderProps {
 const HeaderComponent: React.FC<HeaderProps> = ({
     title,
     status,
-    statusLabel,
+    modelConnectionStatus,
+    modelConnectionLabel,
+    modelConnectionError,
+    canRetryModelConnection,
+    isRetryingModelConnection,
     llmConfig,
     enabledSkillsCount,
     enabledToolpacksCount,
     isClearing,
     isCancelling,
+    onCreateSession,
     onShowSettings,
     onShowSkills,
     onShowMcp,
+    onRetryModelConnection,
     onClearHistory,
     onCancel,
 }) => {
@@ -63,23 +73,37 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                     <div className={`chat-status-dot ${status}`} aria-hidden="true" />
                     <div className="chat-header-copy">
                         <h2 className="chat-title" title={title}>{title}</h2>
-                        <div className="chat-subtitle-row">
-                            <span className={`status-badge ${status}`}>{statusLabel}</span>
-                            <span className="chat-capability-pill" title={t('chat.manageSkills')}>
-                                {enabledSkillsCount} SK
-                            </span>
-                            <span className="chat-capability-pill" title={t('chat.manageMcpServers')}>
-                                {enabledToolpacksCount} MCP
-                            </span>
-                        </div>
                     </div>
-                </div>
-                <div className="chat-header-workspace">
-                    <WorkspaceSelector />
                 </div>
             </div>
 
             <div className="chat-header-actions">
+                <button
+                    type="button"
+                    className="chat-header-icon-button chat-header-new-session"
+                    onClick={onCreateSession}
+                    title={t('welcome.newTask')}
+                    aria-label={t('welcome.newTask')}
+                >
+                    <span className="chat-header-new-session-plus">+</span>
+                </button>
+
+                <button
+                    type="button"
+                    className={`chat-header-chip chat-header-link-chip ${modelConnectionStatus}`}
+                    onClick={onRetryModelConnection}
+                    disabled={!canRetryModelConnection || isRetryingModelConnection}
+                    title={
+                        modelConnectionError
+                            ? `${modelConnectionLabel} - ${modelConnectionError}`
+                            : `${modelConnectionLabel} (${t('common.retry')})`
+                    }
+                    aria-label={`${modelConnectionLabel} ${t('common.retry')}`}
+                >
+                    <span className="chat-header-chip-label">MODEL LINK</span>
+                    <span className="chat-header-chip-value">{modelConnectionLabel}</span>
+                </button>
+
                 <button
                     type="button"
                     className="chat-header-chip"
@@ -142,7 +166,11 @@ const arePropsEqual = (prevProps: HeaderProps, nextProps: HeaderProps): boolean 
     return (
         prevProps.title === nextProps.title &&
         prevProps.status === nextProps.status &&
-        prevProps.statusLabel === nextProps.statusLabel &&
+        prevProps.modelConnectionStatus === nextProps.modelConnectionStatus &&
+        prevProps.modelConnectionLabel === nextProps.modelConnectionLabel &&
+        prevProps.modelConnectionError === nextProps.modelConnectionError &&
+        prevProps.canRetryModelConnection === nextProps.canRetryModelConnection &&
+        prevProps.isRetryingModelConnection === nextProps.isRetryingModelConnection &&
         prevProps.enabledSkillsCount === nextProps.enabledSkillsCount &&
         prevProps.enabledToolpacksCount === nextProps.enabledToolpacksCount &&
         prevProps.isClearing === nextProps.isClearing &&

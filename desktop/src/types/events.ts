@@ -42,7 +42,9 @@ export type TaskEventType =
     | 'MCP_GATEWAY_DECISION'
     | 'RUNTIME_SECURITY_ALERT'
     | 'RATE_LIMITED'
-    | 'TOKEN_USAGE';
+    | 'TOKEN_USAGE'
+    | 'TASK_SUSPENDED'
+    | 'TASK_RESUMED';
 
 // ============================================================================
 // Task & Session Types
@@ -166,6 +168,15 @@ export type ToolCallStatus = 'running' | 'success' | 'failed';
 export interface SystemEventItem extends BaseEvent {
     type: 'system_event';
     content: string;
+    actions?: SystemEventAction[];
+}
+
+export interface SystemEventAction {
+    id: string;
+    label: string;
+    kind: 'send_message' | 'copy_text';
+    value: string;
+    primary?: boolean;
 }
 
 export interface EffectRequestItem extends BaseEvent {
@@ -208,6 +219,19 @@ export interface ChatMessagePayload {
 export interface TextDeltaPayload {
     role?: 'thinking' | 'assistant';
     delta: string;
+}
+
+export interface TaskSuspendedPayload {
+    reason: string;
+    userMessage: string;
+    canAutoResume: boolean;
+    maxWaitTimeMs?: number;
+    actions?: SystemEventAction[];
+}
+
+export interface TaskResumedPayload {
+    resumeReason?: string;
+    suspendDurationMs: number;
 }
 
 export interface ToolCalledPayload {

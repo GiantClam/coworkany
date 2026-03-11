@@ -6,7 +6,7 @@ pub mod commands;
 mod engine;
 mod types;
 
-pub use audit::ConsoleAuditSink;
+pub use audit::FileAuditSink;
 pub use commands::PolicyEngineState;
 pub use types::{
     EffectContext, EffectPayload, EffectRequest,

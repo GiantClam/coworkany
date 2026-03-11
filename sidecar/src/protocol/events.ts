@@ -383,6 +383,13 @@ export const TaskSuspendedEventSchema = BaseEventSchema.extend({
         userMessage: z.string(),
         canAutoResume: z.boolean(),
         maxWaitTimeMs: z.number().optional(),
+        actions: z.array(z.object({
+            id: z.string(),
+            label: z.string(),
+            kind: z.enum(['send_message', 'copy_text']),
+            value: z.string(),
+            primary: z.boolean().optional(),
+        })).optional(),
     }),
 });
 

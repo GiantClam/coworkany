@@ -10,7 +10,9 @@ import * as path from 'path';
 import { ToolDefinition, ToolContext } from './standard';
 import { voiceSpeakTool } from './core/voice';
 import { taskCreateTool, taskListTool, taskUpdateTool } from './core/tasks';
+import { scheduledTaskCreateTool, scheduledTaskDeleteTool, scheduledTaskListTool } from './core/scheduledTasks';
 import { systemStatusTool } from './core/system';
+import { systemShutdownCancelTool, systemShutdownScheduleTool, systemShutdownStatusTool } from './core/systemShutdown';
 import {
     calendarCheckTool,
     calendarCreateEventTool,
@@ -24,6 +26,7 @@ import {
     emailGetThreadTool,
 } from './core/email';
 import { CODE_QUALITY_TOOLS } from './codeQuality';
+import { setReminderTool } from './personal/reminder';
 
 // ============================================================================
 // Memory Tools - Local File-Based Storage
@@ -1420,7 +1423,14 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     taskCreateTool,
     taskListTool,
     taskUpdateTool,
+    setReminderTool,
+    scheduledTaskCreateTool,
+    scheduledTaskListTool,
+    scheduledTaskDeleteTool,
     systemStatusTool,
+    systemShutdownScheduleTool,
+    systemShutdownStatusTool,
+    systemShutdownCancelTool,
 
     // Calendar Integration
     calendarCheckTool,

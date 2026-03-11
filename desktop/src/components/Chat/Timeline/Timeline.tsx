@@ -6,7 +6,7 @@
 
 import React from 'react';
 import styles from './Timeline.module.css';
-import type { TaskSession } from '../../../types';
+import type { SystemEventAction, TaskSession } from '../../../types';
 import { useTimelineItems } from './hooks/useTimelineItems';
 import { ToolCard } from './components/ToolCard';
 import { MessageBubble } from './components/MessageBubble';
@@ -17,7 +17,10 @@ import { IS_STARTUP_BASELINE } from '../../../lib/startupProfile';
 // Main Timeline Component
 // ============================================================================
 
-export const Timeline: React.FC<{ session: TaskSession }> = ({ session }) => {
+export const Timeline: React.FC<{
+    session: TaskSession;
+    onSystemAction?: (action: SystemEventAction) => void;
+}> = ({ session, onSystemAction }) => {
     const [showFullHistory, setShowFullHistory] = React.useState(false);
     const shouldCollapseHistory = !IS_STARTUP_BASELINE && !showFullHistory && session.events.length > 320;
     const { items, hiddenEventCount } = useTimelineItems(session, shouldCollapseHistory ? 320 : undefined);
@@ -100,7 +103,14 @@ export const Timeline: React.FC<{ session: TaskSession }> = ({ session }) => {
                     case 'tool_call':
                         return <ToolCard key={item.id} item={item as any} />;
                     case 'system_event':
-                        return <SystemBadge key={item.id} content={(item as any).content} />;
+                        return (
+                            <SystemBadge
+                                key={item.id}
+                                content={(item as any).content}
+                                actions={(item as any).actions}
+                                onAction={onSystemAction}
+                            />
+                        );
                     default:
                         return null;
                 }

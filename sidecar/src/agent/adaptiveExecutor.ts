@@ -24,6 +24,14 @@ export interface ExecutionResult {
     suggestedAlternative?: any;
 }
 
+type StructuredToolResult = {
+    error?: string;
+    error_type?: string;
+    preflight?: {
+        preflightToken?: string;
+    };
+};
+
 export interface AdaptiveExecutionConfig {
     maxRetries: number;
     retryDelay: number; // ms
@@ -82,6 +90,13 @@ export class AdaptiveExecutor {
                     break;
                 }
 
+                if (analysis.suggestedAlternative) {
+                    console.log(`[AdaptiveExecutor] Using structured alternative: ${analysis.suggestedAlternative.description}`);
+                    step.args = analysis.suggestedAlternative.args;
+                    await this.delay(this.config.retryDelay);
+                    continue;
+                }
+
                 // DETECT: Analyze the error
                 const errorType = this.detectErrorType(analysis.error || '');
                 console.log(`[AdaptiveExecutor] Error type detected: ${errorType}`);
@@ -129,18 +144,38 @@ export class AdaptiveExecutor {
      * Analyze tool result to determine success/failure
      */
     private analyzeResult(result: any, step: ExecutionStep): ExecutionResult {
+        const structuredResult = this.parseStructuredResult(result);
+
         // Handle explicit success/error indicators
-        if (typeof result === 'object' && result !== null) {
-            if (result.success === false || result.error) {
+        if (structuredResult) {
+            if (structuredResult.error_type === 'preflight_required' && step.toolName === 'run_command') {
+                const preflightToken = structuredResult.preflight?.preflightToken;
+                if (preflightToken) {
+                    return {
+                        success: false,
+                        error: 'preflight_required',
+                        shouldRetry: true,
+                        suggestedAlternative: {
+                            description: 'Reuse the returned preflight token and retry the exact same command.',
+                            args: {
+                                ...step.args,
+                                preflight_token: preflightToken,
+                            },
+                        },
+                    };
+                }
+            }
+
+            if (structuredResult.error || structuredResult.error_type) {
                 const isSearchFailure = step.toolName === 'search_web';
                 return {
                     success: false,
-                    error: result.error || result.message || 'Tool returned error',
-                    shouldRetry: isSearchFailure ? false : this.isRetryableError(result.error || ''),
+                    error: structuredResult.error || structuredResult.error_type || 'Tool returned error',
+                    shouldRetry: isSearchFailure ? false : this.isRetryableError(structuredResult.error || structuredResult.error_type || ''),
                 };
             }
 
-            if (result.success === true) {
+            if (structuredResult.success === true) {
                 return {
                     success: true,
                     output: result,
@@ -180,6 +215,30 @@ export class AdaptiveExecutor {
         };
     }
 
+    private parseStructuredResult(result: any): (StructuredToolResult & { success?: boolean }) | null {
+        if (typeof result === 'object' && result !== null) {
+            return result as StructuredToolResult & { success?: boolean };
+        }
+
+        if (typeof result === 'string') {
+            const trimmed = result.trim();
+            if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+                return null;
+            }
+
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (typeof parsed === 'object' && parsed !== null) {
+                    return parsed as StructuredToolResult & { success?: boolean };
+                }
+            } catch {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Detect error type from error message
      */
@@ -216,6 +275,10 @@ export class AdaptiveExecutor {
             return 'network_error';
         }
 
+        if (errorLower.includes('preflight_required')) {
+            return 'preflight_required';
+        }
+
         if (errorLower.includes('selector') || errorLower.includes('invalid selector')) {
             return 'invalid_selector';
         }
@@ -229,7 +292,7 @@ export class AdaptiveExecutor {
     private isRetryableError(error: string): boolean {
         const errorType = this.detectErrorType(error);
         // smart_mode_unavailable is NOT retryable - it will never succeed
-        return ['element_not_found', 'timeout', 'network_error', 'invalid_selector', 'spa_not_rendered'].includes(errorType);
+        return ['element_not_found', 'timeout', 'network_error', 'invalid_selector', 'spa_not_rendered', 'preflight_required'].includes(errorType);
     }
 
     /**

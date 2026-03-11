@@ -88,6 +88,8 @@ pub struct SendTaskMessageInput {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub content: String,
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: Option<String>,
     pub config: Option<StartTaskConfigInput>,
 }
 
@@ -161,6 +163,20 @@ pub struct RemoveClaudeSkillInput {
     pub skill_id: String,
     #[serde(rename = "deleteFiles")]
     pub delete_files: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchOpenClawSkillStoreInput {
+    pub store: String,
+    pub query: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstallOpenClawSkillInput {
+    pub store: String,
+    #[serde(rename = "skillName")]
+    pub skill_name: String,
 }
 
 // ============================================================================
@@ -652,6 +668,7 @@ pub async fn send_task_message(
     let command = IpcCommand::send_task_message(
         input.task_id.clone(),
         input.content,
+        input.workspace_path,
         config,
     );
 
@@ -1300,6 +1317,53 @@ pub async fn remove_claude_skill(
     });
     let command = build_command("remove_claude_skill", payload);
     let response = send_command_and_wait(&state, command, 5000).await?;
+    if response
+        .get("payload")
+        .and_then(|p| p.get("success"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let _ = app_handle.emit("skills-updated", ());
+    }
+    Ok(GenericIpcResult {
+        success: true,
+        payload: response,
+    })
+}
+
+#[tauri::command]
+pub async fn search_openclaw_skill_store(
+    input: SearchOpenClawSkillStoreInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let payload = json!({
+        "store": input.store,
+        "query": input.query,
+        "limit": input.limit.unwrap_or(20),
+    });
+    let command = build_command("search_openclaw_skill_store", payload);
+    let response = send_command_and_wait(&state, command, 20_000).await?;
+    Ok(GenericIpcResult {
+        success: true,
+        payload: response,
+    })
+}
+
+#[tauri::command]
+pub async fn install_openclaw_skill(
+    input: InstallOpenClawSkillInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let payload = json!({
+        "store": input.store,
+        "skillName": input.skill_name,
+    });
+    let command = build_command("install_openclaw_skill", payload);
+    let response = send_command_and_wait(&state, command, 90_000).await?;
     if response
         .get("payload")
         .and_then(|p| p.get("success"))

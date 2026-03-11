@@ -1,51 +1,49 @@
-//! Policy Gate Tauri Commands
-//!
-//! Exposes PolicyEngine functionality via Tauri invoke commands.
-//! Handles effect requests, user confirmations, and audit logging.
-
-use super::audit::{AuditEvent, AuditSink};
-use super::engine::{PolicyDecision, PolicyEngine, PolicyOutcome};
+use super::audit::{read_recent_audit_events, AuditEvent, AuditSink};
+use super::engine::{normalize_policy_config, PolicyDecision, PolicyEngine, PolicyOutcome};
 use super::types::{
     AgentDelegation, AgentIdentity, ConfirmationPolicy, EffectRequest, EffectResponse, EffectType,
-    McpGatewayDecision, RuntimeSecurityAlert,
+    McpGatewayDecision, PolicyConfig, RuntimeSecurityAlert,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::{oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
-// ============================================================================
-// State Types
-// ============================================================================
+const CONFIRMATION_TIMEOUT_SECS: u64 = 300;
+const POLICY_CONFIG_FILE: &str = "policy-config.json";
+const POLICY_AUDIT_FILE: &str = "policy-audit.jsonl";
 
-/// Thread-safe wrapper for PolicyEngine with pending confirmations
 pub struct PolicyEngineState {
     pub engine: Arc<Mutex<PolicyEngine>>,
     pub pending_confirmations: Arc<Mutex<HashMap<String, PendingConfirmation>>>,
     pub audit_sink: Arc<Mutex<Box<dyn AuditSink + Send>>>,
+    pub audit_events: Arc<Mutex<Vec<AuditEvent>>>,
     pub identities: Arc<Mutex<HashMap<String, AgentIdentity>>>,
     pub delegations: Arc<Mutex<Vec<AgentDelegation>>>,
     pub mcp_decisions: Arc<Mutex<Vec<McpGatewayDecision>>>,
     pub runtime_alerts: Arc<Mutex<Vec<RuntimeSecurityAlert>>>,
 }
 
-#[derive(Debug, Clone)]
 pub struct PendingConfirmation {
     pub request: EffectRequest,
     pub outcome: PolicyOutcome,
     pub _requested_at: String,
+    pub responder: Option<oneshot::Sender<EffectResponse>>,
 }
 
 impl PolicyEngineState {
     pub fn new(audit_sink: Box<dyn AuditSink + Send>) -> Self {
-        let config = super::types::PolicyConfig::default_config();
+        let config = PolicyConfig::default_config();
         Self {
             engine: Arc::new(Mutex::new(PolicyEngine::new(config))),
             pending_confirmations: Arc::new(Mutex::new(HashMap::new())),
             audit_sink: Arc::new(Mutex::new(audit_sink)),
+            audit_events: Arc::new(Mutex::new(Vec::new())),
             identities: Arc::new(Mutex::new(HashMap::new())),
             delegations: Arc::new(Mutex::new(Vec::new())),
             mcp_decisions: Arc::new(Mutex::new(Vec::new())),
@@ -54,9 +52,31 @@ impl PolicyEngineState {
     }
 }
 
-// ============================================================================
-// Confirmation Request (sent to UI)
-// ============================================================================
+const MAX_POLICY_AUDIT_EVENTS: usize = 200;
+
+async fn record_policy_audit_event(
+    state: &PolicyEngineState,
+    app: &AppHandle,
+    event: AuditEvent,
+) {
+    {
+        let mut audit = state.audit_sink.lock().await;
+        let _ = audit.log(event.clone());
+    }
+
+    {
+        let mut events = state.audit_events.lock().await;
+        events.push(event.clone());
+        if events.len() > MAX_POLICY_AUDIT_EVENTS {
+            let overflow = events.len() - MAX_POLICY_AUDIT_EVENTS;
+            events.drain(0..overflow);
+        }
+    }
+
+    if let Err(e) = app.emit("policy-audit-event", &event) {
+        warn!("Failed to emit policy-audit-event: {}", e);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +89,8 @@ pub struct ConfirmationRequest {
     pub details: HashMap<String, serde_json::Value>,
     pub risk_level: u8,
     pub policy: String,
+    pub allowed_approval_modes: Vec<String>,
+    pub command_base: Option<String>,
 }
 
 impl ConfirmationRequest {
@@ -80,6 +102,9 @@ impl ConfirmationRequest {
         }
         if let Some(ref command) = request.payload.command {
             details.insert("command".to_string(), serde_json::json!(command));
+        }
+        if let Some(ref cwd) = request.payload.cwd {
+            details.insert("cwd".to_string(), serde_json::json!(cwd));
         }
         if let Some(ref url) = request.payload.url {
             details.insert("url".to_string(), serde_json::json!(url));
@@ -110,6 +135,8 @@ impl ConfirmationRequest {
             details,
             risk_level: Self::calculate_risk(&request.effect_type),
             policy: format!("{:?}", policy).to_lowercase(),
+            allowed_approval_modes: approval_modes_for_request(request),
+            command_base: extract_command_base(request),
         }
     }
 
@@ -127,29 +154,99 @@ impl ConfirmationRequest {
     }
 }
 
-// ============================================================================
-// Input Types
-// ============================================================================
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfirmEffectInput {
-    pub request_id: String,
-    pub remember: bool,
+fn approval_modes_for_request(request: &EffectRequest) -> Vec<String> {
+    if matches!(request.effect_type, EffectType::ShellRead | EffectType::ShellWrite) {
+        vec!["once".to_string(), "session".to_string(), "permanent".to_string()]
+    } else {
+        vec!["once".to_string(), "session".to_string()]
+    }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DenyEffectInput {
-    pub request_id: String,
-    pub reason: Option<String>,
+fn normalize_approval_type(value: Option<String>) -> ConfirmationPolicy {
+    match value.as_deref() {
+        Some("session") => ConfirmationPolicy::Session,
+        Some("permanent") => ConfirmationPolicy::Permanent,
+        Some("never") => ConfirmationPolicy::Never,
+        Some("always") => ConfirmationPolicy::Always,
+        _ => ConfirmationPolicy::Once,
+    }
 }
 
-// ============================================================================
-// Tauri Commands
-// ============================================================================
+fn extract_command_base(request: &EffectRequest) -> Option<String> {
+    request
+        .payload
+        .command
+        .as_ref()
+        .and_then(|command| command.split_whitespace().next())
+        .map(|command| {
+            command
+                .trim_matches('"')
+                .trim()
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(command)
+                .trim_end_matches(".exe")
+                .to_lowercase()
+        })
+        .filter(|command| !command.is_empty())
+}
 
-/// Request approval for an effect
+fn policy_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {}", e))?;
+    Ok(app_data_dir.join(POLICY_CONFIG_FILE))
+}
+
+fn policy_audit_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {}", e))?;
+    Ok(app_data_dir.join(POLICY_AUDIT_FILE))
+}
+
+async fn load_policy_config(app: &AppHandle) -> Result<PolicyConfig, String> {
+    let path = policy_config_path(app)?;
+    if !path.exists() {
+        return Ok(normalize_policy_config(PolicyConfig::default_config()));
+    }
+
+    let raw = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("failed to read policy config: {}", e))?;
+    serde_json::from_str::<PolicyConfig>(&raw)
+        .map(normalize_policy_config)
+        .map_err(|e| format!("failed to parse policy config: {}", e))
+}
+
+async fn persist_policy_config(app: &AppHandle, config: &PolicyConfig) -> Result<(), String> {
+    let normalized = normalize_policy_config(config.clone());
+    let path = policy_config_path(app)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("failed to create policy config dir: {}", e))?;
+    }
+
+    let raw = serde_json::to_string_pretty(&normalized)
+        .map_err(|e| format!("failed to serialize policy config: {}", e))?;
+    tokio::fs::write(&path, raw)
+        .await
+        .map_err(|e| format!("failed to write policy config: {}", e))
+}
+
+async fn refresh_engine_config(
+    state: &PolicyEngineState,
+    app: &AppHandle,
+) -> Result<(), String> {
+    let config = load_policy_config(app).await.unwrap_or_else(|_| PolicyConfig::default_config());
+    let mut engine = state.engine.lock().await;
+    engine.replace_config(config);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn request_effect(
     request: EffectRequest,
@@ -161,7 +258,8 @@ pub async fn request_effect(
         request.effect_type, request.source
     );
 
-    // Evaluate with policy engine
+    refresh_engine_config(&state, &app).await?;
+
     let outcome = {
         let engine = state.engine.lock().await;
         engine.evaluate(&request)
@@ -169,26 +267,18 @@ pub async fn request_effect(
 
     debug!("Policy decision: {:?}", outcome.decision);
 
-    // Log to audit
-    {
-        let mut audit = state.audit_sink.lock().await;
-        let _ = audit.log(AuditEvent::request(&request, &outcome));
-    }
+    record_policy_audit_event(&state, &app, AuditEvent::request(&request, &outcome)).await;
 
     match &outcome.decision {
-        PolicyDecision::Approved {
-            approval_type: _,
-            modified_scope: _,
-        } => {
+        PolicyDecision::Approved { .. } => {
             info!("Effect auto-approved: {}", request.id);
             let engine = state.engine.lock().await;
             Ok(engine.to_response(outcome, true))
         }
-
         PolicyDecision::RequiresUserConfirmation { policy, .. } => {
             info!("Effect requires confirmation: {}", request.id);
 
-            // Store pending confirmation
+            let (tx, rx) = oneshot::channel::<EffectResponse>();
             {
                 let mut pending = state.pending_confirmations.lock().await;
                 pending.insert(
@@ -197,29 +287,35 @@ pub async fn request_effect(
                         request: request.clone(),
                         outcome: outcome.clone(),
                         _requested_at: Utc::now().to_rfc3339(),
+                        responder: Some(tx),
                     },
                 );
             }
 
-            // Emit confirmation request to UI
             let confirmation_req = ConfirmationRequest::from_request(&request, policy);
             if let Err(e) = app.emit("effect-confirmation-required", &confirmation_req) {
                 error!("Failed to emit confirmation request: {}", e);
             }
 
-            // Return pending response (caller should wait for confirm/deny)
-            Ok(EffectResponse {
-                request_id: request.id,
-                timestamp: Utc::now().to_rfc3339(),
-                approved: false, // Not yet approved
-                approval_type: None,
-                expires_at: None,
-                denial_reason: Some("awaiting_confirmation".to_string()),
-                denial_code: None,
-                modified_scope: None,
-            })
+            match timeout(Duration::from_secs(CONFIRMATION_TIMEOUT_SECS), rx).await {
+                Ok(Ok(response)) => Ok(response),
+                Ok(Err(_)) => Err("confirmation channel closed unexpectedly".to_string()),
+                Err(_) => {
+                    let mut pending = state.pending_confirmations.lock().await;
+                    pending.remove(&request.id);
+                    Ok(EffectResponse {
+                        request_id: request.id,
+                        timestamp: Utc::now().to_rfc3339(),
+                        approved: false,
+                        approval_type: None,
+                        expires_at: None,
+                        denial_reason: Some("approval timeout".to_string()),
+                        denial_code: Some("timeout".to_string()),
+                        modified_scope: None,
+                    })
+                }
+            }
         }
-
         PolicyDecision::Denied { reason, code } => {
             warn!("Effect denied: {}", request.id);
             Ok(EffectResponse {
@@ -236,42 +332,60 @@ pub async fn request_effect(
     }
 }
 
-/// User confirms an effect
 #[tauri::command]
 pub async fn confirm_effect(
-    input: ConfirmEffectInput,
+    request_id: String,
+    approval_type: Option<String>,
     state: State<'_, PolicyEngineState>,
     app: AppHandle,
 ) -> Result<EffectResponse, String> {
+    let approval_type = normalize_approval_type(approval_type);
     info!(
-        "Effect confirmed by user: {} (remember: {})",
-        input.request_id, input.remember
+        "Effect confirmed by user: {} (approval_type: {:?})",
+        request_id, approval_type
     );
 
-    // Get pending confirmation
     let pending = {
         let mut pending_map = state.pending_confirmations.lock().await;
-        pending_map.remove(&input.request_id)
+        pending_map.remove(&request_id)
     };
 
-    let Some(pending) = pending else {
-        return Err(format!(
-            "No pending confirmation found for {}",
-            input.request_id
-        ));
+    let Some(mut pending) = pending else {
+        return Err(format!("No pending confirmation found for {}", request_id));
     };
 
-    // Build response
-    let engine = state.engine.lock().await;
-    let response = engine.to_response(pending.outcome, true);
+    refresh_engine_config(&state, &app).await?;
 
-    // Log to audit
-    {
-        let mut audit = state.audit_sink.lock().await;
-        let _ = audit.log(AuditEvent::confirmed(&pending.request, input.remember));
+    let mut config_to_persist: Option<PolicyConfig> = None;
+    let mut response = {
+        let mut engine = state.engine.lock().await;
+        if let Some(command_base) = extract_command_base(&pending.request) {
+            match approval_type {
+                ConfirmationPolicy::Session => engine.approve_command_for_session(&command_base),
+                ConfirmationPolicy::Permanent => {
+                    if engine.approve_command_permanently(&command_base) {
+                        config_to_persist = Some(engine.config.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        engine.to_response(pending.outcome.clone(), true)
+    };
+
+    if let Some(config) = config_to_persist {
+        persist_policy_config(&app, &config).await?;
     }
 
-    // Emit confirmation result
+    response.approval_type = Some(approval_type.clone());
+
+    let remember = !matches!(approval_type, ConfirmationPolicy::Once);
+    record_policy_audit_event(&state, &app, AuditEvent::confirmed(&pending.request, remember)).await;
+
+    if let Some(responder) = pending.responder.take() {
+        let _ = responder.send(response.clone());
+    }
+
     if let Err(e) = app.emit("effect-confirmed", &response) {
         warn!("Failed to emit effect-confirmed: {}", e);
     }
@@ -279,46 +393,41 @@ pub async fn confirm_effect(
     Ok(response)
 }
 
-/// User denies an effect
 #[tauri::command]
 pub async fn deny_effect(
-    input: DenyEffectInput,
+    request_id: String,
+    reason: Option<String>,
     state: State<'_, PolicyEngineState>,
     app: AppHandle,
 ) -> Result<EffectResponse, String> {
-    info!("Effect denied by user: {}", input.request_id);
+    info!("Effect denied by user: {}", request_id);
 
-    // Get pending confirmation
     let pending = {
         let mut pending_map = state.pending_confirmations.lock().await;
-        pending_map.remove(&input.request_id)
+        pending_map.remove(&request_id)
     };
 
-    let Some(pending) = pending else {
-        return Err(format!(
-            "No pending confirmation found for {}",
-            input.request_id
-        ));
+    let Some(mut pending) = pending else {
+        return Err(format!("No pending confirmation found for {}", request_id));
     };
 
     let response = EffectResponse {
-        request_id: input.request_id.clone(),
+        request_id: request_id.clone(),
         timestamp: Utc::now().to_rfc3339(),
         approved: false,
         approval_type: None,
         expires_at: None,
-        denial_reason: input.reason.clone().or(Some("user_denied".to_string())),
+        denial_reason: reason.clone().or(Some("user_denied".to_string())),
         denial_code: Some("user_denied".to_string()),
         modified_scope: None,
     };
 
-    // Log to audit
-    {
-        let mut audit = state.audit_sink.lock().await;
-        let _ = audit.log(AuditEvent::denied(&pending.request, input.reason.as_deref()));
+    record_policy_audit_event(&state, &app, AuditEvent::denied(&pending.request, reason.as_deref())).await;
+
+    if let Some(responder) = pending.responder.take() {
+        let _ = responder.send(response.clone());
     }
 
-    // Emit denial result
     if let Err(e) = app.emit("effect-denied", &response) {
         warn!("Failed to emit effect-denied: {}", e);
     }
@@ -326,7 +435,6 @@ pub async fn deny_effect(
     Ok(response)
 }
 
-/// Get pending confirmations (for UI display)
 #[tauri::command]
 pub async fn get_pending_confirmations(
     state: State<'_, PolicyEngineState>,
@@ -347,9 +455,71 @@ pub async fn get_pending_confirmations(
     Ok(requests)
 }
 
-// ============================================================================
-// Identity and Security Commands
-// ============================================================================
+#[tauri::command]
+pub async fn get_policy_config(
+    state: State<'_, PolicyEngineState>,
+    app: AppHandle,
+) -> Result<PolicyConfig, String> {
+    refresh_engine_config(&state, &app).await?;
+    let engine = state.engine.lock().await;
+    Ok(engine.config.clone())
+}
+
+#[tauri::command]
+pub async fn save_policy_config(
+    config: PolicyConfig,
+    state: State<'_, PolicyEngineState>,
+    app: AppHandle,
+) -> Result<PolicyConfig, String> {
+    let normalized = normalize_policy_config(config);
+    persist_policy_config(&app, &normalized).await?;
+    let mut engine = state.engine.lock().await;
+    engine.replace_config(normalized.clone());
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn list_policy_audit_events(
+    limit: Option<usize>,
+    state: State<'_, PolicyEngineState>,
+    app: AppHandle,
+) -> Result<Vec<AuditEvent>, String> {
+    let limit = limit.unwrap_or(30).min(MAX_POLICY_AUDIT_EVENTS);
+    if let Ok(path) = policy_audit_path(&app) {
+        match read_recent_audit_events(&path, limit) {
+            Ok(events) => return Ok(events),
+            Err(err) => warn!("Failed to read persistent policy audit log: {}", err),
+        }
+    }
+
+    let events = state.audit_events.lock().await;
+    let start = events.len().saturating_sub(limit);
+    Ok(events[start..].to_vec())
+}
+
+#[tauri::command]
+pub async fn clear_policy_audit_events(
+    state: State<'_, PolicyEngineState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    {
+        let mut events = state.audit_events.lock().await;
+        events.clear();
+    }
+
+    let path = policy_audit_path(&app)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("failed to create audit log dir: {}", e))?;
+    }
+
+    tokio::fs::write(&path, "")
+        .await
+        .map_err(|e| format!("failed to clear policy audit log: {}", e))?;
+
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn register_agent_identity(

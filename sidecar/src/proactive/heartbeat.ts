@@ -20,7 +20,7 @@ import * as os from 'os';
 // Types
 // ============================================================================
 
-export type TriggerType = 'cron' | 'file_watch' | 'webhook' | 'condition' | 'interval';
+export type TriggerType = 'cron' | 'file_watch' | 'webhook' | 'condition' | 'interval' | 'date';
 
 export interface CronConfig {
     expression: string;  // Cron expression: "*/5 * * * *" = every 5 minutes
@@ -56,12 +56,16 @@ export interface IntervalConfig {
     intervalMs: number;
 }
 
+export interface DateConfig {
+    runAt: string;
+}
+
 export interface ClipboardConfig {
     enabled: boolean;
     pattern?: string;
 }
 
-export type TriggerConfig = CronConfig | FileWatchConfig | WebhookConfig | ConditionConfig | IntervalConfig | ClipboardConfig;
+export type TriggerConfig = CronConfig | FileWatchConfig | WebhookConfig | ConditionConfig | IntervalConfig | DateConfig | ClipboardConfig;
 
 
 export interface TriggerAction {
@@ -71,6 +75,8 @@ export interface TriggerAction {
     channel?: string;  // For multi-channel support
     // Execute task action
     taskQuery?: string;
+    workspacePath?: string;
+    taskConfig?: Record<string, unknown>;
     // Run skill action
     skillName?: string;
     skillArgs?: Record<string, unknown>;
@@ -89,6 +95,7 @@ export interface Trigger {
     createdAt: string;
     lastTriggeredAt?: string;
     triggerCount: number;
+    runOnce?: boolean;
 }
 
 export interface TriggerEvent {
@@ -143,7 +150,7 @@ export interface ProactiveTaskExecutor {
     /**
      * Send notification to user
      */
-    notify(message: string, channel?: string): Promise<void>;
+    notify(message: string, channel?: string, context?: Record<string, unknown>): Promise<void>;
 }
 
 // ============================================================================
@@ -221,6 +228,7 @@ export class HeartbeatEngine extends EventEmitter {
     private conditionIntervals: Map<string, NodeJS.Timeout> = new Map();
     private fileWatchers: Map<string, fs.FSWatcher> = new Map();
     private intervalTimers: Map<string, NodeJS.Timeout> = new Map();
+    private dateTimers: Map<string, NodeJS.Timeout> = new Map();
     private executor: ProactiveTaskExecutor;
     private eventCallback?: HeartbeatEventCallback;
     private isRunning: boolean = false;
@@ -326,6 +334,11 @@ export class HeartbeatEngine extends EventEmitter {
             clearInterval(timerId);
         }
         this.intervalTimers.clear();
+
+        for (const timerId of this.dateTimers.values()) {
+            clearTimeout(timerId);
+        }
+        this.dateTimers.clear();
 
         this.isRunning = false;
 
@@ -438,6 +451,9 @@ export class HeartbeatEngine extends EventEmitter {
             case 'interval':
                 this.startIntervalTimer(trigger);
                 break;
+            case 'date':
+                this.startDateTimer(trigger);
+                break;
             // Cron triggers are handled by the central cron checker
         }
     }
@@ -452,6 +468,9 @@ export class HeartbeatEngine extends EventEmitter {
                 break;
             case 'interval':
                 this.stopIntervalTimer(trigger.id);
+                break;
+            case 'date':
+                this.stopDateTimer(trigger.id);
                 break;
         }
     }
@@ -639,6 +658,40 @@ export class HeartbeatEngine extends EventEmitter {
     }
 
     // ========================================================================
+    // Date Triggers
+    // ========================================================================
+
+    private startDateTimer(trigger: Trigger): void {
+        const config = trigger.config as DateConfig;
+        const targetTime = new Date(config.runAt);
+
+        if (Number.isNaN(targetTime.getTime())) {
+            console.error(`[Heartbeat] Invalid date trigger time for ${trigger.id}: ${config.runAt}`);
+            return;
+        }
+
+        const delayMs = Math.max(0, targetTime.getTime() - Date.now());
+        const timerId = setTimeout(() => {
+            this.dateTimers.delete(trigger.id);
+            void this.fireTrigger(trigger, {
+                type: 'date',
+                scheduledTime: config.runAt,
+            });
+        }, delayMs);
+
+        this.dateTimers.set(trigger.id, timerId);
+        console.log(`[Heartbeat] Started date timer for: ${trigger.name} at ${config.runAt}`);
+    }
+
+    private stopDateTimer(triggerId: string): void {
+        const timerId = this.dateTimers.get(triggerId);
+        if (timerId) {
+            clearTimeout(timerId);
+            this.dateTimers.delete(triggerId);
+        }
+    }
+
+    // ========================================================================
     // Trigger Firing
     // ========================================================================
 
@@ -665,6 +718,10 @@ export class HeartbeatEngine extends EventEmitter {
 
         // Execute action
         await this.executeAction(trigger, eventData);
+
+        if (trigger.type === 'date' || trigger.runOnce) {
+            this.unregisterTrigger(trigger.id);
+        }
     }
 
     private async executeAction(
@@ -687,14 +744,27 @@ export class HeartbeatEngine extends EventEmitter {
                 case 'notify':
                     await this.executor.notify(
                         this.interpolateMessage(action.message!, eventData),
-                        action.channel
+                        action.channel,
+                        {
+                            triggerId: trigger.id,
+                            triggerName: trigger.name,
+                            workspacePath: action.workspacePath,
+                            taskConfig: action.taskConfig,
+                            eventData,
+                        }
                     );
                     break;
 
                 case 'execute_task':
                     await this.executor.executeTask(
                         this.interpolateMessage(action.taskQuery!, eventData),
-                        { triggerEvent: eventData }
+                        {
+                            triggerEvent: eventData,
+                            workspacePath: action.workspacePath,
+                            taskConfig: action.taskConfig,
+                            triggerId: trigger.id,
+                            triggerName: trigger.name,
+                        }
                     );
                     break;
 

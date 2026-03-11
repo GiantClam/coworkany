@@ -85,21 +85,21 @@ export type ConfirmationPolicy = z.infer<typeof ConfirmationPolicySchema>;
  */
 export const EffectScopeSchema = z.object({
     // Filesystem scope
-    workspacePaths: z.array(z.string()).optional(),
-    allowedExtensions: z.array(z.string()).optional(),
-    excludedPaths: z.array(z.string()).optional(),
+    workspacePaths: z.array(z.string()).nullable().optional(),
+    allowedExtensions: z.array(z.string()).nullable().optional(),
+    excludedPaths: z.array(z.string()).nullable().optional(),
 
     // Shell scope
-    commandAllowlist: z.array(z.string()).optional(),
-    commandBlocklist: z.array(z.string()).optional(),
+    commandAllowlist: z.array(z.string()).nullable().optional(),
+    commandBlocklist: z.array(z.string()).nullable().optional(),
 
     // Network scope
-    domainAllowlist: z.array(z.string()).optional(),
-    domainBlocklist: z.array(z.string()).optional(),
+    domainAllowlist: z.array(z.string()).nullable().optional(),
+    domainBlocklist: z.array(z.string()).nullable().optional(),
 
     // General
-    maxFileSizeBytes: z.number().optional(),
-    timeoutMs: z.number().optional(),
+    maxFileSizeBytes: z.number().nullable().optional(),
+    timeoutMs: z.number().nullable().optional(),
 });
 
 export type EffectScope = z.infer<typeof EffectScopeSchema>;
@@ -114,7 +114,7 @@ export type EffectScope = z.infer<typeof EffectScopeSchema>;
  */
 export const EffectRequestSchema = z.object({
     id: z.string().uuid(),
-    timestamp: z.string().datetime(),
+    timestamp: z.string(),
 
     // Effect classification
     effectType: EffectTypeSchema,
@@ -164,27 +164,27 @@ export type EffectRequest = z.infer<typeof EffectRequestSchema>;
  */
 export const EffectResponseSchema = z.object({
     requestId: z.string().uuid(),
-    timestamp: z.string().datetime(),
+    timestamp: z.string(),
 
     // Decision
     approved: z.boolean(),
 
     // Approval details
-    approvalType: ConfirmationPolicySchema.optional(),
-    expiresAt: z.string().datetime().optional(),
+    approvalType: ConfirmationPolicySchema.nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
 
     // Denial details
-    denialReason: z.string().optional(),
+    denialReason: z.string().nullable().optional(),
     denialCode: z.enum([
         'user_denied',
         'policy_blocked',
         'scope_violation',
         'timeout',
         'rate_limited',
-    ]).optional(),
+    ]).nullable().optional(),
 
     // Modifications (Policy Gate may constrain the request)
-    modifiedScope: EffectScopeSchema.optional(),
+    modifiedScope: EffectScopeSchema.nullable().optional(),
 });
 
 export type EffectResponse = z.infer<typeof EffectResponseSchema>;

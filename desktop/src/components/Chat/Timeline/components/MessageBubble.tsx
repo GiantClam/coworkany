@@ -6,15 +6,12 @@
 
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from '../Timeline.module.css';
 import type { TimelineItemType } from '../../../../types';
 import { processMessageContent } from '../../../../lib/text/messageProcessor';
 import { parseMessageContent } from '../../../../lib/parsers/qualityParser';
 import { VerificationStatus, CodeQualityReport } from '../../../index';
+import { MarkdownContent } from '../../../Common/MarkdownContent';
 
 interface MessageBubbleProps {
     item: TimelineItemType & { content: string };
@@ -36,35 +33,6 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
 
     // Parse content for verification and quality data
     const parsed = isUser ? null : parseMessageContent(item.content);
-
-    // Markdown renderer component
-    const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => (
-        <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-                code(props) {
-                    const { children, className, node, ref, ...rest } = props as any;
-                    const match = /language-(\w+)/.exec(className || '');
-                    return match ? (
-                        <SyntaxHighlighter
-                            {...rest}
-                            PreTag="div"
-                            children={String(children).replace(/\n$/, '')}
-                            language={match[1]}
-                            style={oneLight}
-                            customStyle={{ margin: 0, borderRadius: 'var(--radius-md)', fontSize: '12px', border: '1px solid var(--border-subtle)' }}
-                        />
-                    ) : (
-                        <code {...props} className={className}>
-                            {children}
-                        </code>
-                    );
-                }
-            }}
-        >
-            {processMessageContent(content)}
-        </ReactMarkdown>
-    );
 
     return (
         <div
@@ -89,7 +57,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
                     <div className="space-y-3">
                         {/* Before text */}
                         {parsed.beforeText && (
-                            <MarkdownRenderer content={parsed.beforeText} />
+                            <MarkdownContent content={processMessageContent(parsed.beforeText)} />
                         )}
 
                         {/* Verification Status */}
@@ -104,12 +72,12 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
 
                         {/* After text */}
                         {parsed.afterText && (
-                            <MarkdownRenderer content={parsed.afterText} />
+                            <MarkdownContent content={processMessageContent(parsed.afterText)} />
                         )}
                     </div>
                 ) : (
                     // Standard markdown rendering
-                    <MarkdownRenderer content={item.content} />
+                    <MarkdownContent content={processMessageContent(item.content)} />
                 )}
             </div>
         </div>

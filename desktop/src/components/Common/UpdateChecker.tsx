@@ -1,4 +1,4 @@
-/**
+﻿/**
  * UpdateChecker Component
  *
  * Checks for application updates on startup using the Tauri updater plugin.
@@ -22,12 +22,14 @@ export function UpdateChecker() {
     const { t } = useTranslation();
     const [state, setState] = useState<UpdateState>({ status: 'idle' });
     const [dismissed, setDismissed] = useState(false);
+    const updaterEnabled =
+        (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_ENABLE_UPDATER === 'true';
 
     // Store the update object for later download/install
     const [updateObj, setUpdateObj] = useState<unknown>(null);
 
     useEffect(() => {
-        if (!isTauri()) return;
+        if (!isTauri() || !updaterEnabled) return;
 
         let cancelled = false;
 
@@ -55,7 +57,7 @@ export function UpdateChecker() {
             } catch (err) {
                 if (cancelled) return;
                 console.warn('[UpdateChecker] Check failed:', err);
-                // Silently fail — don't show error banner for update checks
+                // Silently fail so startup is not polluted by updater config issues.
                 setState({ status: 'idle' });
             }
         };
@@ -69,7 +71,7 @@ export function UpdateChecker() {
             cancelled = true;
             clearTimeout(timer);
         };
-    }, []);
+    }, [updaterEnabled]);
 
     const handleDownload = useCallback(async () => {
         if (!updateObj || typeof (updateObj as Record<string, unknown>).downloadAndInstall !== 'function') return;
@@ -131,11 +133,11 @@ export function UpdateChecker() {
         >
             {/* Icon */}
             <div style={{ fontSize: 20, flexShrink: 0 }}>
-                {state.status === 'available' && '🔄'}
-                {state.status === 'downloading' && '⬇️'}
-                {state.status === 'ready' && '✅'}
-                {state.status === 'up-to-date' && '✓'}
-                {state.status === 'error' && '⚠️'}
+                {state.status === 'available' && 'UPD'}
+                {state.status === 'downloading' && '...'}
+                {state.status === 'ready' && 'OK'}
+                {state.status === 'up-to-date' && 'OK'}
+                {state.status === 'error' && '!'}
             </div>
 
             {/* Content */}
@@ -230,10 +232,11 @@ export function UpdateChecker() {
                             fontSize: 14,
                         }}
                     >
-                        ×
+                        脳
                     </button>
                 )}
             </div>
         </div>
     );
 }
+

@@ -29,6 +29,11 @@ const CDP_FALLBACK_PORTS = [9223, 9224, 9225];
 /** All CDP ports to attempt, in order */
 const ALL_CDP_PORTS = [CDP_PORT, ...CDP_FALLBACK_PORTS];
 
+function shouldDisableExternalCdp(): boolean {
+    const raw = process.env.COWORKANY_DISABLE_BROWSER_CDP?.trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -226,6 +231,15 @@ export class PlaywrightBackend implements BrowserBackend {
         const headless = options.headless ?? false;
 
         console.error(`[PlaywrightBackend] Connecting to Chrome (profile: ${profileName}, cdpHealth: ${this._cdpHealthStatus})`);
+
+        if (shouldDisableExternalCdp()) {
+            console.error('[PlaywrightBackend] External CDP discovery disabled by COWORKANY_DISABLE_BROWSER_CDP; using persistent context only');
+            if (requireUserProfile) {
+                throw new Error('External CDP discovery is disabled. User-profile mode is unavailable in this session.');
+            }
+            this._cdpHealthStatus = 'broken';
+            return this._fallbackLaunchPersistentContext(headless);
+        }
 
         // Fast path: if CDP is known to be broken on this system, go straight
         // to the persistent context fallback (saves 15-30s of futile retries).
@@ -602,38 +616,42 @@ export class PlaywrightBackend implements BrowserBackend {
         // If the user's Chrome is running with --remote-debugging-port,
         // this will connect to it and preserve the user's login cookies.
         // ------------------------------------------------------------------
-        for (const cdpPort of ALL_CDP_PORTS) {
-            if (await this._isCdpAvailable(cdpPort)) {
-                console.error(`[PlaywrightBackend] Bridge: trying CDP connection on port ${cdpPort}...`);
-                try {
-                    const cdpResult = await this._bridgeSend('connectCDP', {
-                        cdpUrl: `http://127.0.0.1:${cdpPort}`,
-                        timeout: 10000,
-                    });
-                    if (cdpResult.success) {
-                        console.error(`[PlaywrightBackend] Bridge: CDP connected on port ${cdpPort}! (user profile with cookies)`);
-                        this._cdpHealthStatus = 'works';
+        if (!shouldDisableExternalCdp()) {
+            for (const cdpPort of ALL_CDP_PORTS) {
+                if (await this._isCdpAvailable(cdpPort)) {
+                    console.error(`[PlaywrightBackend] Bridge: trying CDP connection on port ${cdpPort}...`);
+                    try {
+                        const cdpResult = await this._bridgeSend('connectCDP', {
+                            cdpUrl: `http://127.0.0.1:${cdpPort}`,
+                            timeout: 10000,
+                        });
+                        if (cdpResult.success) {
+                            console.error(`[PlaywrightBackend] Bridge: CDP connected on port ${cdpPort}! (user profile with cookies)`);
+                            this._cdpHealthStatus = 'works';
 
-                        const bridgePage = this._createBridgePageProxy();
-                        const bridgeContext = {
-                            close: async () => { await this._bridgeSend('close', {}).catch(() => {}); },
-                            pages: () => [bridgePage],
-                            newPage: async () => bridgePage,
-                        } as unknown as import('playwright').BrowserContext;
+                            const bridgePage = this._createBridgePageProxy();
+                            const bridgeContext = {
+                                close: async () => { await this._bridgeSend('close', {}).catch(() => {}); },
+                                pages: () => [bridgePage],
+                                newPage: async () => bridgePage,
+                            } as unknown as import('playwright').BrowserContext;
 
-                        this.connection = {
-                            browser: null as unknown as Browser,
-                            context: bridgeContext,
-                            page: bridgePage as unknown as import('playwright').Page,
-                            isUserProfile: true,
-                            profilePath: getChromeUserDataDir(),
-                        };
-                        return this.connection;
+                            this.connection = {
+                                browser: null as unknown as Browser,
+                                context: bridgeContext,
+                                page: bridgePage as unknown as import('playwright').Page,
+                                isUserProfile: true,
+                                profilePath: getChromeUserDataDir(),
+                            };
+                            return this.connection;
+                        }
+                    } catch (cdpErr) {
+                        console.error(`[PlaywrightBackend] Bridge: CDP connection failed on port ${cdpPort}: ${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}`);
                     }
-                } catch (cdpErr) {
-                    console.error(`[PlaywrightBackend] Bridge: CDP connection failed on port ${cdpPort}: ${cdpErr instanceof Error ? cdpErr.message : String(cdpErr)}`);
                 }
             }
+        } else {
+            console.error('[PlaywrightBackend] Bridge: external CDP discovery disabled; skipping user-profile attach attempts');
         }
         console.error('[PlaywrightBackend] Bridge: no CDP endpoint available, using persistent context');
 

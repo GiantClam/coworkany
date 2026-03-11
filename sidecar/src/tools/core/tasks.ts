@@ -24,6 +24,18 @@ export const taskCreateTool: ToolDefinition = {
         properties: {
             title: { type: 'string', description: 'Task title' },
             description: { type: 'string', description: 'Detailed description' },
+            dueDate: {
+                type: 'string',
+                description: 'Optional due date/time in ISO 8601 format.'
+            },
+            due_date: {
+                type: 'string',
+                description: 'Legacy alias for dueDate. Optional due date/time in ISO 8601 format.'
+            },
+            estimatedMinutes: {
+                type: 'number',
+                description: 'Optional estimate in minutes.'
+            },
             priority: {
                 type: 'string',
                 enum: ['critical', 'high', 'medium', 'low'],
@@ -33,6 +45,19 @@ export const taskCreateTool: ToolDefinition = {
                 type: 'array',
                 items: { type: 'string' },
                 description: 'Tags for categorization'
+            },
+            dependencies: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional task dependency IDs.'
+            },
+            metadata: {
+                type: 'object',
+                description: 'Optional structured metadata stored in task context.'
+            },
+            context: {
+                type: 'object',
+                description: 'Optional task context object.'
             }
         },
         required: ['title'],
@@ -41,18 +66,29 @@ export const taskCreateTool: ToolDefinition = {
         const manager = getTaskManager(context.workspacePath);
 
         try {
+            const dueDate = typeof args.dueDate === 'string'
+                ? args.dueDate
+                : (typeof args.due_date === 'string' ? args.due_date : undefined);
+            const mergedContext = {
+                ...(args.context && typeof args.context === 'object' ? args.context : {}),
+                ...(args.metadata && typeof args.metadata === 'object' ? { metadata: args.metadata } : {}),
+            };
             const task = manager.createTask({
                 title: args.title,
                 description: args.description || '',
                 priority: args.priority || 'medium',
                 status: 'pending',
                 tags: args.tags || [],
-                dependencies: []
+                dependencies: Array.isArray(args.dependencies) ? args.dependencies : [],
+                dueDate,
+                estimatedMinutes: typeof args.estimatedMinutes === 'number' ? args.estimatedMinutes : undefined,
+                context: Object.keys(mergedContext).length > 0 ? mergedContext : undefined,
             });
 
             return {
                 success: true,
                 taskId: task.id,
+                task_id: task.id,
                 message: `Task "${task.title}" created.`,
                 task: task
             };

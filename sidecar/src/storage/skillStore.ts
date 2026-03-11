@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { parse as parseYaml } from 'yaml';
 import { BUILTIN_SKILLS } from '../data/defaults';
 
 // ============================================================================
@@ -48,6 +49,12 @@ export interface ClaudeSkillManifest {
      * Keywords for discovery
      */
     tags?: string[];
+
+    /**
+     * OpenClaw-compatible allowed tools list.
+     * Supports both `allowed-tools` and `allowedTools` frontmatter forms.
+     */
+    allowedTools?: string[];
 
     /**
      * Required capabilities (for policy evaluation)
@@ -284,108 +291,178 @@ export class SkillStore {
     }
 
     /**
-     * Parse YAML frontmatter into a key-value object
-     * Supports simple values, arrays (flow and block style), and nested objects
+     * Parse YAML frontmatter into a key-value object.
+     * Uses a full YAML parser so OpenClaw nested metadata/commands can be preserved.
      */
     private static parseFrontmatter(yaml: string): Record<string, unknown> {
-        const result: Record<string, unknown> = {};
-        const lines = yaml.split('\n');
-        let currentKey: string | null = null;
-        let currentArray: string[] | null = null;
-        let currentObject: Record<string, unknown> | null = null;
-        let objectKey: string | null = null;
+        try {
+            const parsed = parseYaml(yaml);
+            return parsed && typeof parsed === 'object'
+                ? (parsed as Record<string, unknown>)
+                : {};
+        } catch (error) {
+            console.warn('[SkillStore] Failed to parse YAML frontmatter:', error);
+            return {};
+        }
+    }
 
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const trimmed = line.trim();
+    private static asRecord(value: unknown): Record<string, unknown> | null {
+        return value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : null;
+    }
 
-            // Skip empty lines and comments
-            if (!trimmed || trimmed.startsWith('#')) continue;
-
-            // Check for array item (starts with -)
-            if (trimmed.startsWith('- ') && currentArray !== null) {
-                const value = trimmed.slice(2).trim().replace(/^["']|["']$/g, '');
-                currentArray.push(value);
-                continue;
+    private static normalizeStringArray(value: unknown): string[] {
+        if (!Array.isArray(value)) {
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                return trimmed ? [trimmed] : [];
             }
-
-            // Check for nested object property (indented key: value)
-            if (line.startsWith('  ') && currentObject !== null && objectKey !== null) {
-                const match = trimmed.match(/^(\w+):\s*(.*)$/);
-                if (match) {
-                    const [, key, value] = match;
-                    if (value.startsWith('[') && value.endsWith(']')) {
-                        // Inline array: [item1, item2]
-                        const items = value.slice(1, -1).split(',').map((s) =>
-                            s.trim().replace(/^["']|["']$/g, '')
-                        ).filter(Boolean);
-                        currentObject[key] = items;
-                    } else {
-                        currentObject[key] = value.replace(/^["']|["']$/g, '');
-                    }
+            return [];
+        }
+        const result: string[] = [];
+        for (const item of value) {
+            if (typeof item === 'string') {
+                const trimmed = item.trim();
+                if (trimmed) {
+                    result.push(trimmed);
                 }
-                continue;
-            }
-
-            // Close any open array/object when we hit a new top-level key
-            if (!line.startsWith(' ') && currentArray !== null && currentKey !== null) {
-                result[currentKey] = currentArray;
-                currentArray = null;
-                currentKey = null;
-            }
-            if (!line.startsWith(' ') && currentObject !== null && objectKey !== null) {
-                result[objectKey] = currentObject;
-                currentObject = null;
-                objectKey = null;
-            }
-
-            // Parse top-level key: value
-            const match = trimmed.match(/^([\w-]+):\s*(.*)$/);
-            if (match) {
-                const [, key, value] = match;
-
-                if (value === '' || value === '|' || value === '>') {
-                    // Check next line to determine if array or object
-                    const nextLine = lines[i + 1]?.trim() || '';
-                    if (nextLine.startsWith('-')) {
-                        currentKey = key;
-                        currentArray = [];
-                    } else if (nextLine.match(/^\w+:/)) {
-                        objectKey = key;
-                        currentObject = {};
-                    } else {
-                        result[key] = '';
-                    }
-                } else if (value.startsWith('[') && value.endsWith(']')) {
-                    // Inline array: [item1, item2]
-                    const items = value.slice(1, -1).split(',').map((s) =>
-                        s.trim().replace(/^["']|["']$/g, '')
-                    ).filter(Boolean);
-                    result[key] = items;
-                } else if (value === 'true') {
-                    result[key] = true;
-                } else if (value === 'false') {
-                    result[key] = false;
-                } else if (/^\d+$/.test(value)) {
-                    result[key] = parseInt(value, 10);
-                } else if (/^\d+\.\d+$/.test(value)) {
-                    result[key] = parseFloat(value);
-                } else {
-                    // String value (remove quotes if present)
-                    result[key] = value.replace(/^["']|["']$/g, '');
-                }
+            } else if (typeof item === 'number' || typeof item === 'boolean') {
+                result.push(String(item));
             }
         }
-
-        // Close any remaining open array/object
-        if (currentArray !== null && currentKey !== null) {
-            result[currentKey] = currentArray;
-        }
-        if (currentObject !== null && objectKey !== null) {
-            result[objectKey] = currentObject;
-        }
-
         return result;
+    }
+
+    private static normalizeRequires(value: unknown): SkillRequirements | undefined {
+        if (!value) {
+            return undefined;
+        }
+
+        const empty: SkillRequirements = {
+            tools: [],
+            capabilities: [],
+            bins: [],
+            env: [],
+            config: [],
+        };
+
+        if (Array.isArray(value)) {
+            // Some community skills use `requires: [ENV_VAR, ...]`.
+            const env = value
+                .map((item) => (typeof item === 'string' ? item.trim() : ''))
+                .filter(Boolean)
+                .map((entry) => entry.split(/\s|\(/, 1)[0])
+                .filter(Boolean);
+            return { ...empty, env };
+        }
+
+        if (typeof value === 'string') {
+            const token = value.trim().split(/\s|\(/, 1)[0];
+            if (!token) {
+                return undefined;
+            }
+            return { ...empty, env: [token] };
+        }
+
+        const record = SkillStore.asRecord(value);
+        if (!record) {
+            return undefined;
+        }
+
+        return {
+            tools: SkillStore.normalizeStringArray(record.tools),
+            capabilities: SkillStore.normalizeStringArray(record.capabilities),
+            bins: SkillStore.normalizeStringArray(record.bins),
+            env: SkillStore.normalizeStringArray(record.env),
+            config: SkillStore.normalizeStringArray(record.config),
+        };
+    }
+
+    private static mergeRequirements(
+        primary?: SkillRequirements,
+        secondary?: SkillRequirements
+    ): SkillRequirements | undefined {
+        if (!primary && !secondary) {
+            return undefined;
+        }
+        const merged: SkillRequirements = {
+            tools: [],
+            capabilities: [],
+            bins: [],
+            env: [],
+            config: [],
+        };
+        const pushUnique = (target: string[], source: string[] | undefined) => {
+            for (const item of source ?? []) {
+                if (item && !target.includes(item)) {
+                    target.push(item);
+                }
+            }
+        };
+        pushUnique(merged.tools, primary?.tools);
+        pushUnique(merged.tools, secondary?.tools);
+        pushUnique(merged.capabilities, primary?.capabilities);
+        pushUnique(merged.capabilities, secondary?.capabilities);
+        pushUnique(merged.bins, primary?.bins);
+        pushUnique(merged.bins, secondary?.bins);
+        pushUnique(merged.env, primary?.env);
+        pushUnique(merged.env, secondary?.env);
+        pushUnique(merged.config, primary?.config);
+        pushUnique(merged.config, secondary?.config);
+        return merged;
+    }
+
+    private static extractOpenClawEnvNames(openclawMeta: Record<string, unknown> | null): string[] {
+        if (!openclawMeta) {
+            return [];
+        }
+
+        const directEnv = SkillStore.normalizeStringArray(openclawMeta.env);
+        if (directEnv.length > 0) {
+            return directEnv;
+        }
+
+        const requires = SkillStore.asRecord(openclawMeta.requires);
+        if (!requires) {
+            return [];
+        }
+
+        const requiresEnv = requires.env;
+        if (!Array.isArray(requiresEnv)) {
+            return [];
+        }
+
+        const envVars: string[] = [];
+        for (const entry of requiresEnv) {
+            if (typeof entry === 'string') {
+                const trimmed = entry.trim();
+                if (trimmed) {
+                    envVars.push(trimmed);
+                }
+                continue;
+            }
+            const record = SkillStore.asRecord(entry);
+            const name = record?.name;
+            if (typeof name === 'string' && name.trim()) {
+                envVars.push(name.trim());
+            }
+        }
+        return envVars;
+    }
+
+    private static normalizeCommandEntries(value: unknown): Array<Record<string, unknown>> {
+        if (!Array.isArray(value)) {
+            return [];
+        }
+        const commands: Array<Record<string, unknown>> = [];
+        for (const entry of value) {
+            const record = SkillStore.asRecord(entry);
+            if (record) {
+                commands.push(record);
+            }
+        }
+        return commands;
     }
 
     /**
@@ -397,7 +474,7 @@ export class SkillStore {
         content: string
     ): ClaudeSkillManifest | null {
         // Extract YAML frontmatter
-        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
         if (!frontmatterMatch) {
             return {
                 name,
@@ -409,6 +486,10 @@ export class SkillStore {
 
         const yaml = frontmatterMatch[1];
         const parsed = SkillStore.parseFrontmatter(yaml);
+        const metadata = SkillStore.asRecord(parsed.metadata) ?? {};
+        const openclawMeta = SkillStore.asRecord(metadata.openclaw);
+        const topLevelCommands = SkillStore.normalizeCommandEntries(parsed.commands);
+        const openclawCommands = SkillStore.normalizeCommandEntries(openclawMeta?.commands);
 
         // Build manifest with OpenClaw-compatible fields
         const manifest: ClaudeSkillManifest = {
@@ -419,21 +500,23 @@ export class SkillStore {
         };
 
         // Optional string fields
-        if (parsed.author) manifest.author = parsed.author as string;
-        if (parsed.homepage) manifest.homepage = parsed.homepage as string;
-        if (parsed.license) manifest.license = parsed.license as string;
-        if (parsed.scriptsDir) manifest.scriptsDir = parsed.scriptsDir as string;
+        if (typeof parsed.author === 'string') manifest.author = parsed.author;
+        if (typeof parsed.homepage === 'string') manifest.homepage = parsed.homepage;
+        if (typeof parsed.license === 'string') manifest.license = parsed.license;
+        if (typeof parsed.scriptsDir === 'string') manifest.scriptsDir = parsed.scriptsDir;
 
         // Array fields
-        if (Array.isArray(parsed.tags)) {
-            manifest.tags = parsed.tags as string[];
+        manifest.tags = SkillStore.normalizeStringArray(parsed.tags);
+        manifest.triggers = SkillStore.normalizeStringArray(parsed.triggers);
+        const allowedTools = SkillStore.normalizeStringArray(
+            parsed['allowed-tools'] ?? parsed.allowedTools ?? parsed.allowed_tools
+        );
+        if (allowedTools.length > 0) {
+            manifest.allowedTools = allowedTools;
         }
-        if (Array.isArray(parsed.triggers)) {
-            manifest.triggers = parsed.triggers as string[];
-        }
-        if (Array.isArray(parsed.requiredCapabilities)) {
-            manifest.requiredCapabilities = parsed.requiredCapabilities as string[];
-        }
+        manifest.requiredCapabilities = SkillStore.normalizeStringArray(
+            parsed.requiredCapabilities ?? parsed['required-capabilities']
+        );
 
         // Boolean fields with defaults
         if (typeof parsed['user-invocable'] === 'boolean') {
@@ -448,26 +531,46 @@ export class SkillStore {
             manifest.disableModelInvocation = parsed.disableModelInvocation;
         }
 
-        // Requires object (OpenClaw compatible)
-        if (parsed.requires && typeof parsed.requires === 'object') {
-            const req = parsed.requires as Record<string, unknown>;
-            manifest.requires = {
-                tools: Array.isArray(req.tools) ? (req.tools as string[]) : [],
-                capabilities: Array.isArray(req.capabilities) ? (req.capabilities as string[]) : [],
-                bins: Array.isArray(req.bins) ? (req.bins as string[]) : [],
-                env: Array.isArray(req.env) ? (req.env as string[]) : [],
-                config: Array.isArray(req.config) ? (req.config as string[]) : [],
-            };
+        // Requires object (OpenClaw compatible, supports top-level and metadata.openclaw.requires)
+        const parsedRequires = SkillStore.normalizeRequires(parsed.requires);
+        const openclawRequires = SkillStore.normalizeRequires(openclawMeta?.requires);
+        manifest.requires = SkillStore.mergeRequirements(parsedRequires, openclawRequires);
 
-            // Also populate legacy requiredCapabilities from requires.capabilities
-            if (manifest.requires.capabilities.length > 0 && !manifest.requiredCapabilities) {
-                manifest.requiredCapabilities = manifest.requires.capabilities;
-            }
+        // OpenClaw metadata often defines env vars as objects under metadata.openclaw.env.
+        const metaEnv = SkillStore.extractOpenClawEnvNames(openclawMeta);
+        if (metaEnv.length > 0) {
+            manifest.requires = SkillStore.mergeRequirements(manifest.requires, {
+                tools: [],
+                capabilities: [],
+                bins: [],
+                env: metaEnv,
+                config: [],
+            });
         }
 
-        // Metadata object
-        if (parsed.metadata && typeof parsed.metadata === 'object') {
-            manifest.metadata = parsed.metadata as Record<string, unknown>;
+        // Also populate legacy requiredCapabilities from requires.capabilities
+        if ((manifest.requiredCapabilities?.length ?? 0) === 0 && manifest.requires?.capabilities.length) {
+            manifest.requiredCapabilities = [...manifest.requires.capabilities];
+        }
+
+        if (topLevelCommands.length > 0 || openclawCommands.length > 0) {
+            const mergedCommands = [...topLevelCommands];
+            for (const command of openclawCommands) {
+                if (!mergedCommands.includes(command)) {
+                    mergedCommands.push(command);
+                }
+            }
+            metadata.commands = mergedCommands;
+        }
+
+        // Preserve parsed frontmatter for downstream compatibility/tooling adapters.
+        try {
+            metadata.frontmatter = JSON.parse(JSON.stringify(parsed));
+        } catch {
+            // Ignore non-serializable metadata snapshots.
+        }
+        if (Object.keys(metadata).length > 0) {
+            manifest.metadata = metadata;
         }
 
         return manifest;

@@ -1,19 +1,8 @@
-/**
- * Effect Confirmation Dialog
- *
- * Modal dialog for confirming potentially risky effects.
- * Shows effect details, risk level, and allows approve/deny.
- */
-
 import * as Dialog from '@radix-ui/react-dialog';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import './EffectConfirmationDialog.css';
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export type EffectType =
     | 'filesystem:read'
@@ -25,62 +14,68 @@ export type EffectType =
     | 'screen:capture'
     | 'ui:control';
 
+export type ApprovalMode = 'once' | 'session' | 'permanent';
+
 export interface EffectRequest {
     requestId: string;
-    sessionId: string;
     effectType: EffectType;
     description: string;
     details: Record<string, unknown>;
-    riskLevel: number; // 1-100
+    riskLevel: number;
     source: 'agent' | 'toolpack' | 'claude_skill';
     sourceId?: string;
+    policy?: string;
+    allowedApprovalModes?: ApprovalMode[];
+    commandBase?: string;
 }
 
 export interface EffectConfirmationDialogProps {
     request: EffectRequest | null;
     open: boolean;
-    onApprove: (requestId: string, remember: boolean) => void;
+    onApprove: (requestId: string, approvalMode: ApprovalMode) => void;
     onDeny: (requestId: string) => void;
     onClose: () => void;
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 function getRiskColor(level: number): string {
-    if (level >= 80) return '#dc2626'; // red
-    if (level >= 60) return '#ea580c'; // orange
-    if (level >= 40) return '#ca8a04'; // yellow
-    return '#16a34a'; // green
+    if (level >= 80) return '#dc2626';
+    if (level >= 60) return '#ea580c';
+    if (level >= 40) return '#ca8a04';
+    return '#16a34a';
 }
 
 function getEffectIcon(type: EffectType): string {
     switch (type) {
         case 'filesystem:read':
-            return '📄';
+            return 'Read';
         case 'filesystem:write':
-            return '✏️';
+            return 'Write';
         case 'shell:read':
-            return '💻';
+            return 'CLI';
         case 'shell:write':
-            return '⚡';
+            return 'Exec';
         case 'network:outbound':
-            return '🌐';
+            return 'Net';
         case 'secrets:read':
-            return '🔑';
+            return 'Secret';
         case 'screen:capture':
-            return '📸';
+            return 'Screen';
         case 'ui:control':
-            return '🖱️';
+            return 'UI';
         default:
-            return '❓';
+            return 'Effect';
     }
 }
 
-// ============================================================================
-// Component
-// ============================================================================
+function getModeLabel(mode: ApprovalMode, commandBase?: string): string {
+    if (mode === 'permanent') {
+        return commandBase ? `Always allow ${commandBase}` : 'Always allow';
+    }
+    if (mode === 'session') {
+        return 'Allow this session';
+    }
+    return 'Allow once';
+}
 
 export function EffectConfirmationDialog({
     request,
@@ -90,12 +85,20 @@ export function EffectConfirmationDialog({
     onClose,
 }: EffectConfirmationDialogProps) {
     const { t } = useTranslation();
-    const [rememberChoice, setRememberChoice] = useState(false);
+    const allowedModes = useMemo<ApprovalMode[]>(
+        () => request?.allowedApprovalModes?.length ? request.allowedApprovalModes : ['once'],
+        [request]
+    );
+    const [approvalMode, setApprovalMode] = useState<ApprovalMode>(allowedModes[0] ?? 'once');
+
+    useEffect(() => {
+        setApprovalMode(allowedModes[0] ?? 'once');
+    }, [allowedModes, request?.requestId]);
 
     if (!request) return null;
 
     const handleApprove = () => {
-        onApprove(request.requestId, rememberChoice);
+        onApprove(request.requestId, approvalMode);
         onClose();
     };
 
@@ -112,12 +115,9 @@ export function EffectConfirmationDialog({
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
             <Dialog.Portal>
                 <Dialog.Overlay className="effect-dialog-overlay" />
-                <Dialog.Content className="effect-dialog-content">
-                    {/* Header */}
+                <Dialog.Content className="effect-dialog-content" data-testid="effect-confirmation-dialog">
                     <div className="effect-dialog-header">
-                        <div className="effect-icon">
-                            {getEffectIcon(request.effectType)}
-                        </div>
+                        <div className="effect-icon">{getEffectIcon(request.effectType)}</div>
                         <div className="effect-title-area">
                             <Dialog.Title className="effect-dialog-title">
                                 {t('effect.permissionRequired')}
@@ -128,7 +128,6 @@ export function EffectConfirmationDialog({
                         </div>
                     </div>
 
-                    {/* Risk Indicator */}
                     <div className="effect-risk-section">
                         <div className="risk-label">{t('effect.riskLevel')}</div>
                         <div className="risk-meter">
@@ -145,7 +144,6 @@ export function EffectConfirmationDialog({
                         </div>
                     </div>
 
-                    {/* Details */}
                     <div className="effect-details">
                         <div className="detail-row">
                             <span className="detail-label">{t('effect.effectType')}:</span>
@@ -158,42 +156,44 @@ export function EffectConfirmationDialog({
                                 {request.sourceId && ` (${request.sourceId})`}
                             </span>
                         </div>
-
-                        {/* Effect-specific details */}
+                        {request.commandBase && (
+                            <div className="detail-row">
+                                <span className="detail-label">command:</span>
+                                <span className="detail-value detail-code">{request.commandBase}</span>
+                            </div>
+                        )}
                         {Object.entries(request.details).map(([key, value]) => (
                             <div className="detail-row" key={key}>
                                 <span className="detail-label">{key}:</span>
                                 <span className="detail-value detail-code">
-                                    {typeof value === 'string'
-                                        ? value
-                                        : JSON.stringify(value)}
+                                    {typeof value === 'string' ? value : JSON.stringify(value)}
                                 </span>
                             </div>
                         ))}
                     </div>
 
-                    {/* Remember Checkbox */}
-                    <label className="remember-checkbox">
-                        <input
-                            type="checkbox"
-                            checked={rememberChoice}
-                            onChange={(e) => setRememberChoice(e.target.checked)}
-                        />
-                        <span>{t('effect.rememberChoice')}</span>
-                    </label>
+                    <div className="approval-mode-group">
+                        <div className="approval-mode-label">Approval scope</div>
+                        <div className="approval-mode-options">
+                            {allowedModes.map((mode) => (
+                                <button
+                                    key={mode}
+                                    type="button"
+                                    data-testid={`approval-mode-${mode}`}
+                                    className={clsx('approval-mode-option', approvalMode === mode && 'is-selected')}
+                                    onClick={() => setApprovalMode(mode)}
+                                >
+                                    {getModeLabel(mode, request.commandBase)}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
 
-                    {/* Actions */}
                     <div className="effect-dialog-actions">
-                        <button
-                            className={clsx('effect-btn', 'deny-btn')}
-                            onClick={handleDeny}
-                        >
+                        <button data-testid="effect-deny" className={clsx('effect-btn', 'deny-btn')} onClick={handleDeny}>
                             {t('effect.deny')}
                         </button>
-                        <button
-                            className={clsx('effect-btn', 'approve-btn')}
-                            onClick={handleApprove}
-                        >
+                        <button data-testid="effect-approve" className={clsx('effect-btn', 'approve-btn')} onClick={handleApprove}>
                             {t('effect.approve')}
                         </button>
                     </div>

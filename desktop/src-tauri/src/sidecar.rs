@@ -94,6 +94,8 @@ pub struct SendTaskMessagePayload {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub content: String,
+    #[serde(rename = "workspacePath", skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<TaskConfig>,
 }
@@ -183,6 +185,7 @@ impl IpcCommand {
     pub fn send_task_message(
         task_id: String,
         content: String,
+        workspace_path: Option<String>,
         config: Option<TaskConfig>,
     ) -> Self {
         IpcCommand::SendTaskMessage {
@@ -191,6 +194,7 @@ impl IpcCommand {
             payload: SendTaskMessagePayload {
                 task_id,
                 content,
+                workspace_path,
                 config,
             },
         }

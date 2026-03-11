@@ -41,6 +41,9 @@ export type {
     EffectResponsePayload,
     PatchProposedPayload,
     PatchAppliedPayload,
+    TaskSuspendedPayload,
+    TaskResumedPayload,
+    SystemEventAction,
 } from './events';
 
 export {
@@ -62,6 +65,11 @@ export type {
     CustomProviderSettings,
     SearchSettings,
     ProxySettings,
+    PolicyLists,
+    PolicyConfig,
+    PolicyAuditRequestPayload,
+    PolicyAuditRequest,
+    PolicyAuditEvent,
     LlmProfile,
     LlmConfig,
     IpcResult,

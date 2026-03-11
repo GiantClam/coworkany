@@ -21,7 +21,7 @@ mod tray;
 mod window_manager;
 
 
-use policy::{ConsoleAuditSink, PolicyEngineState};
+use policy::{FileAuditSink, PolicyEngineState};
 use process_manager::ProcessManagerState;
 use shadow_fs::ShadowFsState;
 use sidecar::SidecarState;
@@ -69,8 +69,10 @@ fn main() {
     // ---------- Log directory setup ----------
     // Logs go to the shared application data directory so dev and release
     // write to the same location.
-    let log_dir = shared_app_data_dir().join("logs");
+    let app_data_dir = shared_app_data_dir();
+    let log_dir = app_data_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
+    let _ = std::fs::create_dir_all(&app_data_dir);
 
     // Daily-rotated file appender: desktop-YYYY-MM-DD.log
     let file_appender = tracing_appender::rolling::daily(&log_dir, "desktop.log");
@@ -92,11 +94,12 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState::new())
         .manage(ProcessManagerState::new())
         .manage::<ShadowFsState>(Arc::new(Mutex::new(None)))
-        .manage(PolicyEngineState::new(Box::new(ConsoleAuditSink)))
+        .manage(PolicyEngineState::new(Box::new(FileAuditSink::new(
+            app_data_dir.join("policy-audit.jsonl"),
+        ))))
         .invoke_handler(tauri::generate_handler![
             // Sidecar commands
             ipc::start_task,
@@ -125,6 +128,8 @@ fn main() {
             ipc::import_claude_skill,
             ipc::set_claude_skill_enabled,
             ipc::remove_claude_skill,
+            ipc::search_openclaw_skill_store,
+            ipc::install_openclaw_skill,
             // Workspace commands
             ipc::list_workspaces,
             ipc::create_workspace,
@@ -150,6 +155,10 @@ fn main() {
             policy::commands::confirm_effect,
             policy::commands::deny_effect,
             policy::commands::get_pending_confirmations,
+            policy::commands::get_policy_config,
+            policy::commands::save_policy_config,
+            policy::commands::list_policy_audit_events,
+            policy::commands::clear_policy_audit_events,
             policy::commands::register_agent_identity,
             policy::commands::record_agent_delegation,
             policy::commands::report_mcp_gateway_decision,

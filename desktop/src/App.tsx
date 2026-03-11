@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+﻿import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
 import { useTauriEvents } from './hooks/useTauriEvents';
@@ -64,6 +64,8 @@ function App() {
     const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
     const [activeTab, setActiveTab] = useState<SidebarTab>('chat');
     const startupSkeletonStartRef = useRef<number>(performance.now());
+    const updaterEnabled =
+        (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_ENABLE_UPDATER === 'true';
 
     useEffect(() => {
         let cancelled = false;
@@ -416,10 +418,11 @@ function App() {
                 />
 
                 <OfflineBanner />
-                <UpdateChecker />
+                {updaterEnabled ? <UpdateChecker /> : null}
             </div>
         </div>
     );
 }
 
 export default App;
+

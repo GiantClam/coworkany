@@ -11,6 +11,7 @@ import type { StartTaskConfig } from './useStartTask';
 export interface SendTaskMessageInput {
     taskId: string;
     content: string;
+    workspacePath?: string;
     config?: StartTaskConfig;
 }
 

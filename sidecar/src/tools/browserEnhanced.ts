@@ -1,8 +1,8 @@
-/**
+﻿/**
  * Enhanced Browser Tools with Adaptive Execution and Suspend/Resume
  *
  * Wraps browser tools with:
- * - Adaptive retry loop (DETECT→PLAN→EXECUTE→FEEDBACK)
+ * - Adaptive retry loop (DETECT鈫扨LAN鈫扙XECUTE鈫扚EEDBACK)
  * - Task suspension/resumption for user actions (e.g., login)
  * - Alternative strategy generation on errors
  * - Auto-fallback from precise to smart mode (browser_ai_action suggestion)
@@ -51,7 +51,7 @@ export function createEnhancedBrowserTools(
                 const hasAuthInputs = !!document.querySelector('input[name="text"], input[autocomplete="username"], input[name="session[username_or_email]"], input[type="password"]');
                 const hasLoginCta = Array.from(document.querySelectorAll('a,button')).some((el) => {
                     const t = (el.textContent || '').trim();
-                    return /^(log\s*in|sign\s*in|登录)$/i.test(t);
+                    return /^(log\s*in|sign\s*in|\u767b\u5f55)$/i.test(t);
                 });
                 const p = (location.pathname || '').toLowerCase();
                 const hasLoginFlowPath = p.includes('/i/flow/login') || p.includes('/login') || p.includes('/signin');
@@ -132,7 +132,7 @@ export function createEnhancedBrowserTools(
                                 await suspendResumeManager.suspend(
                                     taskId,
                                     'user_profile_recommended',
-                                    '当前连接为 persistent_profile（非系统Chrome登录态）。若需要复用你已登录账号，请先启动 Chrome 9222 并重新 browser_connect(require_user_profile=true)。若继续使用当前自动化窗口登录，请回复“继续”。',
+                                    '当前打开的是一个新的浏览器窗口，还没有使用你平时已登录的网站状态。你可以选择“使用我已登录的浏览器”，或者先在当前窗口完成登录，再点击“在当前窗口登录后继续”。',
                                     ResumeConditions.manual(),
                                     {
                                         domain: args.url,
@@ -144,7 +144,7 @@ export function createEnhancedBrowserTools(
                                     ...result,
                                     suspended: true,
                                     reason: 'waiting_for_user_profile_confirmation',
-                                    message: 'Task suspended: login-sensitive site detected under persistent_profile. Awaiting user confirmation.',
+                                    message: '任务已暂停：当前打开的是新的浏览器窗口，请选择使用已登录浏览器，或先在当前窗口完成登录后继续。',
                                 };
                             }
 
@@ -155,7 +155,7 @@ export function createEnhancedBrowserTools(
                             const currentUrl = contentResult.url || args.url || '';
 
                             // Detect login page by content keywords and URL patterns
-                            const loginKeywords = ['登录', '登 录', 'Sign in', 'Log in', 'Login', '验证码'];
+                            const loginKeywords = ['登录', 'Sign in', 'Log in', 'Login', '验证码'];
                             const loginUrlPatterns = ['/login', '/signin', '/auth'];
                             const loggedInKeywords = ['退出', '注销', 'Logout', 'Sign out', '我的主页', '创作中心', '发布笔记'];
 
@@ -187,7 +187,7 @@ export function createEnhancedBrowserTools(
                                 await suspendResumeManager.suspend(
                                     taskId,
                                     'authentication_required',
-                                    `Please login to ${domain} in the browser window. The task will resume automatically once you're logged in.`,
+                                    `请先在浏览器窗口中登录 ${domain}。登录完成后，任务会自动继续。`,
                                     ResumeConditions.browserPageCheck(
                                         async () => {
                                             // Check if user has logged in by looking at page content
@@ -227,7 +227,7 @@ export function createEnhancedBrowserTools(
                                     ...result,
                                     suspended: true,
                                     reason: 'waiting_for_login',
-                                    message: `Task suspended. Please login to ${domain} in the browser. The task will resume automatically.`,
+                                    message: `任务已暂停。请先在浏览器中登录 ${domain}，登录完成后任务会自动继续。`,
                                 };
                             }
                         } catch (error) {
@@ -291,3 +291,4 @@ export async function resumeTask(taskId: string, suspendResumeManager: SuspendRe
     const result = await suspendResumeManager.resume(taskId, 'Manual resume');
     return result.success;
 }
+

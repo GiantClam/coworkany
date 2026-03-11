@@ -30,13 +30,6 @@ const ChevronDown = ({ open }: { open: boolean }) => (
     </svg>
 );
 
-const PlusIcon = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <line x1="12" y1="5" x2="12" y2="19"></line>
-        <line x1="5" y1="12" x2="19" y2="12"></line>
-    </svg>
-);
-
 const TrashIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <polyline points="3 6 5 6 21 6"></polyline>
@@ -46,7 +39,7 @@ const TrashIcon = () => (
 
 export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className }) => {
     const { t } = useTranslation();
-    const { workspaces, activeWorkspace, selectWorkspace, createWorkspace, updateWorkspace, deleteWorkspace, isLoading } = useWorkspace();
+    const { workspaces, activeWorkspace, selectWorkspace, updateWorkspace, deleteWorkspace, isLoading } = useWorkspace();
     const [isOpen, setIsOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
@@ -85,15 +78,6 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
     const toggleDropdown = () => {
         if (workspaces.length > 0 || isOpen) {
             setIsOpen(!isOpen);
-        }
-    };
-
-    const handleQuickCreate = async (event: React.MouseEvent) => {
-        event.stopPropagation();
-        const newWorkspace = await createWorkspace();
-        if (newWorkspace) {
-            selectWorkspace(newWorkspace);
-            setIsOpen(true);
         }
     };
 
@@ -146,14 +130,6 @@ export const WorkspaceSelector: React.FC<WorkspaceSelectorProps> = ({ className 
                     <span className="workspace-arrow">
                         <ChevronDown open={isOpen} />
                     </span>
-                </button>
-                <button
-                    className="btn-create-workspace"
-                    onClick={handleQuickCreate}
-                    title={t('workspace.createNewWorkspace')}
-                    aria-label={t('workspace.createNewWorkspace')}
-                >
-                    <PlusIcon />
                 </button>
             </div>
 

@@ -12,6 +12,9 @@ import { ProfileList } from './components/ProfileList';
 import { SearchSettings } from './components/SearchSettings';
 import { ProxySettings } from './components/ProxySettings';
 import { ShortcutSettings } from './components/ShortcutSettings';
+import { CommandApprovalSettings } from './components/CommandApprovalSettings';
+import { PolicyGuardrailsSettings } from './components/PolicyGuardrailsSettings';
+import { PolicyAuditTrail } from './components/PolicyAuditTrail';
 import { useSettings } from './hooks/useSettings';
 import { toast } from '../Common/ToastProvider';
 import { useThemeStore } from '../../stores/themeStore';
@@ -62,12 +65,21 @@ export function SettingsView() {
         searchSaved,
         proxySettings,
         proxySaved,
+        policyConfig,
+        policyAuditEvents,
+        policyAuditLoading,
+        policyAuditClearing,
+        policySaved,
+        policySaving,
         refresh,
+        refreshPolicyAudit,
+        clearPolicyAudit,
         validateAndAddProfile,
         switchProfile,
         deleteProfile,
         saveSearchSettings,
         saveProxySettings,
+        savePolicyConfig,
         updateMaxHistoryMessages,
     } = useSettings();
 
@@ -99,6 +111,12 @@ export function SettingsView() {
             toast.success(t('settings.proxySettingsSaved'));
         }
     }, [proxySaved, t]);
+
+    useEffect(() => {
+        if (policySaved) {
+            toast.success('Policy settings saved');
+        }
+    }, [policySaved]);
 
     return (
         <div className={styles.container}>
@@ -151,6 +169,27 @@ export function SettingsView() {
                 settings={proxySettings}
                 onSave={saveProxySettings}
                 saved={proxySaved}
+            />
+
+            <CommandApprovalSettings
+                policyConfig={policyConfig}
+                saved={policySaved}
+                saving={policySaving}
+                onSave={savePolicyConfig}
+            />
+
+            <PolicyGuardrailsSettings
+                policyConfig={policyConfig}
+                saving={policySaving}
+                onSave={savePolicyConfig}
+            />
+
+            <PolicyAuditTrail
+                events={policyAuditEvents}
+                loading={policyAuditLoading}
+                clearing={policyAuditClearing}
+                onRefresh={refreshPolicyAudit}
+                onClear={clearPolicyAudit}
             />
 
             <div className={styles.footer}>

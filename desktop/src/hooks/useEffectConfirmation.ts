@@ -8,7 +8,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import type { EffectRequest } from '../components/EffectConfirmationDialog';
+import type { ApprovalMode, EffectRequest } from '../components/EffectConfirmationDialog';
 import { isTauri } from '../lib/tauri';
 
 // ============================================================================
@@ -18,7 +18,7 @@ import { isTauri } from '../lib/tauri';
 interface UseEffectConfirmationReturn {
     pendingRequest: EffectRequest | null;
     isDialogOpen: boolean;
-    approve: (requestId: string, remember: boolean) => Promise<void>;
+    approve: (requestId: string, approvalMode: ApprovalMode) => Promise<void>;
     deny: (requestId: string) => Promise<void>;
     closeDialog: () => void;
 }
@@ -55,13 +55,12 @@ export function useEffectConfirmation(): UseEffectConfirmationReturn {
     }, []);
 
     // Approve handler
-    const approve = useCallback(async (requestId: string, remember: boolean) => {
+    const approve = useCallback(async (requestId: string, approvalMode: ApprovalMode) => {
         if (!isTauri()) return;
         try {
             await invoke('confirm_effect', {
                 requestId,
-                sessionId: pendingRequest?.sessionId || '',
-                remember,
+                approvalType: approvalMode,
             });
             console.log('[useEffectConfirmation] Approved:', requestId);
         } catch (e) {

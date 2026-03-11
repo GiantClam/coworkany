@@ -248,6 +248,7 @@ export class SidecarProcess {
         this.proc = spawn({
             cmd: ['bun', 'run', 'src/main.ts'],
             cwd: process.cwd(),
+            env: process.env,
             stdin: 'pipe',
             stdout: 'pipe',
             stderr: 'pipe',

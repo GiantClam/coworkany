@@ -10,6 +10,7 @@ export * from '../core/email';
 export * from '../core/tasks';
 export * from '../core/voice';
 export * from '../core/system';
+export * from '../core/systemShutdown';
 
 import { ToolDefinition } from '../standard';
 import {
@@ -35,6 +36,11 @@ import {
 import {
     systemStatusTool,
 } from '../core/system';
+import {
+    systemShutdownCancelTool,
+    systemShutdownScheduleTool,
+    systemShutdownStatusTool,
+} from '../core/systemShutdown';
 
 export const PRODUCTIVITY_TOOLS: ToolDefinition[] = [
     // Calendar
@@ -59,4 +65,7 @@ export const PRODUCTIVITY_TOOLS: ToolDefinition[] = [
 
     // System
     systemStatusTool,
+    systemShutdownScheduleTool,
+    systemShutdownStatusTool,
+    systemShutdownCancelTool,
 ];

@@ -24,6 +24,60 @@ const CDP_PORT = 9945;
 const DESKTOP_DIR = path.resolve(__dirname_local, '..');
 const CDP_READY_TIMEOUT_MS = 120_000;
 const CDP_POLL_MS = 2000;
+const FRONTEND_PAGE_TIMEOUT_MS = 30_000;
+const SIDECAR_BROWSER_CDP_PORTS = [9222, 9223, 9224, 9225];
+const SIDECAR_PERSISTENT_PROFILE_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), 'CoworkAny', 'PlaywrightProfile');
+
+function clearSidecarBrowserCdpPorts(): void {
+    if (process.platform !== 'win32') {
+        return;
+    }
+
+    const portList = SIDECAR_BROWSER_CDP_PORTS.join(',');
+    const script = `
+$ports = @(${portList})
+$listeners = @()
+foreach ($port in $ports) {
+  try {
+    $listeners += Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
+  } catch {}
+}
+$pids = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($pid in $pids) {
+  if (-not $pid) { continue }
+  try {
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue
+    if ($null -eq $proc) { continue }
+    $name = ($proc.Name | Out-String).Trim().ToLower()
+    $cmd = ($proc.CommandLine | Out-String).Trim().ToLower()
+    $isBrowser = $name -match 'chrome|msedge|chromium|brave'
+    $isDebugPort = $cmd -match '--remote-debugging-port=(9222|9223|9224|9225)'
+    if ($isBrowser -or $isDebugPort) {
+      Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    }
+  } catch {}
+}
+`;
+
+    try {
+        childProcess.execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/"/g, '\\"')}"`, {
+            stdio: 'ignore',
+            timeout: 15_000,
+        });
+        console.log('[Fixture-NoChrome] Cleared sidecar browser CDP ports 9222-9225');
+    } catch {
+        console.log('[Fixture-NoChrome] Failed to clear one or more sidecar browser CDP ports; continuing');
+    }
+}
+
+function clearSidecarPersistentProfile(): void {
+    try {
+        fs.rmSync(SIDECAR_PERSISTENT_PROFILE_DIR, { recursive: true, force: true });
+        console.log(`[Fixture-NoChrome] Cleared sidecar persistent browser profile: ${SIDECAR_PERSISTENT_PROFILE_DIR}`);
+    } catch {
+        console.log('[Fixture-NoChrome] Failed to clear sidecar persistent browser profile; continuing');
+    }
+}
 
 async function waitForCdp(port: number, timeoutMs: number): Promise<boolean> {
     const startTime = Date.now();
@@ -43,6 +97,20 @@ async function waitForCdp(port: number, timeoutMs: number): Promise<boolean> {
     return false;
 }
 
+async function waitForFrontendPages(context: BrowserContext, timeoutMs: number): Promise<Page[]> {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+        const frontendPages = context.pages().filter((p) => p.url().includes('localhost:5173'));
+        if (frontendPages.length > 0) {
+            return frontendPages;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    return context.pages().filter((p) => p.url().includes('localhost:5173'));
+}
+
 type TauriFixtures = {
     tauriProcess: childProcess.ChildProcess;
     tauriLogs: TauriLogCollector;
@@ -53,6 +121,8 @@ type TauriFixtures = {
 export const test = base.extend<TauriFixtures>({
     tauriProcess: [async ({}, use, testInfo) => {
         console.log('[Fixture-NoChrome] Starting Tauri app (NO Chrome)...');
+        clearSidecarBrowserCdpPorts();
+        clearSidecarPersistentProfile();
 
         const tauriProc = childProcess.spawn(
             process.platform === 'win32' ? 'npx.cmd' : 'npx',
@@ -62,6 +132,7 @@ export const test = base.extend<TauriFixtures>({
                 shell: true,
                 env: {
                     ...process.env,
+                    COWORKANY_DISABLE_BROWSER_CDP: '1',
                     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
                     WEBVIEW2_USER_DATA_FOLDER: path.join(
                         fs.realpathSync(os.tmpdir()),
@@ -144,7 +215,10 @@ export const test = base.extend<TauriFixtures>({
 
     page: [async ({ context }, use) => {
         // Same single-window selection logic as tauriFixture.ts.
-        let pages = context.pages();
+        let pages = await waitForFrontendPages(context, FRONTEND_PAGE_TIMEOUT_MS);
+        if (pages.length === 0) {
+            pages = context.pages();
+        }
         console.log(`[Fixture-NoChrome] Found ${pages.length} pages:`);
         
         for (let i = 0; i < pages.length; i++) {
@@ -168,7 +242,10 @@ export const test = base.extend<TauriFixtures>({
             }
         }
 
-        pages = context.pages();
+        pages = await waitForFrontendPages(context, FRONTEND_PAGE_TIMEOUT_MS);
+        if (pages.length === 0) {
+            pages = context.pages();
+        }
         let page: Page | null = null;
 
         // Give React time to hydrate
@@ -234,23 +311,29 @@ export const test = base.extend<TauriFixtures>({
         }
 
         if (!page) {
-            // Last resort: just use the first frontend page
+            // Fallback to first frontend page if present
             const frontendPages = pages.filter(p => p.url().includes('localhost:5173'));
             if (frontendPages.length > 0) {
                 page = frontendPages[0];
-                console.log(`[Fixture-NoChrome] Last resort: using first available page`);
-            } else {
-                throw new Error('Could not find main CoworkAny page');
+                console.log('[Fixture-NoChrome] Fallback: using first frontend page');
             }
         }
 
-        console.log('[Fixture-NoChrome] Page selected, waiting for stabilization...');
-        try {
-            await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
-            await new Promise(r => setTimeout(r, 3000));
-        } catch (e) {
-            console.log('[Fixture-NoChrome] Page load warning:', e);
+        if (!page) {
+            // Last fallback: first page in context, then wait for a newly opened page.
+            page = pages[0] ?? null;
+            if (!page) {
+                page = await context.waitForEvent('page', { timeout: 30_000 });
+            }
+            console.log(`[Fixture-NoChrome] Last fallback: using page url="${page.url()}"`);
         }
+
+        console.log('[Fixture-NoChrome] Page selected, waiting for stabilization...');
+        await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
+        if (page.url() === 'about:blank') {
+            await page.waitForURL('**/localhost:5173/**', { timeout: 30_000 }).catch(() => {});
+        }
+        await new Promise(r => setTimeout(r, 3000));
 
         await use(page);
     }, { scope: 'test' }],

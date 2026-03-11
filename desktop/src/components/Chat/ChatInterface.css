@@ -34,7 +34,7 @@
 
 /* Header */
 .chat-header {
-    padding: 16px 20px;
+    padding: 10px 14px;
     background:
         linear-gradient(180deg, rgba(9, 38, 36, 0.9), rgba(6, 26, 25, 0.74));
     border-bottom: 1px solid rgba(138, 232, 219, 0.12);
@@ -43,35 +43,34 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
+    gap: 10px;
+    flex-wrap: nowrap;
     flex-shrink: 0;
 }
 
 .chat-header-main {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex: 1 1 560px;
+    gap: 10px;
+    flex: 1 1 340px;
     min-width: 0;
 }
 
 .chat-header-title-block {
     display: flex;
-    align-items: flex-start;
-    gap: 12px;
+    align-items: center;
+    gap: 10px;
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
+    max-width: min(54vw, 680px);
 }
 
 .chat-status-dot {
-    width: 10px;
-    height: 10px;
-    margin-top: 6px;
+    width: 8px;
+    height: 8px;
     border-radius: 999px;
     background: rgba(138, 232, 219, 0.44);
-    box-shadow: 0 0 0 5px rgba(45, 212, 191, 0.08);
+    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.08);
     flex-shrink: 0;
 }
 
@@ -93,15 +92,15 @@
 .chat-header-copy {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 0;
     min-width: 0;
 }
 
 .chat-title {
     font-family: var(--font-heading);
-    font-size: 18px;
+    font-size: 15px;
     line-height: 1.2;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
@@ -122,48 +121,14 @@
     align-items: center;
     justify-content: flex-end;
     flex-shrink: 0;
-    min-width: 160px;
-    max-width: min(360px, 100%);
-    margin-left: auto;
+    min-width: 120px;
+    max-width: min(260px, 32vw);
+    margin-left: 4px;
 }
 
 .chat-header-workspace .workspace-selector {
     width: 100%;
     max-width: 100%;
-}
-
-/* Status and action buttons */
-.status-badge {
-    font-family: var(--font-code);
-    font-size: 10px;
-    padding: 5px 9px;
-    border-radius: 999px;
-    background: rgba(8, 24, 27, 0.7);
-    color: var(--text-secondary);
-    border: 1px solid rgba(138, 232, 219, 0.14);
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.status-badge.running {
-    color: #95fff3;
-    border-color: rgba(45, 212, 191, 0.34);
-    background: rgba(9, 60, 55, 0.7);
-}
-
-.status-badge.finished {
-    color: #b6ffce;
-    border-color: rgba(34, 197, 94, 0.22);
-    background: rgba(18, 68, 34, 0.36);
-}
-
-.status-badge.failed {
-    color: #ffc0cb;
-    border-color: rgba(251, 113, 133, 0.24);
-    background: rgba(85, 19, 35, 0.36);
 }
 
 .chat-capability-pill {
@@ -181,18 +146,20 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    flex: 1 1 420px;
-    gap: 8px;
+    flex: 0 1 auto;
+    gap: 6px;
     flex-shrink: 1;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
 }
 
 .chat-header-chip {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: 8px;
+    padding: 6px 10px;
     max-width: min(320px, 100%);
     border-radius: 999px;
     border: 1px solid rgba(138, 232, 219, 0.14);
@@ -209,27 +176,48 @@
     color: var(--text-primary);
 }
 
+.chat-header-chip:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+    transform: none;
+}
+
 .chat-header-chip-label {
     font-family: var(--font-code);
-    font-size: 10px;
+    font-size: 9px;
     letter-spacing: 0.08em;
     color: var(--text-muted);
     flex-shrink: 0;
 }
 
 .chat-header-chip-value {
-    font-size: 12px;
+    font-size: 11px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.chat-header-link-chip.connected {
+    border-color: rgba(34, 197, 94, 0.36);
+    background: rgba(18, 68, 34, 0.38);
+}
+
+.chat-header-link-chip.failed {
+    border-color: rgba(251, 113, 133, 0.34);
+    background: rgba(85, 19, 35, 0.4);
+}
+
+.chat-header-link-chip.checking {
+    border-color: rgba(45, 212, 191, 0.34);
+    background: rgba(7, 58, 56, 0.42);
 }
 
 .chat-header-icon-button {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-width: 52px;
-    padding: 8px 10px;
+    min-width: 48px;
+    padding: 6px 9px;
     border: 1px solid rgba(138, 232, 219, 0.12);
     border-radius: 999px;
     background: rgba(8, 24, 27, 0.58);
@@ -248,17 +236,31 @@
 .chat-header-icon-button-text,
 .chat-header-icon-button-count {
     font-family: var(--font-code);
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 0.05em;
+}
+
+.chat-header-new-session {
+    min-width: 32px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+}
+
+.chat-header-new-session-plus {
+    font-size: 18px;
+    line-height: 1;
+    transform: translateY(-1px);
 }
 
 .status-action {
     background: rgba(8, 24, 27, 0.68);
     border: 1px solid rgba(138, 232, 219, 0.14);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 11px;
     font-family: var(--font-body);
-    padding: 8px 14px;
+    padding: 6px 12px;
     border-radius: 999px;
     cursor: pointer;
     transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
@@ -563,47 +565,15 @@
 
 @media (max-width: 1460px) {
     .chat-header {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .chat-header-main,
-    .chat-header-actions {
-        width: 100%;
-        flex: 0 0 auto;
-    }
-
-    .chat-header-actions {
-        flex-wrap: wrap;
-        justify-content: flex-start;
-    }
-
-    .chat-header-chip {
-        max-width: none;
+        padding: 10px 12px;
+        gap: 8px;
     }
 }
 
 @media (max-width: 860px) {
-    .chat-header-main {
-        flex-direction: column;
-        align-items: stretch;
-        flex: 0 0 auto;
-    }
-
     .chat-header-workspace {
         min-width: 0;
-        justify-content: flex-start;
-        max-width: 100%;
-        margin-left: 0;
-    }
-
-    .chat-header-actions {
-        justify-content: flex-start;
-        flex: 0 0 auto;
-    }
-
-    .chat-header-chip {
-        width: 100%;
+        max-width: 150px;
     }
 
     .input-meta-row {
