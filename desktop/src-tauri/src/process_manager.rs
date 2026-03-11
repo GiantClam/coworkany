@@ -304,7 +304,7 @@ impl RagService {
             .env("TRANSFORMERS_CACHE", transformers_cache.to_string_lossy().as_ref());
     }
 
-    fn get_rag_service_path(&self) -> std::path::PathBuf {
+    fn get_rag_service_path(&self) -> Result<std::path::PathBuf, ProcessError> {
         // Try multiple paths to find rag-service directory
         let candidates = vec![
             // 1. Environment variable (can be set by user)
@@ -332,22 +332,30 @@ impl RagService {
 
             // 5. From current working directory going up (if CWD is desktop)
             std::env::current_dir().ok().map(|cwd| cwd.join("..").join("rag-service")),
-
-            // 6. Absolute path for this specific project (fallback)
-            Some(std::path::PathBuf::from(r"d:\private\coworkany\rag-service")),
         ];
 
         for candidate in candidates.into_iter().flatten() {
             let main_py = candidate.join("main.py");
             if main_py.exists() {
                 info!("[RAG] Found service at: {:?}", candidate);
-                return candidate.canonicalize().unwrap_or(candidate);
+                return Ok(candidate.canonicalize().unwrap_or(candidate));
             }
         }
 
-        // Final fallback - return the project-specific path
-        warn!("[RAG] Could not find rag-service directory, using default");
-        std::path::PathBuf::from(r"d:\private\coworkany\rag-service")
+        Err(ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Unable to locate rag-service/main.py. Set RAG_SERVICE_PATH or keep rag-service adjacent to the desktop app.".to_string(),
+        )))
+    }
+
+    fn ensure_rag_port_available(&self) -> Result<(), ProcessError> {
+        if let Ok(true) = self.health_check() {
+            return Err(ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "Port 8787 is already serving requests. Stop the existing RAG service before starting CoworkAny.".to_string(),
+            )));
+        }
+        Ok(())
     }
 
     pub fn predownload_embedding_model(app_handle: &AppHandle) -> Result<String, ProcessError> {
@@ -358,7 +366,7 @@ impl RagService {
             ))
         })?;
 
-        let rag_path = Self::new().get_rag_service_path();
+        let rag_path = Self::new().get_rag_service_path()?;
         let model_name = std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
         info!("[RAG] Predownloading embedding model: {}", model_name);
 
@@ -411,10 +419,9 @@ impl ManagedService for RagService {
             return Ok(());
         }
 
-        // Kill any stale process occupying the RAG service port.
-        // This prevents the new instance from failing to bind AND prevents
-        // the health-check from succeeding against an orphaned process.
-        Self::kill_stale_process_on_port(8787);
+        // Never kill arbitrary user processes. If the expected RAG endpoint is
+        // already live, surface a clear error so beta users can resolve it.
+        self.ensure_rag_port_available()?;
 
         let python = Self::find_python().ok_or_else(|| {
             ProcessError::SpawnError(std::io::Error::new(
@@ -423,7 +430,7 @@ impl ManagedService for RagService {
             ))
         })?;
 
-        let rag_path = self.get_rag_service_path();
+        let rag_path = self.get_rag_service_path()?;
         let main_py = rag_path.join("main.py");
 
         if !main_py.exists() {
@@ -555,61 +562,6 @@ impl ManagedService for RagService {
 }
 
 impl RagService {
-    /// Kill any stale process occupying the given TCP port.
-    /// On Windows uses `netstat` + `taskkill`; on Unix uses `lsof` + `kill`.
-    fn kill_stale_process_on_port(port: u16) {
-        #[cfg(target_os = "windows")]
-        {
-            // Run: netstat -ano | findstr :<port> | findstr LISTENING
-            let output = Command::new("cmd")
-                .args(["/C", &format!("netstat -ano | findstr :{} | findstr LISTENING", port)])
-                .output();
-
-            if let Ok(output) = output {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    // Typical line: "  TCP    127.0.0.1:8787    0.0.0.0:0    LISTENING    12345"
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if let Some(pid_str) = parts.last() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            if pid > 0 {
-                                warn!("[RAG] Killing stale process on port {} (PID {})", port, pid);
-                                let _ = Command::new("taskkill")
-                                    .args(["/PID", &pid.to_string(), "/F"])
-                                    .output();
-                                // Give the OS time to release the port
-                                thread::sleep(Duration::from_millis(500));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            // Run: lsof -ti :<port>
-            let output = Command::new("lsof")
-                .args(["-ti", &format!(":{}", port)])
-                .output();
-
-            if let Ok(output) = output {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for pid_str in stdout.lines() {
-                    if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                        if pid > 0 {
-                            warn!("[RAG] Killing stale process on port {} (PID {})", port, pid);
-                            let _ = Command::new("kill")
-                                .args(["-9", &pid.to_string()])
-                                .output();
-                            thread::sleep(Duration::from_millis(500));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn wait_for_healthy(&self) -> Result<(), ProcessError> {
         let timeout = Duration::from_secs(self.config.startup_timeout_secs);
         let start = Instant::now();
