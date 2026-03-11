@@ -29,7 +29,6 @@ concurrency:
 
 jobs:
   package:
-    if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
     name: Package ${{ matrix.artifact_name }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -77,14 +76,17 @@ jobs:
             libappindicator3-dev
 
       - name: Install desktop dependencies
+        if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
         working-directory: desktop
         run: npm ci
 
       - name: Build desktop bundle
+        if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
         working-directory: desktop
         run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Upload desktop bundle
+        if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
         uses: actions/upload-artifact@v4
         with:
           name: coworkany-${{ inputs.version_label || 'manual' }}-${{ matrix.artifact_name }}
