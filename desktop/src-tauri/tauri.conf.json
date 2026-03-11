@@ -9,6 +9,16 @@
         "beforeBuildCommand": "npm run build",
         "frontendDist": "../dist"
     },
+    "bundle": {
+        "active": true,
+        "targets": [
+            "nsis",
+            "deb",
+            "appimage",
+            "app",
+            "dmg"
+        ]
+    },
     "app": {
         "withGlobalTauri": true,
         "windows": [

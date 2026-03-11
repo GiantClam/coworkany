@@ -77,7 +77,7 @@ jobs:
         
       - name: Build desktop bundle
         working-directory: desktop
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        run: npx tauri build --target ${{ matrix.target }}
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
