@@ -59,6 +59,10 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
+      - name: Setup Bun
+        if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
+        uses: oven-sh/setup-bun@v2
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -79,6 +83,11 @@ jobs:
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
         working-directory: desktop
         run: npm ci
+
+      - name: Install sidecar dependencies
+        if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
+        working-directory: sidecar
+        run: bun install
 
       - name: Build desktop bundle
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}

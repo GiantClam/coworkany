@@ -1,4 +1,4 @@
-﻿//! CoworkAny Desktop - Sidecar Manager
+//! CoworkAny Desktop - Sidecar Manager
 //!
 //! Manages the Bun sidecar process lifecycle and IPC communication.
 //! - Spawns sidecar with stdin/stdout pipes
@@ -7,10 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,8 +21,16 @@ use uuid::Uuid;
 
 use crate::diff::{apply_patch as apply_patch_diff, DiffHunk, FilePatch, PatchOperation};
 use crate::policy::commands as policy_commands;
-use crate::policy::{EffectContext, EffectPayload, EffectRequest, EffectResponse, EffectScope, EffectSource, EffectType, PolicyEngineState};
+use crate::policy::{
+    EffectContext, EffectPayload, EffectRequest, EffectResponse, EffectScope, EffectSource,
+    EffectType, PolicyEngineState,
+};
 use crate::shadow_fs::{self, ShadowFsState};
+
+struct PackagedSidecar {
+    executable: std::path::PathBuf,
+    bridge_script: Option<std::path::PathBuf>,
+}
 
 // ============================================================================
 // Error Types
@@ -80,7 +88,10 @@ pub struct TaskConfig {
     pub max_tokens: Option<u32>,
     #[serde(rename = "maxHistoryMessages", skip_serializing_if = "Option::is_none")]
     pub max_history_messages: Option<u32>,
-    #[serde(rename = "enabledClaudeSkills", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "enabledClaudeSkills",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub enabled_claude_skills: Option<Vec<String>>,
     #[serde(rename = "enabledToolpacks", skip_serializing_if = "Option::is_none")]
     pub enabled_toolpacks: Option<Vec<String>>,
@@ -239,59 +250,24 @@ impl SidecarManager {
 
         info!("Spawning sidecar process...");
 
-        let sidecar_path = Self::resolve_sidecar_entry_path()?;
-
         let app_dir = Self::resolve_app_dir();
         let app_data_dir = Self::resolve_app_data_dir(&app_handle);
-
-        // Try to use bun for TypeScript execution (sidecar uses Bun runtime)
-        let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
-        info!("Resolved sidecar entry: {}", sidecar_path.display());
-
-        let mut bun_cmd = Command::new("bun");
-        bun_cmd
-            .current_dir(sidecar_dir)
-            .args(["run", "src/main.ts"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()) // Capture stderr
-            .env("COWORKANY_APP_DIR", &app_dir)
-            .env("COWORKANY_APP_DATA_DIR", &app_data_dir);
-        Self::apply_proxy_env(&mut bun_cmd);
-
-        let mut child = bun_cmd.spawn().or_else(|_| {
-                let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
-                let tsx_path = sidecar_dir.join("node_modules/tsx/dist/cli.mjs");
-
-                // Fallback 1: Try local tsx with node (most robust)
-                if tsx_path.exists() {
-                    let mut node_cmd = Command::new("node");
-                    node_cmd
-                        .current_dir(sidecar_dir)
-                        .args([tsx_path.to_str().unwrap(), "src/main.ts"])
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .env("COWORKANY_APP_DIR", &app_dir)
-                        .env("COWORKANY_APP_DATA_DIR", &app_data_dir);
-                    Self::apply_proxy_env(&mut node_cmd);
-                    node_cmd.spawn()
-                } else {
-                    // Fallback 2: Try global npx (legacy)
-                    let cmd = if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" };
-                    let mut npx_cmd = Command::new(cmd);
-                    npx_cmd
-                        .current_dir(sidecar_dir)
-                        .args(["tsx", "src/main.ts"])
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .env("COWORKANY_APP_DIR", &app_dir)
-                        .env("COWORKANY_APP_DATA_DIR", &app_data_dir);
-                    Self::apply_proxy_env(&mut npx_cmd);
-                    npx_cmd.spawn()
-                }
-            })?;
+        let mut child = if !cfg!(debug_assertions) {
+            if let Some(packaged) = Self::resolve_packaged_sidecar(&app_handle) {
+                Self::spawn_packaged_sidecar(&packaged, &app_dir, &app_data_dir)
+                    .or_else(|error| {
+                        warn!(
+                            "Failed to start packaged sidecar ({}), falling back to development entry",
+                            error
+                        );
+                        Self::spawn_development_sidecar(&app_dir, &app_data_dir)
+                    })?
+            } else {
+                Self::spawn_development_sidecar(&app_dir, &app_data_dir)?
+            }
+        } else {
+            Self::spawn_development_sidecar(&app_dir, &app_data_dir)?
+        };
 
         info!("Sidecar spawned with PID: {:?}", child.id());
 
@@ -459,36 +435,37 @@ impl SidecarManager {
                     debug!("Received from sidecar: {}", line);
 
                     match serde_json::from_str::<serde_json::Value>(&line) {
-                        Ok(message) => {
-                            match classify_sidecar_message(&message) {
-                                Some(SidecarMessageKind::TaskEvent) => {
-                                    if let Err(e) = app_handle.emit("task-event", &message) {
-                                        error!("Failed to emit task-event: {}", e);
-                                    }
+                        Ok(message) => match classify_sidecar_message(&message) {
+                            Some(SidecarMessageKind::TaskEvent) => {
+                                if let Err(e) = app_handle.emit("task-event", &message) {
+                                    error!("Failed to emit task-event: {}", e);
                                 }
-                                Some(SidecarMessageKind::IpcResponse) => {
-                                    if let Some(command_id) = message
-                                        .get("commandId")
-                                        .and_then(|v| v.as_str())
-                                        .map(|v| v.to_string())
-                                    {
-                                        if let Ok(mut pending) = pending_responses.lock() {
-                                            if let Some(waiter) = pending.remove(&command_id) {
-                                                let _ = waiter.send(message.clone());
-                                            }
+                            }
+                            Some(SidecarMessageKind::IpcResponse) => {
+                                if let Some(command_id) = message
+                                    .get("commandId")
+                                    .and_then(|v| v.as_str())
+                                    .map(|v| v.to_string())
+                                {
+                                    if let Ok(mut pending) = pending_responses.lock() {
+                                        if let Some(waiter) = pending.remove(&command_id) {
+                                            let _ = waiter.send(message.clone());
                                         }
                                     }
-                                    if let Err(e) = app_handle.emit("ipc-response", &message) {
-                                        error!("Failed to emit ipc-response: {}", e);
-                                    }
                                 }
-                                Some(SidecarMessageKind::IpcCommand) => {
-                                    handle_sidecar_command(message, app_handle.clone(), tx.clone());
+                                if let Err(e) = app_handle.emit("ipc-response", &message) {
+                                    error!("Failed to emit ipc-response: {}", e);
                                 }
-                                None => warn!("Ignoring unclassified sidecar message: {}", line),
                             }
-                        }
-                        Err(e) => warn!("Failed to parse sidecar output as JSON: {} - line: {}", e, line),
+                            Some(SidecarMessageKind::IpcCommand) => {
+                                handle_sidecar_command(message, app_handle.clone(), tx.clone());
+                            }
+                            None => warn!("Ignoring unclassified sidecar message: {}", line),
+                        },
+                        Err(e) => warn!(
+                            "Failed to parse sidecar output as JSON: {} - line: {}",
+                            e, line
+                        ),
                     }
                 }
                 Err(e) => {
@@ -504,9 +481,7 @@ impl SidecarManager {
         let _ = app_handle.emit("sidecar-disconnected", ());
     }
 
-    fn stderr_reader_loop(
-        stderr: std::process::ChildStderr,
-    ) {
+    fn stderr_reader_loop(stderr: std::process::ChildStderr) {
         let reader = BufReader::new(stderr);
 
         for line_result in reader.lines() {
@@ -543,6 +518,123 @@ impl SidecarManager {
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
             .to_string_lossy()
             .to_string()
+    }
+
+    fn spawn_packaged_sidecar(
+        packaged: &PackagedSidecar,
+        app_dir: &str,
+        app_data_dir: &str,
+    ) -> Result<Child, SidecarError> {
+        info!(
+            "Resolved packaged sidecar binary: {}",
+            packaged.executable.display()
+        );
+
+        let working_dir = packaged
+            .executable
+            .parent()
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from(app_dir));
+
+        let mut command = Command::new(&packaged.executable);
+        command
+            .current_dir(&working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("COWORKANY_APP_DIR", app_dir)
+            .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+
+        if let Some(bridge_script) = &packaged.bridge_script {
+            command.env("COWORKANY_PLAYWRIGHT_BRIDGE", bridge_script);
+        }
+
+        Self::apply_proxy_env(&mut command);
+        command.spawn().map_err(SidecarError::from)
+    }
+
+    fn spawn_development_sidecar(app_dir: &str, app_data_dir: &str) -> Result<Child, SidecarError> {
+        let sidecar_path = Self::resolve_sidecar_entry_path()?;
+        let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
+
+        info!(
+            "Resolved development sidecar entry: {}",
+            sidecar_path.display()
+        );
+
+        let mut bun_cmd = Command::new("bun");
+        bun_cmd
+            .current_dir(sidecar_dir)
+            .args(["run", "src/main.ts"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("COWORKANY_APP_DIR", app_dir)
+            .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+        Self::apply_proxy_env(&mut bun_cmd);
+
+        bun_cmd
+            .spawn()
+            .or_else(|_| {
+                let tsx_path = sidecar_dir.join("node_modules/tsx/dist/cli.mjs");
+
+                if tsx_path.exists() {
+                    let mut node_cmd = Command::new("node");
+                    node_cmd
+                        .current_dir(sidecar_dir)
+                        .args([tsx_path.to_str().unwrap(), "src/main.ts"])
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .env("COWORKANY_APP_DIR", app_dir)
+                        .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+                    Self::apply_proxy_env(&mut node_cmd);
+                    node_cmd.spawn()
+                } else {
+                    let cmd = if cfg!(target_os = "windows") {
+                        "npx.cmd"
+                    } else {
+                        "npx"
+                    };
+                    let mut npx_cmd = Command::new(cmd);
+                    npx_cmd
+                        .current_dir(sidecar_dir)
+                        .args(["tsx", "src/main.ts"])
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .env("COWORKANY_APP_DIR", app_dir)
+                        .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+                    Self::apply_proxy_env(&mut npx_cmd);
+                    npx_cmd.spawn()
+                }
+            })
+            .map_err(SidecarError::from)
+    }
+
+    fn resolve_packaged_sidecar(app_handle: &AppHandle) -> Option<PackagedSidecar> {
+        let resource_dir = app_handle.path().resource_dir().ok()?;
+
+        let executable = [
+            resource_dir.join("sidecar/coworkany-sidecar.exe"),
+            resource_dir.join("sidecar/coworkany-sidecar"),
+            resource_dir.join("coworkany-sidecar.exe"),
+            resource_dir.join("coworkany-sidecar"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.exists())?;
+
+        let bridge_script = [
+            resource_dir.join("sidecar/playwright-bridge.cjs"),
+            resource_dir.join("playwright-bridge.cjs"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.exists());
+
+        Some(PackagedSidecar {
+            executable,
+            bridge_script,
+        })
     }
 
     fn resolve_sidecar_entry_path() -> Result<std::path::PathBuf, SidecarError> {
@@ -746,10 +838,7 @@ fn apply_patch_to_content(original: &str, patch: FilePatch) -> Result<String, St
     apply_patch_diff(original, &patch).map_err(|e| e.to_string())
 }
 
-fn build_effect_request_for_patch(
-    operation: PatchOperation,
-    path: &str,
-) -> EffectRequest {
+fn build_effect_request_for_patch(operation: PatchOperation, path: &str) -> EffectRequest {
     EffectRequest {
         id: Uuid::new_v4().to_string(),
         timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -812,18 +901,28 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     .and_then(|r| serde_json::from_value(r.clone()).ok());
 
                 let Some(request) = request else {
-                    send_raw(&tx, build_error_response(&command_id, "request_effect_response", "invalid_request"));
+                    send_raw(
+                        &tx,
+                        build_error_response(
+                            &command_id,
+                            "request_effect_response",
+                            "invalid_request",
+                        ),
+                    );
                     return;
                 };
 
                 let state = app_handle.state::<PolicyEngineState>();
-                let result = policy_commands::request_effect(request.clone(), state, app_handle.clone()).await;
+                let result =
+                    policy_commands::request_effect(request.clone(), state, app_handle.clone())
+                        .await;
 
                 let response = match result {
                     Ok(res) => res,
                     Err(err) => EffectResponse {
                         request_id: request.id.clone(),
-                        timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        timestamp: chrono::Utc::now()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                         approved: false,
                         approval_type: None,
                         expires_at: None,
@@ -854,12 +953,17 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let payload = message.get("payload").cloned().unwrap_or_default();
                 let patch_value = payload.get("patch").cloned().unwrap_or_default();
-                let patch: Option<ProtocolFilePatch> = serde_json::from_value(patch_value.clone()).ok();
+                let patch: Option<ProtocolFilePatch> =
+                    serde_json::from_value(patch_value.clone()).ok();
 
                 let Some(patch) = patch else {
                     send_raw(
                         &tx,
-                        build_error_response(&command_id, "propose_patch_response", "invalid_patch"),
+                        build_error_response(
+                            &command_id,
+                            "propose_patch_response",
+                            "invalid_patch",
+                        ),
                     );
                     return;
                 };
@@ -939,7 +1043,14 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     .unwrap_or(true);
 
                 let Some(patch_id) = patch_id else {
-                    send_raw(&tx, build_error_response(&command_id, "apply_patch_response", "missing_patch_id"));
+                    send_raw(
+                        &tx,
+                        build_error_response(
+                            &command_id,
+                            "apply_patch_response",
+                            "missing_patch_id",
+                        ),
+                    );
                     return;
                 };
 
@@ -948,9 +1059,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     let guard = shadow_state.lock().await;
                     let shadow_fs = guard.as_ref();
                     let entry = shadow_fs.and_then(|fs| fs.get(patch_id));
-                    let operation = entry
-                        .and_then(|e| e.patch.as_ref())
-                        .map(|p| p.operation);
+                    let operation = entry.and_then(|e| e.patch.as_ref()).map(|p| p.operation);
                     let path = entry.map(|e| e.original_path.to_string_lossy().to_string());
                     (operation, path)
                 };
@@ -959,7 +1068,9 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     if matches!(operation, PatchOperation::Delete | PatchOperation::Rename) {
                         let request = build_effect_request_for_patch(operation, &path);
                         let state = app_handle.state::<PolicyEngineState>();
-                        let policy = policy_commands::request_effect(request, state, app_handle.clone()).await;
+                        let policy =
+                            policy_commands::request_effect(request, state, app_handle.clone())
+                                .await;
 
                         if let Ok(response) = &policy {
                             if !response.approved {
@@ -981,7 +1092,8 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     }
                 }
 
-                let result = shadow_fs::apply_patch(shadow_state, patch_id.to_string(), create_backup).await;
+                let result =
+                    shadow_fs::apply_patch(shadow_state, patch_id.to_string(), create_backup).await;
 
                 let response_msg = match &result {
                     Ok(apply_result) => json!({
@@ -1068,7 +1180,14 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
 
                 let Some(identity) = identity else {
-                    send_raw(&tx, build_error_response(&command_id, "register_agent_identity_response", "invalid_identity"));
+                    send_raw(
+                        &tx,
+                        build_error_response(
+                            &command_id,
+                            "register_agent_identity_response",
+                            "invalid_identity",
+                        ),
+                    );
                     return;
                 };
 
@@ -1085,7 +1204,9 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                             "sessionId": message.get("payload").and_then(|p| p.get("identity")).and_then(|i| i.get("sessionId")).cloned().unwrap_or_default()
                         }
                     }),
-                    Err(err) => build_error_response(&command_id, "register_agent_identity_response", &err),
+                    Err(err) => {
+                        build_error_response(&command_id, "register_agent_identity_response", &err)
+                    }
                 };
 
                 send_raw(&tx, response_msg);
@@ -1113,7 +1234,14 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     .to_string();
 
                 let Some(delegation) = delegation else {
-                    send_raw(&tx, build_error_response(&command_id, "record_agent_delegation_response", "invalid_delegation"));
+                    send_raw(
+                        &tx,
+                        build_error_response(
+                            &command_id,
+                            "record_agent_delegation_response",
+                            "invalid_delegation",
+                        ),
+                    );
                     return;
                 };
 
@@ -1131,7 +1259,9 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                             "childSessionId": child_session
                         }
                     }),
-                    Err(err) => build_error_response(&command_id, "record_agent_delegation_response", &err),
+                    Err(err) => {
+                        build_error_response(&command_id, "record_agent_delegation_response", &err)
+                    }
                 };
 
                 send_raw(&tx, response_msg);
@@ -1150,7 +1280,14 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
 
                 let Some(decision) = decision else {
-                    send_raw(&tx, build_error_response(&command_id, "report_mcp_gateway_decision_response", "invalid_decision"));
+                    send_raw(
+                        &tx,
+                        build_error_response(
+                            &command_id,
+                            "report_mcp_gateway_decision_response",
+                            "invalid_decision",
+                        ),
+                    );
                     return;
                 };
 
@@ -1164,7 +1301,11 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                         "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                         "payload": { "success": true }
                     }),
-                    Err(err) => build_error_response(&command_id, "report_mcp_gateway_decision_response", &err),
+                    Err(err) => build_error_response(
+                        &command_id,
+                        "report_mcp_gateway_decision_response",
+                        &err,
+                    ),
                 };
 
                 send_raw(&tx, response_msg);
@@ -1183,7 +1324,14 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
 
                 let Some(alert) = alert else {
-                    send_raw(&tx, build_error_response(&command_id, "report_runtime_security_alert_response", "invalid_alert"));
+                    send_raw(
+                        &tx,
+                        build_error_response(
+                            &command_id,
+                            "report_runtime_security_alert_response",
+                            "invalid_alert",
+                        ),
+                    );
                     return;
                 };
 
@@ -1197,7 +1345,11 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                         "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                         "payload": { "success": true }
                     }),
-                    Err(err) => build_error_response(&command_id, "report_runtime_security_alert_response", &err),
+                    Err(err) => build_error_response(
+                        &command_id,
+                        "report_runtime_security_alert_response",
+                        &err,
+                    ),
                 };
 
                 send_raw(&tx, response_msg);

@@ -34,6 +34,14 @@ function shouldDisableExternalCdp(): boolean {
     return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
+function resolveBridgeScriptPath(): string {
+    const explicit = process.env.COWORKANY_PLAYWRIGHT_BRIDGE?.trim();
+    if (explicit && fs.existsSync(explicit)) {
+        return explicit;
+    }
+    return path.join(__dirname, 'playwright-bridge.cjs');
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -568,7 +576,11 @@ export class PlaywrightBackend implements BrowserBackend {
      * The sidecar sends commands and receives results.
      */
     private async _launchViaBridge(headless: boolean): Promise<BrowserConnection> {
-        const bridgeScript = path.join(__dirname, 'playwright-bridge.cjs');
+        const bridgeScript = resolveBridgeScriptPath();
+
+        if (!fs.existsSync(bridgeScript)) {
+            throw new Error(`Playwright bridge script not found: ${bridgeScript}`);
+        }
 
         // Find Node.js executable
         const nodePath = process.platform === 'win32'

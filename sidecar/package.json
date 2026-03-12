@@ -8,6 +8,7 @@
   "scripts": {
     "start": "bun run src/main.ts",
     "dev": "bun run --watch src/main.ts",
+    "build:release": "node scripts/build-release.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
     "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts",

@@ -6,11 +6,15 @@
     "build": {
         "beforeDevCommand": "npm run dev:tauri-server",
         "devUrl": "http://localhost:5173",
-        "beforeBuildCommand": "npm run build",
+        "beforeBuildCommand": "npm run build && npm --prefix ../sidecar run build:release",
         "frontendDist": "../dist"
     },
     "bundle": {
         "active": true,
+        "resources": {
+            "../../sidecar/dist/coworkany-sidecar*": "sidecar/",
+            "../../sidecar/dist/playwright-bridge.cjs": "sidecar/playwright-bridge.cjs"
+        },
         "targets": [
             "nsis",
             "deb",
