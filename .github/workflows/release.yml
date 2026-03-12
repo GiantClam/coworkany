@@ -59,6 +59,9 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
           
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,6 +77,10 @@ jobs:
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
         
       - name: Build desktop bundle
         working-directory: desktop
