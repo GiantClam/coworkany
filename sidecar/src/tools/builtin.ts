@@ -1398,9 +1398,10 @@ export * from './memory';
 
 // Self-learning tools are bound with runtime handlers in main.ts.
 // Keep the canonical tool names here so builtin capability scans can verify that
-// trigger_learning / validate_skill / find_learned_capability / record_capability_usage
+// resolve_skill_request / trigger_learning / validate_skill / find_learned_capability / record_capability_usage
 // are part of the supported builtin surface.
 export const SELF_LEARNING_TOOL_NAMES = [
+    'resolve_skill_request',
     'trigger_learning',
     'query_learning_status',
     'validate_skill',

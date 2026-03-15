@@ -60,6 +60,30 @@ describe('task list aggregation', () => {
             { workspacePath, taskId: 'task-list-scheduled' }
         );
 
+        const triggerFile = path.join(workspacePath, '.coworkany', 'triggers.json');
+        const triggerConfig = JSON.parse(fs.readFileSync(triggerFile, 'utf-8')) as {
+            triggers: Array<Record<string, unknown>>;
+        };
+        triggerConfig.triggers[0] = {
+            ...triggerConfig.triggers[0],
+            lastRunStatus: 'completed',
+            lastRunSummary: 'Digest generated successfully.',
+            lastRunFinishedAt: new Date().toISOString(),
+            recentRuns: [
+                {
+                    status: 'completed',
+                    summary: 'Digest generated successfully.',
+                    finishedAt: new Date().toISOString(),
+                },
+                {
+                    status: 'failed',
+                    summary: 'Temporary upstream rate limit.',
+                    finishedAt: new Date(Date.now() - 60_000).toISOString(),
+                },
+            ],
+        };
+        fs.writeFileSync(triggerFile, JSON.stringify(triggerConfig, null, 2));
+
         const result = handleGetTasks(
             {
                 id: 'cmd-1',
@@ -75,10 +99,26 @@ describe('task list aggregation', () => {
             }
         );
 
-        const tasks = result.response.payload.tasks as Array<{ title: string; tags: string[] }>;
+        const tasks = result.response.payload.tasks as Array<{
+            title: string;
+            tags: string[];
+            latestRunStatus?: string;
+            latestRunSummary?: string;
+            recentRuns?: Array<{ status: string; summary: string }>;
+        }>;
         expect(tasks.length).toBe(2);
         expect(tasks.some((task) => task.title === 'Prepare brief')).toBe(true);
         expect(tasks.some((task) => task.title === 'Hourly AI digest' && task.tags.includes('scheduled'))).toBe(true);
+        expect(tasks.some((task) =>
+            task.title === 'Hourly AI digest' &&
+            task.latestRunStatus === 'completed' &&
+            task.latestRunSummary === 'Digest generated successfully.'
+        )).toBe(true);
+        expect(tasks.some((task) =>
+            task.title === 'Hourly AI digest' &&
+            task.recentRuns?.length === 2 &&
+            task.recentRuns[1]?.summary === 'Temporary upstream rate limit.'
+        )).toBe(true);
     });
 
     test('get_tasks falls back to sidecar root storage when workspace-local task store is empty', async () => {

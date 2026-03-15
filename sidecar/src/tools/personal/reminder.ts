@@ -10,7 +10,7 @@ import type { Trigger } from '../../proactive/heartbeat';
  */
 export const setReminderTool: ToolDefinition = {
     name: 'set_reminder',
-    description: 'Set a reminder for a specific time. Creates a task with notification metadata. Use when the user asks to be reminded about something.',
+    description: 'Set a reminder for a specific time. Creates a notify-only reminder task. Use only when the user asks to be reminded, not when the user wants substantive work to execute later.',
     effects: ['state:remember', 'ui:notify'],
     input_schema: {
         type: 'object',
@@ -44,6 +44,37 @@ export const setReminderTool: ToolDefinition = {
 
         try {
             const reminderTime = parseTimeExpression(time);
+
+            if (looksLikeDeferredTaskExecution(message)) {
+                const { scheduledTaskCreateTool } = await import('../core/scheduledTasks');
+                const scheduledResult = await scheduledTaskCreateTool.handler(
+                    {
+                        title: buildDeferredTaskTitle(message),
+                        description: `One-off scheduled task for ${reminderTime.toISOString()}`,
+                        taskQuery: message,
+                        scheduleType: 'date',
+                        runAt: reminderTime.toISOString(),
+                    },
+                    context
+                );
+
+                if (!scheduledResult.success) {
+                    return scheduledResult;
+                }
+
+                return {
+                    success: true,
+                    converted_from_reminder: true,
+                    execution_type: 'scheduled_task',
+                    message,
+                    scheduled_at: reminderTime.toISOString(),
+                    recurring: 'none',
+                    human_readable: formatReminderTime(reminderTime),
+                    trigger_id: scheduledResult.trigger_id,
+                    triggerId: scheduledResult.triggerId,
+                    scheduled_task: scheduledResult.trigger,
+                };
+            }
 
             console.error(`[Reminder] Setting reminder for: ${reminderTime.toISOString()}`);
             console.error(`[Reminder] Message: ${message}`);
@@ -127,6 +158,26 @@ function parseTimeExpression(expr: string): Date {
                 result.setHours(result.getHours() + amount);
                 break;
             case 'day':
+                result.setDate(result.getDate() + amount);
+                break;
+        }
+        return result;
+    }
+
+    const chineseRelativeMatch = lower.match(/(\d+)\s*(分钟|小时|天)\s*后/);
+    if (chineseRelativeMatch) {
+        const amount = parseInt(chineseRelativeMatch[1], 10);
+        const unit = chineseRelativeMatch[2];
+        const result = new Date(now);
+
+        switch (unit) {
+            case '分钟':
+                result.setMinutes(result.getMinutes() + amount);
+                break;
+            case '小时':
+                result.setHours(result.getHours() + amount);
+                break;
+            case '天':
                 result.setDate(result.getDate() + amount);
                 break;
         }
@@ -236,6 +287,37 @@ function formatReminderTime(date: Date): string {
     }
 
     return date.toLocaleString();
+}
+
+function looksLikeDeferredTaskExecution(message: string): boolean {
+    const text = message.trim();
+    if (!text) {
+        return false;
+    }
+
+    const reminderOnlyPatterns = [
+        /\b(remind me|reminder|don't let me forget)\b/i,
+        /提醒我|提醒一下|记得|别忘了/i,
+    ];
+    if (reminderOnlyPatterns.some((pattern) => pattern.test(text))) {
+        return false;
+    }
+
+    const actionablePatterns = [
+        /reddit|email|calendar|report|summary|summarize|summarise|digest|check|search|research|analy[sz]e|crawl|collect|monitor|review|run|execute|send/i,
+        /总结|摘要|整理|检索|搜索|调研|分析|检查|抓取|收集|监控|执行|运行|发送/i,
+    ];
+    return actionablePatterns.some((pattern) => pattern.test(text));
+}
+
+function buildDeferredTaskTitle(message: string): string {
+    const trimmed = message.trim();
+    if (!trimmed) {
+        return 'Scheduled task';
+    }
+
+    const snippet = trimmed.length > 48 ? `${trimmed.slice(0, 48)}...` : trimmed;
+    return `Scheduled task: ${snippet}`;
 }
 
 function buildReminderTrigger(reminderId: string, message: string, reminderTime: Date, workspacePath: string): Trigger {

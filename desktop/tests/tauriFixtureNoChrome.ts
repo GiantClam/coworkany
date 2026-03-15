@@ -27,6 +27,45 @@ const CDP_POLL_MS = 2000;
 const FRONTEND_PAGE_TIMEOUT_MS = 30_000;
 const SIDECAR_BROWSER_CDP_PORTS = [9222, 9223, 9224, 9225];
 const SIDECAR_PERSISTENT_PROFILE_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), 'CoworkAny', 'PlaywrightProfile');
+const FRONTEND_DEV_PORT = 5173;
+
+function clearFrontendDevPort(): void {
+    if (process.platform !== 'win32') {
+        return;
+    }
+
+    const script = `
+$listeners = @()
+try {
+  $listeners += Get-NetTCPConnection -State Listen -LocalPort ${FRONTEND_DEV_PORT} -ErrorAction SilentlyContinue
+} catch {}
+$procIds = $listeners | Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($procId in $procIds) {
+  if (-not $procId) { continue }
+  try {
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+    if ($null -eq $proc) { continue }
+    $name = ($proc.Name | Out-String).Trim().ToLower()
+    $cmd = ($proc.CommandLine | Out-String).Trim().ToLower()
+    $isNodeRuntime = $name -match 'node|bun'
+    $isViteServer = $cmd -match 'vite(\\.js)?' -or $cmd -match '--port\\s+${FRONTEND_DEV_PORT}' -or $cmd -match '--strictport'
+    if ($isNodeRuntime -and $isViteServer) {
+      Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    }
+  } catch {}
+}
+`;
+
+    try {
+        childProcess.execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/"/g, '\\"')}"`, {
+            stdio: 'ignore',
+            timeout: 15_000,
+        });
+        console.log(`[Fixture-NoChrome] Cleared frontend dev server port ${FRONTEND_DEV_PORT}`);
+    } catch {
+        console.log('[Fixture-NoChrome] Failed to clear frontend dev server port; continuing');
+    }
+}
 
 function clearSidecarBrowserCdpPorts(): void {
     if (process.platform !== 'win32') {
@@ -111,6 +150,31 @@ async function waitForFrontendPages(context: BrowserContext, timeoutMs: number):
     return context.pages().filter((p) => p.url().includes('localhost:5173'));
 }
 
+async function recoverFrontendDom(page: Page): Promise<void> {
+    const url = page.url();
+    if (!url.includes('localhost:5173')) {
+        return;
+    }
+
+    const hasBodyText = await page.locator('body').innerText({ timeout: 1500 }).then((text) => text.trim().length > 0).catch(() => false);
+    if (hasBodyText) {
+        return;
+    }
+
+    console.log('[Fixture-NoChrome] Frontend target is attached but DOM is empty; forcing navigation recovery...');
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    const stillEmpty = await page.locator('body').innerText({ timeout: 1500 }).then((text) => text.trim().length === 0).catch(() => true);
+    if (stillEmpty) {
+        console.log('[Fixture-NoChrome] DOM still empty after goto; trying a hard reload...');
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+}
+
 type TauriFixtures = {
     tauriProcess: childProcess.ChildProcess;
     tauriLogs: TauriLogCollector;
@@ -121,6 +185,7 @@ type TauriFixtures = {
 export const test = base.extend<TauriFixtures>({
     tauriProcess: [async ({}, use, testInfo) => {
         console.log('[Fixture-NoChrome] Starting Tauri app (NO Chrome)...');
+        clearFrontendDevPort();
         clearSidecarBrowserCdpPorts();
         clearSidecarPersistentProfile();
 
@@ -133,6 +198,7 @@ export const test = base.extend<TauriFixtures>({
                 env: {
                     ...process.env,
                     COWORKANY_DISABLE_BROWSER_CDP: '1',
+                    VITE_E2E_BOOT_FALLBACK: '1',
                     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
                     WEBVIEW2_USER_DATA_FOLDER: path.join(
                         fs.realpathSync(os.tmpdir()),
@@ -334,6 +400,7 @@ export const test = base.extend<TauriFixtures>({
             await page.waitForURL('**/localhost:5173/**', { timeout: 30_000 }).catch(() => {});
         }
         await new Promise(r => setTimeout(r, 3000));
+        await recoverFrontendDom(page);
 
         await use(page);
     }, { scope: 'test' }],

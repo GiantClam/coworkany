@@ -1,0 +1,51 @@
+name: Analyzer Live Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyzer-live-smoke:
+    runs-on: [self-hosted, windows]
+    env:
+      COWORKANY_ANALYZER_SMOKE_RUN: "1"
+      COWORKANY_ANALYZER_SMOKE_KEEP_WORKSPACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
+
+      - name: Validate analyzer live smoke environment
+        working-directory: desktop
+        run: node scripts/run-analyzer-live-smoke.mjs --preflight-only
+
+      - name: Run analyzer live smoke
+        working-directory: desktop
+        run: npm run test:e2e:analyzer-live
+
+      - name: Upload analyzer live smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyzer-live-smoke
+          path: |
+            desktop/test-results/analyzer-live-smoke/**
+            desktop/playwright-report/**
+          if-no-files-found: warn
+          retention-days: 14

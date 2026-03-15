@@ -7,8 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -115,7 +115,7 @@ pub trait ManagedService: Send + Sync {
 pub struct RagService {
     config: ServiceConfig,
     process: Option<Child>,
-    process_pid: Option<u32>,  // Store PID separately for is_running check
+    process_pid: Option<u32>, // Store PID separately for is_running check
     started_at: Option<Instant>,
     #[allow(dead_code)]
     restart_count: u32,
@@ -160,10 +160,7 @@ impl RagService {
     fn find_python() -> Option<String> {
         // Try different Python commands
         for cmd in &["python3", "python", "py"] {
-            if let Ok(output) = Command::new(cmd)
-                .arg("--version")
-                .output()
-            {
+            if let Ok(output) = Command::new(cmd).arg("--version").output() {
                 if output.status.success() {
                     return Some(cmd.to_string());
                 }
@@ -262,12 +259,16 @@ impl RagService {
             .and_then(|(_, bypass)| bypass.clone())
             .or_else(|| Self::first_non_empty_env(&["NO_PROXY", "no_proxy"]))
             .unwrap_or_else(|| "localhost,127.0.0.1,::1".to_string());
-        command.env("NO_PROXY", &no_proxy).env("no_proxy", &no_proxy);
+        command
+            .env("NO_PROXY", &no_proxy)
+            .env("no_proxy", &no_proxy);
     }
 
     fn model_cache_dirs() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
         let base = dirs::home_dir()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            })
             .join(".coworkany")
             .join("models");
         let hf_home = base.join("hf");
@@ -275,7 +276,10 @@ impl RagService {
         let transformers_cache = hf_home.join("hub");
 
         if let Err(e) = fs::create_dir_all(&hf_home) {
-            warn!("[RAG] Failed to create HF_HOME directory {:?}: {}", hf_home, e);
+            warn!(
+                "[RAG] Failed to create HF_HOME directory {:?}: {}",
+                hf_home, e
+            );
         }
         if let Err(e) = fs::create_dir_all(&sentence_transformers_home) {
             warn!(
@@ -301,15 +305,19 @@ impl RagService {
                 "SENTENCE_TRANSFORMERS_HOME",
                 sentence_transformers_home.to_string_lossy().as_ref(),
             )
-            .env("TRANSFORMERS_CACHE", transformers_cache.to_string_lossy().as_ref());
+            .env(
+                "TRANSFORMERS_CACHE",
+                transformers_cache.to_string_lossy().as_ref(),
+            );
     }
 
     fn get_rag_service_path(&self) -> Result<std::path::PathBuf, ProcessError> {
         // Try multiple paths to find rag-service directory
         let candidates = vec![
             // 1. Environment variable (can be set by user)
-            std::env::var("RAG_SERVICE_PATH").ok().map(std::path::PathBuf::from),
-
+            std::env::var("RAG_SERVICE_PATH")
+                .ok()
+                .map(std::path::PathBuf::from),
             // 2. Development path from Cargo manifest dir
             // CARGO_MANIFEST_DIR is desktop/src-tauri, so go up 2 levels
             std::env::var("CARGO_MANIFEST_DIR").ok().map(|dir| {
@@ -318,20 +326,25 @@ impl RagService {
                     .join("..")
                     .join("rag-service")
             }),
-
             // 3. From executable path (debug: target/debug/exe)
             // Path: desktop/src-tauri/target/debug/exe -> ../../../../rag-service
             std::env::current_exe().ok().and_then(|exe| {
                 exe.parent().map(|dir| {
-                    dir.join("..").join("..").join("..").join("..").join("rag-service")
+                    dir.join("..")
+                        .join("..")
+                        .join("..")
+                        .join("..")
+                        .join("rag-service")
                 })
             }),
-
             // 4. From current working directory
-            std::env::current_dir().ok().map(|cwd| cwd.join("rag-service")),
-
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join("rag-service")),
             // 5. From current working directory going up (if CWD is desktop)
-            std::env::current_dir().ok().map(|cwd| cwd.join("..").join("rag-service")),
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join("..").join("rag-service")),
         ];
 
         for candidate in candidates.into_iter().flatten() {
@@ -367,7 +380,8 @@ impl RagService {
         })?;
 
         let rag_path = Self::new().get_rag_service_path()?;
-        let model_name = std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
+        let model_name =
+            std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
         info!("[RAG] Predownloading embedding model: {}", model_name);
 
         let mut cmd = Command::new(&python);

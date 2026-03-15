@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { syncEnabledSkillEnvironment } from '../lib/skillCredentials';
 
 // ============================================================================
 // Types
@@ -18,13 +19,33 @@ export interface SkillManifest {
     version: string;
     description?: string;
     skillPath: string;
+    requires?: {
+        env?: string[];
+    };
+    allowedTools?: string[];
+    tags?: string[];
 }
 
 export interface SkillRecord {
     manifest: SkillManifest;
     enabled: boolean;
-    workingDir: string;
+    rootPath: string;
+    source: string;
     installedAt: string;
+    lastUsedAt?: string;
+}
+
+export interface SkillUpdateInfo {
+    skillId: string;
+    supported: boolean;
+    hasUpdate: boolean;
+    currentVersion?: string;
+    latestVersion?: string;
+    sourceRepo?: string;
+    sourcePath?: string;
+    sourceRef?: string;
+    checkedAt: string;
+    error?: string;
 }
 
 interface IpcResult {
@@ -52,6 +73,7 @@ interface UseSkillsOptions {
 export function useSkills(options: UseSkillsOptions = {}) {
     const { autoRefresh = true } = options;
     const [skills, setSkills] = useState<SkillRecord[]>([]);
+    const [updates, setUpdates] = useState<Record<string, SkillUpdateInfo>>({});
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -128,11 +150,67 @@ export function useSkills(options: UseSkillsOptions = {}) {
         }
     }, [refresh]);
 
+    const checkUpdates = useCallback(async (skillIds?: string[]) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const result = await invoke<IpcResult>('check_claude_skill_updates', {
+                input: skillIds?.length ? { skillIds } : {},
+            });
+            const payload = extractPayload(result);
+            if (Array.isArray(payload.updates)) {
+                const nextUpdates = Object.fromEntries(
+                    (payload.updates as SkillUpdateInfo[]).map((update) => [update.skillId, update])
+                );
+                setUpdates((current) => ({
+                    ...current,
+                    ...nextUpdates,
+                }));
+                return payload.updates as SkillUpdateInfo[];
+            }
+            return [];
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            return [];
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    const upgrade = useCallback(async (skillId: string) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const result = await invoke<IpcResult>('upgrade_claude_skill', {
+                input: { skillId },
+            });
+            const payload = extractPayload(result);
+            if (payload.error) {
+                setError(String(payload.error));
+                return false;
+            }
+            if (payload.update && typeof payload.update === 'object') {
+                const update = payload.update as SkillUpdateInfo;
+                setUpdates((current) => ({ ...current, [update.skillId]: update }));
+            }
+            await refresh();
+            return true;
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            return false;
+        } finally {
+            setLoading(false);
+        }
+    }, [refresh]);
+
     // Load on mount + refresh on skills-updated
     useEffect(() => {
         if (!autoRefresh) return;
 
         let unlisten: UnlistenFn | undefined;
+        const refreshFromWindowEvent = () => {
+            void refresh();
+        };
         refresh();
         listen('skills-updated', () => {
             refresh();
@@ -143,18 +221,27 @@ export function useSkills(options: UseSkillsOptions = {}) {
             .catch(() => {
                 // ignore listener errors
             });
+        window.addEventListener('coworkany:skills-updated', refreshFromWindowEvent);
         return () => {
             unlisten?.();
+            window.removeEventListener('coworkany:skills-updated', refreshFromWindowEvent);
         };
     }, [refresh, autoRefresh]);
 
+    useEffect(() => {
+        void syncEnabledSkillEnvironment(skills);
+    }, [skills]);
+
     return {
         skills,
+        updates,
         loading,
         error,
         refresh,
         importSkill,
         toggle,
         remove,
+        checkUpdates,
+        upgrade,
     };
 }

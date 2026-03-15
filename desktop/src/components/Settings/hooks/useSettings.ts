@@ -19,6 +19,7 @@ import type {
     ProxySettings,
     PolicyConfig,
     PolicyAuditEvent,
+    SoulProfile,
     ValidationMessage,
 } from '../../../types';
 
@@ -33,6 +34,12 @@ interface ValidationResult {
     payload: {
         error?: string;
     };
+}
+
+interface UserProfileResult {
+    success: boolean;
+    payload: SoulProfile;
+    error?: string;
 }
 
 const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890';
@@ -105,6 +112,8 @@ export function useSettings() {
     const [searchSaved, setSearchSaved] = useState(false);
     const [proxySettings, setProxySettings] = useState<ProxySettings>({ enabled: false });
     const [proxySaved, setProxySaved] = useState(false);
+    const [soulProfile, setSoulProfile] = useState<SoulProfile>({ version: 1 });
+    const [soulSaved, setSoulSaved] = useState(false);
     const [policyConfig, setPolicyConfig] = useState<PolicyConfig>(DEFAULT_POLICY_CONFIG);
     const [policyAuditEvents, setPolicyAuditEvents] = useState<PolicyAuditEvent[]>([]);
     const [policySaved, setPolicySaved] = useState(false);
@@ -158,6 +167,8 @@ export function useSettings() {
             // Load search settings
             setSearchSettings(normalizedData.search ?? { provider: 'serper' });
             setProxySettings(normalizedData.proxy ?? { enabled: false });
+            const userProfile = await invoke<UserProfileResult>('get_user_profile');
+            setSoulProfile(userProfile.payload ?? { version: 1 });
 
             const loadedPolicy = await invoke<PolicyConfig>('get_policy_config');
             setPolicyConfig(normalizePolicyConfig(loadedPolicy ?? DEFAULT_POLICY_CONFIG));
@@ -179,6 +190,18 @@ export function useSettings() {
             setError(err instanceof Error ? err.message : 'Failed to load settings');
         } finally {
             setLoading(false);
+        }
+    }, []);
+
+    const saveSoulProfile = useCallback(async (profile: SoulProfile) => {
+        setSoulSaved(false);
+        try {
+            const result = await invoke<UserProfileResult>('save_user_profile', { input: profile });
+            setSoulProfile(result.payload ?? { version: 1 });
+            setSoulSaved(true);
+            setTimeout(() => setSoulSaved(false), 2000);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to save soul profile');
         }
     }, []);
 
@@ -344,9 +367,20 @@ export function useSettings() {
                 return;
             }
 
-            unlisten = await listen<PolicyAuditEvent>('policy-audit-event', (event) => {
+            const unsubscribers: UnlistenFn[] = [];
+
+            unsubscribers.push(await listen<PolicyAuditEvent>('policy-audit-event', (event) => {
                 setPolicyAuditEvents((current) => sortPolicyAuditEvents([...current, event.payload]).slice(0, 100));
-            });
+            }));
+            unsubscribers.push(await listen<SoulProfile>('user-profile-updated', (event) => {
+                setSoulProfile(event.payload ?? { version: 1 });
+            }));
+
+            unlisten = () => {
+                for (const unsubscribe of unsubscribers) {
+                    unsubscribe();
+                }
+            };
         }
 
         void setupPolicyAuditListener();
@@ -382,6 +416,8 @@ export function useSettings() {
         searchSaved,
         proxySettings,
         proxySaved,
+        soulProfile,
+        soulSaved,
         policyConfig,
         policyAuditEvents,
         policyAuditLoading,
@@ -399,6 +435,7 @@ export function useSettings() {
         deleteProfile,
         saveSearchSettings,
         saveProxySettings,
+        saveSoulProfile,
         savePolicyConfig,
         updateMaxHistoryMessages,
     };

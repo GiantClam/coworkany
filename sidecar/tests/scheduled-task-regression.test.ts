@@ -65,7 +65,7 @@ describe('scheduled task regression', () => {
         try {
             const result = await setReminderTool.handler(
                 {
-                    message: 'Review contract',
+                    message: 'Remind me to stretch',
                     time: 'in 2 hours',
                 },
                 { workspacePath, taskId: 'reminder_test' }
@@ -82,6 +82,29 @@ describe('scheduled task regression', () => {
             expect(
                 triggerEngine.getTriggers().some((trigger) => trigger.id === result.trigger_id && trigger.type === 'date')
             ).toBe(true);
+        } finally {
+            removeWorkspace(workspacePath);
+        }
+    });
+
+    test('set_reminder supports Chinese relative time expressions from desktop logs', async () => {
+        const workspacePath = createWorkspace();
+
+        try {
+            const before = Date.now();
+            const result = await setReminderTool.handler(
+                {
+                    message: '开会，在10号会议室',
+                    time: '2分钟后',
+                },
+                { workspacePath, taskId: 'reminder_cn_relative_test' }
+            );
+
+            expect(result.success).toBe(true);
+
+            const scheduledAt = new Date(result.scheduled_at).getTime();
+            expect(scheduledAt).toBeGreaterThan(before + 60_000);
+            expect(scheduledAt).toBeLessThan(before + 3 * 60_000);
         } finally {
             removeWorkspace(workspacePath);
         }
@@ -159,6 +182,81 @@ describe('scheduled task regression', () => {
                 { workspacePath, taskId: 'schedule_delete_test' }
             );
             expect(deleted.success).toBe(true);
+        } finally {
+            removeWorkspace(workspacePath);
+        }
+    });
+
+    test('scheduled_task_create supports one-off date execution triggers', async () => {
+        const workspacePath = createWorkspace();
+        const executedQueries: string[] = [];
+
+        setHeartbeatExecutorFactory(() => ({
+            executeTask: async (query) => {
+                executedQueries.push(query);
+                return { success: true, result: 'ok' };
+            },
+            runSkill: async () => ({ success: true, result: 'ok' }),
+            notify: async () => {},
+        }));
+
+        try {
+            const runAt = new Date(Date.now() + 1200).toISOString();
+            const created = await scheduledTaskCreateTool.handler(
+                {
+                    title: 'One-off AI digest',
+                    taskQuery: '总结 reddit 关于 AI 的热点信息',
+                    scheduleType: 'date',
+                    runAt,
+                },
+                { workspacePath, taskId: 'schedule_date_test' }
+            );
+
+            expect(created.success).toBe(true);
+            expect(created.trigger.schedule.runAt).toBe(runAt);
+
+            await new Promise((resolve) => setTimeout(resolve, 1800));
+
+            expect(executedQueries).toContain('总结 reddit 关于 AI 的热点信息');
+
+            const triggerEngine = getHeartbeatEngine(workspacePath);
+            expect(triggerEngine.getTriggers().some((trigger) => trigger.id === created.triggerId)).toBe(false);
+        } finally {
+            removeWorkspace(workspacePath);
+        }
+    });
+
+    test('set_reminder converts actionable deferred work into one-off execute_task scheduling', async () => {
+        const workspacePath = createWorkspace();
+        const executedQueries: string[] = [];
+
+        setHeartbeatExecutorFactory(() => ({
+            executeTask: async (query) => {
+                executedQueries.push(query);
+                return { success: true, result: 'ok' };
+            },
+            runSkill: async () => ({ success: true, result: 'ok' }),
+            notify: async () => {},
+        }));
+
+        try {
+            const result = await setReminderTool.handler(
+                {
+                    message: '总结Reddit关于AI的热点信息',
+                    time: new Date(Date.now() + 1200).toISOString(),
+                },
+                { workspacePath, taskId: 'reminder_convert_test' }
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.converted_from_reminder).toBe(true);
+            expect(result.execution_type).toBe('scheduled_task');
+            expect(result.scheduled_task.type).toBe('date');
+            expect(result.scheduled_task.taskQuery).toContain('Reddit');
+
+            await new Promise((resolve) => setTimeout(resolve, 1800));
+
+            expect(executedQueries).toContain('总结Reddit关于AI的热点信息');
         } finally {
             removeWorkspace(workspacePath);
         }

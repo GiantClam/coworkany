@@ -3,12 +3,17 @@ import type { ToolDefinition, ToolContext } from '../standard';
 import type { Trigger } from '../../proactive/heartbeat';
 import { getHeartbeatEngine } from '../../proactive/runtime';
 
+type ScheduleType = 'interval' | 'cron' | 'date';
+
 function buildExecuteTaskTrigger(
     args: Record<string, any>,
     context: ToolContext
 ): Trigger {
     const now = new Date().toISOString();
-    const scheduleType = args.scheduleType === 'cron' ? 'cron' : 'interval';
+    const scheduleType: ScheduleType =
+        args.scheduleType === 'cron' || args.scheduleType === 'date'
+            ? args.scheduleType
+            : 'interval';
 
     if (scheduleType === 'cron' && typeof args.cron !== 'string') {
         throw new Error('cron is required when scheduleType is "cron".');
@@ -21,14 +26,28 @@ function buildExecuteTaskTrigger(
         }
     }
 
+    if (scheduleType === 'date') {
+        if (typeof args.runAt !== 'string' || args.runAt.trim().length === 0) {
+            throw new Error('runAt is required when scheduleType is "date".');
+        }
+
+        const runAt = new Date(args.runAt);
+        if (Number.isNaN(runAt.getTime())) {
+            throw new Error('runAt must be a valid ISO timestamp.');
+        }
+    }
+
     return {
         id: randomUUID(),
         name: String(args.title || 'Scheduled task'),
         description: typeof args.description === 'string' ? args.description : undefined,
         type: scheduleType,
-        config: scheduleType === 'cron'
-            ? { expression: args.cron }
-            : { intervalMs: Math.max(1000, Math.round(Number(args.intervalMinutes) * 60_000)) },
+        config:
+            scheduleType === 'cron'
+                ? { expression: String(args.cron) }
+                : scheduleType === 'date'
+                    ? { runAt: String(args.runAt) }
+                    : { intervalMs: Math.max(1000, Math.round(Number(args.intervalMinutes) * 60_000)) },
         action: {
             type: 'execute_task',
             taskQuery: String(args.taskQuery),
@@ -41,6 +60,7 @@ function buildExecuteTaskTrigger(
         enabled: args.enabled !== false,
         createdAt: now,
         triggerCount: 0,
+        runOnce: scheduleType === 'date',
     };
 }
 
@@ -51,9 +71,12 @@ function normalizeTriggerSummary(trigger: Trigger) {
         description: trigger.description,
         enabled: trigger.enabled,
         type: trigger.type,
-        schedule: trigger.type === 'cron'
-            ? { cron: (trigger.config as { expression: string }).expression }
-            : { intervalMs: (trigger.config as { intervalMs: number }).intervalMs },
+        schedule:
+            trigger.type === 'cron'
+                ? { cron: (trigger.config as { expression: string }).expression }
+                : trigger.type === 'date'
+                    ? { runAt: (trigger.config as { runAt: string }).runAt }
+                    : { intervalMs: (trigger.config as { intervalMs: number }).intervalMs },
         taskQuery: trigger.action.taskQuery,
         createdAt: trigger.createdAt,
         lastTriggeredAt: trigger.lastTriggeredAt,
@@ -63,18 +86,18 @@ function normalizeTriggerSummary(trigger: Trigger) {
 
 export const scheduledTaskCreateTool: ToolDefinition = {
     name: 'scheduled_task_create',
-    description: 'Create a recurring scheduled task. Use when the user asks to run something every hour, every day, weekly, or on a cron-like schedule.',
+    description: 'Create a scheduled task that executes work in the future. Supports one-off delayed execution with scheduleType "date", recurring intervals with scheduleType "interval", and cron-like schedules with scheduleType "cron".',
     effects: ['state:remember'],
     input_schema: {
         type: 'object',
         properties: {
             title: { type: 'string', description: 'Human-readable schedule name.' },
             description: { type: 'string', description: 'Optional description.' },
-            taskQuery: { type: 'string', description: 'The query/instruction to run each time the schedule fires.' },
+            taskQuery: { type: 'string', description: 'The query/instruction to execute when the trigger fires.' },
             scheduleType: {
                 type: 'string',
-                enum: ['interval', 'cron'],
-                description: 'Use "interval" for every N minutes, or "cron" for cron expressions.',
+                enum: ['interval', 'cron', 'date'],
+                description: 'Use "interval" for every N minutes, "cron" for cron expressions, or "date" for one-off delayed execution.',
             },
             intervalMinutes: {
                 type: 'number',
@@ -83,6 +106,10 @@ export const scheduledTaskCreateTool: ToolDefinition = {
             cron: {
                 type: 'string',
                 description: 'Required for cron schedules. Standard 5-field cron expression.',
+            },
+            runAt: {
+                type: 'string',
+                description: 'Required for one-off schedules. ISO 8601 timestamp for when the task should execute.',
             },
             enabled: {
                 type: 'boolean',
@@ -115,7 +142,7 @@ export const scheduledTaskCreateTool: ToolDefinition = {
 
 export const scheduledTaskListTool: ToolDefinition = {
     name: 'scheduled_task_list',
-    description: 'List recurring scheduled tasks.',
+    description: 'List scheduled tasks, including both recurring schedules and one-off delayed execution tasks.',
     effects: ['state:remember'],
     input_schema: {
         type: 'object',
@@ -150,7 +177,7 @@ export const scheduledTaskListTool: ToolDefinition = {
 
 export const scheduledTaskDeleteTool: ToolDefinition = {
     name: 'scheduled_task_delete',
-    description: 'Delete a recurring scheduled task.',
+    description: 'Delete a scheduled task.',
     effects: ['state:remember'],
     input_schema: {
         type: 'object',

@@ -139,6 +139,7 @@ export class SkillStore {
                 const data = fs.readFileSync(this.storagePath, 'utf-8');
                 const parsed = JSON.parse(data) as Record<string, StoredSkill>;
                 this.skills = new Map(Object.entries(parsed));
+                this.pruneInvalidStoredSkills();
                 console.log(`[SkillStore] Loaded ${this.skills.size} skills`);
             }
         } catch (error) {
@@ -177,6 +178,7 @@ export class SkillStore {
      * List all stored skills
      */
     list(): StoredSkill[] {
+        this.pruneInvalidStoredSkills();
         const stored = Array.from(this.skills.values());
         const builtins = BUILTIN_SKILLS.map((manifest) => ({
             manifest: manifest as unknown as ClaudeSkillManifest,
@@ -200,7 +202,15 @@ export class SkillStore {
      */
     get(name: string): StoredSkill | undefined {
         const stored = this.skills.get(name);
-        if (stored) return stored;
+        if (stored) {
+            if (this.isStoredSkillUsable(name, stored)) {
+                return stored;
+            }
+
+            this.skills.delete(name);
+            this.save();
+            return undefined;
+        }
 
         const builtin = BUILTIN_SKILLS.find((b) => b.name === name);
         if (builtin) {
@@ -212,6 +222,44 @@ export class SkillStore {
             };
         }
         return undefined;
+    }
+
+    private pruneInvalidStoredSkills(): void {
+        let changed = false;
+
+        for (const [name, stored] of this.skills.entries()) {
+            if (this.isStoredSkillUsable(name, stored)) {
+                continue;
+            }
+
+            this.skills.delete(name);
+            changed = true;
+        }
+
+        if (changed) {
+            this.save();
+        }
+    }
+
+    private isStoredSkillUsable(name: string, stored: StoredSkill): boolean {
+        const directory = stored.manifest.directory;
+        if (!directory || !directory.trim()) {
+            console.warn(`[SkillStore] Pruning invalid skill "${name}": missing directory`);
+            return false;
+        }
+
+        if (!fs.existsSync(directory)) {
+            console.warn(`[SkillStore] Pruning invalid skill "${name}": directory not found (${directory})`);
+            return false;
+        }
+
+        const skillMdPath = path.join(directory, 'SKILL.md');
+        if (!fs.existsSync(skillMdPath)) {
+            console.warn(`[SkillStore] Pruning invalid skill "${name}": missing SKILL.md (${skillMdPath})`);
+            return false;
+        }
+
+        return true;
     }
 
     /**

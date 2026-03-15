@@ -2,6 +2,12 @@ import { useState, useCallback, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore } from '../stores/useTaskEventStore';
 
+export interface TaskRecentRun {
+    status: 'completed' | 'failed';
+    summary: string;
+    finishedAt: string;
+}
+
 export interface Task {
     id: string;
     title: string;
@@ -12,6 +18,10 @@ export interface Task {
     tags: string[];
     createdAt: string;
     updatedAt: string;
+    latestRunStatus?: 'running' | 'completed' | 'failed';
+    latestRunSummary?: string;
+    latestRunAt?: string;
+    recentRuns?: TaskRecentRun[];
 }
 
 export interface GetTasksResult {

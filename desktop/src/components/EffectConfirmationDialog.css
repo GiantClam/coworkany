@@ -1,36 +1,74 @@
 .effect-dialog-overlay {
-    background-color: rgba(0, 0, 0, 0.5);
     position: fixed;
     inset: 0;
-    animation: overlayShow 150ms ease-out;
+    z-index: var(--z-overlay);
+    background:
+        radial-gradient(circle at top, rgba(45, 212, 191, 0.12), transparent 45%),
+        rgba(2, 10, 10, 0.72);
+    backdrop-filter: blur(8px);
+    animation: effectDialogOverlayShow 150ms ease-out;
 }
 
 .effect-dialog-content {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    --effect-risk-color: var(--status-success);
     position: fixed;
     top: 50%;
     left: 50%;
+    z-index: var(--z-modal);
     transform: translate(-50%, -50%);
-    width: 90vw;
-    max-width: 500px;
-    max-height: 85vh;
-    padding: 24px;
-    animation: contentShow 200ms ease-out;
+    width: min(92vw, 560px);
+    max-height: 88vh;
     overflow-y: auto;
+    padding: var(--space-6);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    background:
+        linear-gradient(180deg, rgba(19, 72, 67, 0.28) 0%, rgba(5, 20, 19, 0) 100%),
+        var(--glass-bg);
+    box-shadow: var(--shadow-float);
+    backdrop-filter: var(--glass-blur);
+    color: var(--text-primary);
+    animation: effectDialogContentShow 200ms ease-out;
+}
+
+.effect-dialog-risk-critical {
+    --effect-risk-color: var(--status-error);
+}
+
+.effect-dialog-risk-high {
+    --effect-risk-color: #fb923c;
+}
+
+.effect-dialog-risk-medium {
+    --effect-risk-color: var(--status-warning);
+}
+
+.effect-dialog-risk-low {
+    --effect-risk-color: var(--status-success);
 }
 
 .effect-dialog-header {
     display: flex;
     align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 20px;
+    gap: var(--space-4);
+    margin-bottom: var(--space-5);
 }
 
 .effect-icon {
-    font-size: 32px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 68px;
+    padding: var(--space-3) var(--space-2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--accent-hover);
+    font-family: var(--font-heading);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-bold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
 .effect-title-area {
@@ -39,62 +77,77 @@
 
 .effect-dialog-title {
     margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: #1f2937;
+    font-family: var(--font-heading);
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-bold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
 }
 
 .effect-dialog-description {
-    margin: 4px 0 0;
-    font-size: 14px;
-    color: #6b7280;
+    margin: var(--space-2) 0 0;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: var(--leading-relaxed);
+}
+
+.effect-risk-section,
+.effect-details,
+.approval-mode-group {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    background: rgba(10, 41, 38, 0.64);
 }
 
 .effect-risk-section {
-    background: #f9fafb;
-    border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 20px;
+    margin-bottom: var(--space-5);
+    padding: var(--space-4);
 }
 
-.risk-label {
-    font-size: 12px;
-    font-weight: 600;
+.risk-label,
+.approval-mode-label {
+    margin-bottom: var(--space-2);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-semibold);
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #6b7280;
-    margin-bottom: 8px;
 }
 
 .risk-meter {
-    height: 8px;
-    background: #e5e7eb;
-    border-radius: 4px;
+    height: 10px;
+    margin-bottom: var(--space-2);
     overflow: hidden;
-    margin-bottom: 8px;
+    border-radius: var(--radius-full);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .risk-fill {
     height: 100%;
-    border-radius: 4px;
-    transition: width 300ms ease-out;
+    border-radius: inherit;
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--effect-risk-color) 76%, white 24%), var(--effect-risk-color));
+    box-shadow: 0 0 24px color-mix(in srgb, var(--effect-risk-color) 36%, transparent 64%);
+    transition: width var(--transition-base);
 }
 
 .risk-value {
-    font-size: 14px;
-    font-weight: 600;
+    color: var(--effect-risk-color);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-semibold);
 }
 
 .effect-details {
-    background: #f9fafb;
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 16px;
+    margin-bottom: var(--space-4);
+    padding: var(--space-3) var(--space-4);
 }
 
 .detail-row {
-    display: flex;
-    padding: 8px 0;
-    border-bottom: 1px solid #e5e7eb;
+    display: grid;
+    grid-template-columns: minmax(88px, 120px) minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .detail-row:last-child {
@@ -102,98 +155,152 @@
 }
 
 .detail-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #6b7280;
-    width: 100px;
-    flex-shrink: 0;
+    color: var(--text-tertiary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-semibold);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
 }
 
 .detail-value {
-    font-size: 13px;
-    color: #1f2937;
-    word-break: break-all;
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+    line-height: var(--leading-relaxed);
+    word-break: break-word;
 }
 
 .detail-code {
-    font-family: ui-monospace, SFMono-Regular, monospace;
-    background: #e5e7eb;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    max-width: 100%;
+    padding: 3px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.05);
+    font-family: var(--font-code);
+    font-size: 0.8rem;
 }
 
 .approval-mode-group {
-    margin-bottom: 20px;
-}
-
-.approval-mode-label {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    color: #6b7280;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-5);
+    padding: var(--space-4);
 }
 
 .approval-mode-options {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .approval-mode-option {
-    border: 1px solid #d1d5db;
-    background: #f9fafb;
-    color: #374151;
-    border-radius: 999px;
-    padding: 8px 12px;
-    font-size: 13px;
-    font-weight: 600;
+    padding: 9px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--bg-element);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-semibold);
     cursor: pointer;
-    transition: all 150ms ease;
+    transition:
+        background var(--transition-fast),
+        border-color var(--transition-fast),
+        color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.approval-mode-option:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-element-hover);
+    color: var(--text-primary);
+    transform: translateY(-1px);
 }
 
 .approval-mode-option.is-selected {
-    border-color: #2563eb;
-    background: rgba(37, 99, 235, 0.12);
-    color: #1d4ed8;
+    border-color: color-mix(in srgb, var(--accent-primary) 70%, white 30%);
+    background: var(--accent-subtle);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
 }
 
 .effect-dialog-actions {
     display: flex;
     justify-content: flex-end;
-    gap: 12px;
+    gap: var(--space-3);
 }
 
 .effect-btn {
-    padding: 10px 20px;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 600;
+    min-width: 108px;
+    padding: 11px 18px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-family: var(--font-body);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-semibold);
     cursor: pointer;
-    transition: all 150ms ease;
-    border: none;
+    transition:
+        background var(--transition-fast),
+        border-color var(--transition-fast),
+        color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.effect-btn:hover {
+    transform: translateY(-1px);
 }
 
 .deny-btn {
-    background: #fee2e2;
-    color: #dc2626;
+    border-color: rgba(251, 113, 133, 0.2);
+    background: rgba(251, 113, 133, 0.12);
+    color: #ffc0cb;
 }
 
 .deny-btn:hover {
-    background: #fecaca;
+    border-color: rgba(251, 113, 133, 0.32);
+    background: rgba(251, 113, 133, 0.18);
 }
 
 .approve-btn {
-    background: #3b82f6;
-    color: white;
+    border-color: rgba(45, 212, 191, 0.28);
+    background: linear-gradient(135deg, var(--accent-primary), #0f8f80);
+    color: var(--text-inverse);
 }
 
 .approve-btn:hover {
-    background: #2563eb;
+    border-color: rgba(94, 234, 212, 0.42);
+    background: linear-gradient(135deg, var(--accent-hover), var(--accent-primary));
 }
 
-@keyframes overlayShow {
+@media (max-width: 640px) {
+    .effect-dialog-content {
+        padding: var(--space-5);
+    }
+
+    .effect-dialog-header {
+        flex-direction: column;
+    }
+
+    .effect-icon {
+        min-width: 0;
+        width: fit-content;
+    }
+
+    .detail-row {
+        grid-template-columns: 1fr;
+        gap: var(--space-1);
+    }
+
+    .effect-dialog-actions {
+        flex-direction: column-reverse;
+    }
+
+    .effect-btn {
+        width: 100%;
+    }
+}
+
+@keyframes effectDialogOverlayShow {
     from {
         opacity: 0;
     }
@@ -203,7 +310,7 @@
     }
 }
 
-@keyframes contentShow {
+@keyframes effectDialogContentShow {
     from {
         opacity: 0;
         transform: translate(-50%, -48%) scale(0.96);

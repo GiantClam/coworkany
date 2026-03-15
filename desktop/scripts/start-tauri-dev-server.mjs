@@ -80,15 +80,16 @@ function killWindowsViteOnPort(port) {
   for (const pid of pids) {
     const cmdline = getWindowsProcessCommandLine(pid).toLowerCase();
     const imageName = getWindowsProcessImageName(pid).toLowerCase();
+    const isNodeRuntime = imageName === 'node.exe' || imageName === 'bun.exe';
     if (cmdline.includes('vite')) {
       console.log(`[dev-server] Killing existing vite process on port ${port}: PID ${pid}`);
       execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'inherit' });
       continue;
     }
 
-    // Some Windows environments fail to read command line reliably; allow killing node.exe on the Vite port.
-    if (!cmdline && imageName === 'node.exe') {
-      console.log(`[dev-server] Command line unavailable for PID ${pid}; killing node.exe on port ${port}`);
+    if (isNodeRuntime) {
+      const reason = cmdline ? 'runtime is node/bun on reserved Vite port' : 'command line unavailable for node/bun on reserved Vite port';
+      console.log(`[dev-server] Killing process on port ${port}: PID ${pid} (${reason})`);
       execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'inherit' });
       continue;
     }
@@ -155,7 +156,7 @@ function ensureCleanPort(port) {
 function startVite(port) {
   const vite = spawn(
     process.execPath,
-    ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
+    ['node_modules/vite/bin/vite.js', '--host', 'localhost', '--port', String(port), '--strictPort'],
     {
       stdio: 'inherit',
       cwd: process.cwd(),

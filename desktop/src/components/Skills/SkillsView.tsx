@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import '../../styles/variables.css';
@@ -7,22 +7,15 @@ import { SkillRepositoryView } from './SkillRepositoryView';
 import { RuntimeBadge } from '../Common/RuntimeBadge';
 import { MarketplaceView } from '../Marketplace/MarketplaceView';
 import { OpenClawStoreTab } from './OpenClawStoreTab';
-
-type SkillRecord = {
-    manifest: {
-        id: string;
-        name: string;
-        version: string;
-        description?: string;
-        allowedTools?: string[];
-        tags?: string[];
-        // Add other manifest fields if needed
-    };
-    rootPath: string;
-    source: string;
-    installedAt: string;
-    enabled: boolean;
-};
+import { SkillCredentialCard } from './SkillCredentialCard';
+import { SkillCreatorWorkbench } from './SkillCreatorWorkbench';
+import type { OpenClawStore } from '../../hooks/useOpenClawSkillStore';
+import type { SkillRecord, SkillUpdateInfo } from '../../hooks/useSkills';
+import {
+    deleteSkillCredentials,
+    getRequiredSkillEnvVars,
+    syncEnabledSkillEnvironment,
+} from '../../lib/skillCredentials';
 
 type IpcResult = {
     success: boolean;
@@ -30,6 +23,13 @@ type IpcResult = {
         payload?: Record<string, unknown>;
     };
 };
+
+type SkillsTab = 'install' | 'browse' | 'market' | OpenClawStore;
+
+const STORE_TABS: Array<{ id: OpenClawStore; label: string }> = [
+    { id: 'clawhub', label: 'ClawHub' },
+    { id: 'tencent_skillhub', label: 'SkillHub' },
+];
 
 function extractList<T>(result: IpcResult, key: string): T[] {
     const payload = result.payload?.payload ?? {};
@@ -40,26 +40,75 @@ function extractList<T>(result: IpcResult, key: string): T[] {
 export function SkillsView() {
     const { t } = useTranslation();
     const [skills, setSkills] = useState<SkillRecord[]>([]);
+    const [updates, setUpdates] = useState<Record<string, SkillUpdateInfo>>({});
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [importPath, setImportPath] = useState('');
     const [loading, setLoading] = useState(false);
+    const [checkingUpdates, setCheckingUpdates] = useState(false);
+    const [upgradingSkillId, setUpgradingSkillId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'install' | 'browse' | 'market' | 'clawhub'>('install');
+    const [activeTab, setActiveTab] = useState<SkillsTab>('install');
 
     // GitHub URL validation
     const { validating, result: validationResult } = useGitHubValidation(importPath, 'skill');
 
     const refresh = async () => {
         setLoading(true);
+        setError(null);
         try {
             const result = await invoke<IpcResult>('list_claude_skills', {
                 input: { includeDisabled: true },
             });
-            setSkills(extractList<SkillRecord>(result, 'skills'));
+            const nextSkills = extractList<SkillRecord>(result, 'skills');
+            setSkills(nextSkills);
+            await syncEnabledSkillEnvironment(nextSkills);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to refresh');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const checkUpdates = async (skillIds?: string[]) => {
+        setCheckingUpdates(true);
+        setError(null);
+        try {
+            const result = await invoke<IpcResult>('check_claude_skill_updates', {
+                input: skillIds?.length ? { skillIds } : {},
+            });
+            const payload = result.payload?.payload ?? {};
+            const nextUpdates = Array.isArray(payload.updates) ? payload.updates as SkillUpdateInfo[] : [];
+            setUpdates((current) => ({
+                ...current,
+                ...Object.fromEntries(nextUpdates.map((update) => [update.skillId, update])),
+            }));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to check updates');
+        } finally {
+            setCheckingUpdates(false);
+        }
+    };
+
+    const upgradeSkill = async (skillId: string) => {
+        setUpgradingSkillId(skillId);
+        setError(null);
+        try {
+            const result = await invoke<IpcResult>('upgrade_claude_skill', {
+                input: { skillId },
+            });
+            const payload = result.payload?.payload ?? {};
+            if (payload.error) {
+                throw new Error(String(payload.error));
+            }
+            if (payload.update && typeof payload.update === 'object') {
+                const update = payload.update as SkillUpdateInfo;
+                setUpdates((current) => ({ ...current, [skillId]: update }));
+            }
+            await refresh();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Upgrade failed');
+        } finally {
+            setUpgradingSkillId(null);
         }
     };
 
@@ -93,6 +142,7 @@ export function SkillsView() {
         setLoading(true);
         try {
             await invoke<IpcResult>('remove_claude_skill', { input: { skillId, deleteFiles: true } });
+            await deleteSkillCredentials(skillId);
             if (selectedId === skillId) setSelectedId(null);
             await refresh();
         } catch (err) { setError(err instanceof Error ? err.message : 'Remove failed'); }
@@ -100,16 +150,26 @@ export function SkillsView() {
     };
 
     const selectedSkill = skills.find(s => s.manifest.id === selectedId);
+    const selectedUpdate = selectedSkill ? updates[selectedSkill.manifest.id] : undefined;
+    const requiredEnvVars = useMemo(
+        () => (selectedSkill ? getRequiredSkillEnvVars(selectedSkill) : []),
+        [selectedSkill]
+    );
     const showImportBar = activeTab === 'install';
 
     return (
         <div style={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h2>{t('skills.claudeSkills')}</h2>
-                <button className="btn btn-secondary" onClick={() => void refresh()} disabled={loading}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-                    {t('common.refresh')}
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={() => void checkUpdates()} disabled={loading || checkingUpdates}>
+                        {checkingUpdates ? 'Checking updates...' : 'Check updates'}
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => void refresh()} disabled={loading}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                        {t('common.refresh')}
+                    </button>
+                </div>
             </div>
 
             {/* Tabs */}
@@ -159,21 +219,24 @@ export function SkillsView() {
                 >
                     Market
                 </button>
-                <button
-                    onClick={() => setActiveTab('clawhub')}
-                    style={{
-                        padding: '8px 16px',
-                        border: 'none',
-                        background: 'transparent',
-                        color: activeTab === 'clawhub' ? 'var(--status-info)' : 'var(--text-secondary)',
-                        borderBottom: activeTab === 'clawhub' ? '2px solid var(--status-info)' : '2px solid transparent',
-                        cursor: 'pointer',
-                        fontWeight: activeTab === 'clawhub' ? 600 : 400,
-                        transition: 'all 0.2s'
-                    }}
-                >
-                    ClawHub
-                </button>
+                {STORE_TABS.map((tab) => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        style={{
+                            padding: '8px 16px',
+                            border: 'none',
+                            background: 'transparent',
+                            color: activeTab === tab.id ? 'var(--status-info)' : 'var(--text-secondary)',
+                            borderBottom: activeTab === tab.id ? '2px solid var(--status-info)' : '2px solid transparent',
+                            cursor: 'pointer',
+                            fontWeight: activeTab === tab.id ? 600 : 400,
+                            transition: 'all 0.2s'
+                        }}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
             {/* Import Bar */}
@@ -257,9 +320,9 @@ export function SkillsView() {
                     installedSources={new Set(skills.map(s => s.source))}
                     onInstallComplete={refresh}
                 />
-            ) : activeTab === 'clawhub' ? (
+            ) : STORE_TABS.some((tab) => tab.id === activeTab) ? (
                 <OpenClawStoreTab
-                    store="clawhub"
+                    store={activeTab as OpenClawStore}
                     installedSkillIds={new Set(skills.map(s => s.manifest.id))}
                     onInstallComplete={refresh}
                 />
@@ -272,7 +335,9 @@ export function SkillsView() {
                 <div style={{ display: 'flex', gap: '24px', flex: 1, overflow: 'hidden' }}>
                     {/* List */}
                     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {skills.map(skill => (
+                        {skills.map(skill => {
+                            const update = updates[skill.manifest.id];
+                            return (
                             <div
                                 key={skill.manifest.id}
                                 style={{
@@ -287,7 +352,20 @@ export function SkillsView() {
                                 onClick={() => setSelectedId(skill.manifest.id)}
                             >
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                    <span style={{ fontWeight: 600 }}>{skill.manifest.name}</span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span style={{ fontWeight: 600 }}>{skill.manifest.name}</span>
+                                        {update?.hasUpdate && (
+                                            <span style={{
+                                                fontSize: '11px',
+                                                padding: '2px 6px',
+                                                borderRadius: '999px',
+                                                background: 'rgba(245, 158, 11, 0.14)',
+                                                color: 'var(--status-warning)'
+                                            }}>
+                                                Update available
+                                            </span>
+                                        )}
+                                    </div>
                                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>v{skill.manifest.version}</span>
                                 </div>
                                 <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
@@ -309,7 +387,7 @@ export function SkillsView() {
                                     </label>
                                 </div>
                             </div>
-                        ))}
+                        );})}
                         {skills.length === 0 && <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '20px' }}>{t('skills.noSkillsInstalled')}</div>}
                     </div>
 
@@ -325,6 +403,82 @@ export function SkillsView() {
                                     <Field label={t('skills.location')} value={selectedSkill.rootPath} />
                                     <Field label={t('skills.installedAt')} value={new Date(selectedSkill.installedAt).toLocaleString()} />
                                 </div>
+
+                                <div style={{
+                                    padding: '12px',
+                                    border: '1px solid var(--border-subtle)',
+                                    borderRadius: 'var(--radius-md)',
+                                    background: 'var(--bg-panel)'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                                        <div style={{ display: 'grid', gap: '4px' }}>
+                                            <div style={{ fontSize: '14px', fontWeight: 600 }}>Updates</div>
+                                            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                                {selectedUpdate
+                                                    ? selectedUpdate.supported
+                                                        ? selectedUpdate.error
+                                                            ? selectedUpdate.error
+                                                            : selectedUpdate.hasUpdate
+                                                                ? `Latest version: ${selectedUpdate.latestVersion ?? 'unknown'}`
+                                                                : `Up to date${selectedUpdate.latestVersion ? ` (${selectedUpdate.latestVersion})` : ''}`
+                                                        : 'This skill does not have a supported upstream source.'
+                                                    : 'No update check has been run for this skill yet.'}
+                                            </div>
+                                            {selectedUpdate?.sourceRepo && (
+                                                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                                    {selectedUpdate.sourceRepo}@{selectedUpdate.sourceRef} / {selectedUpdate.sourcePath}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => void checkUpdates([selectedSkill.manifest.id])}
+                                                disabled={checkingUpdates}
+                                            >
+                                                {checkingUpdates ? 'Checking...' : 'Check'}
+                                            </button>
+                                            <button
+                                                className="btn btn-primary"
+                                                onClick={() => void upgradeSkill(selectedSkill.manifest.id)}
+                                                disabled={
+                                                    upgradingSkillId === selectedSkill.manifest.id
+                                                    || !selectedUpdate?.supported
+                                                    || !selectedUpdate?.hasUpdate
+                                                }
+                                            >
+                                                {upgradingSkillId === selectedSkill.manifest.id ? 'Upgrading...' : 'Upgrade'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    <div>
+                                        <h4 style={{ fontSize: '14px', marginBottom: '6px' }}>{t('skills.credentialsTitle')}</h4>
+                                        <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                            {requiredEnvVars.length > 0
+                                                ? t('skills.credentialsHint')
+                                                : t('skills.noCredentialsRequired')}
+                                        </div>
+                                    </div>
+
+                                    {requiredEnvVars.length > 0 && (
+                                        <>
+                                            <SkillCredentialCard
+                                                skillId={selectedSkill.manifest.id}
+                                                skillName={selectedSkill.manifest.name}
+                                                requiredEnv={requiredEnvVars}
+                                                source={selectedSkill.source}
+                                            />
+                                        </>
+                                    )}
+                                </div>
+
+                                <SkillCreatorWorkbench
+                                    skill={selectedSkill}
+                                    onError={(message) => setError(message)}
+                                />
 
                                 <div>
                                     <h4 style={{ fontSize: '14px', marginBottom: '8px' }}>{t('skills.manifestFull')}</h4>
@@ -352,8 +506,9 @@ export function SkillsView() {
                                 )}
 
                                 <button
+                                    className="btn"
                                     onClick={() => void remove(selectedSkill.manifest.id)}
-                                    style={{ background: 'var(--status-error)', marginTop: '20px', alignSelf: 'flex-start' }}
+                                    style={{ background: 'var(--status-error)', marginTop: '20px', alignSelf: 'flex-start', color: 'white' }}
                                 >
                                     {t('skills.uninstallSkill')}
                                 </button>

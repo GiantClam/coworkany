@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { useTasks, Task } from '../../hooks/useTasks';
+import { useTasks, Task, TaskRecentRun } from '../../hooks/useTasks';
 import { useWorkspace } from '../../hooks/useWorkspace';
 import './TaskListView.css';
 
@@ -121,7 +121,32 @@ const statusTone: Record<Task['status'], string> = {
     cancelled: 'cancelled',
 };
 
+const latestRunTone: Record<NonNullable<Task['latestRunStatus']>, string> = {
+    completed: 'success',
+    failed: 'failed',
+    running: 'running',
+};
+
 const TaskItem: React.FC<{ task: Task }> = ({ task }) => {
+    const { t } = useTranslation();
+    const latestRunLabel: Record<NonNullable<Task['latestRunStatus']>, string> = {
+        completed: t('dashboard.lastRunSucceeded'),
+        failed: t('dashboard.lastRunFailed'),
+        running: t('dashboard.runInProgress'),
+    };
+    const latestRunFingerprint = `${task.latestRunStatus ?? ''}|${task.latestRunAt ?? ''}|${task.latestRunSummary ?? ''}`;
+    const recentRuns = task.recentRuns ?? [];
+    const visibleRecentRuns = recentRuns.filter((run, index) => {
+        if (index !== 0) {
+            return true;
+        }
+        if (task.latestRunStatus === 'running') {
+            return true;
+        }
+        const runFingerprint = `${run.status}|${run.finishedAt}|${run.summary}`;
+        return runFingerprint !== latestRunFingerprint;
+    });
+
     return (
         <div className={`task-card ${task.status === 'completed' ? 'completed' : ''}`}>
             <div className="task-card-header">
@@ -147,6 +172,56 @@ const TaskItem: React.FC<{ task: Task }> = ({ task }) => {
                     </span>
                 ))}
             </div>
+
+            {(task.latestRunSummary || task.latestRunStatus) && (
+                <div className={`task-card-result ${task.latestRunStatus ? latestRunTone[task.latestRunStatus] : ''}`}>
+                    <div className="task-card-result-header">
+                        <span className="task-card-result-label">
+                            {task.latestRunStatus ? latestRunLabel[task.latestRunStatus] : t('dashboard.latestResult')}
+                        </span>
+                        {task.latestRunAt && (
+                            <span className="task-card-result-time">
+                                {new Date(task.latestRunAt).toLocaleString()}
+                            </span>
+                        )}
+                    </div>
+                    {task.latestRunSummary && (
+                        <p className="task-card-result-summary">{task.latestRunSummary}</p>
+                    )}
+                    {visibleRecentRuns.length > 0 && (
+                        <div className="task-card-history">
+                            <div className="task-card-history-title">
+                                {t('dashboard.recentRuns', { count: visibleRecentRuns.length })}
+                            </div>
+                            <div className="task-card-history-list">
+                                {visibleRecentRuns.map((run, index) => (
+                                    <TaskRunHistoryItem key={`${run.finishedAt}-${index}`} run={run} />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const TaskRunHistoryItem: React.FC<{ run: TaskRecentRun }> = ({ run }) => {
+    const { t } = useTranslation();
+
+    return (
+        <div className="task-card-history-entry">
+            <div className="task-card-history-entry-header">
+                <span className={`task-card-history-status ${run.status}`}>
+                    {run.status === 'completed'
+                        ? t('dashboard.runStatusCompleted')
+                        : t('dashboard.runStatusFailed')}
+                </span>
+                <span className="task-card-history-time">
+                    {new Date(run.finishedAt).toLocaleString()}
+                </span>
+            </div>
+            <p className="task-card-history-summary">{run.summary}</p>
         </div>
     );
 };

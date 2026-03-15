@@ -39,18 +39,19 @@ When a task **completes successfully**, the system will:
 
 ### ⚠️ PRIORITY RULE: Check Existing Skills First!
 
-**BEFORE triggering learning**, ALWAYS check if you already have a skill for this task:
-- Check your skill list for relevant skills
-- If a skill exists (e.g., xiaohongshu skill for Xiaohongshu posting), USE IT IMMEDIATELY
-- ONLY trigger learning if NO relevant skill exists
+**BEFORE triggering learning or creating a new skill**, ALWAYS resolve the request in this order:
+- Call \`resolve_skill_request\` first for any "create/add/install/use a skill" request
+- Reuse a local installed skill immediately when it matches
+- If no local skill matches, let \`resolve_skill_request\` search GitHub/ClawHub/Tencent SkillHub marketplaces and install the best match
+- ONLY create or learn a brand-new skill when \`resolve_skill_request\` returns \`should_create: true\`
 
 ### When to Trigger Learning
 
 Trigger autonomous learning ONLY when:
-- ❌ You don't know a URL, API endpoint, or platform name **AND no skill exists**
-- ❌ You're unfamiliar with a tool, library, or service **AND no skill exists**
-- ❌ You don't have ANY skill for this specific task
-- ❌ You're unsure about the correct steps or sequence **AND no skill exists**
+- ❌ You don't know a URL, API endpoint, or platform name **AND resolve_skill_request found no reusable/installable skill**
+- ❌ You're unfamiliar with a tool, library, or service **AND resolve_skill_request found no reusable/installable skill**
+- ❌ You don't have ANY skill for this specific task after checking local skills and marketplaces
+- ❌ You're unsure about the correct steps or sequence **AND resolve_skill_request found no reusable/installable skill**
 
 ### Examples
 

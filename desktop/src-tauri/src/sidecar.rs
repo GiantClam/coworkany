@@ -15,6 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -437,6 +438,12 @@ impl SidecarManager {
                     match serde_json::from_str::<serde_json::Value>(&line) {
                         Ok(message) => match classify_sidecar_message(&message) {
                             Some(SidecarMessageKind::TaskEvent) => {
+                                if let Some(reminder_message) = extract_reminder_message(&message) {
+                                    dispatch_system_reminder_notification(
+                                        &app_handle,
+                                        &reminder_message,
+                                    );
+                                }
                                 if let Err(e) = app_handle.emit("task-event", &message) {
                                     error!("Failed to emit task-event: {}", e);
                                 }
@@ -738,6 +745,34 @@ enum SidecarMessageKind {
     TaskEvent,
     IpcResponse,
     IpcCommand,
+}
+
+fn extract_reminder_message(message: &serde_json::Value) -> Option<String> {
+    let event_type = message.get("type")?.as_str()?;
+    if event_type != "TASK_FINISHED" {
+        return None;
+    }
+
+    let summary = message.get("payload")?.get("summary")?.as_str()?;
+    summary
+        .strip_prefix("[Reminder] ")
+        .map(std::string::ToString::to_string)
+}
+
+fn dispatch_system_reminder_notification(app_handle: &AppHandle, message: &str) {
+    match app_handle
+        .notification()
+        .builder()
+        .title("Reminder")
+        .body(message)
+        .show()
+    {
+        Ok(()) => info!("Dispatched system reminder notification: {}", message),
+        Err(error) => warn!(
+            "Failed to dispatch system reminder notification for '{}': {}",
+            message, error
+        ),
+    }
 }
 
 fn classify_sidecar_message(message: &serde_json::Value) -> Option<SidecarMessageKind> {

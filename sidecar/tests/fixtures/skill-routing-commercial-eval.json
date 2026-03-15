@@ -1,0 +1,44 @@
+{
+  "thresholds": {
+    "requiredHitRate": 1,
+    "forbiddenHitRate": 0
+  },
+  "scenarios": [
+    {
+      "query": "Use the weather skill to tell me if I need an umbrella in Beijing tonight.",
+      "required": ["weather-helper"],
+      "forbidden": ["systematic-debugging", "writing-plans", "browser-use"],
+      "maxRoutes": 1
+    },
+    {
+      "query": "Explain in one short sentence what earnings mean for NVDA stock investors.",
+      "required": ["stock-research"],
+      "forbidden": ["browser-use", "systematic-debugging", "writing-plans"],
+      "maxRoutes": 1
+    },
+    {
+      "query": "Write an implementation plan for this feature before touching code.",
+      "required": ["writing-plans"],
+      "forbidden": ["systematic-debugging", "browser-use"],
+      "maxRoutes": 1
+    },
+    {
+      "query": "This test is failing with a timeout error. Debug the root cause.",
+      "required": ["systematic-debugging"],
+      "forbidden": ["writing-plans", "browser-use"],
+      "maxRoutes": 1
+    },
+    {
+      "query": "Open the website, click the login button, and take a screenshot.",
+      "requiredAnyOf": ["browser-use", "browser-automation"],
+      "forbidden": ["systematic-debugging", "writing-plans"],
+      "maxRoutes": 1
+    },
+    {
+      "query": "Hello there.",
+      "required": [],
+      "forbidden": ["weather-helper", "stock-research", "browser-use", "systematic-debugging", "writing-plans"],
+      "maxRoutes": 0
+    }
+  ]
+}

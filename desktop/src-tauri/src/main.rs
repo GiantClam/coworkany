@@ -14,21 +14,21 @@ mod git_integration;
 mod ipc;
 mod policy;
 mod process_manager;
+mod screen_capture;
 mod shadow_fs;
 mod sidecar;
-mod screen_capture;
 mod tray;
 mod window_manager;
-
 
 use policy::{FileAuditSink, PolicyEngineState};
 use process_manager::ProcessManagerState;
 use shadow_fs::ShadowFsState;
 use sidecar::SidecarState;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 const APP_IDENTIFIER: &str = "com.coworkany.desktop";
@@ -59,7 +59,10 @@ fn update_global_shortcut(
         .register(new_shortcut.as_str())
         .map_err(|e| format!("Failed to register shortcut '{}': {}", new_shortcut, e))?;
 
-    info!("Global shortcut updated: '{}' -> '{}'", old_shortcut, new_shortcut);
+    info!(
+        "Global shortcut updated: '{}' -> '{}'",
+        old_shortcut, new_shortcut
+    );
     Ok(())
 }
 
@@ -84,7 +87,7 @@ fn main() {
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt::layer().with_writer(std::io::stderr))             // console
+        .with(fmt::layer().with_writer(std::io::stderr)) // console
         .with(fmt::layer().with_ansi(false).with_writer(non_blocking)) // file
         .init();
 
@@ -92,10 +95,13 @@ fn main() {
     info!("Log directory: {}", log_dir.display());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(SidecarState::new())
         .manage(ProcessManagerState::new())
+        .manage::<ipc::SkillReviewServerState>(Arc::new(Mutex::new(HashMap::new())))
         .manage::<ShadowFsState>(Arc::new(Mutex::new(None)))
         .manage(PolicyEngineState::new(Box::new(FileAuditSink::new(
             app_data_dir.join("policy-audit.jsonl"),
@@ -105,6 +111,7 @@ fn main() {
             ipc::start_task,
             ipc::cancel_task,
             ipc::send_task_message,
+            ipc::resume_recoverable_tasks,
             ipc::clear_task_history,
             ipc::get_tasks, // Previously added
             ipc::get_sidecar_status,
@@ -114,6 +121,25 @@ fn main() {
             ipc::get_workspace_root,
             ipc::load_sessions,
             ipc::save_sessions,
+            ipc::get_user_profile,
+            ipc::save_user_profile,
+            ipc::ensure_skill_evals_file,
+            ipc::aggregate_skill_benchmark,
+            ipc::generate_skill_review_viewer,
+            ipc::import_skill_review_feedback,
+            ipc::load_skill_benchmark_preview,
+            ipc::load_skill_benchmark_notes_history,
+            ipc::start_skill_review_server,
+            ipc::stop_skill_review_server,
+            ipc::get_skill_review_server_status,
+            ipc::save_skill_benchmark_notes,
+            ipc::check_skill_benchmark_analyzer,
+            ipc::load_skill_benchmark_analyzer_status,
+            ipc::load_skill_benchmark_analyzer_history,
+            ipc::run_skill_benchmark_analyzer_smoke,
+            ipc::assess_skill_benchmark_analyzer_readiness,
+            ipc::generate_skill_benchmark_notes,
+            ipc::open_local_path,
             ipc::get_startup_measurement_config,
             ipc::record_startup_metric,
             ipc::spawn_sidecar,
@@ -128,8 +154,11 @@ fn main() {
             ipc::import_claude_skill,
             ipc::set_claude_skill_enabled,
             ipc::remove_claude_skill,
+            ipc::check_claude_skill_updates,
+            ipc::upgrade_claude_skill,
             ipc::search_openclaw_skill_store,
             ipc::install_openclaw_skill,
+            ipc::sync_skill_environment,
             // Workspace commands
             ipc::list_workspaces,
             ipc::create_workspace,

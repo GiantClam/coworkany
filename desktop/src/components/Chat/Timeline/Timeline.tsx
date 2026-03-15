@@ -108,6 +108,7 @@ export const Timeline: React.FC<{
                                 key={item.id}
                                 content={(item as any).content}
                                 actions={(item as any).actions}
+                                skillConfigCard={(item as any).skillConfigCard}
                                 onAction={onSystemAction}
                             />
                         );

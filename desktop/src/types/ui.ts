@@ -140,6 +140,17 @@ export interface LlmConfig {
     proxy?: ProxySettings;
 }
 
+export interface SoulProfile {
+    version?: number;
+    identity?: string;
+    stablePreferences?: string[];
+    workingStyle?: string[];
+    longTermGoals?: string[];
+    avoid?: string[];
+    outputRules?: string[];
+    updatedAt?: string;
+}
+
 // ============================================================================
 // IPC Result Types
 // ============================================================================

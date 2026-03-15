@@ -11,8 +11,10 @@ export default defineConfig({
     },
     clearScreen: false,
     server: {
+        host: 'localhost',
         port: 5173,
         strictPort: true,
+        allowedHosts: ['localhost', '127.0.0.1'],
         watch: {
             // Ignore .coworkany directory to prevent constant reloads from sessions.json updates
             ignored: ['**/.coworkany/**', '**/src-tauri/.coworkany/**'],

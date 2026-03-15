@@ -33,6 +33,7 @@ function getAppStateRoot(): string {
 // Logs are written to the app data directory when available, falling back to
 // workspace-local .coworkany during development.
 const APP_STATE_ROOT = getAppStateRoot();
+const managedSkillEnvOriginals = new Map<string, string | undefined>();
 const LOG_DIR = path.join(APP_STATE_ROOT, 'logs');
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* ignore */ }
 
@@ -91,6 +92,7 @@ import {
     type HandlerContext,
 } from './handlers';
 import { ToolpackStore, SkillStore, WorkspaceStore } from './storage';
+import { openclawCompat } from './claude_skills/openclawCompat';
 import { createPostExecutionLearningManager } from './agent/postExecutionLearning';
 import { downloadSkillFromGitHub, downloadMcpFromGitHub } from './utils';
 import {
@@ -114,6 +116,11 @@ import { xiaohongshuPostTool } from './tools/xiaohongshuPost';
 import { BrowserService } from './services/browserService';
 import { CODE_EXECUTION_TOOLS } from './tools/codeExecution';
 import { KNOWLEDGE_TOOLS } from './agent/knowledgeUpdater';
+import {
+    isRecoverableTaskId,
+    normalizeRecoverableTaskInputs,
+    type RecoverableTaskHint as RecoveryHintInput,
+} from './agent/recoveryHints';
 import { executeJavaScriptTool, executePythonTool } from './tools/codeExecution';
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
 import { AUTONOMOUS_LEARNING_PROTOCOL } from './data/prompts/autonomousLearning';
@@ -136,6 +143,15 @@ import {
 } from './agent/selfLearning';
 import type { SkillRecord, ReuseEngineDependencies } from './agent/selfLearning/reuseEngine';
 import { createSelfLearningTools, type SelfLearningToolHandlers } from './tools/selfLearning';
+import { buildSkillSystemPromptContext } from './skills/promptBuilder';
+import { resolveSkillRequest } from './skills/skillResolver';
+import { checkSkillsForUpdates, upgradeSkillFromUpstream, type ClaudeSkillUpdateInfo } from './skills/updater';
+import {
+    buildCurrentSessionSection,
+    formatSoulSection,
+    loadSoulProfile,
+    loadWorkspacePolicySection,
+} from './promptContext/profile';
 import { getRagBridge, getMemoryContext, getVaultManager } from './memory';
 import {
     AutonomousAgentController,
@@ -160,12 +176,24 @@ import { setHeartbeatExecutorFactory, shutdownHeartbeatEngines } from './proacti
 import * as os from 'os';
 // NOTE: fs and path are imported at the top of the file (log file setup)
 import { getCurrentPlatform } from './utils/commandAlternatives';
+import { buildAnthropicSystemBlocks, flattenStructuredSystemPrompt, type StructuredSystemPrompt } from './llm/systemPrompt';
 import { getCommandLearningDirective } from './agent/commandLearningIntent';
 import {
     getBrowserFeedDirective,
     isXFollowingResearchRequest,
     shouldSuppressTriggeredSkillForBrowserFeed,
 } from './agent/browserFeedIntent';
+import { buildTaskCompletionSummary } from './agent/taskOutcome';
+import {
+    getSchedulingDirective,
+    shouldSuppressTriggeredSkillForScheduling,
+} from './agent/schedulingIntent';
+import {
+    buildRepeatedSuccessfulInstallMessage,
+    isDirectPackageInstallRequest,
+    isSuccessfulPythonInstallResult,
+    normalizePythonInstallCommandForLoopGuard,
+} from './agent/installLoopGuard';
 
 // ============================================================================
 // Event Emitter
@@ -179,6 +207,57 @@ function emit(message: OutputMessage): void {
 
     // Forward TaskEvents to post-execution learning manager
     if ('type' in message && 'taskId' in message && typeof postLearningManager !== 'undefined') {
+        if (message.type === 'TASK_STARTED') {
+            const payload = (message as any).payload ?? {};
+            const context = payload.context ?? {};
+            if (typeof context.workspacePath === 'string') {
+                const existingConfig = taskConfigs.get((message as any).taskId) ?? {};
+                taskConfigs.set((message as any).taskId, {
+                    ...existingConfig,
+                    workspacePath: context.workspacePath,
+                    activeFile: typeof context.activeFile === 'string' ? context.activeFile : existingConfig.activeFile,
+                });
+            }
+            markTaskRuntime((message as any).taskId, {
+                title: typeof payload.title === 'string' ? payload.title : undefined,
+                status: 'running',
+                autoResumePending: false,
+                lastError: undefined,
+            });
+        } else if (message.type === 'TASK_STATUS') {
+            const status = (message as any).payload?.status;
+            if (status === 'running') {
+                markTaskRuntime((message as any).taskId, {
+                    status: 'running',
+                    autoResumePending: false,
+                    lastError: undefined,
+                });
+            }
+        } else if (message.type === 'TASK_FINISHED') {
+            markTaskRuntime((message as any).taskId, {
+                status: 'finished',
+                autoResumePending: false,
+                lastError: undefined,
+                lastSummary: typeof (message as any).payload?.summary === 'string'
+                    ? (message as any).payload.summary
+                    : undefined,
+            });
+        } else if (message.type === 'TASK_FAILED') {
+            const payload = (message as any).payload ?? {};
+            const recoverable = payload.recoverable === true;
+            markTaskRuntime((message as any).taskId, {
+                status: recoverable ? 'recoverable_interrupted' : 'failed',
+                autoResumePending: recoverable,
+                lastError: typeof payload.error === 'string' ? payload.error : undefined,
+            });
+        }
+
+        const meta = taskRuntimeMeta.get((message as any).taskId);
+        if (meta?.status === 'running' && !['TASK_FINISHED', 'TASK_FAILED'].includes(message.type as string)) {
+            scheduleTaskTerminalWatchdog((message as any).taskId);
+            persistTaskRuntimeSnapshot((message as any).taskId);
+        }
+
         const taskEventTypes = [
             'TASK_STARTED', 'TASK_FINISHED', 'TASK_FAILED',
             'TOOL_CALLED', 'TOOL_RESULT', 'TEXT_DELTA'
@@ -201,6 +280,39 @@ function emit(message: OutputMessage): void {
 function emitAny(message: Record<string, unknown>): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
+}
+
+function syncManagedSkillEnvironment(env: Record<string, string>): { applied: number; cleared: number } {
+    const nextEntries = Object.entries(env)
+        .map(([key, value]) => [key.trim(), value.trim()] as const)
+        .filter(([key, value]) => key.length > 0 && value.length > 0);
+    const nextKeys = new Set(nextEntries.map(([key]) => key));
+
+    let cleared = 0;
+    for (const key of Array.from(managedSkillEnvOriginals.keys())) {
+        if (nextKeys.has(key)) {
+            continue;
+        }
+
+        const original = managedSkillEnvOriginals.get(key);
+        if (typeof original === 'string') {
+            process.env[key] = original;
+        } else {
+            delete process.env[key];
+        }
+        managedSkillEnvOriginals.delete(key);
+        cleared += 1;
+    }
+
+    for (const [key, value] of nextEntries) {
+        if (!managedSkillEnvOriginals.has(key)) {
+            managedSkillEnvOriginals.set(key, process.env[key]);
+        }
+        process.env[key] = value;
+    }
+
+    console.log(`[SkillEnv] Synced ${nextEntries.length} vars, cleared ${cleared}`);
+    return { applied: nextEntries.length, cleared };
 }
 
 const pendingEffectResponses = new Map<
@@ -309,7 +421,7 @@ function clearRateLimitContext() {
 type AnthropicStreamOptions = {
     modelId?: string;
     maxTokens?: number;
-    systemPrompt?: string | { skills: string };  // Support both legacy string and structured format for caching
+    systemPrompt?: string | StructuredSystemPrompt;  // Support both legacy string and structured format for caching
     tools?: any[];
 };
 
@@ -318,9 +430,7 @@ type AnthropicMessage = {
     content: string | Array<Record<string, unknown>>;
 };
 
-const taskSequences = new Map<string, number>();
-const taskConversations = new Map<string, AnthropicMessage[]>();
-const taskConfigs = new Map<string, {
+type TaskRuntimeConfig = {
     modelId?: string;
     maxTokens?: number;
     maxHistoryMessages?: number;
@@ -328,12 +438,294 @@ const taskConfigs = new Map<string, {
     enabledToolpacks?: string[];
     enabledSkills?: string[];
     workspacePath?: string;
-}>();
+    activeFile?: string;
+};
+
+type PersistedTaskRuntimeStatus =
+    | 'running'
+    | 'finished'
+    | 'failed'
+    | 'recoverable_interrupted';
+
+type PersistedTaskRuntimeSnapshot = {
+    version: 1;
+    taskId: string;
+    title?: string;
+    workspacePath: string;
+    config: TaskRuntimeConfig;
+    conversation: AnthropicMessage[];
+    status: PersistedTaskRuntimeStatus;
+    updatedAt: string;
+    lastError?: string;
+    autoResumePending?: boolean;
+    lastSummary?: string;
+};
+
+type RecoverableTaskHint = RecoveryHintInput;
+
+type TaskRuntimeMeta = {
+    title?: string;
+    status: PersistedTaskRuntimeStatus;
+    updatedAt: string;
+    lastError?: string;
+    autoResumePending?: boolean;
+    lastSummary?: string;
+};
+
+type AgentLoopOutcome = {
+    terminalEmitted: boolean;
+    finalAssistantText?: string;
+    cancelled?: boolean;
+    maxStepsReached?: boolean;
+};
+
+const taskSequences = new Map<string, number>();
+const taskConversations = new Map<string, AnthropicMessage[]>();
+const taskConfigs = new Map<string, TaskRuntimeConfig>();
+const taskRuntimeMeta = new Map<string, TaskRuntimeMeta>();
 
 const mcpGateway = new MCPGateway();
 
 const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 const taskHistoryLimits = new Map<string, number>();
+const RECOVERABLE_RUNTIME_SCAN_MAX_AGE_MS = 15 * 60 * 1000;
+const TASK_RUNTIME_STALL_TIMEOUT_MS = 2 * 60 * 1000;
+const taskWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+
+function getTaskRuntimeDir(workspacePath: string): string {
+    return path.join(workspacePath, '.coworkany', 'runtime', 'tasks');
+}
+
+function getTaskSnapshotPath(taskId: string, workspacePath: string): string {
+    return path.join(getTaskRuntimeDir(workspacePath), `${taskId}.json`);
+}
+
+function scheduleTaskTerminalWatchdog(taskId: string): void {
+    const existing = taskWatchdogs.get(taskId);
+    if (existing) {
+        clearTimeout(existing);
+    }
+
+    const config = taskConfigs.get(taskId);
+    const workspacePath = config?.workspacePath;
+    if (!workspacePath) {
+        return;
+    }
+
+    const timer = setTimeout(() => {
+        const meta = taskRuntimeMeta.get(taskId);
+        if (!meta || meta.status !== 'running') {
+            return;
+        }
+
+        console.error(`[TaskWatchdog] Task ${taskId} exceeded terminal timeout without a final event`);
+        emit(createTaskFailedEvent(taskId, {
+            error: 'Task stalled without producing a terminal result.',
+            errorCode: 'TASK_TERMINAL_TIMEOUT',
+            recoverable: true,
+            suggestion: 'CoworkAny recorded the interrupted state. Reconnect and resume to continue from the last saved context.',
+        }));
+    }, TASK_RUNTIME_STALL_TIMEOUT_MS);
+
+    taskWatchdogs.set(taskId, timer);
+}
+
+function clearTaskTerminalWatchdog(taskId: string): void {
+    const existing = taskWatchdogs.get(taskId);
+    if (existing) {
+        clearTimeout(existing);
+        taskWatchdogs.delete(taskId);
+    }
+}
+
+function persistTaskRuntimeSnapshot(taskId: string): void {
+    const config = taskConfigs.get(taskId);
+    if (!config?.workspacePath) {
+        return;
+    }
+
+    const meta = taskRuntimeMeta.get(taskId);
+    const conversation = taskConversations.get(taskId) ?? [];
+    const snapshot: PersistedTaskRuntimeSnapshot = {
+        version: 1,
+        taskId,
+        title: meta?.title,
+        workspacePath: config.workspacePath,
+        config,
+        conversation,
+        status: meta?.status ?? 'running',
+        updatedAt: meta?.updatedAt ?? new Date().toISOString(),
+        lastError: meta?.lastError,
+        autoResumePending: meta?.autoResumePending,
+        lastSummary: meta?.lastSummary,
+    };
+
+    try {
+        fs.mkdirSync(getTaskRuntimeDir(config.workspacePath), { recursive: true });
+        fs.writeFileSync(getTaskSnapshotPath(taskId, config.workspacePath), JSON.stringify(snapshot, null, 2), 'utf-8');
+    } catch (error) {
+        console.error(`[TaskRuntime] Failed to persist snapshot for ${taskId}:`, error);
+    }
+}
+
+function markTaskRuntime(
+    taskId: string,
+    patch: Partial<TaskRuntimeMeta>,
+): void {
+    const current = taskRuntimeMeta.get(taskId);
+    const next: TaskRuntimeMeta = {
+        title: patch.title ?? current?.title,
+        status: patch.status ?? current?.status ?? 'running',
+        updatedAt: patch.updatedAt ?? new Date().toISOString(),
+        lastError: patch.lastError ?? current?.lastError,
+        autoResumePending: patch.autoResumePending ?? current?.autoResumePending,
+        lastSummary: patch.lastSummary ?? current?.lastSummary,
+    };
+    taskRuntimeMeta.set(taskId, next);
+
+    if (next.status === 'running') {
+        scheduleTaskTerminalWatchdog(taskId);
+    } else {
+        clearTaskTerminalWatchdog(taskId);
+    }
+
+    persistTaskRuntimeSnapshot(taskId);
+}
+
+function restoreTaskRuntimeSnapshot(taskId: string, workspacePath: string): boolean {
+    const snapshotPath = getTaskSnapshotPath(taskId, workspacePath);
+    if (!fs.existsSync(snapshotPath)) {
+        return false;
+    }
+
+    try {
+        const raw = fs.readFileSync(snapshotPath, 'utf-8');
+        const parsed = JSON.parse(raw) as PersistedTaskRuntimeSnapshot;
+        if (parsed.taskId !== taskId || !Array.isArray(parsed.conversation)) {
+            return false;
+        }
+
+        taskConfigs.set(taskId, {
+            ...parsed.config,
+            workspacePath: parsed.workspacePath,
+        });
+        taskConversations.set(taskId, parsed.conversation);
+        taskRuntimeMeta.set(taskId, {
+            title: parsed.title,
+            status: parsed.status,
+            updatedAt: parsed.updatedAt,
+            lastError: parsed.lastError,
+            autoResumePending: parsed.autoResumePending,
+            lastSummary: parsed.lastSummary,
+        });
+        if (typeof parsed.config.maxHistoryMessages === 'number' && parsed.config.maxHistoryMessages > 0) {
+            taskHistoryLimits.set(taskId, parsed.config.maxHistoryMessages);
+        }
+        return true;
+    } catch (error) {
+        console.error(`[TaskRuntime] Failed to restore snapshot for ${taskId}:`, error);
+        return false;
+    }
+}
+
+function ensureTaskRuntimeLoaded(taskId: string, workspacePath?: string): void {
+    if (taskConversations.has(taskId) && taskConfigs.has(taskId)) {
+        return;
+    }
+    if (!workspacePath) {
+        return;
+    }
+    restoreTaskRuntimeSnapshot(taskId, workspacePath);
+}
+
+function isRecoverableTaskSnapshot(snapshot: PersistedTaskRuntimeSnapshot): boolean {
+    const updatedAt = new Date(snapshot.updatedAt).getTime();
+    const isFreshEnough = Number.isFinite(updatedAt) && (Date.now() - updatedAt) <= RECOVERABLE_RUNTIME_SCAN_MAX_AGE_MS;
+    if (!isFreshEnough) {
+        return false;
+    }
+
+    if (snapshot.status === 'running') {
+        return true;
+    }
+
+    return snapshot.status === 'recoverable_interrupted' && snapshot.autoResumePending !== false;
+}
+
+function tryLoadRecoverableTaskSnapshot(snapshotPath: string): PersistedTaskRuntimeSnapshot | null {
+    try {
+        if (!fs.existsSync(snapshotPath)) {
+            return null;
+        }
+
+        const raw = fs.readFileSync(snapshotPath, 'utf-8');
+        const snapshot = JSON.parse(raw) as PersistedTaskRuntimeSnapshot;
+        if (!snapshot.taskId || !Array.isArray(snapshot.conversation)) {
+            return null;
+        }
+        return isRecoverableTaskSnapshot(snapshot) ? snapshot : null;
+    } catch (error) {
+        console.error('[TaskRuntime] Failed to inspect snapshot:', error);
+        return null;
+    }
+}
+
+function collectRecoverableTaskSnapshots(taskIds?: string[], taskHints?: RecoverableTaskHint[]): PersistedTaskRuntimeSnapshot[] {
+    const allowed = taskIds ? new Set(taskIds) : null;
+    const workspaces = workspaceStore.list().map((workspace) => workspace.path);
+    const uniqueRoots = Array.from(new Set([
+        ...workspaces,
+        process.cwd(),
+    ]));
+    const snapshots: PersistedTaskRuntimeSnapshot[] = [];
+    const seenTaskIds = new Set<string>();
+
+    for (const hint of taskHints ?? []) {
+        if (!hint.workspacePath || seenTaskIds.has(hint.taskId)) {
+            continue;
+        }
+        if (allowed && !allowed.has(hint.taskId)) {
+            continue;
+        }
+
+        const snapshot = tryLoadRecoverableTaskSnapshot(getTaskSnapshotPath(hint.taskId, hint.workspacePath));
+        if (!snapshot) {
+            continue;
+        }
+
+        snapshots.push(snapshot);
+        seenTaskIds.add(snapshot.taskId);
+    }
+
+    for (const workspacePath of uniqueRoots) {
+        const runtimeDir = getTaskRuntimeDir(workspacePath);
+        if (!fs.existsSync(runtimeDir)) {
+            continue;
+        }
+
+        for (const entry of fs.readdirSync(runtimeDir)) {
+            if (!entry.endsWith('.json')) {
+                continue;
+            }
+
+            const snapshot = tryLoadRecoverableTaskSnapshot(path.join(runtimeDir, entry));
+            if (!snapshot) {
+                continue;
+            }
+            if (allowed && !allowed.has(snapshot.taskId)) {
+                continue;
+            }
+            if (seenTaskIds.has(snapshot.taskId)) {
+                continue;
+            }
+
+            snapshots.push(snapshot);
+            seenTaskIds.add(snapshot.taskId);
+        }
+    }
+
+    return snapshots;
+}
 
 // Forward declarations for LLM types (used by AutonomousLlmAdapter)
 type LlmProvider =
@@ -1054,8 +1446,16 @@ function createToolCallEvent(taskId: string, payload: { id: string; name: string
         taskId,
         timestamp: new Date().toISOString(),
         sequence: nextSequence(taskId),
-        type: 'TOOL_CALL',
-        payload,
+        type: 'TOOL_CALLED',
+        payload: {
+            toolId: payload.id,
+            toolName: payload.name,
+            input: payload.input,
+            inputRedacted: false,
+            source: 'agent',
+            id: payload.id,
+            name: payload.name,
+        },
     } as any;
 }
 
@@ -1066,7 +1466,19 @@ function createToolResultEvent(taskId: string, payload: { toolUseId: string; nam
         timestamp: new Date().toISOString(),
         sequence: nextSequence(taskId),
         type: 'TOOL_RESULT',
-        payload,
+        payload: {
+            toolId: payload.toolUseId,
+            success: !payload.isError,
+            result: payload.result,
+            resultSummary: typeof payload.result === 'string'
+                ? payload.result.slice(0, 240)
+                : undefined,
+            duration: 0,
+            toolUseId: payload.toolUseId,
+            name: payload.name,
+            isError: payload.isError ?? false,
+            error: payload.isError ? String(payload.result ?? 'Tool failed') : undefined,
+        },
     } as any;
 }
 
@@ -1388,8 +1800,6 @@ function normalizeOpenAiCompatibleEndpoint(baseUrl: string): string {
     return `${trimmed}/chat/completions`;
 }
 
-const MAX_SKILL_PROMPT_CHARS = 32000;
-
 function getCandidateLlmConfigPaths(workspaceRootPath?: string): string[] {
     const candidates: string[] = [];
 
@@ -1409,20 +1819,24 @@ function getCandidateLlmConfigPaths(workspaceRootPath?: string): string[] {
 
 /**
  * Build structured system prompt with cacheable sections
- * Returns object with skills content for prompt caching
+ * Returns cacheable stable content plus a smaller dynamic per-turn section.
  */
-function buildSkillSystemPrompt(skillIds: string[] | undefined, userMessage?: string): { skills: string } | undefined {
-    // System environment context - injected so the agent knows what OS/platform it's on
+async function buildSkillSystemPrompt(
+    taskId: string,
+    workspaceRootPath: string,
+    skillIds: string[] | undefined,
+    userMessage?: string
+): Promise<{ skills: string; dynamic?: string }> {
     const platformName = getCurrentPlatform();
     const now = new Date();
-    const currentDate = now.toLocaleDateString('zh-CN', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric', 
-        weekday: 'long' 
+    const currentDate = now.toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        weekday: 'long'
     });
-    const currentTime = now.toLocaleTimeString('zh-CN', { 
-        hour: '2-digit', 
+    const currentTime = now.toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Shanghai'
     });
@@ -1448,7 +1862,6 @@ IMPORTANT: When executing system commands (run_command), ALWAYS use commands com
 
 `;
 
-    // Tool usage guidance - always included to ensure models know how to use available tools
     const toolGuidance = `## Tool Usage Guidelines
 
 You have access to various tools to help complete tasks. Important guidelines:
@@ -1475,6 +1888,7 @@ You have access to various tools to help complete tasks. Important guidelines:
    - If \`run_command\` tells you \`preflight_required\`, do not guess. Read the returned help output, then retry \`run_command\` with the exact same command and the provided \`preflight_token\`.
    - Do not call \`command_preflight\` repeatedly for the exact same command in the same task unless the command string changed or the previous token expired / was rejected. Once preflight succeeded, move forward to \`run_command\`.
    - If the help output does not confirm the syntax or semantics, do not execute the command.
+   - If a package installation command already succeeded (for example \`pip install\` returning \`Successfully installed\` or \`Requirement already satisfied\`), do not run the same install command again in the same task unless a new dependency failure appears.
 
 8. **Memory**: Use remember/recall tools to store and retrieve information across conversations.
 
@@ -1506,77 +1920,43 @@ When in doubt about whether to use a tool, prefer to use it and let the tool's r
 
     const commandLearningDirective = userMessage ? getCommandLearningDirective(userMessage) : '';
     const browserFeedDirective = userMessage ? getBrowserFeedDirective(userMessage) : '';
-
-    // Add self-learning capabilities prompt (OpenClaw-style)
+    const schedulingDirective = userMessage ? getSchedulingDirective(userMessage) : '';
     const selfLearningPrompt = getSelfLearningPrompt();
+    const soulSection = formatSoulSection(loadSoulProfile(APP_STATE_ROOT));
+    const workspacePolicySection = loadWorkspacePolicySection(workspaceRootPath);
+    const sessionConfig = taskConfigs.get(taskId);
+    const currentSessionSection = buildCurrentSessionSection({
+        workspacePath: sessionConfig?.workspacePath ?? workspaceRootPath,
+        activeFile: sessionConfig?.activeFile,
+        enabledSkillIds: skillIds,
+        historyCount: taskConversations.get(taskId)?.length ?? 0,
+    });
+    const memorySection = userMessage ? await getRelevantMemoryContext(userMessage) : '';
 
-    const selectedIds =
-        skillIds && skillIds.length > 0
-            ? skillIds
-            : skillStore.listEnabled().map((skill) => skill.manifest.name);
+    const stablePrelude = [
+        soulSection.trim(),
+        workspacePolicySection.trim(),
+        systemContext.trim(),
+        toolGuidance.trim(),
+        AUTONOMOUS_LEARNING_PROTOCOL.trim(),
+        selfLearningPrompt.trim(),
+    ].filter(Boolean).join('\n\n');
 
-    const blocks: string[] = [];
-    let totalLength = toolGuidance.length;
+    const dynamicPrelude = [
+        currentSessionSection.trim(),
+        memorySection.trim(),
+        commandLearningDirective.trim(),
+        browserFeedDirective.trim(),
+        schedulingDirective.trim(),
+    ].filter(Boolean).join('\n\n');
 
-    for (const skillId of selectedIds) {
-        const record = skillStore.get(skillId);
-        if (!record) continue;
-
-        let content: string | undefined;
-
-        // Check for embedded content (builtins)
-        const manifest = record.manifest as { content?: string };
-        if (manifest.content) {
-            content = manifest.content;
-            console.error(`[Skill] Loaded builtin: ${record.manifest.name}`);
-        } else {
-            // Fall back to filesystem for user-installed skills
-            const skillPath = record.manifest.directory;
-            if (skillPath) {
-                const skillMd = path.join(skillPath, 'SKILL.md');
-                if (fs.existsSync(skillMd)) {
-                    content = fs.readFileSync(skillMd, 'utf-8');
-                    console.error(`[Skill] Loaded from filesystem: ${record.manifest.name}`);
-                }
-            }
-        }
-
-        if (!content) continue;
-
-        const block = `Skill: ${record.manifest.name}\n${content}`;
-        blocks.push(block);
-        totalLength += block.length;
-        if (totalLength >= MAX_SKILL_PROMPT_CHARS) {
-            break;
-        }
-    }
-
-    // Build combined prompt - always include system context, tool guidance and self-learning
-    let combined: string;
-    if (blocks.length > 0) {
-        combined =
-            systemContext +
-            toolGuidance +
-            (commandLearningDirective ? `${commandLearningDirective}\n\n` : '') +
-            (browserFeedDirective ? `${browserFeedDirective}\n\n` : '') +
-            AUTONOMOUS_LEARNING_PROTOCOL +
-            selfLearningPrompt +
-            `\n\n## Skill Instructions\n\nFollow these skill instructions when relevant:\n\n${blocks.join('\n\n')}`;
-    } else {
-        combined =
-            systemContext +
-            toolGuidance +
-            (commandLearningDirective ? `${commandLearningDirective}\n\n` : '') +
-            (browserFeedDirective ? `${browserFeedDirective}\n\n` : '') +
-            AUTONOMOUS_LEARNING_PROTOCOL +
-            selfLearningPrompt;
-    }
-
-    if (combined.length > MAX_SKILL_PROMPT_CHARS) {
-        combined = combined.slice(0, MAX_SKILL_PROMPT_CHARS) + '\n...[truncated]';
-    }
-
-    return { skills: combined };
+    return buildSkillSystemPromptContext({
+        skillStore,
+        preferredSkillIds: skillIds,
+        userMessage,
+        stablePrelude,
+        dynamicPrelude,
+    });
 }
 
 /**
@@ -1587,7 +1967,8 @@ function getTriggeredSkillIds(userMessage: string): string[] {
     const triggeredSkills = skillStore.findByTrigger(userMessage);
     const triggeredIds = triggeredSkills
         .map((s) => s.manifest.name)
-        .filter((skillName) => !shouldSuppressTriggeredSkillForBrowserFeed(skillName, userMessage));
+        .filter((skillName) => !shouldSuppressTriggeredSkillForBrowserFeed(skillName, userMessage))
+        .filter((skillName) => !shouldSuppressTriggeredSkillForScheduling(skillName, userMessage));
 
     if (triggeredIds.length > 0) {
         console.log(`[Skill] Auto-triggered skills: ${triggeredIds.join(', ')}`);
@@ -2038,6 +2419,23 @@ suspendResumeManager.on('task_cancelled', (data: any) => {
 
 // Create handler implementations for self-learning tools
 const selfLearningHandlers: SelfLearningToolHandlers = {
+    resolveSkillRequest: async (args, context) => {
+        try {
+            return await resolveSkillRequest({
+                query: args.query,
+                workspacePath: context.workspacePath,
+                skillStore,
+                autoInstall: args.auto_install,
+                limit: args.limit,
+            });
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
+    },
+
     triggerLearning: async (args) => {
         try {
             const query = `${args.topic}: ${args.context}`;
@@ -2545,17 +2943,10 @@ function pushConversationMessage(
         return compacted;
     }
 
+    persistTaskRuntimeSnapshot(taskId);
     return conversation;
 }
-function getTaskConfig(taskId: string): {
-    modelId?: string;
-    maxTokens?: number;
-    maxHistoryMessages?: number;
-    enabledClaudeSkills?: string[];
-    enabledToolpacks?: string[];
-    enabledSkills?: string[];
-    workspacePath?: string;
-} | undefined {
+function getTaskConfig(taskId: string): TaskRuntimeConfig | undefined {
     return taskConfigs.get(taskId);
 }
 
@@ -2746,49 +3137,7 @@ async function streamAnthropicResponse(
 
     // Build structured system prompt with cache breakpoints (Anthropic only)
     if (systemPrompt || (tools && tools.length > 0)) {
-        const systemBlocks: any[] = [];
-
-        // Extract skills if systemPrompt is structured
-        let skillsContent: string | undefined;
-        let basePrompt: string | undefined;
-
-        if (systemPrompt) {
-            if (typeof systemPrompt === 'string') {
-                basePrompt = systemPrompt;
-            } else if (typeof systemPrompt === 'object' && 'skills' in systemPrompt) {
-                skillsContent = (systemPrompt as any).skills;
-            }
-        }
-
-        // Block 1: Skills (cacheable)
-        if (skillsContent) {
-            systemBlocks.push({
-                type: 'text',
-                text: skillsContent,
-                cache_control: { type: 'ephemeral' }
-            });
-        }
-
-        // Block 2: Tool definitions (cacheable)
-        if (tools && tools.length > 0) {
-            const toolDescriptions = tools.map(t =>
-                `Tool: ${t.name}\nDescription: ${t.description}\nEffects: ${t.effects.join(', ')}`
-            ).join('\n\n');
-
-            systemBlocks.push({
-                type: 'text',
-                text: `Available tools:\n\n${toolDescriptions}`,
-                cache_control: { type: 'ephemeral' }
-            });
-        }
-
-        // Block 3: Dynamic instructions (not cached)
-        if (basePrompt) {
-            systemBlocks.push({
-                type: 'text',
-                text: basePrompt
-            });
-        }
+        const systemBlocks = buildAnthropicSystemBlocks(systemPrompt, tools);
 
         if (systemBlocks.length > 0) {
             body.system = systemBlocks;
@@ -2982,11 +3331,10 @@ async function streamOpenAIResponse(
 
     const openaiMessages: Array<Record<string, any>> = [];
     if (options.systemPrompt) {
-        // Extract string content from structured or legacy string format
-        const systemContent = typeof options.systemPrompt === 'string'
-            ? options.systemPrompt
-            : String(options.systemPrompt.skills || '');
-        openaiMessages.push({ role: 'system', content: systemContent });
+        const systemContent = flattenStructuredSystemPrompt(options.systemPrompt);
+        if (systemContent) {
+            openaiMessages.push({ role: 'system', content: systemContent });
+        }
     }
     for (const message of messages) {
         if (typeof message.content === 'string') {
@@ -3282,7 +3630,7 @@ async function runAgentLoop(
     options: AnthropicStreamOptions,
     config: LlmProviderConfig,
     tools: ToolDefinition[]
-): Promise<void> {
+): Promise<AgentLoopOutcome> {
     const workspaceRoot = getTaskConfig(taskId)?.workspacePath || process.cwd();
     const MAX_STEPS = 30;
     let steps = 0;
@@ -3291,6 +3639,7 @@ async function runAgentLoop(
     const recentToolCalls: Array<{ name: string; inputHash: string }> = [];
     let lastCachedResult = '';  // Cache the last result for read-only tools
     let lastBrowserContentSnapshot = '';
+    const successfulPythonInstallCommands = new Map<string, { command: string; repeatBlocks: number }>();
     const LOOP_THRESHOLD = 3; // Block execution after 3 consecutive identical calls
     const OBSERVATION_STALL_THRESHOLD = 6;
 
@@ -3549,6 +3898,57 @@ async function runAgentLoop(
             // ================================================================
             const currentInputHash = JSON.stringify(toolUse.input || {});
             const blockKey = `${toolUse.name}::${currentInputHash}`;
+            const rawCommand = toolUse.name === 'run_command' && typeof toolUse.input?.command === 'string'
+                ? toolUse.input.command
+                : '';
+            const normalizedPythonInstallCommand = rawCommand
+                ? normalizePythonInstallCommandForLoopGuard(rawCommand)
+                : null;
+
+            if (normalizedPythonInstallCommand) {
+                const previousInstall = successfulPythonInstallCommands.get(normalizedPythonInstallCommand);
+                if (previousInstall) {
+                    previousInstall.repeatBlocks += 1;
+                    const repeatMessage = buildRepeatedSuccessfulInstallMessage(previousInstall.command, previousInstall.repeatBlocks);
+
+                    emit(createToolResultEvent(taskId, {
+                        toolUseId: toolUse.id,
+                        name: toolUse.name,
+                        result: repeatMessage,
+                        isError: false,
+                    }));
+
+                    toolResults.push({
+                        type: 'tool_result',
+                        tool_use_id: toolUse.id,
+                        content: repeatMessage,
+                        is_error: false,
+                    });
+
+                    if (previousInstall.repeatBlocks >= 3 && isDirectPackageInstallRequest(lastUserQuery)) {
+                        const completionSummary =
+                            `Python package installation already completed successfully. ` +
+                            `CoworkAny stopped repeated install retries and closed the task.`;
+
+                        messages.push({ role: 'assistant', content: completionSummary });
+                        emit(createTextDeltaEvent(taskId, {
+                            delta: completionSummary,
+                            role: 'assistant',
+                        }));
+                        emit(createTaskStatusEvent(taskId, { status: 'finished' }));
+                        emit(createTaskFinishedEvent(taskId, {
+                            summary: 'Task closed after repeated successful Python install retries were suppressed.',
+                            duration: 0,
+                        }));
+                        return {
+                            terminalEmitted: true,
+                            finalAssistantText: completionSummary,
+                        };
+                    }
+
+                    continue;
+                }
+            }
 
             // 鈹€鈹€ Permanent Block Check 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
             // If AUTOPILOT has already intervened on this exact tool+args,
@@ -3590,7 +3990,10 @@ async function runAgentLoop(
                             summary: `Task closed after repeated blocked tool calls following completed workflows: ${workflowNames}.`,
                             duration: 0,
                         }));
-                        return;
+                        return {
+                            terminalEmitted: true,
+                            finalAssistantText: completionSummary,
+                        };
                     }
 
                     toolResults.push({
@@ -3653,7 +4056,9 @@ async function runAgentLoop(
                         type: 'TASK_STATUS',
                         payload: { status: 'finished' },
                     });
-                    return;
+                    return {
+                        terminalEmitted: true,
+                    };
                 }
 
                 const blockMsg = `ERROR: ${toolUse.name}(${currentInputHash.substring(0, 60)}) is PERMANENTLY BLOCKED. ` +
@@ -3719,7 +4124,10 @@ async function runAgentLoop(
                         summary: 'Completed X Following feed review from visible feed evidence.',
                         duration: 0,
                     }));
-                    return;
+                    return {
+                        terminalEmitted: true,
+                        finalAssistantText: summary,
+                    };
                 }
             }
 
@@ -4437,7 +4845,10 @@ async function runAgentLoop(
                                     : 'Completed X Following feed review after repeated scroll attempts yielded no new evidence.',
                                 duration: 0,
                             }));
-                            return;
+                            return {
+                                terminalEmitted: true,
+                                finalAssistantText: summary,
+                            };
                         }
                     }
                 }
@@ -4468,7 +4879,10 @@ async function runAgentLoop(
                             summary: 'Extracted AI-related signals from the current X Following feed.',
                             duration: 0,
                         }));
-                        return;
+                        return {
+                            terminalEmitted: true,
+                            finalAssistantText: summary,
+                        };
                     }
                 }
 
@@ -4717,6 +5131,13 @@ async function runAgentLoop(
                 consecutiveToolErrors = 0;
             }
 
+            if (!isError && normalizedPythonInstallCommand && isSuccessfulPythonInstallResult(result)) {
+                successfulPythonInstallCommands.set(normalizedPythonInstallCommand, {
+                    command: rawCommand,
+                    repeatBlocks: 0,
+                });
+            }
+
             let resultStr = typeof result === 'string' ? result : JSON.stringify(result);
 
             // Cache the result for read-only tools (for loop detection context)
@@ -4839,9 +5260,88 @@ async function runAgentLoop(
                 } else {
                     console.log(`[AgentLoop] Task ${taskId} cancelled during suspension: ${resumeResult.reason}`);
                     // Break out of the loop - task was cancelled
-                    break;
+                    return {
+                        terminalEmitted: true,
+                        cancelled: true,
+                    };
                 }
             }
+        }
+    }
+
+    return {
+        terminalEmitted: false,
+        finalAssistantText: buildTaskCompletionSummary(messages, 'Task completed'),
+        maxStepsReached: steps >= MAX_STEPS,
+    };
+}
+
+async function resumeRecoverableTask(
+    snapshot: PersistedTaskRuntimeSnapshot,
+): Promise<void> {
+    const taskId = snapshot.taskId;
+    const workspacePath = snapshot.workspacePath;
+
+    restoreTaskRuntimeSnapshot(taskId, workspacePath);
+
+    const config = taskConfigs.get(taskId);
+    if (!config?.workspacePath) {
+        throw new Error(`Missing task config for recoverable task ${taskId}`);
+    }
+
+    emit(createTaskResumedEvent(taskId, {
+        resumeReason: 'Recovered after sidecar restart',
+        suspendDurationMs: 0,
+    }));
+    emit(createTaskStatusEvent(taskId, { status: 'running' }));
+
+    const continuationMessage =
+        '[System Notification] The previous model connection dropped and the sidecar process restarted. ' +
+        'Resume the interrupted task from the latest completed step. Do not repeat successful tool calls unless they are required because the page or external state may have changed. ' +
+        'When you finish, report the concrete result, not just your status.';
+
+    const conversation = pushConversationMessage(taskId, {
+        role: 'user',
+        content: continuationMessage,
+    });
+
+    const explicitSkillIds =
+        config.enabledClaudeSkills ??
+        config.enabledSkills;
+    const triggeredSkillIds = getTriggeredSkillIds(continuationMessage);
+    const enabledSkillIds = mergeSkillIds(explicitSkillIds, triggeredSkillIds);
+
+    const systemPrompt = await buildSkillSystemPrompt(
+        taskId,
+        workspacePath,
+        enabledSkillIds,
+        continuationMessage,
+    );
+
+    const options: AnthropicStreamOptions = {
+        modelId: config.modelId,
+        maxTokens: config.maxTokens,
+        systemPrompt,
+    };
+    const tools = getToolsForTask(taskId);
+    (options as any).tools = tools;
+    const providerConfig = resolveProviderConfig(loadLlmConfig(workspacePath), options);
+    const outcome = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+
+    if (!outcome.terminalEmitted) {
+        if (outcome.maxStepsReached) {
+            emit(createTaskFailedEvent(taskId, {
+                error: 'Recovered task reached the maximum reasoning steps without producing a final result.',
+                errorCode: 'TASK_MAX_STEPS_EXCEEDED',
+                recoverable: true,
+                suggestion: 'The interrupted task was restored, but it still looped. Continue with a narrower follow-up instruction.',
+            }));
+        } else {
+            emit(createTaskStatusEvent(taskId, { status: 'finished' }));
+            emit(createTaskFinishedEvent(taskId, {
+                summary: outcome.finalAssistantText || 'Task completed',
+                duration: 0,
+            }));
         }
     }
 }
@@ -4921,6 +5421,10 @@ function toSkillRecord(stored: {
         description: string;
         directory: string;
         tags?: string[];
+        allowedTools?: string[];
+        requires?: {
+            env?: string[];
+        };
         requiredCapabilities?: string[];
     };
     enabled: boolean;
@@ -4933,8 +5437,9 @@ function toSkillRecord(stored: {
             name: stored.manifest.name,
             version: stored.manifest.version,
             description: stored.manifest.description,
-            allowedTools: [],
+            allowedTools: stored.manifest.allowedTools ?? [],
             tags: stored.manifest.tags ?? [],
+            requires: stored.manifest.requires,
         },
         rootPath: stored.manifest.directory,
         source: 'local_folder',
@@ -4942,6 +5447,16 @@ function toSkillRecord(stored: {
         enabled: stored.enabled,
         lastUsedAt: stored.lastUsedAt,
     };
+}
+
+function selectSkillsForUpdateCheck(skillIds?: string[]) {
+    const allSkills = skillStore.list();
+    if (!skillIds || skillIds.length === 0) {
+        return allSkills;
+    }
+
+    const requested = new Set(skillIds);
+    return allSkills.filter((skill) => requested.has(skill.manifest.name));
 }
 
 // Helper to gather tools for a task
@@ -5024,6 +5539,13 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 taskConfigs.set(taskId, {
                     ...(command.payload.config ?? {}),
                     workspacePath: command.payload.context.workspacePath,
+                    activeFile: command.payload.context.activeFile,
+                });
+                taskRuntimeMeta.set(taskId, {
+                    title: command.payload.title,
+                    status: 'running',
+                    updatedAt: new Date().toISOString(),
+                    autoResumePending: false,
                 });
                 const startLimit = command.payload.config?.maxHistoryMessages;
                 taskHistoryLimits.set(
@@ -5123,7 +5645,12 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 // Merge explicit and triggered skills
                 const enabledSkillIds = mergeSkillIds(explicitSkillIds, triggeredSkillIds);
 
-                const systemPrompt = buildSkillSystemPrompt(enabledSkillIds, command.payload.userQuery);
+                const systemPrompt = await buildSkillSystemPrompt(
+                    taskId,
+                    workspaceRoot,
+                    enabledSkillIds,
+                    command.payload.userQuery
+                );
                 try {
                     const options = {
                         modelId: command.payload.config?.modelId,
@@ -5176,14 +5703,26 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     const providerConfig = resolveProviderConfig(loadLlmConfig(workspaceRoot), options);
 
                     // RUN AGENT LOOP
-                    await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+                    const outcome = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
 
-                    emit(
-                        createTaskFinishedEvent(taskId, {
-                            summary: 'Task completed',
-                            duration: Date.now() - startedAt,
-                        })
-                    );
+                    if (!outcome.terminalEmitted) {
+                        if (outcome.maxStepsReached) {
+                            emit(createTaskFailedEvent(taskId, {
+                                error: 'Task reached the maximum reasoning steps without producing a final result.',
+                                errorCode: 'TASK_MAX_STEPS_EXCEEDED',
+                                recoverable: true,
+                                suggestion: 'Resume the task with a shorter follow-up instruction or inspect the repeated tool calls in the timeline.',
+                            }));
+                        } else {
+                            emit(createTaskStatusEvent(taskId, { status: 'finished' }));
+                            emit(
+                                createTaskFinishedEvent(taskId, {
+                                    summary: outcome.finalAssistantText || 'Task completed',
+                                    duration: Date.now() - startedAt,
+                                })
+                            );
+                        }
+                    }
                 } catch (error) {
                     const errorMessage =
                         error instanceof Error ? error.message : String(error);
@@ -5191,12 +5730,14 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                         createTaskFailedEvent(taskId, {
                             error: errorMessage,
                             errorCode: 'MODEL_STREAM_ERROR',
-                            recoverable: false,
+                            recoverable: /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage),
                             suggestion:
                                 errorMessage === 'missing_api_key'
                                     ? 'Set API key in environment or .coworkany/settings.json'
                                     : errorMessage === 'missing_base_url'
                                         ? 'Set base URL in environment or .coworkany/settings.json'
+                                        : /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage)
+                                            ? 'The model connection dropped. CoworkAny can continue this task after the connection is restored.'
                                         : undefined,
                         })
                     );
@@ -5232,6 +5773,7 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 const taskId = command.payload.taskId;
                 taskConversations.set(taskId, []);
                 taskHistoryLimits.set(taskId, taskHistoryLimits.get(taskId) ?? getDefaultHistoryLimit());
+                persistTaskRuntimeSnapshot(taskId);
 
                 emit({
                     id: randomUUID(),
@@ -5259,6 +5801,11 @@ async function handleCommand(command: IpcCommand): Promise<void> {
             case 'send_task_message': {
                 const taskId = command.payload.taskId;
                 const content = command.payload.content;
+                const hintedWorkspacePath =
+                    command.payload.workspacePath ??
+                    getTaskConfig(taskId)?.workspacePath;
+
+                ensureTaskRuntimeLoaded(taskId, hintedWorkspacePath);
 
                 emit({
                     id: randomUUID(),
@@ -5291,9 +5838,6 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     payload: { status: 'running' },
                 });
 
-                // Add user message
-                pushConversationMessage(taskId, { role: 'user', content });
-
                 const taskConfig = getTaskConfig(taskId);
                 if (command.payload.config) {
                     if (
@@ -5318,10 +5862,16 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                         workspacePath: command.payload.workspacePath,
                     });
                 }
+                const effectiveTaskConfig = getTaskConfig(taskId);
+                markTaskRuntime(taskId, {
+                    status: 'running',
+                    autoResumePending: false,
+                    lastError: undefined,
+                });
                 // Get explicitly enabled skills from config
                 const explicitSkillIds =
-                    taskConfig?.enabledClaudeSkills ??
-                    taskConfig?.enabledSkills ??
+                    effectiveTaskConfig?.enabledClaudeSkills ??
+                    effectiveTaskConfig?.enabledSkills ??
                     command.payload.config?.enabledClaudeSkills ??
                     command.payload.config?.enabledSkills;
 
@@ -5331,7 +5881,12 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 // Merge explicit and triggered skills
                 const enabledSkillIds = mergeSkillIds(explicitSkillIds, triggeredSkillIds);
 
-                const systemPrompt = buildSkillSystemPrompt(enabledSkillIds, content);
+                const systemPrompt = await buildSkillSystemPrompt(
+                    taskId,
+                    workspaceRoot,
+                    enabledSkillIds,
+                    content
+                );
                 // Add user message
                 const conversation = pushConversationMessage(taskId, { role: 'user', content });
 
@@ -5349,13 +5904,28 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                     const providerConfig = resolveProviderConfig(loadLlmConfig(workspaceRoot), options);
 
                     // RUN AGENT LOOP
-                    await runAgentLoop(taskId, conversation, options, providerConfig, tools);
+                    const outcome = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
 
-                    emit(
-                        createTaskStatusEvent(taskId, {
-                            status: 'finished',
-                        })
-                    );
+                    if (!outcome.terminalEmitted) {
+                        if (outcome.maxStepsReached) {
+                            emit(
+                                createTaskFailedEvent(taskId, {
+                                    error: 'Task reached the maximum reasoning steps without producing a final result.',
+                                    errorCode: 'TASK_MAX_STEPS_EXCEEDED',
+                                    recoverable: true,
+                                    suggestion: 'Connection recovered, but the task still looped. Continue with a narrower follow-up instruction.',
+                                })
+                            );
+                        } else {
+                            emit(createTaskStatusEvent(taskId, { status: 'finished' }));
+                            emit(
+                                createTaskFinishedEvent(taskId, {
+                                    summary: outcome.finalAssistantText || 'Task completed',
+                                    duration: 0,
+                                })
+                            );
+                        }
+                    }
                 } catch (error) {
                     const errorMessage =
                         error instanceof Error ? error.message : String(error);
@@ -5363,15 +5933,57 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                         createTaskFailedEvent(taskId, {
                             error: errorMessage,
                             errorCode: 'MODEL_STREAM_ERROR',
-                            recoverable: false,
+                            recoverable: /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage),
                             suggestion:
                                 errorMessage === 'missing_api_key'
                                     ? 'Set API key in environment or .coworkany/settings.json'
                                     : errorMessage === 'missing_base_url'
                                         ? 'Set base URL in environment or .coworkany/settings.json'
+                                        : /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage)
+                                            ? 'The model connection dropped. CoworkAny can continue this task after the connection is restored.'
                                         : undefined,
                         })
                     );
+                }
+
+                break;
+            }
+
+            case 'resume_recoverable_tasks': {
+                const normalizedRecovery = normalizeRecoverableTaskInputs(
+                    command.payload?.taskIds,
+                    command.payload?.tasks,
+                );
+                const requestedTaskIds = normalizedRecovery.taskIds;
+                const requestedTaskHints = normalizedRecovery.taskHints;
+                const snapshots = collectRecoverableTaskSnapshots(requestedTaskIds, requestedTaskHints);
+                const resumedTaskIds = snapshots.map((snapshot) => snapshot.taskId);
+                const requestedIds = requestedTaskIds ?? requestedTaskHints?.map((task) => task.taskId);
+
+                emitAny({
+                    commandId: command.id,
+                    timestamp: new Date().toISOString(),
+                    type: 'resume_recoverable_tasks_response',
+                    payload: {
+                        success: true,
+                        resumedTaskIds,
+                        skippedTaskIds: Array.from(new Set([
+                            ...(requestedIds
+                                ? requestedIds.filter((taskId) => !resumedTaskIds.includes(taskId))
+                                : []),
+                            ...normalizedRecovery.invalidTaskIds.filter(isRecoverableTaskId),
+                        ])),
+                    },
+                });
+
+                for (const snapshot of snapshots) {
+                    void resumeRecoverableTask(snapshot).catch((error) => {
+                        emit(createTaskFailedEvent(snapshot.taskId, {
+                            error: error instanceof Error ? error.message : String(error),
+                            errorCode: 'TASK_RECOVERY_ERROR',
+                            recoverable: false,
+                        }));
+                    });
                 }
 
                 break;
@@ -5755,6 +6367,191 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                         error: success ? undefined : 'skill_not_found',
                     },
                 });
+                break;
+            }
+            case 'check_claude_skill_updates': {
+                try {
+                    const skillIds = (command.payload as { skillIds?: string[] } | undefined)?.skillIds;
+                    const updates = await checkSkillsForUpdates(selectSkillsForUpdateCheck(skillIds));
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'check_claude_skill_updates_response',
+                        payload: {
+                            success: true,
+                            updates,
+                        },
+                    });
+                } catch (error) {
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'check_claude_skill_updates_response',
+                        payload: {
+                            success: false,
+                            updates: [] satisfies ClaudeSkillUpdateInfo[],
+                            error: error instanceof Error ? error.message : String(error),
+                        },
+                    });
+                }
+                break;
+            }
+            case 'upgrade_claude_skill': {
+                const { skillId } = command.payload as { skillId: string };
+                const result = await upgradeSkillFromUpstream(skillStore, skillId);
+                emitAny({
+                    commandId: command.id,
+                    timestamp: new Date().toISOString(),
+                    type: 'upgrade_claude_skill_response',
+                    payload: {
+                        success: result.success,
+                        skillId,
+                        skill: result.skill ? toSkillRecord(result.skill) : undefined,
+                        update: result.update,
+                        error: result.error,
+                    },
+                });
+                break;
+            }
+            case 'search_openclaw_skill_store': {
+                const { store, query, limit } = command.payload as {
+                    store: 'clawhub' | 'tencent_skillhub';
+                    query: string;
+                    limit?: number;
+                };
+
+                try {
+                    const skills = await openclawCompat.searchStore(store, query, limit ?? 20);
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'search_openclaw_skill_store_response',
+                        payload: {
+                            success: true,
+                            store,
+                            skills,
+                        },
+                    });
+                } catch (error) {
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'search_openclaw_skill_store_response',
+                        payload: {
+                            success: false,
+                            store,
+                            skills: [],
+                            error: error instanceof Error ? error.message : String(error),
+                        },
+                    });
+                }
+                break;
+            }
+            case 'install_openclaw_skill': {
+                const { store, skillName } = command.payload as {
+                    store: 'clawhub' | 'tencent_skillhub';
+                    skillName: string;
+                };
+
+                try {
+                    const skillsRoot = path.join(workspaceRoot, '.coworkany', 'skills');
+                    fs.mkdirSync(skillsRoot, { recursive: true });
+
+                    const result = await openclawCompat.installFromStore(store, skillName, skillsRoot);
+                    if (!result.success || !result.path) {
+                        emitAny({
+                            commandId: command.id,
+                            timestamp: new Date().toISOString(),
+                            type: 'install_openclaw_skill_response',
+                            payload: {
+                                success: false,
+                                store,
+                                skillName,
+                                error: result.error ?? 'install_failed',
+                            },
+                        });
+                        break;
+                    }
+
+                    const manifest = SkillStore.loadFromDirectory(result.path);
+                    if (!manifest) {
+                        emitAny({
+                            commandId: command.id,
+                            timestamp: new Date().toISOString(),
+                            type: 'install_openclaw_skill_response',
+                            payload: {
+                                success: false,
+                                store,
+                                skillName,
+                                error: 'missing_skill_manifest',
+                            },
+                        });
+                        break;
+                    }
+
+                    skillStore.install(manifest);
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'install_openclaw_skill_response',
+                        payload: {
+                            success: true,
+                            store,
+                            skillName,
+                            path: result.path,
+                            skill: {
+                                id: manifest.name,
+                                name: manifest.name,
+                                description: manifest.description,
+                                requiredEnv: manifest.requires?.env ?? [],
+                                source: store,
+                            },
+                        },
+                    });
+                } catch (error) {
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'install_openclaw_skill_response',
+                        payload: {
+                            success: false,
+                            store,
+                            skillName,
+                            error: error instanceof Error ? error.message : String(error),
+                        },
+                    });
+                }
+                break;
+            }
+            case 'sync_skill_environment': {
+                try {
+                    const { env } = command.payload as {
+                        env?: Record<string, string>;
+                    };
+                    const result = syncManagedSkillEnvironment(env ?? {});
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'sync_skill_environment_response',
+                        payload: {
+                            success: true,
+                            applied: result.applied,
+                            cleared: result.cleared,
+                        },
+                    });
+                } catch (error) {
+                    emitAny({
+                        commandId: command.id,
+                        timestamp: new Date().toISOString(),
+                        type: 'sync_skill_environment_response',
+                        payload: {
+                            success: false,
+                            applied: 0,
+                            cleared: 0,
+                            error: error instanceof Error ? error.message : String(error),
+                        },
+                    });
+                }
                 break;
             }
 

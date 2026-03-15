@@ -5,18 +5,66 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import styles from '../Timeline.module.css';
 import type { ToolCallItem } from '../../../../types';
 import { MarkdownContent } from '../../../Common/MarkdownContent';
+import { toast } from '../../../Common/ToastProvider';
 
 interface ToolCardProps {
     item: ToolCallItem;
 }
 
+interface GeneratedFileResult {
+    filePath: string;
+    size?: number;
+}
+
+function isLikelyLocalPath(value: unknown): value is string {
+    return typeof value === 'string'
+        && value.length > 0
+        && !/^https?:\/\//i.test(value)
+        && /[\\/]/.test(value);
+}
+
+function extractGeneratedFileResult(
+    toolName: string,
+    structuredResult: Record<string, any> | null
+): GeneratedFileResult | null {
+    if (!structuredResult || structuredResult.success !== true) {
+        return null;
+    }
+
+    const pathCandidate = [
+        structuredResult.path,
+        structuredResult.filePath,
+        structuredResult.outputPath,
+        structuredResult.savedPath,
+    ].find(isLikelyLocalPath);
+
+    if (!pathCandidate) {
+        return null;
+    }
+
+    const toolLooksLikeFileWrite = toolName === 'write_to_file'
+        || toolName === 'replace_file_content'
+        || toolName === 'export_conversation';
+
+    if (!toolLooksLikeFileWrite && typeof structuredResult.size !== 'number') {
+        return null;
+    }
+
+    return {
+        filePath: pathCandidate,
+        size: typeof structuredResult.size === 'number' ? structuredResult.size : undefined,
+    };
+}
+
 const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
     const { t } = useTranslation();
     const [expanded, setExpanded] = useState(false);
+    const [openingFolder, setOpeningFolder] = useState(false);
 
     const structuredResult = useMemo(() => {
         if (!item.result || typeof item.result !== 'string') {
@@ -29,6 +77,11 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
             return null;
         }
     }, [item.result]);
+
+    const generatedFile = useMemo(
+        () => extractGeneratedFileResult(item.toolName, structuredResult),
+        [item.toolName, structuredResult]
+    );
 
     const commandLearningSummary = useMemo(() => {
         if (!structuredResult) return null;
@@ -75,6 +128,25 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
         return cleaned.length > 60 ? cleaned.slice(0, 60) + '...' : cleaned;
     }, [item.result]);
 
+    const handleOpenFolder = async () => {
+        if (!generatedFile || openingFolder) return;
+
+        try {
+            setOpeningFolder(true);
+            await invoke('open_local_path', {
+                input: {
+                    path: generatedFile.filePath,
+                    revealParent: true,
+                },
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            toast.error(t('chat.openFolderFailedTitle'), message);
+        } finally {
+            setOpeningFolder(false);
+        }
+    };
+
     return (
         <div className={styles.timelineItem}>
             <div className={styles.toolCard} data-status={displayStatus}>
@@ -82,6 +154,9 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
                     <div className={styles.toolInfo}>
                         <span className={styles.toolIcon}>🔧</span>
                         <strong className={styles.toolName}>{item.toolName}</strong>
+                        {(item.repeatCount ?? 1) > 1 && (
+                            <span className={styles.toolRepeatBadge}>x{item.repeatCount}</span>
+                        )}
                         {!expanded && preview && (
                             <span className={styles.toolPreview}>
                                 {preview}
@@ -106,6 +181,21 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
                         {item.result && (
                             <div className={styles.outputSection}>
                                 <div className={styles.sectionLabel}>{t('chat.output')}</div>
+                                {generatedFile && (
+                                    <div className={styles.generatedFilePanel}>
+                                        <div className={styles.generatedFilePath}>
+                                            {t('chat.fileSavedAt')}: {generatedFile.filePath}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className={styles.generatedFileAction}
+                                            onClick={handleOpenFolder}
+                                            disabled={openingFolder}
+                                        >
+                                            {openingFolder ? t('common.loading') : t('chat.openContainingFolder')}
+                                        </button>
+                                    </div>
+                                )}
                                 {commandLearningSummary && (
                                     <div className={styles.commandLearningPanel}>
                                         <div className={styles.commandLearningRow}>
@@ -168,6 +258,7 @@ const arePropsEqual = (prevProps: ToolCardProps, nextProps: ToolCardProps): bool
         prevProps.item.toolName === nextProps.item.toolName &&
         prevProps.item.status === nextProps.item.status &&
         prevProps.item.result === nextProps.item.result &&
+        prevProps.item.repeatCount === nextProps.item.repeatCount &&
         JSON.stringify(prevProps.item.args) === JSON.stringify(nextProps.item.args)
     );
 };

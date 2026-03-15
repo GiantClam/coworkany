@@ -161,6 +161,7 @@ export interface ToolCallItem extends BaseEvent {
     args: any;
     status: ToolCallStatus;
     result?: string;
+    repeatCount?: number;
 }
 
 export type ToolCallStatus = 'running' | 'success' | 'failed';
@@ -169,6 +170,7 @@ export interface SystemEventItem extends BaseEvent {
     type: 'system_event';
     content: string;
     actions?: SystemEventAction[];
+    skillConfigCard?: SkillConfigCardData;
 }
 
 export interface SystemEventAction {
@@ -177,6 +179,13 @@ export interface SystemEventAction {
     kind: 'send_message' | 'copy_text';
     value: string;
     primary?: boolean;
+}
+
+export interface SkillConfigCardData {
+    skillId: string;
+    skillName: string;
+    requiredEnv: string[];
+    source?: string;
 }
 
 export interface EffectRequestItem extends BaseEvent {
@@ -214,6 +223,7 @@ export interface PlanUpdatedPayload {
 export interface ChatMessagePayload {
     role: 'user' | 'assistant' | 'system';
     content: string;
+    skillConfigCard?: SkillConfigCardData;
 }
 
 export interface TextDeltaPayload {

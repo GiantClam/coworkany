@@ -132,7 +132,7 @@ impl AuditSink for ConsoleAuditSink {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_recent_audit_events, AuditEvent, FileAuditSink, AuditSink};
+    use super::{read_recent_audit_events, AuditEvent, AuditSink, FileAuditSink};
     use crate::policy::types::{EffectPayload, EffectRequest, EffectSource, EffectType};
     use chrono::Utc;
     use std::fs;
@@ -178,7 +178,8 @@ mod tests {
         let mut sink = FileAuditSink::new(audit_path.clone());
 
         for idx in 0..5 {
-            sink.log(sample_event(&format!("req-{}", idx))).expect("log");
+            sink.log(sample_event(&format!("req-{}", idx)))
+                .expect("log");
         }
 
         let events = read_recent_audit_events(&audit_path, 2).expect("read");

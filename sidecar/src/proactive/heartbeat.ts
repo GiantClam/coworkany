@@ -96,6 +96,16 @@ export interface Trigger {
     lastTriggeredAt?: string;
     triggerCount: number;
     runOnce?: boolean;
+    lastRunStatus?: 'running' | 'completed' | 'failed';
+    lastRunSummary?: string;
+    lastRunFinishedAt?: string;
+    recentRuns?: TriggerRunRecord[];
+}
+
+export interface TriggerRunRecord {
+    status: 'completed' | 'failed';
+    summary: string;
+    finishedAt: string;
 }
 
 export interface TriggerEvent {
@@ -120,6 +130,11 @@ export interface HeartbeatEvent {
     type: HeartbeatEventType;
     timestamp: string;
     data: Record<string, unknown>;
+}
+
+function appendTriggerRun(trigger: Trigger, run: TriggerRunRecord, maxEntries = 5): void {
+    const history = Array.isArray(trigger.recentRuns) ? trigger.recentRuns : [];
+    trigger.recentRuns = [run, ...history].slice(0, maxEntries);
 }
 
 export type HeartbeatEventCallback = (event: HeartbeatEvent) => void;
@@ -729,6 +744,10 @@ export class HeartbeatEngine extends EventEmitter {
         eventData: Record<string, unknown>
     ): Promise<void> {
         const action = trigger.action;
+        trigger.lastRunStatus = 'running';
+        trigger.lastRunSummary = undefined;
+        trigger.lastRunFinishedAt = undefined;
+        this.saveTriggersToConfig();
 
         this.emitEvent({
             type: 'trigger_action_started',
@@ -740,6 +759,14 @@ export class HeartbeatEngine extends EventEmitter {
         });
 
         try {
+            let actionResult:
+                | {
+                    success: boolean;
+                    result?: string;
+                    error?: string;
+                }
+                | undefined;
+
             switch (action.type) {
                 case 'notify':
                     await this.executor.notify(
@@ -753,10 +780,14 @@ export class HeartbeatEngine extends EventEmitter {
                             eventData,
                         }
                     );
+                    actionResult = {
+                        success: true,
+                        result: this.interpolateMessage(action.message!, eventData),
+                    };
                     break;
 
                 case 'execute_task':
-                    await this.executor.executeTask(
+                    actionResult = await this.executor.executeTask(
                         this.interpolateMessage(action.taskQuery!, eventData),
                         {
                             triggerEvent: eventData,
@@ -769,14 +800,30 @@ export class HeartbeatEngine extends EventEmitter {
                     break;
 
                 case 'run_skill':
-                    await this.executor.runSkill(action.skillName!, action.skillArgs);
+                    actionResult = await this.executor.runSkill(action.skillName!, action.skillArgs);
                     break;
 
                 case 'custom':
                     // Custom handlers would be implemented by the executor
                     console.log(`[Heartbeat] Custom handler: ${action.customHandler}`);
+                    actionResult = {
+                        success: true,
+                        result: `Custom handler executed: ${action.customHandler ?? 'unknown'}`,
+                    };
                     break;
             }
+
+            trigger.lastRunStatus = actionResult?.success === false ? 'failed' : 'completed';
+            trigger.lastRunSummary = actionResult?.success === false
+                ? actionResult.error || 'Scheduled task failed'
+                : actionResult?.result || 'Scheduled task completed';
+            trigger.lastRunFinishedAt = new Date().toISOString();
+            appendTriggerRun(trigger, {
+                status: trigger.lastRunStatus,
+                summary: trigger.lastRunSummary,
+                finishedAt: trigger.lastRunFinishedAt,
+            });
+            this.saveTriggersToConfig();
 
             this.emitEvent({
                 type: 'trigger_action_completed',
@@ -784,10 +831,20 @@ export class HeartbeatEngine extends EventEmitter {
                 data: {
                     triggerId: trigger.id,
                     actionType: action.type,
+                    result: trigger.lastRunSummary,
                 },
             });
         } catch (error) {
             console.error(`[Heartbeat] Action failed for trigger ${trigger.id}:`, error);
+            trigger.lastRunStatus = 'failed';
+            trigger.lastRunSummary = error instanceof Error ? error.message : String(error);
+            trigger.lastRunFinishedAt = new Date().toISOString();
+            appendTriggerRun(trigger, {
+                status: 'failed',
+                summary: trigger.lastRunSummary,
+                finishedAt: trigger.lastRunFinishedAt,
+            });
+            this.saveTriggersToConfig();
 
             this.emitEvent({
                 type: 'trigger_action_failed',

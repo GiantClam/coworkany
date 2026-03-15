@@ -15,7 +15,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { parse as parseYaml } from 'yaml';
 import { SkillManifest, SkillRequirements } from './types';
 
@@ -68,7 +68,7 @@ export interface DependencyCheckResult {
     installCommands?: string[];
 }
 
-export type OpenClawStore = 'clawhub';
+export type OpenClawStore = 'clawhub' | 'tencent_skillhub';
 
 export interface OpenClawStoreSkillInfo {
     name: string;
@@ -80,13 +80,21 @@ export interface OpenClawStoreSkillInfo {
     downloads?: number;
     stars?: number;
     tags?: string[];
+    homepage?: string;
     repoUrl?: string;
     files?: string[];
     skillMdUrl?: string;
+    downloadUrl?: string;
     raw?: Record<string, unknown>;
 }
 
 export type ClawHubSkillInfo = OpenClawStoreSkillInfo;
+export type TencentSkillHubSkillInfo = OpenClawStoreSkillInfo;
+
+const TENCENT_SKILLHUB_RAINBOW_GROUP = 'skill-hub.skills.skills\u6570\u636e\u6e90';
+const TENCENT_SKILLHUB_DATA_FALLBACK_URL =
+    'https://cloudcache.tencentcs.com/qcloud/tea/app/data/skills.2d46363b.json?max_age=31536000';
+const TENCENT_SKILLHUB_DOWNLOAD_BASE_URL = 'https://lightmake.site';
 
 const OPENCLAW_STORE_CONFIGS: Record<
     OpenClawStore,
@@ -113,13 +121,34 @@ const OPENCLAW_STORE_CONFIGS: Record<
             '/skills/{skillName}',
         ],
     },
+    tencent_skillhub: {
+        baseUrl: 'https://skillhub.tencent.com',
+        searchPaths: [],
+        detailPaths: [],
+    },
 };
 
 function getStoreBaseUrl(store: OpenClawStore): string {
-    const envOverride = process.env.OPENCLAW_STORE_CLAWHUB_BASE_URL || process.env.CLAWHUB_BASE_URL;
+    const envOverride = store === 'clawhub'
+        ? (process.env.OPENCLAW_STORE_CLAWHUB_BASE_URL || process.env.CLAWHUB_BASE_URL)
+        : (process.env.OPENCLAW_STORE_TENCENT_SKILLHUB_BASE_URL || process.env.TENCENT_SKILLHUB_BASE_URL);
 
     const fallback = OPENCLAW_STORE_CONFIGS[store].baseUrl;
     const raw = (envOverride || fallback).trim();
+    return raw.replace(/\/$/, '');
+}
+
+function getTencentSkillHubDataFallbackUrl(): string {
+    const envOverride = process.env.OPENCLAW_STORE_TENCENT_SKILLHUB_DATA_URL || process.env.TENCENT_SKILLHUB_DATA_URL;
+    const raw = (envOverride || TENCENT_SKILLHUB_DATA_FALLBACK_URL).trim();
+    return raw;
+}
+
+function getTencentSkillHubDownloadBaseUrl(): string {
+    const envOverride =
+        process.env.OPENCLAW_STORE_TENCENT_SKILLHUB_DOWNLOAD_BASE_URL
+        || process.env.TENCENT_SKILLHUB_DOWNLOAD_BASE_URL;
+    const raw = (envOverride || TENCENT_SKILLHUB_DOWNLOAD_BASE_URL).trim();
     return raw.replace(/\/$/, '');
 }
 
@@ -129,6 +158,8 @@ function getStoreBaseUrl(store: OpenClawStore): string {
 
 export class OpenClawCompatLayer {
     private static instance: OpenClawCompatLayer;
+    private tencentSkillHubDataCache: Record<string, unknown> | null = null;
+    private tencentSkillHubDataPromise: Promise<Record<string, unknown> | null> | null = null;
 
     private constructor() {}
 
@@ -468,6 +499,10 @@ export class OpenClawCompatLayer {
         query: string,
         limit: number = 10
     ): Promise<OpenClawStoreSkillInfo[]> {
+        if (store === 'tencent_skillhub') {
+            return this.searchTencentSkillHub(query, limit);
+        }
+
         const config = OPENCLAW_STORE_CONFIGS[store];
         if (!config) {
             return [];
@@ -503,6 +538,10 @@ export class OpenClawCompatLayer {
         store: OpenClawStore,
         skillName: string
     ): Promise<OpenClawStoreSkillInfo | null> {
+        if (store === 'tencent_skillhub') {
+            return this.getTencentSkillHubSkill(skillName);
+        }
+
         const config = OPENCLAW_STORE_CONFIGS[store];
         if (!config) {
             return null;
@@ -557,6 +596,10 @@ export class OpenClawCompatLayer {
                     return clawHubInstall;
                 }
                 console.warn(`[OpenClawCompat] ${store} API install failed, falling back to repo/raw mode:`, clawHubInstall.error);
+            }
+
+            if (store === 'tencent_skillhub') {
+                return this.installFromTencentSkillHubZip(skillInfo, targetDir, store);
             }
 
             const safeFolderName = this.sanitizeFolderName(skillInfo.name || skillName);
@@ -678,6 +721,68 @@ export class OpenClawCompatLayer {
         return this.installFromStore('clawhub', skillName, targetDir);
     }
 
+    async searchTencentSkillHub(query: string, limit: number = 10): Promise<TencentSkillHubSkillInfo[]> {
+        const payload = await this.fetchTencentSkillHubDataset();
+        const skills = Array.isArray(payload?.skills) ? payload.skills : [];
+        const normalizedQuery = query.trim().toLowerCase();
+
+        return skills
+            .map((entry) => this.normalizeTencentSkillHubSkillInfo(entry))
+            .filter((entry) => Boolean(entry.name))
+            .map((entry) => ({
+                entry,
+                score: this.scoreTencentSkillHubMatch(entry, normalizedQuery),
+            }))
+            .filter(({ score }) => score > 0 || normalizedQuery.length === 0)
+            .sort((left, right) => {
+                if (right.score !== left.score) {
+                    return right.score - left.score;
+                }
+                const rightDownloads = right.entry.downloads ?? 0;
+                const leftDownloads = left.entry.downloads ?? 0;
+                if (rightDownloads !== leftDownloads) {
+                    return rightDownloads - leftDownloads;
+                }
+                return left.entry.name.localeCompare(right.entry.name);
+            })
+            .slice(0, Math.max(1, limit))
+            .map(({ entry }) => entry);
+    }
+
+    async getTencentSkillHubSkill(skillName: string): Promise<TencentSkillHubSkillInfo | null> {
+        const normalizedNeedle = skillName.trim().toLowerCase();
+        if (!normalizedNeedle) {
+            return null;
+        }
+
+        const payload = await this.fetchTencentSkillHubDataset();
+        const skills = Array.isArray(payload?.skills) ? payload.skills : [];
+
+        for (const entry of skills) {
+            const normalized = this.normalizeTencentSkillHubSkillInfo(entry, skillName);
+            const candidates = [
+                normalized.slug,
+                normalized.name,
+                normalized.displayName,
+            ]
+                .filter((value): value is string => Boolean(value))
+                .map((value) => value.toLowerCase());
+
+            if (candidates.includes(normalizedNeedle)) {
+                return normalized;
+            }
+        }
+
+        return null;
+    }
+
+    async installFromTencentSkillHub(
+        skillName: string,
+        targetDir: string
+    ): Promise<{ success: boolean; path?: string; error?: string }> {
+        return this.installFromStore('tencent_skillhub', skillName, targetDir);
+    }
+
     private async fetchFirstJson(urls: string[]): Promise<unknown | null> {
         for (const url of urls) {
             try {
@@ -691,6 +796,81 @@ export class OpenClawCompatLayer {
             }
         }
         return null;
+    }
+
+    private async fetchTencentSkillHubDataset(): Promise<Record<string, unknown> | null> {
+        if (this.tencentSkillHubDataCache) {
+            return this.tencentSkillHubDataCache;
+        }
+        if (this.tencentSkillHubDataPromise) {
+            return this.tencentSkillHubDataPromise;
+        }
+
+        this.tencentSkillHubDataPromise = (async () => {
+            const baseUrl = getStoreBaseUrl('tencent_skillhub');
+            const dataUrl = await this.resolveTencentSkillHubDataUrl(baseUrl);
+            const response = await fetch(dataUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to load Tencent SkillHub catalog: ${response.status}`);
+            }
+
+            const payload = await response.json();
+            const record = this.asRecord(payload);
+            if (!record) {
+                throw new Error('Tencent SkillHub catalog response is not an object');
+            }
+
+            this.tencentSkillHubDataCache = record;
+            return record;
+        })()
+            .catch((error) => {
+                console.error('[OpenClawCompat] Tencent SkillHub catalog load failed:', error);
+                return null;
+            })
+            .finally(() => {
+                this.tencentSkillHubDataPromise = null;
+            });
+
+        return this.tencentSkillHubDataPromise;
+    }
+
+    private async resolveTencentSkillHubDataUrl(baseUrl: string): Promise<string> {
+        const rainbowUrl = `${baseUrl}/ajax/rainbow?action=getRainbowConfig`;
+        try {
+            const response = await fetch(rainbowUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    app: 'ai',
+                    options: {
+                        enableEnv: 1,
+                    },
+                    groups: [TENCENT_SKILLHUB_RAINBOW_GROUP],
+                }),
+            });
+
+            if (response.ok) {
+                const payload = await response.json();
+                const record = this.asRecord(payload);
+                const data = Array.isArray(record?.data) ? record.data : [];
+                const firstBlock = this.asRecord(data[0]);
+                const rows = Array.isArray(firstBlock?.rows) ? firstBlock.rows : [];
+                const firstRow = this.asRecord(rows[0]);
+                const url = this.pickString(firstRow?.url);
+                if (url) {
+                    if (/^https?:\/\//i.test(url)) {
+                        return url;
+                    }
+                    return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+                }
+            }
+        } catch (error) {
+            console.warn('[OpenClawCompat] Tencent SkillHub rainbow config lookup failed:', error);
+        }
+
+        return getTencentSkillHubDataFallbackUrl();
     }
 
     private async resolveClawHubLatestVersion(baseUrl: string, slug: string): Promise<string | undefined> {
@@ -802,6 +982,7 @@ export class OpenClawCompatLayer {
             downloads: this.toOptionalNumber(data.downloads) ?? this.toOptionalNumber(stats?.downloads),
             stars: this.toOptionalNumber(data.stars) ?? this.toOptionalNumber(stats?.stars),
             tags,
+            homepage: this.pickString(data.homepage, data.url),
             repoUrl: this.pickString(data.repoUrl, data.repositoryUrl),
             files: Array.isArray(data.files)
                 ? data.files.map((file) => String(file))
@@ -813,7 +994,35 @@ export class OpenClawCompatLayer {
             skillMdUrl: data.skillMdUrl
                 ? String(data.skillMdUrl)
                 : (data.downloadUrl ? String(data.downloadUrl) : undefined),
+            downloadUrl: data.downloadUrl ? String(data.downloadUrl) : undefined,
             raw: data,
+        };
+    }
+
+    private normalizeTencentSkillHubSkillInfo(entry: unknown, fallbackName: string = ''): OpenClawStoreSkillInfo {
+        const normalized = this.normalizeSkillInfo(entry, fallbackName);
+        const data = this.asRecord(entry);
+        const slug = this.pickString(data?.slug, normalized.slug, normalized.name, fallbackName);
+        const displayName = this.pickString(data?.name, data?.displayName, normalized.displayName, slug);
+        const tags = Array.isArray(data?.tags)
+            ? data?.tags.map((tag) => String(tag))
+            : normalized.tags;
+
+        return {
+            ...normalized,
+            name: slug ?? normalized.name,
+            slug: slug ?? normalized.slug,
+            displayName,
+            description: this.pickString(data?.description_zh, data?.description, normalized.description) ?? '',
+            author: this.pickString(data?.owner, data?.author, normalized.author),
+            tags,
+            homepage: this.pickString(data?.homepage, normalized.homepage),
+            downloadUrl: this.pickString(
+                data?.downloadUrl,
+                normalized.downloadUrl,
+                slug ? `${getTencentSkillHubDownloadBaseUrl()}/api/v1/download?slug=${encodeURIComponent(slug)}` : undefined
+            ),
+            raw: data ?? normalized.raw,
         };
     }
 
@@ -851,6 +1060,49 @@ export class OpenClawCompatLayer {
         return sanitized.length > 0 ? sanitized : 'openclaw_skill';
     }
 
+    private scoreTencentSkillHubMatch(skill: OpenClawStoreSkillInfo, normalizedQuery: string): number {
+        const baseScore = (skill.raw && this.toOptionalNumber(this.asRecord(skill.raw)?.score)) ?? 0;
+        if (!normalizedQuery) {
+            return baseScore;
+        }
+
+        const haystacks = [
+            skill.displayName,
+            skill.name,
+            skill.slug,
+            skill.description,
+            skill.author,
+            skill.homepage,
+            ...(skill.tags ?? []),
+        ]
+            .filter((value): value is string => Boolean(value))
+            .map((value) => value.toLowerCase());
+
+        let score = baseScore;
+        for (const value of haystacks) {
+            if (value === normalizedQuery) {
+                score += 1_000;
+                continue;
+            }
+            if (value.includes(normalizedQuery)) {
+                score += 250;
+            }
+        }
+
+        const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+        for (const token of tokens) {
+            for (const value of haystacks) {
+                if (value === token) {
+                    score += 100;
+                } else if (value.includes(token)) {
+                    score += 25;
+                }
+            }
+        }
+
+        return score;
+    }
+
     private resolveSkillMdUrl(skill: OpenClawStoreSkillInfo): string | null {
         if (skill.skillMdUrl && /^https?:\/\//i.test(skill.skillMdUrl)) {
             return skill.skillMdUrl;
@@ -869,6 +1121,139 @@ export class OpenClawCompatLayer {
             return null;
         }
         return `${skill.repoUrl.replace(/\/$/, '')}/raw/main/${filePath}`;
+    }
+
+    private async installFromTencentSkillHubZip(
+        skillInfo: OpenClawStoreSkillInfo,
+        targetDir: string,
+        store: OpenClawStore
+    ): Promise<{ success: boolean; path?: string; error?: string }> {
+        const slug = this.pickString(skillInfo.slug, skillInfo.name);
+        const downloadUrl = this.pickString(
+            skillInfo.downloadUrl,
+            slug ? `${getTencentSkillHubDownloadBaseUrl()}/api/v1/download?slug=${encodeURIComponent(slug)}` : undefined
+        );
+
+        if (!slug || !downloadUrl) {
+            return { success: false, error: `Missing ${store} download metadata` };
+        }
+
+        const safeFolderName = this.sanitizeFolderName(slug);
+        const skillDir = path.join(targetDir, safeFolderName);
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-tencent-skillhub-'));
+        const archivePath = path.join(tempRoot, `${safeFolderName}.zip`);
+
+        try {
+            const response = await fetch(downloadUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to download ${store} package: ${response.status}`);
+            }
+
+            const archiveBuffer = Buffer.from(await response.arrayBuffer());
+            fs.writeFileSync(archivePath, archiveBuffer);
+
+            fs.rmSync(skillDir, { recursive: true, force: true });
+            fs.mkdirSync(skillDir, { recursive: true });
+
+            this.extractZipArchive(archivePath, skillDir);
+            this.normalizeExtractedSkillDirectory(skillDir);
+
+            if (!fs.existsSync(path.join(skillDir, 'SKILL.md'))) {
+                throw new Error(`Downloaded ${store} package did not contain SKILL.md`);
+            }
+
+            return { success: true, path: skillDir };
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+            };
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    }
+
+    private extractZipArchive(archivePath: string, destinationPath: string): void {
+        const failures: string[] = [];
+
+        if (process.platform === 'win32') {
+            try {
+                execFileSync(
+                    'powershell',
+                    [
+                        '-NoProfile',
+                        '-NonInteractive',
+                        '-Command',
+                        `Expand-Archive -LiteralPath ${this.toPowerShellLiteral(archivePath)} -DestinationPath ${this.toPowerShellLiteral(destinationPath)} -Force`,
+                    ],
+                    { stdio: 'pipe' }
+                );
+                return;
+            } catch (error) {
+                failures.push(error instanceof Error ? error.message : String(error));
+            }
+        }
+
+        try {
+            execFileSync('unzip', ['-oq', archivePath, '-d', destinationPath], { stdio: 'pipe' });
+            return;
+        } catch (error) {
+            failures.push(error instanceof Error ? error.message : String(error));
+        }
+
+        try {
+            execFileSync('tar', ['-xf', archivePath, '-C', destinationPath], { stdio: 'pipe' });
+            return;
+        } catch (error) {
+            failures.push(error instanceof Error ? error.message : String(error));
+        }
+
+        throw new Error(`Failed to extract skill archive: ${failures.join(' | ')}`);
+    }
+
+    private normalizeExtractedSkillDirectory(skillDir: string): void {
+        if (this.ensureSkillManifestAtRoot(skillDir)) {
+            return;
+        }
+
+        const entries = fs.readdirSync(skillDir, { withFileTypes: true });
+        const nestedDirectories = entries.filter((entry) => entry.isDirectory());
+        if (nestedDirectories.length !== 1) {
+            return;
+        }
+
+        const nestedRoot = path.join(skillDir, nestedDirectories[0].name);
+        if (!this.ensureSkillManifestAtRoot(nestedRoot)) {
+            return;
+        }
+
+        for (const entry of fs.readdirSync(nestedRoot)) {
+            const source = path.join(nestedRoot, entry);
+            const target = path.join(skillDir, entry);
+            fs.rmSync(target, { recursive: true, force: true });
+            fs.renameSync(source, target);
+        }
+        fs.rmSync(nestedRoot, { recursive: true, force: true });
+        this.ensureSkillManifestAtRoot(skillDir);
+    }
+
+    private ensureSkillManifestAtRoot(directory: string): boolean {
+        const exactPath = path.join(directory, 'SKILL.md');
+        if (fs.existsSync(exactPath)) {
+            return true;
+        }
+
+        const lowerPath = path.join(directory, 'skill.md');
+        if (fs.existsSync(lowerPath)) {
+            fs.renameSync(lowerPath, exactPath);
+            return true;
+        }
+
+        return false;
+    }
+
+    private toPowerShellLiteral(value: string): string {
+        return `'${value.replace(/'/g, "''")}'`;
     }
 
     // ========================================================================

@@ -205,6 +205,9 @@
     "exportChat": "Export as Markdown",
     "copied": "Copied!",
     "copyMessage": "Copy message",
+    "fileSavedAt": "Saved to",
+    "openContainingFolder": "Open folder",
+    "openFolderFailedTitle": "Failed to open folder",
     "tokenUsage": "Token Usage",
     "inputTokens": "In: {{value}}",
     "outputTokens": "Out: {{value}}",
@@ -243,7 +246,14 @@
     "managedBy": "Managed by Unified Core Skills",
     "inProgress": "In Progress",
     "noActiveTasks": "No structured tasks in this workspace yet.",
-    "completed": "Completed"
+    "completed": "Completed",
+    "latestResult": "Latest result",
+    "lastRunSucceeded": "Last run succeeded",
+    "lastRunFailed": "Last run failed",
+    "runInProgress": "Run in progress",
+    "recentRuns": "Recent runs ({{count}})",
+    "runStatusCompleted": "Succeeded",
+    "runStatusFailed": "Failed"
   },
 
   "errorBoundary": {
@@ -296,7 +306,15 @@
     "confirmRemove": "Confirm Remove?",
     "path": "Path: {{path}}",
     "installedDate": "Installed: {{date}}",
-    "folderPlaceholder": "Enter folder path containing SKILL.md..."
+    "folderPlaceholder": "Enter folder path containing SKILL.md...",
+    "credentialsTitle": "Credentials",
+    "credentialsHint": "These values are stored locally and synced while this skill is enabled.",
+    "noCredentialsRequired": "This skill does not declare any required environment variables.",
+    "credentialsPlaceholder": "Enter {{envVar}}",
+    "credentialsSaved": "Credentials saved",
+    "credentialsCleared": "Credentials cleared",
+    "clearCredentials": "Clear credentials",
+    "credentialsDisabledHint": "This skill is currently disabled. Saved values will take effect again when you re-enable it."
   },
 
   "mcp": {

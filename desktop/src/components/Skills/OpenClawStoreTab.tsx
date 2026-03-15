@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useOpenClawSkillStore, type OpenClawStore } from '../../hooks/useOpenClawSkillStore';
+import { injectSkillConfigPrompt } from '../../lib/skillConfigPrompts';
+import { useTaskEventStore } from '../../stores/useTaskEventStore';
 
 interface OpenClawStoreTabProps {
     store: OpenClawStore;
@@ -9,26 +11,29 @@ interface OpenClawStoreTabProps {
 
 const STORE_LABELS: Record<OpenClawStore, string> = {
     clawhub: 'ClawHub',
+    tencent_skillhub: 'SkillHub',
 };
 
 const DEFAULT_QUERY = 'automation';
-const FETCH_LIMIT = 120;
+const FETCH_LIMIT = 100;
+const SCROLL_LOAD_THRESHOLD_PX = 120;
 
 export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }: OpenClawStoreTabProps) {
+    const activeTaskId = useTaskEventStore((state) => state.activeTaskId);
     const [query, setQuery] = useState(DEFAULT_QUERY);
-    const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState(12);
+    const [visibleCount, setVisibleCount] = useState(12);
     const [viewMode, setViewMode] = useState<'compact' | 'comfortable'>('compact');
     const { skills, loading, installingSkill, error, search, install } = useOpenClawSkillStore();
 
     useEffect(() => {
-        void search(store, query.trim() || DEFAULT_QUERY, FETCH_LIMIT).then(() => setCurrentPage(1));
+        void search(store, query.trim() || DEFAULT_QUERY, FETCH_LIMIT).then(() => setVisibleCount(pageSize));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [store]);
 
     const onSearch = async () => {
         await search(store, query.trim() || DEFAULT_QUERY, FETCH_LIMIT);
-        setCurrentPage(1);
+        setVisibleCount(pageSize);
     };
 
     const onInstall = async (skillName: string) => {
@@ -38,12 +43,40 @@ export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }
             return;
         }
         onInstallComplete?.();
+        if (result.skill && result.skill.requiredEnv.length > 0) {
+            injectSkillConfigPrompt(activeTaskId, {
+                skillId: result.skill.id,
+                skillName: result.skill.name,
+                requiredEnv: result.skill.requiredEnv,
+                source: result.skill.source,
+            });
+        }
     };
 
-    const totalPages = Math.max(1, Math.ceil(skills.length / pageSize));
-    const safePage = Math.min(currentPage, totalPages);
-    const pageStart = (safePage - 1) * pageSize;
-    const pageSkills = skills.slice(pageStart, pageStart + pageSize);
+    useEffect(() => {
+        setVisibleCount((prev) => {
+            if (skills.length === 0) {
+                return pageSize;
+            }
+            if (prev > skills.length) {
+                return skills.length;
+            }
+            if (prev < pageSize) {
+                return pageSize;
+            }
+            return prev;
+        });
+    }, [skills.length, pageSize]);
+
+    const hasMoreSkills = visibleCount < skills.length;
+    const visibleSkills = skills.slice(0, visibleCount);
+
+    const loadMoreSkills = () => {
+        if (loading || !hasMoreSkills) {
+            return;
+        }
+        setVisibleCount((prev) => Math.min(skills.length, prev + pageSize));
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
@@ -67,18 +100,17 @@ export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                    {skills.length} skills
+                    Showing {Math.min(visibleCount, skills.length)} of {skills.length} skills
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                        Page Size
+                        Load Step
                     </label>
                     <select
                         className="input-field"
                         value={String(pageSize)}
                         onChange={(event) => {
                             setPageSize(Number(event.target.value));
-                            setCurrentPage(1);
                         }}
                         style={{ width: '96px', height: '34px' }}
                     >
@@ -117,13 +149,21 @@ export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }
                     gap: '8px',
                     alignContent: 'start',
                 }}
+                onScroll={(event) => {
+                    const target = event.currentTarget;
+                    const remaining = target.scrollHeight - target.scrollTop - target.clientHeight;
+                    if (remaining <= SCROLL_LOAD_THRESHOLD_PX) {
+                        loadMoreSkills();
+                    }
+                }}
             >
-                {pageSkills.map((skill) => {
-                    const installed = installedSkillIds.has(skill.name);
-                    const installing = installingSkill === skill.name;
+                {visibleSkills.map((skill) => {
+                    const installKey = skill.slug || skill.name;
+                    const installed = installedSkillIds.has(skill.name) || installedSkillIds.has(installKey);
+                    const installing = installingSkill === installKey;
                     return (
                         <div
-                            key={`${store}:${skill.name}`}
+                            key={`${store}:${installKey}`}
                             style={{
                                 border: '1px solid var(--border-subtle)',
                                 borderRadius: 'var(--radius-md)',
@@ -136,7 +176,7 @@ export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }
                         >
                             <div style={{ minWidth: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                    <strong style={{ fontSize: '14px' }}>{skill.name}</strong>
+                                    <strong style={{ fontSize: '14px' }}>{skill.displayName || skill.name}</strong>
                                     {skill.version && (
                                         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>v{skill.version}</span>
                                     )}
@@ -148,13 +188,14 @@ export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }
                                     {STORE_LABELS[store]}
                                     {skill.author ? ` - ${skill.author}` : ''}
                                     {typeof skill.downloads === 'number' ? ` - ${skill.downloads} downloads` : ''}
+                                    {skill.slug && skill.slug !== skill.name ? ` - ${skill.slug}` : ''}
                                 </div>
                             </div>
 
                             <button
                                 className="btn btn-primary"
                                 disabled={installed || installing || loading}
-                                onClick={() => void onInstall(skill.name)}
+                                onClick={() => void onInstall(installKey)}
                                 style={{ minWidth: '100px', alignSelf: viewMode === 'compact' ? 'flex-end' : 'auto' }}
                             >
                                 {installed ? 'Installed' : installing ? 'Installing' : 'Install'}
@@ -168,26 +209,21 @@ export function OpenClawStoreTab({ store, installedSkillIds, onInstallComplete }
                         No skills found.
                     </div>
                 )}
-            </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <button
-                    className="btn btn-secondary"
-                    disabled={safePage <= 1 || loading}
-                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                >
-                    Prev
-                </button>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                    Page {safePage} / {totalPages}
-                </div>
-                <button
-                    className="btn btn-secondary"
-                    disabled={safePage >= totalPages || loading}
-                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                >
-                    Next
-                </button>
+                {skills.length > 0 && hasMoreSkills && (
+                    <div
+                        style={{
+                            gridColumn: viewMode === 'compact' ? '1 / -1' : undefined,
+                            display: 'flex',
+                            justifyContent: 'center',
+                            padding: '12px 0 4px',
+                        }}
+                    >
+                        <button className="btn btn-secondary" onClick={loadMoreSkills} disabled={loading}>
+                            Load more
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );

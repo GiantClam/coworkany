@@ -44,6 +44,7 @@ export type {
     TaskSuspendedPayload,
     TaskResumedPayload,
     SystemEventAction,
+    SkillConfigCardData,
 } from './events';
 
 export {
@@ -72,6 +73,7 @@ export type {
     PolicyAuditEvent,
     LlmProfile,
     LlmConfig,
+    SoulProfile,
     IpcResult,
     SkillManifest,
     SkillRecord,

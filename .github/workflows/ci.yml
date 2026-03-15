@@ -61,8 +61,38 @@ jobs:
         working-directory: desktop
         run: npm run test:ci
 
+  test-desktop-e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
+
+      - name: Run desktop Tauri E2E smoke suite
+        working-directory: desktop
+        env:
+          CI: true
+        run: npm run test:e2e:desktop-ci
+
   build-tauri:
-    needs: [lint-and-typecheck, test-desktop]
+    needs: [lint-and-typecheck, test-desktop, test-desktop-e2e]
     strategy:
       fail-fast: false
       matrix:

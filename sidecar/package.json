@@ -11,7 +11,7 @@
     "build:release": "node scripts/build-release.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
-    "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts",
+    "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts tests/install-loop-guard.test.ts tests/skill-prompt-builder.test.ts tests/system-prompt-serialization.test.ts tests/skill-routing-eval.test.ts tests/skill-routing-commercial-eval.test.ts",
     "test:ci": "npm run test:stable",
     "test:agent:core": "bun test tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",
     "test:agent:scenarios": "bun test tests/capabilities.test.ts tests/user-scenarios.test.ts tests/e2e-composite.test.ts tests/openclaw-quick.test.ts tests/openclaw-simulation.test.ts tests/openclaw-extended.test.ts tests/openclow-comparison.test.ts",

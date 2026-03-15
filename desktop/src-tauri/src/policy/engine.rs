@@ -211,7 +211,10 @@ impl PolicyEngine {
     }
 
     fn get_command_auto_approval(&self, request: &EffectRequest) -> Option<ConfirmationPolicy> {
-        if !matches!(request.effect_type, EffectType::ShellRead | EffectType::ShellWrite) {
+        if !matches!(
+            request.effect_type,
+            EffectType::ShellRead | EffectType::ShellWrite
+        ) {
             return None;
         }
 
@@ -376,9 +379,15 @@ mod tests {
 
         engine.replace_config(config);
 
-        assert_eq!(engine.config.allowlists.commands, vec!["SchTasks".to_string()]);
         assert_eq!(
-            engine.config.default_policies.get(&EffectType::NetworkOutbound),
+            engine.config.allowlists.commands,
+            vec!["SchTasks".to_string()]
+        );
+        assert_eq!(
+            engine
+                .config
+                .default_policies
+                .get(&EffectType::NetworkOutbound),
             Some(&ConfirmationPolicy::Once)
         );
     }

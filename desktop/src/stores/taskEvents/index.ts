@@ -51,6 +51,7 @@ export type {
 interface TaskEventStoreState {
     sessions: Map<string, TaskSession>;
     activeTaskId: string | null;
+    lastForegroundTaskId: string | null;
     sidecarConnected: boolean;
     pendingResponses: Map<string, IpcResponse>;
     auditEvents: AuditEvent[];
@@ -166,6 +167,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
     subscribeWithSelector((set, get) => ({
         sessions: new Map(),
         activeTaskId: null,
+        lastForegroundTaskId: null,
         sidecarConnected: false,
         pendingResponses: new Map(),
         auditEvents: [],
@@ -197,7 +199,12 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
 
         setActiveTask: (taskId: string | null) => {
             set((state) => {
-                const next = { activeTaskId: taskId };
+                const next = {
+                    activeTaskId: taskId,
+                    lastForegroundTaskId: taskId && !taskId.startsWith('scheduled_')
+                        ? taskId
+                        : state.lastForegroundTaskId,
+                };
                 const snapshot: SessionsSnapshot = {
                     sessions: Array.from(state.sessions.values()),
                     activeTaskId: taskId,
@@ -270,6 +277,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
             set({
                 sessions: new Map(),
                 activeTaskId: null,
+                lastForegroundTaskId: null,
                 pendingResponses: new Map(),
                 auditEvents: [],
             });
@@ -296,6 +304,11 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
             set({
                 sessions: map,
                 activeTaskId,
+                lastForegroundTaskId: activeTaskId && !activeTaskId.startsWith('scheduled_')
+                    ? activeTaskId
+                    : [...map.values()]
+                        .filter((session) => !session.taskId.startsWith('scheduled_'))
+                        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0]?.taskId ?? null,
             });
         },
     }))

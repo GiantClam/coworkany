@@ -27,6 +27,8 @@ const defaultStartupMeasurement: StartupMeasurementConfig = {
     profile: 'optimized',
     runLabel: '',
 };
+const e2eBootFallbackEnabled =
+    (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_E2E_BOOT_FALLBACK === '1';
 
 function syncViewportCssVars() {
     const root = document.documentElement;
@@ -96,6 +98,17 @@ function renderApp() {
 }
 
 void (async () => {
+    if (e2eBootFallbackEnabled) {
+        renderApp();
+        void Promise.all([
+            initializeTheme(),
+            hydrateLanguagePreference(),
+        ]).catch((error) => {
+            console.warn('[startup] Deferred theme/language hydration failed during E2E bootstrap', error);
+        });
+        return;
+    }
+
     await Promise.all([
         initializeTheme(),
         hydrateLanguagePreference(),

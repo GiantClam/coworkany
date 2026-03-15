@@ -5,7 +5,7 @@
  * Handlers are stubs that will be bound to actual implementation in main.ts
  */
 
-import type { ToolDefinition } from './standard';
+import type { ToolContext, ToolDefinition } from './standard';
 
 // ============================================================================
 // Placeholder Handlers (to be replaced with actual implementation)
@@ -21,6 +21,47 @@ const notImplementedHandler = async (args: Record<string, unknown>) => ({
 // ============================================================================
 // Tool Definitions
 // ============================================================================
+
+/**
+ * Resolve a skill request by searching local skills first, then skill marketplaces.
+ */
+export const resolveSkillRequestTool: ToolDefinition = {
+    name: 'resolve_skill_request',
+    description: `Resolve a user request for a skill before creating a new one.
+
+Always use this tool first when the user asks to create, add, install, or use a skill.
+It enforces this order:
+1. Search already installed local skills
+2. Search skill marketplaces (GitHub/ClawHub/Tencent SkillHub)
+3. Install the best existing match automatically
+4. Only return should_create=true when nothing suitable exists
+
+If a skill is found or installed, the result includes the skill instructions so you can use it immediately in the current conversation.`,
+    effects: ['network:outbound', 'filesystem:write', 'state:remember'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            query: {
+                type: 'string',
+                description: 'The user request or capability you need a skill for',
+            },
+            auto_install: {
+                type: 'boolean',
+                default: true,
+                description: 'Automatically install the best marketplace match when found',
+            },
+            limit: {
+                type: 'number',
+                default: 5,
+                minimum: 1,
+                maximum: 10,
+                description: 'Maximum number of candidate matches to inspect',
+            },
+        },
+        required: ['query'],
+    },
+    handler: notImplementedHandler,
+};
 
 /**
  * Trigger a self-learning session for a capability the AI doesn't have
@@ -412,6 +453,7 @@ Requires explicit user opt-in.`,
 // ============================================================================
 
 export const SELF_LEARNING_TOOLS: ToolDefinition[] = [
+    resolveSkillRequestTool,
     triggerLearningTool,
     queryLearningStatusTool,
     validateSkillTool,
@@ -432,6 +474,7 @@ export default SELF_LEARNING_TOOLS;
 // ============================================================================
 
 export interface SelfLearningToolHandlers {
+    resolveSkillRequest: (args: { query: string; auto_install?: boolean; limit?: number }, context: ToolContext) => Promise<unknown>;
     triggerLearning: (args: { topic: string; context: string; urgency?: string; depth?: string }) => Promise<unknown>;
     queryStatus: (args: { session_id?: string; capability?: string; show_statistics?: boolean; show_needs_attention?: boolean }) => Promise<unknown>;
     validateSkill: (args: { skill_id: string; test_cases?: unknown[]; update_confidence?: boolean }) => Promise<unknown>;
@@ -450,16 +493,17 @@ export interface SelfLearningToolHandlers {
  */
 export function createSelfLearningTools(handlers: SelfLearningToolHandlers): ToolDefinition[] {
     return [
-        { ...triggerLearningTool, handler: handlers.triggerLearning },
-        { ...queryLearningStatusTool, handler: handlers.queryStatus },
-        { ...validateSkillTool, handler: handlers.validateSkill },
-        { ...findLearnedCapabilityTool, handler: handlers.findCapability },
-        { ...recordCapabilityUsageTool, handler: handlers.recordUsage },
+        { ...resolveSkillRequestTool, handler: (args, context) => handlers.resolveSkillRequest(args, context) },
+        { ...triggerLearningTool, handler: (args) => handlers.triggerLearning(args) },
+        { ...queryLearningStatusTool, handler: (args) => handlers.queryStatus(args) },
+        { ...validateSkillTool, handler: (args) => handlers.validateSkill(args) },
+        { ...findLearnedCapabilityTool, handler: (args) => handlers.findCapability(args) },
+        { ...recordCapabilityUsageTool, handler: (args) => handlers.recordUsage(args) },
         // OpenClaw-style enhancements
-        { ...submitFeedbackTool, handler: handlers.submitFeedback },
-        { ...rollbackSkillTool, handler: handlers.rollbackSkill },
-        { ...viewSkillHistoryTool, handler: handlers.viewSkillHistory },
-        { ...getLearningPredictionsTool, handler: handlers.getLearningPredictions },
-        { ...configureProactiveLearningTool, handler: handlers.configureProactiveLearning },
+        { ...submitFeedbackTool, handler: (args) => handlers.submitFeedback(args) },
+        { ...rollbackSkillTool, handler: (args) => handlers.rollbackSkill(args) },
+        { ...viewSkillHistoryTool, handler: (args) => handlers.viewSkillHistory(args) },
+        { ...getLearningPredictionsTool, handler: (args) => handlers.getLearningPredictions(args) },
+        { ...configureProactiveLearningTool, handler: (args) => handlers.configureProactiveLearning(args) },
     ];
 }

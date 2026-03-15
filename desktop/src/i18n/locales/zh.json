@@ -203,6 +203,9 @@
     "exportChat": "导出为 Markdown",
     "copied": "已复制！",
     "copyMessage": "复制消息",
+    "fileSavedAt": "已保存到",
+    "openContainingFolder": "打开所在文件夹",
+    "openFolderFailedTitle": "打开文件夹失败",
     "tokenUsage": "Token 用量",
     "inputTokens": "输入: {{value}}",
     "outputTokens": "输出: {{value}}",
@@ -241,7 +244,14 @@
     "managedBy": "由统一核心技能管理",
     "inProgress": "进行中",
     "noActiveTasks": "当前工作区还没有结构化任务。",
-    "completed": "已完成"
+    "completed": "已完成",
+    "latestResult": "最新结果",
+    "lastRunSucceeded": "上一次运行成功",
+    "lastRunFailed": "上一次运行失败",
+    "runInProgress": "正在运行",
+    "recentRuns": "最近运行（{{count}}）",
+    "runStatusCompleted": "成功",
+    "runStatusFailed": "失败"
   },
 
   "errorBoundary": {

@@ -124,6 +124,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [modelConnectionError, setModelConnectionError] = useState<string | null>(null);
     const [isRetryingModelConnection, setIsRetryingModelConnection] = useState(false);
     const modelConnectionCheckSeq = useRef(0);
+    const autoResumedFailureRef = useRef<string | null>(null);
 
     const activeSession = useActiveSession();
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
@@ -282,6 +283,56 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setModelConnectionError(firstModelError);
         }
     }, [startError, sendError, cancelError, clearError]);
+
+    useEffect(() => {
+        if (!activeSession?.taskId || modelConnectionStatus !== 'connected') {
+            return;
+        }
+
+        const failureReason = activeSession.summary ?? '';
+        if (activeSession.status !== 'failed' || !isModelTransportError(failureReason)) {
+            return;
+        }
+
+        const fingerprint = `${activeSession.taskId}:${activeSession.updatedAt}:${failureReason}`;
+        if (autoResumedFailureRef.current === fingerprint) {
+            return;
+        }
+
+        autoResumedFailureRef.current = fingerprint;
+
+        void sendMessage({
+            taskId: activeSession.taskId,
+            content: '[System] Model connection recovered. Continue the interrupted task from the latest completed step. Do not repeat successful tool calls unless the previous result is stale or incomplete. End by reporting the actual result, not just your status.',
+            workspacePath: activeWorkspace?.path || activeSession.workspacePath,
+            config: {
+                enabledClaudeSkills: enabledSkills,
+                enabledToolpacks,
+                enabledSkills,
+            },
+        }).then((result) => {
+            if (result?.success) {
+                toast.success(t('common.reconnected'), 'Task resumed after model connection recovery.');
+                return;
+            }
+
+            autoResumedFailureRef.current = null;
+        }).catch(() => {
+            autoResumedFailureRef.current = null;
+        });
+    }, [
+        activeSession?.status,
+        activeSession?.summary,
+        activeSession?.taskId,
+        activeSession?.updatedAt,
+        activeSession?.workspacePath,
+        activeWorkspace?.path,
+        enabledSkills,
+        enabledToolpacks,
+        modelConnectionStatus,
+        sendMessage,
+        t,
+    ]);
 
     const modelConnectionLabel = useMemo(() => {
         switch (modelConnectionStatus) {

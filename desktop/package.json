@@ -25,9 +25,11 @@
         "build": "tsc && vite build",
         "preview": "vite preview",
         "tauri": "tauri",
-        "test": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
-        "test:ci": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts",
+        "test": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/use-tauri-events.test.ts tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
+        "test:ci": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/use-tauri-events.test.ts",
         "test:e2e": "playwright test",
+        "test:e2e:desktop-ci": "playwright test tests/reddit-hourly-scheduled-task-desktop-e2e.test.ts tests/summerize-skill-chat-install-desktop-e2e.test.ts tests/tencent-skillhub-skill-lifecycle-desktop-e2e.test.ts --reporter=line",
+        "test:e2e:analyzer-live": "node scripts/run-analyzer-live-smoke.mjs",
         "test:e2e:x-following": "playwright test tests/x-following-posts-query-e2e.test.ts tests/x-following-posts-suspend-e2e.test.ts"
     },
     "dependencies": {
@@ -35,6 +37,8 @@
         "@radix-ui/react-toast": "^1.2.15",
         "@radix-ui/react-tooltip": "^1.0.7",
         "@tauri-apps/api": "2.10.1",
+        "@tauri-apps/plugin-dialog": "^2.6.0",
+        "@tauri-apps/plugin-notification": "2.3.1",
         "@tauri-apps/plugin-store": "2.4.2",
         "@tauri-apps/plugin-updater": "2.10.0",
         "clsx": "^2.1.0",

@@ -28,8 +28,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test-desktop-e2e:
+    name: Desktop E2E Gate
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Bun
+        if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
+        working-directory: sidecar
+        run: bun install
+
+      - name: Run desktop Tauri E2E smoke suite
+        if: ${{ inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
+        working-directory: desktop
+        env:
+          CI: true
+        run: npm run test:e2e:desktop-ci
+
+      - name: Skip desktop E2E gate for non-Windows packaging
+        if: ${{ inputs.platform != 'all' && inputs.platform != 'windows-x64' }}
+        run: echo "Skipping desktop E2E gate because Windows packaging is not requested."
+
   package:
     name: Package ${{ matrix.artifact_name }}
+    needs: [test-desktop-e2e]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

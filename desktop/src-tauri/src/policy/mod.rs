@@ -9,6 +9,6 @@ mod types;
 pub use audit::FileAuditSink;
 pub use commands::PolicyEngineState;
 pub use types::{
-    EffectContext, EffectPayload, EffectRequest,
-    EffectResponse, EffectScope, EffectSource, EffectType,
+    EffectContext, EffectPayload, EffectRequest, EffectResponse, EffectScope, EffectSource,
+    EffectType,
 };

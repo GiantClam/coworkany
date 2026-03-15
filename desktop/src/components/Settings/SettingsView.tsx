@@ -6,7 +6,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { DirectivesEditor } from './DirectivesEditor';
+import { SoulEditor } from './SoulEditor';
 import { ProfileEditor } from './components/ProfileEditor';
 import { ProfileList } from './components/ProfileList';
 import { SearchSettings } from './components/SearchSettings';
@@ -65,6 +65,8 @@ export function SettingsView() {
         searchSaved,
         proxySettings,
         proxySaved,
+        soulProfile,
+        soulSaved,
         policyConfig,
         policyAuditEvents,
         policyAuditLoading,
@@ -79,6 +81,7 @@ export function SettingsView() {
         deleteProfile,
         saveSearchSettings,
         saveProxySettings,
+        saveSoulProfile,
         savePolicyConfig,
         updateMaxHistoryMessages,
     } = useSettings();
@@ -113,6 +116,12 @@ export function SettingsView() {
     }, [proxySaved, t]);
 
     useEffect(() => {
+        if (soulSaved) {
+            toast.success('Soul profile saved');
+        }
+    }, [soulSaved]);
+
+    useEffect(() => {
         if (policySaved) {
             toast.success('Policy settings saved');
         }
@@ -139,7 +148,7 @@ export function SettingsView() {
             <AppearanceSection />
 
             <div className={styles.section}>
-                <DirectivesEditor />
+                <SoulEditor profile={soulProfile} onSave={saveSoulProfile} saving={loading} />
             </div>
 
             <div className={styles.grid}>

@@ -54,11 +54,7 @@ impl PolicyEngineState {
 
 const MAX_POLICY_AUDIT_EVENTS: usize = 200;
 
-async fn record_policy_audit_event(
-    state: &PolicyEngineState,
-    app: &AppHandle,
-    event: AuditEvent,
-) {
+async fn record_policy_audit_event(state: &PolicyEngineState, app: &AppHandle, event: AuditEvent) {
     {
         let mut audit = state.audit_sink.lock().await;
         let _ = audit.log(event.clone());
@@ -155,8 +151,15 @@ impl ConfirmationRequest {
 }
 
 fn approval_modes_for_request(request: &EffectRequest) -> Vec<String> {
-    if matches!(request.effect_type, EffectType::ShellRead | EffectType::ShellWrite) {
-        vec!["once".to_string(), "session".to_string(), "permanent".to_string()]
+    if matches!(
+        request.effect_type,
+        EffectType::ShellRead | EffectType::ShellWrite
+    ) {
+        vec![
+            "once".to_string(),
+            "session".to_string(),
+            "permanent".to_string(),
+        ]
     } else {
         vec!["once".to_string(), "session".to_string()]
     }
@@ -237,11 +240,10 @@ async fn persist_policy_config(app: &AppHandle, config: &PolicyConfig) -> Result
         .map_err(|e| format!("failed to write policy config: {}", e))
 }
 
-async fn refresh_engine_config(
-    state: &PolicyEngineState,
-    app: &AppHandle,
-) -> Result<(), String> {
-    let config = load_policy_config(app).await.unwrap_or_else(|_| PolicyConfig::default_config());
+async fn refresh_engine_config(state: &PolicyEngineState, app: &AppHandle) -> Result<(), String> {
+    let config = load_policy_config(app)
+        .await
+        .unwrap_or_else(|_| PolicyConfig::default_config());
     let mut engine = state.engine.lock().await;
     engine.replace_config(config);
     Ok(())
@@ -380,7 +382,12 @@ pub async fn confirm_effect(
     response.approval_type = Some(approval_type.clone());
 
     let remember = !matches!(approval_type, ConfirmationPolicy::Once);
-    record_policy_audit_event(&state, &app, AuditEvent::confirmed(&pending.request, remember)).await;
+    record_policy_audit_event(
+        &state,
+        &app,
+        AuditEvent::confirmed(&pending.request, remember),
+    )
+    .await;
 
     if let Some(responder) = pending.responder.take() {
         let _ = responder.send(response.clone());
@@ -422,7 +429,12 @@ pub async fn deny_effect(
         modified_scope: None,
     };
 
-    record_policy_audit_event(&state, &app, AuditEvent::denied(&pending.request, reason.as_deref())).await;
+    record_policy_audit_event(
+        &state,
+        &app,
+        AuditEvent::denied(&pending.request, reason.as_deref()),
+    )
+    .await;
 
     if let Some(responder) = pending.responder.take() {
         let _ = responder.send(response.clone());

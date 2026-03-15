@@ -9,7 +9,7 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { createProactiveTaskManager } from '../agent/jarvis/proactiveTaskManager';
-import type { Trigger } from '../proactive/heartbeat';
+import type { Trigger, TriggerRunRecord } from '../proactive/heartbeat';
 
 type TaskListItem = {
     id: string;
@@ -21,7 +21,37 @@ type TaskListItem = {
     tags: string[];
     createdAt: string;
     updatedAt: string;
+    latestRunStatus?: 'running' | 'completed' | 'failed';
+    latestRunSummary?: string;
+    latestRunAt?: string;
+    recentRuns?: TriggerRunRecord[];
 };
+
+function normalizeTriggerRuns(trigger: Trigger): TriggerRunRecord[] {
+    if (Array.isArray(trigger.recentRuns) && trigger.recentRuns.length > 0) {
+        return trigger.recentRuns
+            .filter((run) =>
+                (run.status === 'completed' || run.status === 'failed') &&
+                typeof run.summary === 'string' &&
+                typeof run.finishedAt === 'string'
+            )
+            .slice(0, 5);
+    }
+
+    if (
+        (trigger.lastRunStatus === 'completed' || trigger.lastRunStatus === 'failed') &&
+        typeof trigger.lastRunSummary === 'string' &&
+        typeof trigger.lastRunFinishedAt === 'string'
+    ) {
+        return [{
+            status: trigger.lastRunStatus,
+            summary: trigger.lastRunSummary,
+            finishedAt: trigger.lastRunFinishedAt,
+        }];
+    }
+
+    return [];
+}
 
 function getTaskManager(workspacePath: string) {
     const storagePath = path.join(workspacePath, '.coworkany', 'jarvis');
@@ -55,21 +85,28 @@ function loadScheduledTasks(
         const triggers = Array.isArray(parsed.triggers) ? parsed.triggers : [];
         const mapped = triggers
             .filter((trigger) => trigger.action.type === 'execute_task')
-            .map<TaskListItem>((trigger) => ({
-                id: trigger.id,
-                title: trigger.name,
-                description: trigger.description || trigger.action.taskQuery || '',
-                status: trigger.enabled
-                    ? (trigger.triggerCount > 0 ? 'in_progress' : 'pending')
-                    : 'cancelled',
-                priority: 'medium',
-                tags: [
-                    'scheduled',
-                    trigger.type === 'cron' ? 'cron' : 'interval',
-                ],
-                createdAt: trigger.createdAt,
-                updatedAt: trigger.lastTriggeredAt || trigger.createdAt,
-            }));
+            .map<TaskListItem>((trigger) => {
+                const recentRuns = normalizeTriggerRuns(trigger);
+                return {
+                    id: trigger.id,
+                    title: trigger.name,
+                    description: trigger.description || trigger.action.taskQuery || '',
+                    status: trigger.enabled
+                        ? (trigger.lastRunStatus === 'running' || trigger.triggerCount > 0 ? 'in_progress' : 'pending')
+                        : 'cancelled',
+                    priority: 'medium',
+                    tags: [
+                        'scheduled',
+                        trigger.type,
+                    ],
+                    createdAt: trigger.createdAt,
+                    updatedAt: trigger.lastRunFinishedAt || trigger.lastTriggeredAt || trigger.createdAt,
+                    latestRunStatus: trigger.lastRunStatus,
+                    latestRunSummary: trigger.lastRunSummary,
+                    latestRunAt: trigger.lastRunFinishedAt,
+                    recentRuns,
+                };
+            });
 
         if (!filters.status || filters.status.length === 0) {
             return mapped;

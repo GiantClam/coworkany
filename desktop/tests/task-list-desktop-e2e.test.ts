@@ -1,4 +1,4 @@
-import { test, expect } from './tauriFixtureNoChrome';
+import { test, expect } from './tauriFixtureRelease';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -93,7 +93,7 @@ async function waitForWorkspaceRecords(timeoutMs = 20000): Promise<WorkspaceReco
 function extractWorkspaceRecordsFromLogs(rawLogs: string): WorkspaceRecord[] {
     const records: WorkspaceRecord[] = [];
     for (const line of rawLogs.split(/\r?\n/)) {
-        if (!line.includes('list_workspaces_response') || !line.includes('Received from sidecar:')) {
+        if (!line.includes('Received from sidecar:')) {
             continue;
         }
 
@@ -105,13 +105,26 @@ function extractWorkspaceRecordsFromLogs(rawLogs: string): WorkspaceRecord[] {
         try {
             const parsed = JSON.parse(line.slice(jsonStart)) as {
                 payload?: { workspaces?: WorkspaceRecord[] };
+                type?: string;
             };
-            const workspaces = parsed.payload?.workspaces;
-            if (Array.isArray(workspaces)) {
-                for (const workspace of workspaces) {
-                    if (workspace && typeof workspace.path === 'string' && workspace.path.length > 0) {
-                        records.push(workspace);
+
+            if (parsed.type === 'list_workspaces_response') {
+                const workspaces = parsed.payload?.workspaces;
+                if (Array.isArray(workspaces)) {
+                    for (const workspace of workspaces) {
+                        if (workspace && typeof workspace.path === 'string' && workspace.path.length > 0) {
+                            records.push(workspace);
+                        }
                     }
+                }
+            }
+
+            if (parsed.type === 'create_workspace_response') {
+                const workspace = (parsed as {
+                    payload?: { workspace?: WorkspaceRecord };
+                }).payload?.workspace;
+                if (workspace && typeof workspace.path === 'string' && workspace.path.length > 0) {
+                    records.push(workspace);
                 }
             }
         } catch {
@@ -133,6 +146,22 @@ async function waitForWorkspaceRecordsFromLogs(tauriLogs: { getRaw: () => string
     }
 
     throw new Error('No workspace records were observed in tauri logs');
+}
+
+async function ensureWorkspaceForTest(page: any, tauriLogs: { getRaw: () => string }): Promise<WorkspaceRecord> {
+    const existing = extractWorkspaceRecordsFromLogs(tauriLogs.getRaw());
+    if (existing.length > 0) {
+        return existing[0];
+    }
+
+    await page.locator('.workspace-add-btn').first().click();
+    const nameInput = page.locator('.workspace-input').first();
+    await expect(nameInput).toBeVisible({ timeout: 15000 });
+    await nameInput.fill('Desktop E2E Workspace');
+    await page.locator('.workspace-create-btn').first().click();
+
+    const records = await waitForWorkspaceRecordsFromLogs(tauriLogs, 30000);
+    return records[0];
 }
 
 function seedTaskFiles(workspacePath: string): void {
@@ -174,6 +203,55 @@ function seedTaskFiles(workspacePath: string): void {
                 },
                 enabled: true,
                 createdAt: now,
+                lastTriggeredAt: now,
+                lastRunStatus: 'completed',
+                lastRunSummary: 'Scheduled execution finished and produced the expected report.',
+                lastRunFinishedAt: now,
+                recentRuns: [
+                    {
+                        status: 'completed',
+                        summary: 'Scheduled execution finished and produced the expected report.',
+                        finishedAt: now,
+                    },
+                    {
+                        status: 'failed',
+                        summary: 'Previous run hit a temporary provider timeout.',
+                        finishedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+                    },
+                ],
+                triggerCount: 0,
+            },
+            {
+                id: 'desktop-e2e-scheduled-task-failed',
+                name: 'Desktop E2E failed scheduled task',
+                description: 'Seeded failed scheduled task should expose failure state in task board',
+                type: 'interval',
+                config: {
+                    intervalMs: 30 * 60 * 1000,
+                },
+                action: {
+                    type: 'execute_task',
+                    taskQuery: 'Run failing scheduled task verification',
+                    workspacePath,
+                },
+                enabled: true,
+                createdAt: now,
+                lastTriggeredAt: now,
+                lastRunStatus: 'failed',
+                lastRunSummary: 'Scheduled execution failed because the upstream service was unavailable.',
+                lastRunFinishedAt: now,
+                recentRuns: [
+                    {
+                        status: 'failed',
+                        summary: 'Scheduled execution failed because the upstream service was unavailable.',
+                        finishedAt: now,
+                    },
+                    {
+                        status: 'completed',
+                        summary: 'Older run completed before the outage.',
+                        finishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+                    },
+                ],
                 triggerCount: 0,
             },
         ],
@@ -205,7 +283,10 @@ function cleanupSeedTaskFiles(workspacePath: string): void {
         try {
             const parsed = JSON.parse(fs.readFileSync(triggersFile, 'utf-8')) as { triggers?: Array<{ id?: string }> };
             const triggers = Array.isArray(parsed.triggers) ? parsed.triggers : [];
-            const filtered = triggers.filter((trigger) => trigger?.id !== 'desktop-e2e-scheduled-task');
+            const filtered = triggers.filter((trigger) =>
+                trigger?.id !== 'desktop-e2e-scheduled-task' &&
+                trigger?.id !== 'desktop-e2e-scheduled-task-failed'
+            );
             if (filtered.length === 0) {
                 fs.rmSync(triggersFile, { force: true });
             } else {
@@ -255,8 +336,7 @@ test.describe('Desktop GUI E2E - task board visibility', () => {
         await page.waitForLoadState('domcontentloaded');
         await ensureMainShell(page);
 
-        const workspaces = await waitForWorkspaceRecordsFromLogs(tauriLogs);
-        const workspace = workspaces[0];
+        const workspace = await ensureWorkspaceForTest(page, tauriLogs);
         cleanupSeedTaskFiles(workspace.path);
         seedTaskFiles(workspace.path);
 
@@ -267,12 +347,27 @@ test.describe('Desktop GUI E2E - task board visibility', () => {
             await waitForTaskBoardReady(page);
             await page.locator('.task-list-refresh-icon').click();
 
+            const successTaskCard = page.locator('.task-card', {
+                has: page.locator('.task-card-title', { hasText: 'Desktop E2E scheduled task' }),
+            });
+            const failedTaskCard = page.locator('.task-card', {
+                has: page.locator('.task-card-title', { hasText: 'Desktop E2E failed scheduled task' }),
+            });
+
             await expect(page.locator('.task-card-title', { hasText: 'Desktop E2E regular task' })).toBeVisible({ timeout: 15000 });
             await expect(page.locator('.task-card-title', { hasText: 'Desktop E2E scheduled task' })).toBeVisible({ timeout: 15000 });
+            await expect(page.locator('.task-card-title', { hasText: 'Desktop E2E failed scheduled task' })).toBeVisible({ timeout: 15000 });
+            await expect(page.locator('.task-card-result-summary', { hasText: 'Scheduled execution finished and produced the expected report.' })).toBeVisible({ timeout: 15000 });
+            await expect(successTaskCard.locator('.task-card-result.success')).toBeVisible({ timeout: 15000 });
+            await expect(page.locator('.task-card-history-summary', { hasText: 'Previous run hit a temporary provider timeout.' })).toBeVisible({ timeout: 15000 });
+            await expect(page.locator('.task-card-result-summary', { hasText: 'Scheduled execution failed because the upstream service was unavailable.' })).toBeVisible({ timeout: 15000 });
+            await expect(failedTaskCard.locator('.task-card-result.failed')).toBeVisible({ timeout: 15000 });
+            await expect(page.locator('.task-card-history-summary', { hasText: 'Older run completed before the outage.' })).toBeVisible({ timeout: 15000 });
 
             const taskCards = page.locator('.task-card');
-            await expect(taskCards).toHaveCount(2, { timeout: 15000 });
-            await expect(page.locator('.task-tag-pill', { hasText: '#scheduled' })).toBeVisible({ timeout: 15000 });
+            await expect(taskCards).toHaveCount(3, { timeout: 15000 });
+            await expect(successTaskCard.locator('.task-tag-pill', { hasText: '#scheduled' })).toBeVisible({ timeout: 15000 });
+            await expect(failedTaskCard.locator('.task-tag-pill', { hasText: '#scheduled' })).toBeVisible({ timeout: 15000 });
         } finally {
             cleanupSeedTaskFiles(workspace.path);
         }

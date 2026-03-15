@@ -253,12 +253,30 @@ describe('P2-4: Conversation Search & Export', () => {
         expect(bubble).toContain('clipboard');
     });
 
+    test('ToolCard includes open-folder action for generated local files', () => {
+        const toolCard = readFile(
+            path.join(
+                DESKTOP_SRC,
+                'components',
+                'Chat',
+                'Timeline',
+                'components',
+                'ToolCard.tsx'
+            )
+        );
+        expect(toolCard).toContain('open_local_path');
+        expect(toolCard).toContain('openContainingFolder');
+        expect(toolCard).toContain('extractGeneratedFileResult');
+    });
+
     test('Translation files include export/copy keys', () => {
         const en = JSON.parse(readFile(path.join(DESKTOP_SRC, 'i18n', 'locales', 'en.json')));
         expect(en.chat.export).toBeDefined();
         expect(en.chat.exportChat).toBeDefined();
         expect(en.chat.copied).toBeDefined();
         expect(en.chat.copyMessage).toBeDefined();
+        expect(en.chat.fileSavedAt).toBeDefined();
+        expect(en.chat.openContainingFolder).toBeDefined();
     });
 });
 
@@ -374,6 +392,42 @@ describe('P2-6: Tauri Updater', () => {
         expect(hasUpdaterDependency).toBe(hasUpdaterPermission);
     });
 
+    test('notification plugin wiring matches reminder runtime behavior', () => {
+        const cargo = readFile(path.join(__dirname, '../src-tauri/Cargo.toml'));
+        const mainRs = readFile(path.join(TAURI_SRC, 'main.rs'));
+        const caps = JSON.parse(
+            readFile(path.join(__dirname, '../src-tauri/capabilities/default.json'))
+        );
+        const reminderHook = readFile(path.join(DESKTOP_SRC, 'hooks', 'useTauriEvents.ts'));
+        const sidecarRs = readFile(path.join(TAURI_SRC, 'sidecar.rs'));
+
+        expect(cargo).toContain('tauri-plugin-notification');
+        expect(mainRs).toContain('tauri_plugin_notification::init');
+        expect(caps.permissions).toContain('notification:default');
+        expect(reminderHook).toContain('mirrorReminderIntoActiveSession');
+        expect(sidecarRs).toContain('dispatch_system_reminder_notification');
+        expect(sidecarRs).toContain('.notification()');
+    });
+
+    test('scheduled background task outcomes are mirrored into the active desktop session', () => {
+        const tauriEventsHook = readFile(path.join(DESKTOP_SRC, 'hooks', 'useTauriEvents.ts'));
+
+        expect(tauriEventsHook).toContain('buildScheduledTaskMirrorInfo');
+        expect(tauriEventsHook).toContain("taskId.startsWith('scheduled_')");
+        expect(tauriEventsHook).toContain('Scheduled task completed');
+        expect(tauriEventsHook).toContain('Scheduled task failed');
+        expect(tauriEventsHook).toContain('mirrorBackgroundTaskIntoActiveSession');
+    });
+
+    test('effect confirmation dialog uses the shared desktop theme tokens', () => {
+        const effectDialogCss = readFile(path.join(DESKTOP_SRC, 'components', 'EffectConfirmationDialog.css'));
+
+        expect(effectDialogCss).toContain('var(--glass-bg)');
+        expect(effectDialogCss).toContain('var(--text-primary)');
+        expect(effectDialogCss).toContain('var(--accent-primary)');
+        expect(effectDialogCss).not.toContain('background: white;');
+    });
+
     test('UpdateChecker component exists', () => {
         expect(
             fileExists(path.join(DESKTOP_SRC, 'components', 'Common', 'UpdateChecker.tsx'))
@@ -426,6 +480,118 @@ describe('Phase 2: Cross-cutting checks', () => {
         const app = readFile(path.join(DESKTOP_SRC, 'App.tsx'));
         const imports = app.match(/from\s+'([^']+)'/g) || [];
         expect(imports.length).toBeGreaterThan(5);
+    });
+
+    test('skill requests are resolved before creating new skills', () => {
+        const selfLearningTools = readFile(path.join(SIDECAR_SRC, 'tools', 'selfLearning.ts'));
+        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
+        const selfLearningPrompt = readFile(path.join(SIDECAR_SRC, 'data', 'prompts', 'selfLearning.ts'));
+        const autonomousLearningPrompt = readFile(path.join(SIDECAR_SRC, 'data', 'prompts', 'autonomousLearning.ts'));
+
+        expect(selfLearningTools).toContain("name: 'resolve_skill_request'");
+        expect(mainTs).toContain('resolveSkillRequest: async');
+        expect(selfLearningPrompt).toContain('resolve_skill_request');
+        expect(selfLearningPrompt).toContain('Do NOT jump straight to creating a skill');
+        expect(autonomousLearningPrompt).toContain('search GitHub/ClawHub/Tencent SkillHub marketplaces');
+        expect(autonomousLearningPrompt).toContain('ONLY create or learn a brand-new skill');
+    });
+
+    test('chat prompt injects skill catalog metadata and only routes relevant skill bodies', () => {
+        const promptBuilder = readFile(path.join(SIDECAR_SRC, 'skills', 'promptBuilder.ts'));
+        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
+
+        expect(promptBuilder).toContain('## Skill Catalog');
+        expect(promptBuilder).toContain('## Relevant Skill Instructions');
+        expect(promptBuilder).toContain('routeRelevantPromptSkills');
+        expect(promptBuilder).toContain('Preferred Skills For This Session');
+        expect(mainTs).toContain('buildSkillSystemPromptContext');
+        expect(mainTs).toContain('flattenStructuredSystemPrompt');
+        expect(mainTs).toContain('buildAnthropicSystemBlocks');
+    });
+
+    test('OpenClaw store search/install commands are wired through the sidecar runtime', () => {
+        const openClawTab = readFile(path.join(DESKTOP_SRC, 'components', 'Skills', 'OpenClawStoreTab.tsx'));
+        const skillsView = readFile(path.join(DESKTOP_SRC, 'components', 'Skills', 'SkillsView.tsx'));
+        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
+
+        expect(openClawTab).toContain('const FETCH_LIMIT = 100');
+        expect(skillsView).toContain('SkillHub');
+        expect(mainTs).toContain("case 'search_openclaw_skill_store'");
+        expect(mainTs).toContain("type: 'search_openclaw_skill_store_response'");
+        expect(mainTs).toContain("case 'install_openclaw_skill'");
+        expect(mainTs).toContain("type: 'install_openclaw_skill_response'");
+        expect(mainTs).toContain('openclawCompat.installFromStore');
+    });
+
+    test('installed skills detail pane exposes credential fields and syncs env to sidecar', () => {
+        const skillsView = readFile(path.join(DESKTOP_SRC, 'components', 'Skills', 'SkillsView.tsx'));
+        const skillCredentials = readFile(path.join(DESKTOP_SRC, 'lib', 'skillCredentials.ts'));
+        const useSkills = readFile(path.join(DESKTOP_SRC, 'hooks', 'useSkills.ts'));
+        const ipcRs = readFile(path.join(TAURI_SRC, 'ipc.rs'));
+        const mainRs = readFile(path.join(TAURI_SRC, 'main.rs'));
+        const protocol = readFile(path.join(SIDECAR_SRC, 'protocol', 'commands.ts'));
+        const sidecarMain = readFile(path.join(SIDECAR_SRC, 'main.ts'));
+        const en = JSON.parse(readFile(path.join(DESKTOP_SRC, 'i18n', 'locales', 'en.json')));
+        const skillCredentialCard = readFile(path.join(DESKTOP_SRC, 'components', 'Skills', 'SkillCredentialCard.tsx'));
+
+        expect(skillsView).toContain('credentialsTitle');
+        expect(skillsView).toContain('SkillCredentialCard');
+        expect(skillCredentialCard).toContain('saveCredentials');
+        expect(skillCredentialCard).toContain('clearCredentials');
+        expect(skillCredentials).toContain("const SKILL_CREDENTIALS_KEY = 'skills.credentials'");
+        expect(skillCredentials).toContain("invoke('sync_skill_environment'");
+        expect(useSkills).toContain('syncEnabledSkillEnvironment(skills)');
+        expect(ipcRs).toContain('pub struct SyncSkillEnvironmentInput');
+        expect(ipcRs).toContain('build_command(\"sync_skill_environment\"');
+        expect(mainRs).toContain('ipc::sync_skill_environment');
+        expect(protocol).toContain("type: z.literal('sync_skill_environment')");
+        expect(sidecarMain).toContain("case 'sync_skill_environment'");
+        expect(sidecarMain).toContain('syncManagedSkillEnvironment');
+        expect(sidecarMain).toContain('requires: stored.manifest.requires');
+        expect(en.skills.credentialsTitle).toBeDefined();
+        expect(en.skills.credentialsSaved).toBeDefined();
+    });
+
+    test('installed skills that require env expose config cards in chat timeline', () => {
+        const openClawTab = readFile(path.join(DESKTOP_SRC, 'components', 'Skills', 'OpenClawStoreTab.tsx'));
+        const timelineHook = readFile(path.join(DESKTOP_SRC, 'components', 'Chat', 'Timeline', 'hooks', 'useTimelineItems.ts'));
+        const systemBadge = readFile(path.join(DESKTOP_SRC, 'components', 'Chat', 'Timeline', 'components', 'SystemBadge.tsx'));
+        const promptHelper = readFile(path.join(DESKTOP_SRC, 'lib', 'skillConfigPrompts.ts'));
+        const skillResolver = readFile(path.join(SIDECAR_SRC, 'skills', 'skillResolver.ts'));
+
+        expect(openClawTab).toContain('injectSkillConfigPrompt');
+        expect(timelineHook).toContain('buildSkillConfigPromptFromToolResult');
+        expect(timelineHook).toContain('skillConfigCard');
+        expect(systemBadge).toContain('SkillCredentialCard');
+        expect(promptHelper).toContain('skillConfigCard');
+        expect(skillResolver).toContain('requiredEnv: manifest.requires?.env ?? []');
+    });
+
+    test('manual skill installs still inject config cards when no task is active', () => {
+        const openClawTab = readFile(path.join(DESKTOP_SRC, 'components', 'Skills', 'OpenClawStoreTab.tsx'));
+        const promptHelper = readFile(path.join(DESKTOP_SRC, 'lib', 'skillConfigPrompts.ts'));
+        const timelineHook = readFile(path.join(DESKTOP_SRC, 'components', 'Chat', 'Timeline', 'hooks', 'useTimelineItems.ts'));
+
+        expect(openClawTab).not.toContain('if (activeTaskId && result.skill');
+        expect(promptHelper).toContain("const FALLBACK_SKILL_CONFIG_TASK_ID = 'global'");
+        expect(promptHelper).toContain('state.setActiveTask(targetTaskId)');
+        expect(promptHelper).toContain('alreadyInjected');
+        expect(timelineHook).toContain('emittedSkillConfigCards.has(skillConfigCard.skillId)');
+    });
+
+    test('scheduled task tooling supports both delayed one-shot execution and recurring execution', () => {
+        const schedulingIntent = readFile(path.join(SIDECAR_SRC, 'agent', 'schedulingIntent.ts'));
+        const scheduledTasks = readFile(path.join(SIDECAR_SRC, 'tools', 'core', 'scheduledTasks.ts'));
+        const reminderTool = readFile(path.join(SIDECAR_SRC, 'tools', 'personal', 'reminder.ts'));
+
+        expect(schedulingIntent).toContain('isExecutionScheduleRequest');
+        expect(schedulingIntent).toContain('scheduleType: "date"');
+        expect(schedulingIntent).toContain('one-off delayed execution request');
+        expect(scheduledTasks).toContain("enum: ['interval', 'cron', 'date']");
+        expect(scheduledTasks).toContain('runAt');
+        expect(scheduledTasks).toContain("type: 'execute_task'");
+        expect(reminderTool).toContain('converted_from_reminder');
+        expect(reminderTool).toContain('looksLikeDeferredTaskExecution');
     });
 });
 

@@ -146,6 +146,27 @@ export const SendTaskMessageResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+export const ResumeRecoverableTasksCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('resume_recoverable_tasks'),
+    payload: z.object({
+        taskIds: z.array(z.string().min(1)).optional(),
+        tasks: z.array(z.object({
+            taskId: z.string().min(1),
+            workspacePath: z.string().min(1),
+        })).optional(),
+    }).optional(),
+});
+
+export const ResumeRecoverableTasksResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('resume_recoverable_tasks_response'),
+    payload: z.object({
+        success: z.boolean(),
+        resumedTaskIds: z.array(z.string().uuid()),
+        skippedTaskIds: z.array(z.string().uuid()).optional(),
+        error: z.string().optional(),
+    }),
+});
+
 // ============================================================================
 // Effect Commands
 // ============================================================================
@@ -510,6 +531,19 @@ export const ClaudeSkillRecordSchema = z.object({
     lastUsedAt: z.string().datetime().optional(),
 });
 
+export const ClaudeSkillUpdateSchema = z.object({
+    skillId: z.string(),
+    supported: z.boolean(),
+    hasUpdate: z.boolean(),
+    currentVersion: z.string().optional(),
+    latestVersion: z.string().optional(),
+    sourceRepo: z.string().optional(),
+    sourcePath: z.string().optional(),
+    sourceRef: z.string().optional(),
+    checkedAt: z.string().datetime(),
+    error: z.string().optional(),
+});
+
 export const ListClaudeSkillsCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_claude_skills'),
     payload: z.object({
@@ -591,19 +625,57 @@ export const RemoveClaudeSkillResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
-export const OpenClawSkillStoreSchema = z.enum(['clawhub']);
+export const CheckClaudeSkillUpdatesCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('check_claude_skill_updates'),
+    payload: z.object({
+        skillIds: z.array(z.string()).optional(),
+    }).optional(),
+});
+
+export const CheckClaudeSkillUpdatesResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('check_claude_skill_updates_response'),
+    payload: z.object({
+        success: z.boolean(),
+        updates: z.array(ClaudeSkillUpdateSchema),
+        error: z.string().optional(),
+    }),
+});
+
+export const UpgradeClaudeSkillCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('upgrade_claude_skill'),
+    payload: z.object({
+        skillId: z.string(),
+    }),
+});
+
+export const UpgradeClaudeSkillResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('upgrade_claude_skill_response'),
+    payload: z.object({
+        success: z.boolean(),
+        skillId: z.string(),
+        skill: ClaudeSkillRecordSchema.optional(),
+        update: ClaudeSkillUpdateSchema.optional(),
+        error: z.string().optional(),
+    }),
+});
+
+export const OpenClawSkillStoreSchema = z.enum(['clawhub', 'tencent_skillhub']);
 
 export const OpenClawStoreSkillSchema = z.object({
     name: z.string(),
+    slug: z.string().optional(),
+    displayName: z.string().optional(),
     description: z.string().default(''),
     author: z.string().optional(),
     version: z.string().optional(),
     downloads: z.number().optional(),
     stars: z.number().optional(),
     tags: z.array(z.string()).optional(),
+    homepage: z.string().optional(),
     repoUrl: z.string().optional(),
     files: z.array(z.string()).optional(),
     skillMdUrl: z.string().optional(),
+    downloadUrl: z.string().optional(),
 });
 
 export const SearchOpenClawSkillStoreCommandSchema = BaseCommandSchema.extend({
@@ -640,6 +712,30 @@ export const InstallOpenClawSkillResponseSchema = BaseResponseSchema.extend({
         store: OpenClawSkillStoreSchema,
         skillName: z.string(),
         path: z.string().optional(),
+        skill: z.object({
+            id: z.string(),
+            name: z.string(),
+            description: z.string().optional(),
+            requiredEnv: z.array(z.string()).default([]),
+            source: z.string().optional(),
+        }).optional(),
+        error: z.string().optional(),
+    }),
+});
+
+export const SyncSkillEnvironmentCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('sync_skill_environment'),
+    payload: z.object({
+        env: z.record(z.string(), z.string()).default({}),
+    }),
+});
+
+export const SyncSkillEnvironmentResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('sync_skill_environment_response'),
+    payload: z.object({
+        success: z.boolean(),
+        applied: z.number().int().nonnegative(),
+        cleared: z.number().int().nonnegative(),
         error: z.string().optional(),
     }),
 });
@@ -1000,6 +1096,7 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     CancelTaskCommandSchema,
     ClearTaskHistoryCommandSchema,
     SendTaskMessageCommandSchema,
+    ResumeRecoverableTasksCommandSchema,
     RequestEffectCommandSchema,
     ReportEffectResultCommandSchema,
     ProposePatchCommandSchema,
@@ -1020,8 +1117,11 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillCommandSchema,
     SetClaudeSkillEnabledCommandSchema,
     RemoveClaudeSkillCommandSchema,
+    CheckClaudeSkillUpdatesCommandSchema,
+    UpgradeClaudeSkillCommandSchema,
     SearchOpenClawSkillStoreCommandSchema,
     InstallOpenClawSkillCommandSchema,
+    SyncSkillEnvironmentCommandSchema,
     RegisterAgentIdentityCommandSchema,
     RecordAgentDelegationCommandSchema,
     ReportMcpGatewayDecisionCommandSchema,
@@ -1051,6 +1151,7 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     CancelTaskResponseSchema,
     ClearTaskHistoryResponseSchema,
     SendTaskMessageResponseSchema,
+    ResumeRecoverableTasksResponseSchema,
     RequestEffectResponseSchema,
     ProposePatchResponseSchema,
     ApplyPatchResponseSchema,
@@ -1069,8 +1170,11 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillResponseSchema,
     SetClaudeSkillEnabledResponseSchema,
     RemoveClaudeSkillResponseSchema,
+    CheckClaudeSkillUpdatesResponseSchema,
+    UpgradeClaudeSkillResponseSchema,
     SearchOpenClawSkillStoreResponseSchema,
     InstallOpenClawSkillResponseSchema,
+    SyncSkillEnvironmentResponseSchema,
     RegisterAgentIdentityResponseSchema,
     RecordAgentDelegationResponseSchema,
     ReportMcpGatewayDecisionResponseSchema,
@@ -1117,6 +1221,7 @@ export type RemoveToolpackResponse = z.infer<typeof RemoveToolpackResponseSchema
 export type ClaudeSkillSource = z.infer<typeof ClaudeSkillSourceSchema>;
 export type ClaudeSkillManifest = z.infer<typeof ClaudeSkillManifestSchema>;
 export type ClaudeSkillRecord = z.infer<typeof ClaudeSkillRecordSchema>;
+export type ClaudeSkillUpdate = z.infer<typeof ClaudeSkillUpdateSchema>;
 export type ListClaudeSkillsCommand = z.infer<typeof ListClaudeSkillsCommandSchema>;
 export type ListClaudeSkillsResponse = z.infer<typeof ListClaudeSkillsResponseSchema>;
 export type GetClaudeSkillCommand = z.infer<typeof GetClaudeSkillCommandSchema>;
@@ -1127,6 +1232,10 @@ export type SetClaudeSkillEnabledCommand = z.infer<typeof SetClaudeSkillEnabledC
 export type SetClaudeSkillEnabledResponse = z.infer<typeof SetClaudeSkillEnabledResponseSchema>;
 export type RemoveClaudeSkillCommand = z.infer<typeof RemoveClaudeSkillCommandSchema>;
 export type RemoveClaudeSkillResponse = z.infer<typeof RemoveClaudeSkillResponseSchema>;
+export type CheckClaudeSkillUpdatesCommand = z.infer<typeof CheckClaudeSkillUpdatesCommandSchema>;
+export type CheckClaudeSkillUpdatesResponse = z.infer<typeof CheckClaudeSkillUpdatesResponseSchema>;
+export type UpgradeClaudeSkillCommand = z.infer<typeof UpgradeClaudeSkillCommandSchema>;
+export type UpgradeClaudeSkillResponse = z.infer<typeof UpgradeClaudeSkillResponseSchema>;
 export type OpenClawSkillStore = z.infer<typeof OpenClawSkillStoreSchema>;
 export type OpenClawStoreSkill = z.infer<typeof OpenClawStoreSkillSchema>;
 export type SearchOpenClawSkillStoreCommand = z.infer<typeof SearchOpenClawSkillStoreCommandSchema>;

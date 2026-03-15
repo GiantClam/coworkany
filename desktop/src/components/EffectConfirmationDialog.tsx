@@ -37,11 +37,11 @@ export interface EffectConfirmationDialogProps {
     onClose: () => void;
 }
 
-function getRiskColor(level: number): string {
-    if (level >= 80) return '#dc2626';
-    if (level >= 60) return '#ea580c';
-    if (level >= 40) return '#ca8a04';
-    return '#16a34a';
+function getRiskTone(level: number): 'critical' | 'high' | 'medium' | 'low' {
+    if (level >= 80) return 'critical';
+    if (level >= 60) return 'high';
+    if (level >= 40) return 'medium';
+    return 'low';
 }
 
 function getEffectIcon(type: EffectType): string {
@@ -107,7 +107,7 @@ export function EffectConfirmationDialog({
         onClose();
     };
 
-    const riskColor = getRiskColor(request.riskLevel);
+    const riskTone = getRiskTone(request.riskLevel);
     const riskLabelKey = request.riskLevel >= 80 ? 'riskCritical' : request.riskLevel >= 60 ? 'riskHigh' : request.riskLevel >= 40 ? 'riskMedium' : 'riskLow';
     const riskLabel = t(`effect.${riskLabelKey}`);
 
@@ -115,9 +115,12 @@ export function EffectConfirmationDialog({
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
             <Dialog.Portal>
                 <Dialog.Overlay className="effect-dialog-overlay" />
-                <Dialog.Content className="effect-dialog-content" data-testid="effect-confirmation-dialog">
+                <Dialog.Content
+                    className={clsx('effect-dialog-content', `effect-dialog-risk-${riskTone}`)}
+                    data-testid="effect-confirmation-dialog"
+                >
                     <div className="effect-dialog-header">
-                        <div className="effect-icon">{getEffectIcon(request.effectType)}</div>
+                        <div className="effect-icon" aria-hidden="true">{getEffectIcon(request.effectType)}</div>
                         <div className="effect-title-area">
                             <Dialog.Title className="effect-dialog-title">
                                 {t('effect.permissionRequired')}
@@ -135,11 +138,10 @@ export function EffectConfirmationDialog({
                                 className="risk-fill"
                                 style={{
                                     width: `${request.riskLevel}%`,
-                                    backgroundColor: riskColor,
                                 }}
                             />
                         </div>
-                        <div className="risk-value" style={{ color: riskColor }}>
+                        <div className="risk-value">
                             {riskLabel} ({request.riskLevel}/100)
                         </div>
                     </div>
