@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore } from '../../../stores/useTaskEventStore';
 import type { TaskEvent, TaskSession } from '../../../types';
 import './TaskExecutionPanel.css';
@@ -9,6 +10,17 @@ type TaskSummary = {
     status: TaskSession['status'];
     updatedAt: string;
     progress: number;
+};
+
+type TaskRuntimeDiagnosticEntry = {
+    id: string;
+    timestamp: string;
+    taskId: string;
+    kind: 'task_finished' | 'task_failed' | 'task_resumed';
+    severity: 'info' | 'warn' | 'error';
+    summary: string;
+    errorCode?: string;
+    recoverable?: boolean;
 };
 
 function summarizeProgress(session: TaskSession): number {
@@ -49,6 +61,19 @@ function formatTime(ts: string): string {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function describeDiagnostic(entry: TaskRuntimeDiagnosticEntry): string {
+    switch (entry.kind) {
+        case 'task_resumed':
+            return `Recovered: ${entry.summary}`;
+        case 'task_finished':
+            return `Completed: ${entry.summary}`;
+        case 'task_failed':
+            return entry.errorCode ? `${entry.summary} (${entry.errorCode})` : entry.summary;
+        default:
+            return entry.summary;
+    }
+}
+
 const statusText: Record<TaskSession['status'], string> = {
     idle: 'Idle',
     running: 'Running',
@@ -56,10 +81,12 @@ const statusText: Record<TaskSession['status'], string> = {
     failed: 'Failed',
 };
 
-export const TaskExecutionPanel: React.FC = () => {
+export const TaskExecutionPanel: React.FC<{ variant?: 'sidebar' | 'dialog' }> = ({ variant = 'sidebar' }) => {
     const sessions = useTaskEventStore((state) => state.sessions);
     const activeTaskId = useTaskEventStore((state) => state.activeTaskId);
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
+    const [diagnostics, setDiagnostics] = useState<TaskRuntimeDiagnosticEntry[]>([]);
+    const [diagnosticsPath, setDiagnosticsPath] = useState<string | null>(null);
 
     const orderedTasks = useMemo<TaskSummary[]>(() => {
         return Array.from(sessions.values())
@@ -86,8 +113,61 @@ export const TaskExecutionPanel: React.FC = () => {
             .reverse();
     }, [activeSession]);
 
+    useEffect(() => {
+        let cancelled = false;
+
+        async function loadDiagnostics(): Promise<void> {
+            if (!activeSession?.workspacePath || !activeSession.taskId) {
+                if (!cancelled) {
+                    setDiagnostics([]);
+                    setDiagnosticsPath(null);
+                }
+                return;
+            }
+
+            try {
+                const result = await invoke<{
+                    success: boolean;
+                    payload?: { entries?: TaskRuntimeDiagnosticEntry[]; path?: string };
+                }>('load_task_runtime_diagnostics', {
+                    input: {
+                        workspacePath: activeSession.workspacePath,
+                        taskId: activeSession.taskId,
+                        limit: 6,
+                    },
+                });
+
+                if (!cancelled) {
+                    setDiagnostics(result.payload?.entries ?? []);
+                    setDiagnosticsPath(result.payload?.path ?? null);
+                }
+            } catch {
+                if (!cancelled) {
+                    setDiagnostics([]);
+                    setDiagnosticsPath(null);
+                }
+            }
+        }
+
+        void loadDiagnostics();
+        return () => {
+            cancelled = true;
+        };
+    }, [activeSession?.taskId, activeSession?.workspacePath, activeSession?.updatedAt]);
+
+    const openDiagnosticsPath = async (): Promise<void> => {
+        if (!diagnosticsPath) {
+            return;
+        }
+        try {
+            await invoke('open_local_path', { input: { path: diagnosticsPath } });
+        } catch (error) {
+            console.warn('Failed to open task diagnostics path:', error);
+        }
+    };
+
     return (
-        <aside className="task-panel">
+        <aside className={`task-panel task-panel-${variant}`}>
             <section className="task-panel-section">
                 <div className="task-panel-title-row">
                     <h3 className="task-panel-title">Tasks</h3>
@@ -130,6 +210,34 @@ export const TaskExecutionPanel: React.FC = () => {
                             <div key={step.id} className="step-item">
                                 <span className={`step-dot ${step.status}`} />
                                 <span className="step-text">{step.description}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </section>
+
+            <section className="task-panel-section">
+                <div className="task-panel-title-row">
+                    <h3 className="task-panel-title">Diagnostics</h3>
+                    {diagnosticsPath ? (
+                        <button type="button" className="task-panel-link" onClick={openDiagnosticsPath}>
+                            Open log
+                        </button>
+                    ) : null}
+                </div>
+                {!activeSession ? (
+                    <div className="task-panel-empty">No active session</div>
+                ) : diagnostics.length === 0 ? (
+                    <div className="task-panel-empty">No runtime diagnostics for this task</div>
+                ) : (
+                    <div className="diagnostic-list">
+                        {diagnostics.map((entry) => (
+                            <div key={entry.id} className="diagnostic-item">
+                                <div className="diagnostic-meta">
+                                    <span className={`diagnostic-severity ${entry.severity}`}>{entry.severity}</span>
+                                    <span className="feed-time">{formatTime(entry.timestamp)}</span>
+                                </div>
+                                <span className="feed-text">{describeDiagnostic(entry)}</span>
                             </div>
                         ))}
                     </div>

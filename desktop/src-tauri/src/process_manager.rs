@@ -106,6 +106,8 @@ pub trait ManagedService: Send + Sync {
     fn is_running(&self) -> bool;
     fn pid(&self) -> Option<u32>;
     fn health_check(&self) -> Result<bool, ProcessError>;
+    fn status(&self) -> ServiceStatus;
+    fn last_error(&self) -> Option<String>;
 }
 
 // ============================================================================
@@ -371,6 +373,108 @@ impl RagService {
         Ok(())
     }
 
+    fn requirement_to_module_name(requirement_line: &str) -> Option<String> {
+        let trimmed = requirement_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return None;
+        }
+
+        let package = trimmed
+            .split(['<', '>', '=', '!', '['])
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+
+        let normalized = match package.to_ascii_lowercase().as_str() {
+            "sentence-transformers" => "sentence_transformers".to_string(),
+            "python-multipart" => "multipart".to_string(),
+            "pyyaml" => "yaml".to_string(),
+            other => other.replace('-', "_"),
+        };
+
+        Some(normalized)
+    }
+
+    fn required_python_modules(rag_path: &std::path::Path) -> Vec<String> {
+        let requirements_path = rag_path.join("requirements.txt");
+        let Ok(raw) = fs::read_to_string(requirements_path) else {
+            return Vec::new();
+        };
+
+        let mut modules = Vec::new();
+        for line in raw.lines() {
+            if let Some(module) = Self::requirement_to_module_name(line) {
+                if !modules.contains(&module) {
+                    modules.push(module);
+                }
+            }
+        }
+        modules
+    }
+
+    fn format_missing_dependency_message(python: &str, missing_modules: &[String]) -> String {
+        format!(
+            "RAG runtime dependencies missing for {}: {}. Install rag-service/requirements.txt or run the setup wizard before enabling vault search.",
+            python,
+            missing_modules.join(", ")
+        )
+    }
+
+    fn verify_runtime_dependencies(
+        python: &str,
+        rag_path: &std::path::Path,
+    ) -> Result<(), ProcessError> {
+        let required_modules = Self::required_python_modules(rag_path);
+        if required_modules.is_empty() {
+            return Ok(());
+        }
+
+        let modules_json = serde_json::to_string(&required_modules).map_err(|error| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to serialize RAG dependency list: {}", error),
+            ))
+        })?;
+
+        let output = Command::new(python)
+            .current_dir(rag_path)
+            .arg("-c")
+            .arg("import importlib.util, json, sys; mods=json.loads(sys.argv[1]); missing=[m for m in mods if importlib.util.find_spec(m) is None]; print(json.dumps(missing))")
+            .arg(modules_json)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                if stderr.is_empty() {
+                    "Failed to probe RAG Python dependencies".to_string()
+                } else {
+                    format!("Failed to probe RAG Python dependencies: {}", stderr)
+                },
+            )));
+        }
+
+        let missing_modules: Vec<String> =
+            serde_json::from_slice(&output.stdout).map_err(|error| {
+                ProcessError::SpawnError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to parse RAG dependency probe output: {}", error),
+                ))
+            })?;
+
+        if missing_modules.is_empty() {
+            return Ok(());
+        }
+
+        Err(ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            Self::format_missing_dependency_message(python, &missing_modules),
+        )))
+    }
+
     pub fn predownload_embedding_model(app_handle: &AppHandle) -> Result<String, ProcessError> {
         let python = Self::find_python().ok_or_else(|| {
             ProcessError::SpawnError(std::io::Error::new(
@@ -380,6 +484,7 @@ impl RagService {
         })?;
 
         let rag_path = Self::new().get_rag_service_path()?;
+        Self::verify_runtime_dependencies(&python, &rag_path)?;
         let model_name =
             std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
         info!("[RAG] Predownloading embedding model: {}", model_name);
@@ -445,6 +550,10 @@ impl ManagedService for RagService {
         })?;
 
         let rag_path = self.get_rag_service_path()?;
+        if let Err(error) = Self::verify_runtime_dependencies(&python, &rag_path) {
+            self.last_error = Some(error.to_string());
+            return Err(error);
+        }
         let main_py = rag_path.join("main.py");
 
         if !main_py.exists() {
@@ -497,13 +606,19 @@ impl ManagedService for RagService {
         self.process = Some(child);
         self.process_pid = Some(pid);
         self.started_at = Some(Instant::now());
+        self.last_error = None;
 
         info!("[RAG] Service started with PID {}", pid);
 
         // Wait for health check
-        self.wait_for_healthy()?;
-
-        Ok(())
+        match self.wait_for_healthy() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                self.shutdown();
+                Err(error)
+            }
+        }
     }
 
     fn shutdown(&mut self) {
@@ -572,6 +687,20 @@ impl ManagedService for RagService {
             // No health check URL, check if we have a PID
             Ok(self.process_pid.is_some())
         }
+    }
+
+    fn status(&self) -> ServiceStatus {
+        if self.is_running() {
+            ServiceStatus::Running
+        } else if self.last_error.is_some() {
+            ServiceStatus::Failed
+        } else {
+            ServiceStatus::Stopped
+        }
+    }
+
+    fn last_error(&self) -> Option<String> {
+        self.last_error.clone()
     }
 }
 
@@ -702,15 +831,11 @@ impl ProcessManager {
             .values()
             .map(|service| ServiceInfo {
                 name: service.name().to_string(),
-                status: if service.is_running() {
-                    ServiceStatus::Running
-                } else {
-                    ServiceStatus::Stopped
-                },
+                status: service.status(),
                 pid: service.pid(),
                 uptime_secs: None, // TODO: Track uptime
                 restart_count: 0,
-                last_error: None,
+                last_error: service.last_error(),
                 health_check_url: service.config().health_check_url.clone(),
             })
             .collect()
@@ -720,15 +845,11 @@ impl ProcessManager {
     pub fn get_service_status(&self, name: &str) -> Option<ServiceInfo> {
         self.services.get(name).map(|service| ServiceInfo {
             name: service.name().to_string(),
-            status: if service.is_running() {
-                ServiceStatus::Running
-            } else {
-                ServiceStatus::Stopped
-            },
+            status: service.status(),
             pid: service.pid(),
             uptime_secs: None,
             restart_count: 0,
-            last_error: None,
+            last_error: service.last_error(),
             health_check_url: service.config().health_check_url.clone(),
         })
     }
@@ -771,5 +892,42 @@ pub struct ProcessManagerState(pub Arc<Mutex<ProcessManager>>);
 impl ProcessManagerState {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(ProcessManager::new())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RagService;
+
+    #[test]
+    fn requirement_to_module_name_maps_python_package_names() {
+        assert_eq!(
+            RagService::requirement_to_module_name("sentence-transformers>=2.3.0"),
+            Some("sentence_transformers".to_string())
+        );
+        assert_eq!(
+            RagService::requirement_to_module_name("python-multipart>=0.0.6"),
+            Some("multipart".to_string())
+        );
+        assert_eq!(
+            RagService::requirement_to_module_name("pyyaml>=6.0.1"),
+            Some("yaml".to_string())
+        );
+        assert_eq!(
+            RagService::requirement_to_module_name("fastapi>=0.109.0"),
+            Some("fastapi".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_dependency_message_is_actionable() {
+        let message = RagService::format_missing_dependency_message(
+            "python",
+            &["fastapi".to_string(), "chromadb".to_string()],
+        );
+        assert!(message.contains("fastapi"));
+        assert!(message.contains("chromadb"));
+        assert!(message.contains("requirements.txt"));
+        assert!(message.contains("setup wizard"));
     }
 }

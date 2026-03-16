@@ -343,6 +343,18 @@
   - desktop reconnect emits resume hints
   - sidecar restores the interrupted task and emits `TASK_RESUMED`
   - the recovered task reaches `TASK_FINISHED` with a real assistant result
+- Recovery correctness is not enough for commercial supportability. Users still need a durable explanation of what happened when a task stalls, resumes, or finishes after recovery; otherwise every incident still devolves into raw log archaeology.
+- The right minimum artifact is workspace-local `task-diagnostics.jsonl`, written next to the task runtime snapshots. This preserves project context, survives restarts, and gives both support and users a stable file to inspect.
+- The diagnostic trail should capture at least:
+  - recoverable failures
+  - task resumes
+  - task finishes
+  so a missing-result report can be reconstructed without needing the full sidecar log file.
+- This diagnostic view does not need a new sidecar event type. A simpler, lower-risk shape is:
+  - sidecar appends JSONL entries
+  - desktop reads them on demand through Tauri IPC
+  - task panel shows the latest entries and offers an "open log" action
+  That keeps the event protocol stable while still making runtime evidence visible in-product.
 
 ## Follow-up: Scheduled Task Card Commercial Hardening
 - The task board was already receiving `latestRunStatus/latestRunSummary/latestRunAt` for scheduled tasks, but commercial-readiness still had two gaps:
@@ -352,3 +364,29 @@
 - `get_tasks` can expose `recentRuns` without breaking older trigger files by synthesizing a one-entry history from legacy `lastRun*` fields when history is missing.
 - The packaged desktop E2E failure after implementation was not a product defect. The release app rendered two scheduled-task cards, so the old global `#scheduled` locator violated Playwright strict mode. Scoping the assertion to each card fixed the test while preserving coverage.
 - A locale-sensitive UI cannot rely on English-only E2E text assertions for status badges. Structural assertions on card state classes are more stable for packaged desktop verification.
+
+## Follow-up: Task Terminal Watchdog Acceptance
+- A packaged-only timeout override is needed for watchdog acceptance testing. Reading `process.env` directly inside the compiled Bun sidecar was not reliable enough for test-time overrides, so the safer shape is:
+  - desktop reads `COWORKANY_TASK_STALL_TIMEOUT_MS`
+  - desktop passes it to the sidecar as an explicit startup arg
+  - sidecar reads the CLI arg at runtime and falls back to env/default
+- Release E2E needed stronger isolation from prior crash artifacts. Even after the recovery fixes, packaged startup was still seeing old recoverable snapshots from previous runs, so the acceptance suite now clears the release-side workspace root before boot.
+- The initial stalled-task E2E timeout was a test harness bug, not a product bug. The mock SSE server kept its client socket open forever, which caused `server.close()` to hang during teardown; tracking active sockets and destroying them on close fixed the leak.
+- The packaged watchdog acceptance now proves a commercially important boundary:
+  - a task can emit partial assistant output
+  - fail to produce a terminal result
+  - be failed by the sidecar watchdog within the configured timeout
+  - persist `TASK_TERMINAL_TIMEOUT` into workspace diagnostics
+  - surface that failure in the desktop task panel
+- The stalled-task path also exposed a secondary recoverable `MODEL_STREAM_ERROR` after the mock server is torn down. That does not invalidate the watchdog path, but it means diagnostics can contain multiple recoverable failures for one task, and UI/tests should assert on presence of the watchdog failure rather than assume a single terminal artifact.
+- The strongest place to suppress duplicate terminal task failures is not the individual catch blocks but the shared sidecar `emit()` boundary. Even after patching the main `start_task` / `send_task_message` paths, packaged E2E still found duplicate `TASK_FAILED` events because any missed call site could emit a second failure. Once suppression moved into `emit()`, packaged logs showed the watchdog failure once and the later stream-close error only as an internal suppression warning.
+- Duplicate `TASK_FAILED` events were also causing duplicate post-learning runs. A lightweight per-task failed-session guard in `PostExecutionLearningManager` prevents the same stalled task from re-saving identical failure knowledge.
+- The latest packaged logs no longer need to launch the Python RAG process to discover missing dependencies. A preflight that maps `rag-service/requirements.txt` package names to importable module names catches missing `fastapi`/friends before spawn.
+- For Python dependency probing, requirement names are not always import names. The minimum package->module mappings needed here are:
+  - `sentence-transformers` -> `sentence_transformers`
+  - `python-multipart` -> `multipart`
+  - `pyyaml` -> `yaml`
+  Everything else can safely fall back to `-` -> `_`.
+- A service that fails dependency preflight should report `failed` with `last_error`, not merely `stopped`. Otherwise the frontend cannot distinguish "service not started yet" from "service cannot start in this environment".
+- The packaged recovery/watchdog Playwright suite had a hidden coupling bug: it globally forced `COWORKANY_TASK_STALL_TIMEOUT_MS=5000`, which made the recovery test race its own watchdog. Raising the shared override to 15s keeps the watchdog acceptance fast while still leaving enough time for the recovery test to capture a `running` snapshot before the intentional crash.
+- The existing `desktop.log.2026-03-16` file still contains older `fastapi` tracebacks from runs before the preflight fix. Verification after the patch therefore has to focus on new log segments and packaged reruns, not on the historical log file as a whole.

@@ -567,3 +567,75 @@ Phase 4
 | Keep sidecar recovery tolerant of dirty payloads | The recovery command should skip invalid task IDs rather than reject the whole message, otherwise one stale session breaks task resumption for every valid task |
 | Only auto-resume fresh, current tasks | Packaged E2E showed that resuming all historic interrupted sessions creates cross-task noise and can restart stale work the user did not ask to continue |
 | Hydrate sessions before startup recovery | Startup recovery with an empty in-memory session store cannot produce useful hints; hydrate-first preserves cold-start crash recovery |
+| Persist task runtime diagnostics alongside workspace snapshots | Recovery and missing-result bugs need an inspectable, durable trail outside ephemeral desktop/sidecar log files |
+| Surface diagnostics in the task panel via Tauri IPC instead of expanding the task-event protocol again | This keeps the real-time event model stable while still giving users and tests direct access to recovery/failure/completion evidence |
+
+## Follow-up: Task Terminal Watchdog Acceptance
+
+### Goal
+- Validate, in packaged desktop builds, that tasks which never emit a terminal result are failed by the sidecar watchdog and surfaced with durable diagnostics.
+
+### Current Phase
+- Phase 3
+
+### Phases
+#### Phase 1: Runtime Override Design
+- [x] Confirm a packaged-safe way to override stall timeout for acceptance without changing the production default
+- [x] Avoid relying solely on compiled sidecar `process.env` reads for runtime test overrides
+- **Status:** complete
+
+#### Phase 2: Acceptance Implementation
+- [x] Forward `COWORKANY_TASK_STALL_TIMEOUT_MS` from desktop to sidecar as an explicit startup arg
+- [x] Add a packaged stalled-task E2E that asserts `TASK_TERMINAL_TIMEOUT`, diagnostics UI, and workspace log persistence
+- [x] Isolate the packaged acceptance from stale recoverable task artifacts and stalled mock-server teardown hangs
+- **Status:** complete
+
+#### Phase 3: Verification
+- [x] Rebuild packaged sidecar/desktop artifacts
+- [x] Re-run the full packaged recovery + watchdog E2E suite
+- [x] Re-run sidecar/desktop typecheck and cargo check
+- **Status:** complete
+
+### Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Pass stall-timeout overrides as a sidecar startup arg | This is more reliable for packaged acceptance than assuming compiled Bun binaries will honor late-bound env reads |
+| Keep the production stall timeout unchanged and only override it in acceptance/debug scenarios | Commercial behavior should stay conservative while still allowing fast deterministic tests |
+| Assert on workspace diagnostics and task-panel diagnostics, not only raw sidecar logs | The commercial requirement is user-visible and support-visible evidence, not just internal event emission |
+
+## Follow-up: Runtime Failure Dedup + RAG Dependency Preflight
+
+### Goal
+- Eliminate duplicate terminal failure noise after watchdog timeouts and stop packaged RAG startup from repeatedly spawning a Python process that immediately crashes on missing dependencies.
+
+### Current Phase
+- Phase 3
+
+### Phases
+#### Phase 1: Discovery
+- [x] Confirm from packaged logs that stalled-task flows still emitted a second `MODEL_STREAM_ERROR` after `TASK_TERMINAL_TIMEOUT`
+- [x] Confirm from desktop logs that RAG startup was still launching `rag-service/main.py` directly and crashing on missing `fastapi`
+- **Status:** complete
+
+#### Phase 2: Implementation
+- [x] Add shared task-failure guard helpers and enforce duplicate `TASK_FAILED` suppression at the unified sidecar emit boundary
+- [x] Deduplicate failure-side post-learning analysis so one failed task is analyzed once
+- [x] Add Python dependency preflight for the RAG service based on `rag-service/requirements.txt`
+- [x] Surface failed RAG preflight as service status `failed` with a useful `last_error` instead of a bare stopped state
+- [x] Stabilize the packaged recovery/watchdog Playwright suite so recovery does not inherit an unrealistically aggressive global 5s watchdog
+- **Status:** complete
+
+#### Phase 3: Verification
+- [x] Re-run sidecar typecheck and targeted sidecar tests
+- [x] Re-run cargo fmt, cargo check, and targeted Rust unit tests for RAG dependency mapping/error messaging
+- [x] Rebuild packaged sidecar/desktop artifacts and rerun the packaged recovery + watchdog Playwright suite
+- **Status:** complete
+
+### Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Enforce duplicate terminal-failure suppression inside `emit()` itself | Guarding only some call sites is too weak; the unified event emitter is the only reliable choke point |
+| Keep the watchdog failure as the canonical terminal artifact for stalled tasks | `TASK_TERMINAL_TIMEOUT` is the user-meaningful failure; later transport closure is noise |
+| Preflight Python imports before spawning RAG | Failing fast with a clear dependency error is better than starting a doomed process and logging traceback spam |
+| Derive required Python modules from `rag-service/requirements.txt` with a small package->module mapping | This keeps the probe aligned with declared runtime dependencies without hardcoding the full list twice |
+| Increase the packaged E2E watchdog override from 5s to 15s | Recovery acceptance needs enough time to persist a running snapshot before the watchdog intentionally trips |

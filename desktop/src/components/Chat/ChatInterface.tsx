@@ -20,6 +20,7 @@ import { Timeline } from './Timeline/Timeline';
 import { ModalDialog } from '../Common/ModalDialog';
 import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
+import { TaskExecutionPanel } from './components/TaskExecutionPanel';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
 import type { SystemEventAction } from '../../types';
@@ -120,6 +121,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showSkillsDialog, setShowSkillsDialog] = useState(false);
     const [showMcpDialog, setShowMcpDialog] = useState(false);
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
+    const [showTaskInspector, setShowTaskInspector] = useState(false);
     const [modelConnectionStatus, setModelConnectionStatus] = useState<ModelConnectionStatus>('unknown');
     const [modelConnectionError, setModelConnectionError] = useState<string | null>(null);
     const [isRetryingModelConnection, setIsRetryingModelConnection] = useState(false);
@@ -494,6 +496,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleCloseSettings = useCallback(() => setShowSettingsDialog(false), []);
     const handleCloseSkills = useCallback(() => setShowSkillsDialog(false), []);
     const handleCloseMcp = useCallback(() => setShowMcpDialog(false), []);
+    const handleShowInspector = useCallback(() => setShowTaskInspector(true), []);
+    const handleCloseInspector = useCallback(() => setShowTaskInspector(false), []);
     const focusComposer = useCallback(() => {
         window.requestAnimationFrame(() => {
             document.querySelector<HTMLInputElement>('.chat-input')?.focus();
@@ -589,6 +593,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onShowSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowMcp={handleShowMcp}
+                onShowInspector={handleShowInspector}
                 onRetryModelConnection={retryModelConnection}
                 onClearHistory={handleClearHistory}
                 onCancel={handleCancel}
@@ -600,8 +605,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </div>
             )}
 
-            {/* Timeline Area */}
-            <Timeline session={activeSession} onSystemAction={handleSystemAction} />
+            <div className="chat-workspace-main">
+                <Timeline session={activeSession} onSystemAction={handleSystemAction} />
+            </div>
 
             <InputArea
                 query={query}
@@ -621,6 +627,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             />
 
             {/* Dialogs */}
+            <ModalDialog
+                open={showTaskInspector}
+                onClose={handleCloseInspector}
+                title="Task Inspector"
+            >
+                <TaskExecutionPanel variant="dialog" />
+            </ModalDialog>
+
             <ModalDialog
                 open={showSkillsDialog}
                 onClose={handleCloseSkills}

@@ -68,6 +68,7 @@ export class PostExecutionLearningManager {
 
     // Track sessions to analyze
     private sessionBuffer: Map<string, TaskSession> = new Map();
+    private analyzedFailedSessions: Set<string> = new Set();
 
     constructor(
         precipitator: Precipitator,
@@ -107,6 +108,7 @@ export class PostExecutionLearningManager {
                 toolCalls: [],
             };
             this.sessionBuffer.set(taskId, session);
+            this.analyzedFailedSessions.delete(taskId);
         }
 
         if (!session) return;
@@ -143,6 +145,10 @@ export class PostExecutionLearningManager {
 
             // Task failed - analyze failure and learn what went wrong
         if (event.type === 'TASK_FAILED') {
+            if (this.analyzedFailedSessions.has(taskId)) {
+                return;
+            }
+            this.analyzedFailedSessions.add(taskId);
             session.status = 'failed';
             const payload = event.payload as any;
             session.duration = payload.duration || 0;
@@ -151,7 +157,10 @@ export class PostExecutionLearningManager {
             void this.analyzeFailure(session);
 
             // Clean up buffer after a delay
-            setTimeout(() => this.sessionBuffer.delete(taskId), 60000);
+            setTimeout(() => {
+                this.sessionBuffer.delete(taskId);
+                this.analyzedFailedSessions.delete(taskId);
+            }, 60000);
         }
     }
 

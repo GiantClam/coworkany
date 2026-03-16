@@ -128,6 +128,7 @@ fn main() {
             ipc::generate_skill_review_viewer,
             ipc::import_skill_review_feedback,
             ipc::load_skill_benchmark_preview,
+            ipc::load_task_runtime_diagnostics,
             ipc::load_skill_benchmark_notes_history,
             ipc::start_skill_review_server,
             ipc::stop_skill_review_server,

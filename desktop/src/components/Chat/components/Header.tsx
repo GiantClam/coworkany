@@ -35,6 +35,7 @@ interface HeaderProps {
     onShowSettings: () => void;
     onShowSkills: () => void;
     onShowMcp: () => void;
+    onShowInspector: () => void;
     onRetryModelConnection: () => void;
     onClearHistory: () => void;
     onCancel: () => void;
@@ -57,6 +58,7 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     onShowSettings,
     onShowSkills,
     onShowMcp,
+    onShowInspector,
     onRetryModelConnection,
     onClearHistory,
     onCancel,
@@ -113,6 +115,16 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                 >
                     <span className="chat-header-chip-label">MODEL</span>
                     <span className="chat-header-chip-value">{modelName}</span>
+                </button>
+
+                <button
+                    type="button"
+                    className="chat-header-icon-button"
+                    onClick={onShowInspector}
+                    title="Task inspector"
+                    aria-label="Task inspector"
+                >
+                    <span className="chat-header-icon-button-text">TASK</span>
                 </button>
 
                 <button

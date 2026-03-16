@@ -25,6 +25,20 @@ function getSharedAppDataDir(): string | undefined {
     return raw ? raw : undefined;
 }
 
+function getCliArgValue(name: string): string | undefined {
+    const prefix = `${name}=`;
+    for (const arg of process.argv.slice(2)) {
+        if (arg === name) {
+            return 'true';
+        }
+        if (arg.startsWith(prefix)) {
+            const value = arg.slice(prefix.length).trim();
+            return value.length > 0 ? value : undefined;
+        }
+    }
+    return undefined;
+}
+
 function getAppStateRoot(): string {
     return getSharedAppDataDir() ?? path.join(process.cwd(), '.coworkany');
 }
@@ -121,6 +135,8 @@ import {
     normalizeRecoverableTaskInputs,
     type RecoverableTaskHint as RecoveryHintInput,
 } from './agent/recoveryHints';
+import { appendTaskRuntimeDiagnostic } from './agent/taskRuntimeDiagnostics';
+import { buildModelStreamFailurePayload, shouldEmitTaskFailure } from './agent/taskFailureGuards';
 import { executeJavaScriptTool, executePythonTool } from './tools/codeExecution';
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
 import { AUTONOMOUS_LEARNING_PROTOCOL } from './data/prompts/autonomousLearning';
@@ -202,6 +218,16 @@ import {
 type OutputMessage = IpcResponse | TaskEvent;
 
 function emit(message: OutputMessage): void {
+    if ('type' in message && 'taskId' in message && message.type === 'TASK_FAILED') {
+        const existingStatus = taskRuntimeMeta.get((message as any).taskId)?.status;
+        if (!shouldEmitTaskFailure(existingStatus)) {
+            console.warn(
+                `[TaskRuntime] Suppressed duplicate TASK_FAILED for ${(message as any).taskId} because task is already ${existingStatus ?? 'terminal'}`
+            );
+            return;
+        }
+    }
+
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
 
@@ -272,6 +298,8 @@ function emit(message: OutputMessage): void {
                 currentExecutingTaskId = undefined;
             }
         }
+
+        persistTaskEventDiagnostic(message);
     }
 }
 
@@ -489,7 +517,17 @@ const mcpGateway = new MCPGateway();
 const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 const taskHistoryLimits = new Map<string, number>();
 const RECOVERABLE_RUNTIME_SCAN_MAX_AGE_MS = 15 * 60 * 1000;
-const TASK_RUNTIME_STALL_TIMEOUT_MS = 2 * 60 * 1000;
+const TASK_RUNTIME_STALL_TIMEOUT_MS = (() => {
+    const rawValue =
+        getCliArgValue('--task-stall-timeout-ms') ??
+        process.env.COWORKANY_TASK_STALL_TIMEOUT_MS ??
+        '';
+    const raw = Number.parseInt(rawValue, 10);
+    if (Number.isFinite(raw) && raw >= 1000) {
+        return raw;
+    }
+    return 2 * 60 * 1000;
+})();
 const taskWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
 
 function getTaskRuntimeDir(workspacePath: string): string {
@@ -519,12 +557,12 @@ function scheduleTaskTerminalWatchdog(taskId: string): void {
         }
 
         console.error(`[TaskWatchdog] Task ${taskId} exceeded terminal timeout without a final event`);
-        emit(createTaskFailedEvent(taskId, {
+        emitTaskFailureIfActive(taskId, {
             error: 'Task stalled without producing a terminal result.',
             errorCode: 'TASK_TERMINAL_TIMEOUT',
             recoverable: true,
             suggestion: 'CoworkAny recorded the interrupted state. Reconnect and resume to continue from the last saved context.',
-        }));
+        });
     }, TASK_RUNTIME_STALL_TIMEOUT_MS);
 
     taskWatchdogs.set(taskId, timer);
@@ -536,6 +574,75 @@ function clearTaskTerminalWatchdog(taskId: string): void {
         clearTimeout(existing);
         taskWatchdogs.delete(taskId);
     }
+}
+
+function persistTaskEventDiagnostic(message: OutputMessage): void {
+    if (!('type' in message) || !('taskId' in message)) {
+        return;
+    }
+
+    if (!['TASK_RESUMED', 'TASK_FINISHED', 'TASK_FAILED'].includes(message.type as string)) {
+        return;
+    }
+
+    const taskId = (message as TaskEvent).taskId;
+    const workspacePath = taskConfigs.get(taskId)?.workspacePath;
+    if (!workspacePath) {
+        return;
+    }
+
+    const payload = ((message as TaskEvent).payload ?? {}) as Record<string, unknown>;
+    try {
+        if (message.type === 'TASK_RESUMED') {
+            appendTaskRuntimeDiagnostic(workspacePath, {
+                taskId,
+                kind: 'task_resumed',
+                severity: 'info',
+                summary: typeof payload.resumeReason === 'string'
+                    ? payload.resumeReason
+                    : 'Task resumed after interruption.',
+            });
+            return;
+        }
+
+        if (message.type === 'TASK_FINISHED') {
+            appendTaskRuntimeDiagnostic(workspacePath, {
+                taskId,
+                kind: 'task_finished',
+                severity: 'info',
+                summary: typeof payload.summary === 'string'
+                    ? payload.summary
+                    : 'Task finished successfully.',
+            });
+            return;
+        }
+
+        appendTaskRuntimeDiagnostic(workspacePath, {
+            taskId,
+            kind: 'task_failed',
+            severity: payload.recoverable === true ? 'warn' : 'error',
+            summary: typeof payload.error === 'string'
+                ? payload.error
+                : 'Task failed.',
+            errorCode: typeof payload.errorCode === 'string' ? payload.errorCode : undefined,
+            recoverable: payload.recoverable === true,
+        });
+    } catch (error) {
+        console.error(`[TaskRuntime] Failed to persist diagnostic for ${taskId}:`, error);
+    }
+}
+
+function emitTaskFailureIfActive(taskId: string, payload: TaskFailedPayload): boolean {
+    const currentStatus = taskRuntimeMeta.get(taskId)?.status;
+    if (!shouldEmitTaskFailure(currentStatus)) {
+        console.warn(
+            `[TaskRuntime] Suppressed duplicate TASK_FAILED for ${taskId} because task is already ${currentStatus ?? 'terminal'}`
+        );
+        return false;
+    }
+
+    emit(createTaskFailedEvent(taskId, payload));
+    return true;
 }
 
 function persistTaskRuntimeSnapshot(taskId: string): void {
@@ -5707,12 +5814,12 @@ async function handleCommand(command: IpcCommand): Promise<void> {
 
                     if (!outcome.terminalEmitted) {
                         if (outcome.maxStepsReached) {
-                            emit(createTaskFailedEvent(taskId, {
+                            emitTaskFailureIfActive(taskId, {
                                 error: 'Task reached the maximum reasoning steps without producing a final result.',
                                 errorCode: 'TASK_MAX_STEPS_EXCEEDED',
                                 recoverable: true,
                                 suggestion: 'Resume the task with a shorter follow-up instruction or inspect the repeated tool calls in the timeline.',
-                            }));
+                            });
                         } else {
                             emit(createTaskStatusEvent(taskId, { status: 'finished' }));
                             emit(
@@ -5726,21 +5833,7 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 } catch (error) {
                     const errorMessage =
                         error instanceof Error ? error.message : String(error);
-                    emit(
-                        createTaskFailedEvent(taskId, {
-                            error: errorMessage,
-                            errorCode: 'MODEL_STREAM_ERROR',
-                            recoverable: /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage),
-                            suggestion:
-                                errorMessage === 'missing_api_key'
-                                    ? 'Set API key in environment or .coworkany/settings.json'
-                                    : errorMessage === 'missing_base_url'
-                                        ? 'Set base URL in environment or .coworkany/settings.json'
-                                        : /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage)
-                                            ? 'The model connection dropped. CoworkAny can continue this task after the connection is restored.'
-                                        : undefined,
-                        })
-                    );
+                    emitTaskFailureIfActive(taskId, buildModelStreamFailurePayload(errorMessage));
                 }
                 break;
             }
@@ -5748,14 +5841,12 @@ async function handleCommand(command: IpcCommand): Promise<void> {
             case 'cancel_task': {
                 const taskId = command.payload.taskId;
 
-                emit(
-                    createTaskFailedEvent(taskId, {
-                        error: 'Task cancelled by user',
-                        errorCode: 'CANCELLED',
-                        recoverable: false,
-                        suggestion: command.payload.reason,
-                    })
-                );
+                emitTaskFailureIfActive(taskId, {
+                    error: 'Task cancelled by user',
+                    errorCode: 'CANCELLED',
+                    recoverable: false,
+                    suggestion: command.payload.reason,
+                });
 
                 emit({
                     commandId: command.id,
@@ -5908,14 +5999,12 @@ async function handleCommand(command: IpcCommand): Promise<void> {
 
                     if (!outcome.terminalEmitted) {
                         if (outcome.maxStepsReached) {
-                            emit(
-                                createTaskFailedEvent(taskId, {
-                                    error: 'Task reached the maximum reasoning steps without producing a final result.',
-                                    errorCode: 'TASK_MAX_STEPS_EXCEEDED',
-                                    recoverable: true,
-                                    suggestion: 'Connection recovered, but the task still looped. Continue with a narrower follow-up instruction.',
-                                })
-                            );
+                            emitTaskFailureIfActive(taskId, {
+                                error: 'Task reached the maximum reasoning steps without producing a final result.',
+                                errorCode: 'TASK_MAX_STEPS_EXCEEDED',
+                                recoverable: true,
+                                suggestion: 'Connection recovered, but the task still looped. Continue with a narrower follow-up instruction.',
+                            });
                         } else {
                             emit(createTaskStatusEvent(taskId, { status: 'finished' }));
                             emit(
@@ -5929,21 +6018,7 @@ async function handleCommand(command: IpcCommand): Promise<void> {
                 } catch (error) {
                     const errorMessage =
                         error instanceof Error ? error.message : String(error);
-                    emit(
-                        createTaskFailedEvent(taskId, {
-                            error: errorMessage,
-                            errorCode: 'MODEL_STREAM_ERROR',
-                            recoverable: /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage),
-                            suggestion:
-                                errorMessage === 'missing_api_key'
-                                    ? 'Set API key in environment or .coworkany/settings.json'
-                                    : errorMessage === 'missing_base_url'
-                                        ? 'Set base URL in environment or .coworkany/settings.json'
-                                        : /socket connection was closed unexpectedly|fetch failed|network|timeout|ECONNRESET|ETIMEDOUT/i.test(errorMessage)
-                                            ? 'The model connection dropped. CoworkAny can continue this task after the connection is restored.'
-                                        : undefined,
-                        })
-                    );
+                    emitTaskFailureIfActive(taskId, buildModelStreamFailurePayload(errorMessage));
                 }
 
                 break;

@@ -12,6 +12,16 @@
     overflow: hidden;
 }
 
+.task-panel-dialog {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 100%;
+    border-left: none;
+    background: transparent;
+    padding: 0;
+}
+
 .task-panel-section {
     background: var(--bg-app);
     border: 1px solid var(--border-subtle);
@@ -49,6 +59,15 @@
 .task-panel-empty {
     color: var(--text-muted);
     font-size: 12px;
+}
+
+.task-panel-link {
+    border: none;
+    background: transparent;
+    color: var(--brand-600);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
 }
 
 .task-list {
@@ -160,6 +179,44 @@
     flex-direction: column;
     gap: 8px;
     overflow-y: auto;
+}
+
+.diagnostic-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.diagnostic-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.diagnostic-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.diagnostic-severity {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.diagnostic-severity.info {
+    color: var(--brand-600);
+}
+
+.diagnostic-severity.warn {
+    color: var(--status-warning, #b7791f);
+}
+
+.diagnostic-severity.error {
+    color: var(--status-error);
 }
 
 .feed-item {

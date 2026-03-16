@@ -622,6 +622,28 @@ pub struct GenericIpcResult {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoadTaskRuntimeDiagnosticsInput {
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: String,
+    #[serde(rename = "taskId")]
+    pub task_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskRuntimeDiagnosticEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub task_id: String,
+    pub kind: String,
+    pub severity: String,
+    pub summary: String,
+    pub error_code: Option<String>,
+    pub recoverable: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BenchmarkNotesHistoryEntry {
@@ -1150,6 +1172,49 @@ fn read_json_file(path: &Path) -> Result<Value, String> {
     let raw =
         fs::read_to_string(path).map_err(|error| format!("Failed to read JSON file: {error}"))?;
     serde_json::from_str(&raw).map_err(|error| format!("Failed to parse JSON file: {error}"))
+}
+
+fn task_runtime_diagnostics_path(workspace_path: &Path) -> PathBuf {
+    workspace_path
+        .join(".coworkany")
+        .join("runtime")
+        .join("task-diagnostics.jsonl")
+}
+
+fn load_task_runtime_diagnostics_entries(
+    workspace_path: &Path,
+    task_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TaskRuntimeDiagnosticEntry>, String> {
+    let path = task_runtime_diagnostics_path(workspace_path);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| format!("Failed to read task runtime diagnostics: {error}"))?;
+    let mut entries = Vec::new();
+    for (index, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry: TaskRuntimeDiagnosticEntry = serde_json::from_str(trimmed).map_err(|error| {
+            format!(
+                "Failed to parse task runtime diagnostics at line {}: {error}",
+                index + 1
+            )
+        })?;
+        if task_id.map(|value| value == entry.task_id).unwrap_or(true) {
+            entries.push(entry);
+        }
+    }
+
+    entries.reverse();
+    if entries.len() > limit {
+        entries.truncate(limit);
+    }
+    Ok(entries)
 }
 
 fn read_benchmark_notes(path: &Path) -> Result<Vec<String>, String> {
@@ -2692,7 +2757,10 @@ pub async fn resume_recoverable_tasks(
     let response = send_command_and_wait(&state, command, 5000).await?;
     Ok(GenericIpcResult {
         success: true,
-        payload: response.get("payload").cloned().unwrap_or_else(|| json!({})),
+        payload: response
+            .get("payload")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
     })
 }
 
@@ -3369,6 +3437,33 @@ pub async fn load_skill_benchmark_preview(
         payload: json!({
             "path": benchmark_path,
             "benchmark": benchmark,
+        }),
+    })
+}
+
+#[tauri::command]
+pub async fn load_task_runtime_diagnostics(
+    input: LoadTaskRuntimeDiagnosticsInput,
+) -> Result<GenericIpcResult, String> {
+    let workspace_path = PathBuf::from(&input.workspace_path);
+    if !workspace_path.exists() {
+        return Err(format!(
+            "Workspace directory not found: {}",
+            workspace_path.display()
+        ));
+    }
+
+    let entries = load_task_runtime_diagnostics_entries(
+        &workspace_path,
+        input.task_id.as_deref(),
+        input.limit.unwrap_or(8),
+    )?;
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: json!({
+            "entries": entries,
+            "path": task_runtime_diagnostics_path(&workspace_path),
         }),
     })
 }
@@ -4249,12 +4344,12 @@ mod tests {
         append_benchmark_notes_history, assess_analyzer_readiness, benchmark_notes_history_path,
         build_benchmark_smoke_context, generate_benchmark_notes_from_value, import_feedback_json,
         load_analyzer_health_history, load_analyzer_health_status, load_benchmark_notes_history,
-        parse_benchmark_notes_response, pick_free_local_port, read_json_file,
-        resolve_active_llm_profile, should_bypass_proxy, write_analyzer_health_status,
-        write_analyzer_invocation_log, write_benchmark_notes, AnalyzerHealthHistoryEntry,
-        AnalyzerHealthStatus, AnalyzerInvocationLog, AnthropicProviderSettings,
-        BenchmarkNotesSaveMetadataInput, LlmConfig, LlmProfile, OpenAIProviderSettings,
-        ProxySettings,
+        load_task_runtime_diagnostics_entries, parse_benchmark_notes_response,
+        pick_free_local_port, read_json_file, resolve_active_llm_profile, should_bypass_proxy,
+        task_runtime_diagnostics_path, write_analyzer_health_status, write_analyzer_invocation_log,
+        write_benchmark_notes, AnalyzerHealthHistoryEntry, AnalyzerHealthStatus,
+        AnalyzerInvocationLog, AnthropicProviderSettings, BenchmarkNotesSaveMetadataInput,
+        LlmConfig, LlmProfile, OpenAIProviderSettings, ProxySettings,
     };
     use serde_json::Value;
     use std::fs;
@@ -4596,6 +4691,39 @@ mod tests {
         assert!(history[0].status.reachable);
         assert_eq!(history[1].status.checked_at, "2026-03-14T13:00:00Z");
         assert!(!history[1].status.reachable);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn task_runtime_diagnostics_load_newest_entries_first_and_filter_by_task() {
+        let root = std::env::temp_dir().join(format!(
+            "coworkany-task-diagnostics-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join(".coworkany").join("runtime")).expect("create runtime dir");
+        let diagnostics_path = task_runtime_diagnostics_path(&root);
+        fs::write(
+            &diagnostics_path,
+            [
+                r#"{"id":"1","timestamp":"2026-03-15T10:00:00Z","taskId":"task-a","kind":"task_failed","severity":"warn","summary":"timeout","errorCode":"TASK_TERMINAL_TIMEOUT","recoverable":true}"#,
+                r#"{"id":"2","timestamp":"2026-03-15T10:05:00Z","taskId":"task-b","kind":"task_finished","severity":"info","summary":"done"}"#,
+                r#"{"id":"3","timestamp":"2026-03-15T10:06:00Z","taskId":"task-a","kind":"task_resumed","severity":"info","summary":"Recovered after sidecar restart"}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write diagnostics");
+
+        let filtered =
+            load_task_runtime_diagnostics_entries(&root, Some("task-a"), 10).expect("load entries");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, "3");
+        assert_eq!(filtered[1].id, "1");
+
+        let all = load_task_runtime_diagnostics_entries(&root, None, 2).expect("load all entries");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].id, "3");
+        assert_eq!(all[1].id, "2");
 
         let _ = fs::remove_dir_all(&root);
     }

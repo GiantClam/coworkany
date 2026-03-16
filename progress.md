@@ -1067,3 +1067,144 @@
 - `task_plan.md`
 - `findings.md`
 - `progress.md`
+
+## Session: 2026-03-16 (Task Runtime Diagnostics Visibility)
+
+### Goal
+- Make task failure/resume/completion diagnostics durable and visible in-product so recovery incidents and missing-result reports can be explained without digging through raw sidecar logs.
+
+### Actions taken
+- Added workspace-local task runtime diagnostics persistence in:
+  - `sidecar/src/agent/taskRuntimeDiagnostics.ts`
+  - `sidecar/src/main.ts`
+- The sidecar now appends `.coworkany/runtime/task-diagnostics.jsonl` entries for:
+  - `TASK_FAILED`
+  - `TASK_RESUMED`
+  - `TASK_FINISHED`
+- Added a sidecar regression test in `sidecar/tests/task-runtime-diagnostics.test.ts`.
+- Added a Tauri IPC loader for diagnostics in:
+  - `desktop/src-tauri/src/ipc.rs`
+  - `desktop/src-tauri/src/main.rs`
+- Added a Rust regression test to verify JSONL diagnostics load newest-first and can be filtered per task.
+- Extended `desktop/src/components/Chat/components/TaskExecutionPanel.tsx` and `.css` with a new Diagnostics section that:
+  - loads recent runtime diagnostics for the active task
+  - shows severity + time + explanation
+  - opens the underlying diagnostics log file through `open_local_path`
+
+### Verification
+- `sidecar/.\\node_modules\\.bin\\tsc.cmd --noEmit` -> pass
+- `sidecar/bun test tests/task-runtime-diagnostics.test.ts tests/recovery-hints.test.ts` -> pass
+- `desktop/npx tsc --noEmit` -> pass
+- `desktop/src-tauri cargo test --locked task_runtime_diagnostics_load_newest_entries_first_and_filter_by_task` -> pass
+
+### Outcome
+- Task recovery/failure/completion now leaves a durable per-workspace diagnostic trail.
+- The desktop task panel can show recent runtime diagnostics for the selected task without relying on raw sidecar log inspection.
+
+### Files created/modified
+- `sidecar/src/agent/taskRuntimeDiagnostics.ts`
+- `sidecar/tests/task-runtime-diagnostics.test.ts`
+- `sidecar/src/main.ts`
+- `desktop/src-tauri/src/ipc.rs`
+- `desktop/src-tauri/src/main.rs`
+- `desktop/src/components/Chat/components/TaskExecutionPanel.tsx`
+- `desktop/src/components/Chat/components/TaskExecutionPanel.css`
+- `task_plan.md`
+- `findings.md`
+- `progress.md`
+
+## Session: 2026-03-16 (Task Terminal Watchdog Acceptance)
+
+### Goal
+- Turn the existing stall watchdog into a packaged, repeatable acceptance path so "task produced activity but no result" is no longer only covered by source-level logic.
+
+### Actions taken
+- Added sidecar runtime CLI parsing for `--task-stall-timeout-ms` in `sidecar/src/main.ts`.
+- Updated desktop sidecar spawning in `desktop/src-tauri/src/sidecar.rs` to forward `COWORKANY_TASK_STALL_TIMEOUT_MS` as an explicit startup arg for packaged and dev sidecar launches.
+- Extended `desktop/tests/task-recovery-restart-desktop-e2e.test.ts` with a second packaged E2E that:
+  - starts a mock provider which emits one token then stalls
+  - verifies `TASK_TERMINAL_TIMEOUT`
+  - checks the task diagnostics panel
+  - checks `.coworkany/runtime/task-diagnostics.jsonl`
+- Hardened the same test file by:
+  - scoping assertions to chat/task-panel containers
+  - clearing the release-side workspace root before boot so stale recoverable snapshots do not pollute startup
+  - destroying live mock-provider sockets during teardown so the stalled SSE server cannot hang Playwright shutdown
+- Rebuilt packaged artifacts after the sidecar/runtime-arg changes.
+
+### Verification
+- `sidecar/npm run typecheck` -> pass
+- `desktop/npx tsc --noEmit` -> pass
+- `desktop/src-tauri cargo check --locked` -> pass
+- `sidecar/bun run build:release` -> pass
+- `desktop/src-tauri cargo build --release --locked` -> pass
+- `desktop/npx playwright test tests/task-recovery-restart-desktop-e2e.test.ts --reporter=line` -> pass
+
+### Outcome
+- Packaged acceptance now covers both of the high-risk commercial failure modes in one suite:
+  - sidecar crash/restart recovery with real final result
+  - stalled task timeout with visible diagnostics and durable runtime evidence
+- Watchdog timeout overrides are now runtime-configurable for acceptance/debugging without changing the production default timeout.
+
+### Files created/modified
+- `sidecar/src/main.ts`
+- `desktop/src-tauri/src/sidecar.rs`
+- `desktop/tests/task-recovery-restart-desktop-e2e.test.ts`
+- `task_plan.md`
+- `findings.md`
+- `progress.md`
+
+## Session: 2026-03-16 (Runtime Failure Dedup + RAG Dependency Preflight)
+
+### Goal
+- Remove duplicate terminal failure noise from stalled tasks and stop packaged RAG startup from spawning a Python process that immediately crashes on missing dependencies.
+
+### Actions taken
+- Added shared task-failure helpers in:
+  - `sidecar/src/agent/taskFailureGuards.ts`
+- Updated `sidecar/src/main.ts` to:
+  - build `MODEL_STREAM_ERROR` payloads through the shared helper
+  - use `emitTaskFailureIfActive` in the main runtime paths
+  - suppress duplicate `TASK_FAILED` events at the unified `emit()` boundary
+- Updated `sidecar/src/agent/postExecutionLearning.ts` with a per-task failed-session guard so one stalled task is analyzed once.
+- Added sidecar regression coverage in:
+  - `sidecar/tests/task-failure-guard.test.ts`
+- Updated `desktop/src-tauri/src/process_manager.rs` to:
+  - preflight Python dependencies from `rag-service/requirements.txt`
+  - map package names to import module names where needed
+  - return actionable missing-dependency errors before spawn
+  - expose service `status` / `last_error` so failed RAG startup is visible as `failed`
+- Added Rust unit coverage in `desktop/src-tauri/src/process_manager.rs` for requirement mapping and actionable dependency messaging.
+- Stabilized the packaged recovery/watchdog Playwright suite by increasing the shared watchdog override in:
+  - `desktop/tests/task-recovery-restart-desktop-e2e.test.ts`
+  from 5s to 15s so recovery can snapshot as `running` before the intentional crash.
+- Rebuilt packaged artifacts after the sidecar/runtime changes.
+
+### Verification
+- `sidecar/bun test tests/task-failure-guard.test.ts tests/task-runtime-diagnostics.test.ts` -> pass
+- `sidecar/npm run typecheck` -> pass
+- `desktop/src-tauri cargo fmt --manifest-path Cargo.toml` -> pass
+- `desktop/src-tauri cargo test --locked requirement_to_module_name_maps_python_package_names` -> pass
+- `desktop/src-tauri cargo test --locked missing_dependency_message_is_actionable` -> pass
+- `desktop/src-tauri cargo check --locked` -> pass
+- `desktop/npx tsc --noEmit` -> pass
+- `sidecar/bun run build:release` -> pass
+- `desktop/src-tauri cargo build --release --locked` -> pass
+- `desktop/npx playwright test tests/task-recovery-restart-desktop-e2e.test.ts --reporter=line` -> pass
+
+### Outcome
+- Packaged stalled-task flows now emit a single canonical `TASK_TERMINAL_TIMEOUT`; the later model-stream closure is suppressed instead of surfacing as a second terminal failure.
+- Failure-side post-learning no longer runs twice for the same stalled task.
+- Packaged RAG startup now fails fast on missing Python dependencies with a clear service error instead of logging a Python traceback from a doomed child process.
+- The packaged recovery + watchdog acceptance suite is green again after the runtime changes.
+
+### Files created/modified
+- `sidecar/src/agent/taskFailureGuards.ts`
+- `sidecar/tests/task-failure-guard.test.ts`
+- `sidecar/src/agent/postExecutionLearning.ts`
+- `sidecar/src/main.ts`
+- `desktop/src-tauri/src/process_manager.rs`
+- `desktop/tests/task-recovery-restart-desktop-e2e.test.ts`
+- `task_plan.md`
+- `findings.md`
+- `progress.md`

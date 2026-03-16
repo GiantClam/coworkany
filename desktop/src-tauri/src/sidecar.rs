@@ -556,6 +556,7 @@ impl SidecarManager {
             command.env("COWORKANY_PLAYWRIGHT_BRIDGE", bridge_script);
         }
 
+        Self::apply_runtime_override_args(&mut command);
         Self::apply_proxy_env(&mut command);
         command.spawn().map_err(SidecarError::from)
     }
@@ -578,6 +579,7 @@ impl SidecarManager {
             .stderr(Stdio::piped())
             .env("COWORKANY_APP_DIR", app_dir)
             .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+        Self::apply_runtime_override_args(&mut bun_cmd);
         Self::apply_proxy_env(&mut bun_cmd);
 
         bun_cmd
@@ -595,6 +597,7 @@ impl SidecarManager {
                         .stderr(Stdio::piped())
                         .env("COWORKANY_APP_DIR", app_dir)
                         .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+                    Self::apply_runtime_override_args(&mut node_cmd);
                     Self::apply_proxy_env(&mut node_cmd);
                     node_cmd.spawn()
                 } else {
@@ -612,6 +615,7 @@ impl SidecarManager {
                         .stderr(Stdio::piped())
                         .env("COWORKANY_APP_DIR", app_dir)
                         .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+                    Self::apply_runtime_override_args(&mut npx_cmd);
                     Self::apply_proxy_env(&mut npx_cmd);
                     npx_cmd.spawn()
                 }
@@ -734,6 +738,15 @@ impl SidecarManager {
         command
             .env("NO_PROXY", &no_proxy)
             .env("no_proxy", &no_proxy);
+    }
+
+    fn apply_runtime_override_args(command: &mut Command) {
+        if let Ok(timeout_ms) = std::env::var("COWORKANY_TASK_STALL_TIMEOUT_MS") {
+            let trimmed = timeout_ms.trim();
+            if !trimmed.is_empty() {
+                command.arg(format!("--task-stall-timeout-ms={}", trimmed));
+            }
+        }
     }
 }
 
