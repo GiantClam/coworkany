@@ -4,6 +4,7 @@ body {
     margin: 0;
     padding: 0;
     width: 100%;
+    font-size: 12px;
     font-family: var(--font-body);
     background:
         radial-gradient(980px 620px at 8% -12%, rgba(45, 212, 191, 0.18), transparent 58%),
@@ -20,7 +21,7 @@ body {
 }
 
 :root {
-    --titlebar-height: 44px;
+    --titlebar-height: 40px;
 }
 
 #root {
@@ -54,6 +55,16 @@ button {
     font-weight: 500;
     cursor: pointer;
     transition: all var(--ease-default);
+}
+
+button,
+input,
+textarea,
+select,
+option,
+[contenteditable="true"] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
 }
 
 /* Utilities */
@@ -185,6 +196,8 @@ button {
         radial-gradient(920px 520px at 0% 0%, rgba(45, 212, 191, 0.06), transparent 58%),
         radial-gradient(680px 460px at 100% 12%, rgba(249, 115, 22, 0.05), transparent 56%),
         linear-gradient(180deg, rgba(4, 18, 17, 0.98), rgba(3, 16, 15, 1));
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
 }
 
 .app-main-pane {

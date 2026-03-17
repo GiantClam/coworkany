@@ -18,9 +18,11 @@ import {
     printHeader,
     saveTestArtifacts,
 } from './helpers/sidecar-harness';
+import { shouldRunSocialLoginTests } from './helpers/social-login';
 
 const TASK_TIMEOUT_MS = 6 * 60 * 1000;
 const USER_QUERY = '将我的 X 上别人发布的最新帖文里的 10 条 AI 新闻整理出来';
+const describeSocialLogin = shouldRunSocialLoginTests() ? describe : describe.skip;
 
 function buildSendTaskMessageCommand(taskId: string, content: string): string {
     return JSON.stringify({
@@ -34,7 +36,7 @@ function buildSendTaskMessageCommand(taskId: string, content: string): string {
     });
 }
 
-describe('X timeline AI news digest', () => {
+describeSocialLogin('X timeline AI news digest', () => {
     let sidecar: SidecarProcess;
     afterAll(() => sidecar?.kill());
 

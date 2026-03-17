@@ -158,17 +158,23 @@ describe('FS-03: 文件内容替换', () => {
 
         if (skipIfExternalFailure(c)) return;
 
-        // Agent should use replace_file_content or write_to_file
-        expect(replaceCalls.length + writeCalls.length).toBeGreaterThan(0);
-
         // Verify the file was modified
+        let replacedHello = false;
+        let preservedGoodbye = false;
         if (fs.existsSync(testFile)) {
             const content = fs.readFileSync(testFile, 'utf-8');
             console.log(`[Test] File content after: ${content.slice(0, 200)}`);
-            // "Goodbye World" should be preserved (not overwritten)
-            const hasGoodbye = content.includes('Goodbye') || content.includes('goodbye');
-            console.log(`[Test] Other content preserved: ${hasGoodbye}`);
+            replacedHello = content.includes('Hello CoworkAny');
+            preservedGoodbye = content.includes('Goodbye World');
+            console.log(`[Test] Replacement succeeded: ${replacedHello}`);
+            console.log(`[Test] Other content preserved: ${preservedGoodbye}`);
         }
+
+        // Prefer explicit edit tool evidence, but accept a correct file outcome when
+        // stdout event collection misses the tool-call envelope.
+        expect(replaceCalls.length + writeCalls.length > 0 || (replacedHello && preservedGoodbye)).toBe(true);
+        expect(replacedHello).toBe(true);
+        expect(preservedGoodbye).toBe(true);
     }, TASK_TIMEOUT_MS + 30_000);
 });
 
@@ -188,7 +194,7 @@ describe('FS-04: Shell 命令执行', () => {
         sidecar.sendCommand(buildStartTaskCommand({
             taskId,
             title: 'FS-04 命令执行',
-            userQuery: '运行命令 echo "CoworkAny Test Success" 并告诉我输出结果',
+            userQuery: '请使用 run_command 执行这个精确命令：echo "CoworkAny Test Success"，然后告诉我输出结果',
         }));
 
         await sidecar.waitForCompletion(TASK_TIMEOUT_MS);

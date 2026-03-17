@@ -43,7 +43,7 @@
 
 .welcome-headline {
     font-family: var(--font-heading);
-    font-size: 42px;
+    font-size: 38px;
     line-height: 1.08;
     font-weight: 600;
     color: var(--text-primary);
@@ -54,7 +54,7 @@
 
 .welcome-hint {
     max-width: 520px;
-    font-size: 16px;
+    font-size: 15px;
     line-height: 1.65;
     color: var(--text-secondary);
     margin: 0;
@@ -109,13 +109,13 @@
 }
 
 .welcome-action-title {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
 }
 
 .welcome-action-desc {
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.5;
     color: var(--text-secondary);
 }

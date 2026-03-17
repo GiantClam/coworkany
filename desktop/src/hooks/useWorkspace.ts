@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useWorkspaceStore, Workspace } from '../stores/useWorkspaceStore';
 
 export type { Workspace };
@@ -7,28 +7,50 @@ interface UseWorkspaceOptions {
     autoLoad?: boolean;
 }
 
+let initialWorkspaceAutoloadStarted = false;
+
 export function useWorkspace(options: UseWorkspaceOptions = {}) {
     const { autoLoad = true } = options;
-    const store = useWorkspaceStore();
+    const workspaces = useWorkspaceStore((state) => state.workspaces);
+    const activeWorkspace = useWorkspaceStore((state) => state.activeWorkspace);
+    const isLoading = useWorkspaceStore((state) => state.isLoading);
+    const error = useWorkspaceStore((state) => state.error);
+    const hasLoaded = useWorkspaceStore((state) => state.hasLoaded);
+    const loadWorkspaces = useWorkspaceStore((state) => state.loadWorkspaces);
+    const createWorkspace = useWorkspaceStore((state) => state.createWorkspace);
+    const updateWorkspace = useWorkspaceStore((state) => state.updateWorkspace);
+    const deleteWorkspace = useWorkspaceStore((state) => state.deleteWorkspace);
+    const selectWorkspace = useWorkspaceStore((state) => state.selectWorkspace);
+    const syncWorkspace = useWorkspaceStore((state) => state.syncWorkspace);
 
-    const loadedRef = useRef(false);
-
-    // Auto-load on mount if empty (singleton behavior)
+    // Auto-load once at store level to avoid N components issuing the same IPC call.
     useEffect(() => {
-        if (!autoLoad) {
+        if (!autoLoad || hasLoaded || isLoading || initialWorkspaceAutoloadStarted) {
             return;
         }
-        // Only load if empty and we haven't tried loading yet in this instance
-        if (store.workspaces.length === 0 && !store.isLoading && !loadedRef.current) {
-            console.log('[useWorkspace] Auto-loading workspaces...');
-            loadedRef.current = true;
-            void store.loadWorkspaces().then((items) => {
-                if (items.length === 0 && useWorkspaceStore.getState().error) {
-                    loadedRef.current = false;
+        initialWorkspaceAutoloadStarted = true;
+        void loadWorkspaces()
+            .then(() => {
+                if (!useWorkspaceStore.getState().hasLoaded) {
+                    initialWorkspaceAutoloadStarted = false;
                 }
+            })
+            .catch(() => {
+                initialWorkspaceAutoloadStarted = false;
             });
-        }
-    }, [autoLoad, store.workspaces.length, store.isLoading, store.loadWorkspaces]);
+    }, [autoLoad, hasLoaded, isLoading, loadWorkspaces]);
 
-    return store;
+    return {
+        workspaces,
+        activeWorkspace,
+        isLoading,
+        error,
+        hasLoaded,
+        loadWorkspaces,
+        createWorkspace,
+        updateWorkspace,
+        deleteWorkspace,
+        selectWorkspace,
+        syncWorkspace,
+    };
 }

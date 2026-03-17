@@ -9,11 +9,19 @@ import styles from '../Timeline.module.css';
 
 interface SystemBadgeProps {
     content: string;
+    pending?: boolean;
 }
 
-const SystemBadgeComponent: React.FC<SystemBadgeProps> = ({ content }) => (
+const SystemBadgeComponent: React.FC<SystemBadgeProps> = ({ content, pending = false }) => (
     <div className={`${styles.timelineItem} ${styles.system}`}>
-        <span className={styles.systemBadge}>{content}</span>
+        <span
+            className={`${styles.systemBadge} ${pending ? styles.systemBadgePending : ''}`}
+            role={pending ? 'status' : undefined}
+            aria-live={pending ? 'polite' : undefined}
+        >
+            {pending && <span className={styles.systemBadgePulse} aria-hidden="true" />}
+            {content}
+        </span>
     </div>
 );
 

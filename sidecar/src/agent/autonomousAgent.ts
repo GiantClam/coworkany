@@ -17,6 +17,8 @@ import { getVaultManager, getMemoryContext, searchMemory } from '../memory';
 export interface SubTask {
     id: string;
     description: string;
+    requiresTools?: string[];
+    estimatedComplexity?: 'simple' | 'medium' | 'complex';
     status: 'pending' | 'running' | 'completed' | 'failed';
     result?: string;
     error?: string;
@@ -308,6 +310,8 @@ export class AutonomousAgentController {
             task.decomposedTasks = decomposition.subtasks.map((st, index) => ({
                 id: `${taskId}_sub_${index}`,
                 description: st.description,
+                requiresTools: st.requiresTools,
+                estimatedComplexity: st.estimatedComplexity,
                 status: 'pending' as const,
             }));
 

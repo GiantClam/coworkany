@@ -2,18 +2,21 @@
 
 .backdrop {
     position: fixed;
-    inset: 0;
+    inset: 0 0 0 0;
     z-index: var(--z-modal, 40);
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
+    padding: clamp(16px, 3vh, 28px) 24px 24px;
     background:
         radial-gradient(760px 460px at 14% 10%, rgba(83, 214, 255, 0.22), transparent 60%),
         radial-gradient(680px 420px at 86% 20%, rgba(119, 255, 229, 0.16), transparent 62%),
         radial-gradient(920px 520px at 52% 120%, rgba(103, 132, 255, 0.18), transparent 64%);
     font-family: var(--font-body, sans-serif);
     color: var(--text-primary);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    box-sizing: border-box;
 }
 
 .backdrop::before {
@@ -30,8 +33,9 @@
 }
 
 .container {
-    width: 620px;
-    max-width: calc(100vw - 48px);
+    width: 720px;
+    max-width: min(720px, calc(100vw - 48px));
+    max-height: calc(100dvh - var(--setup-top-offset, 0px) - 40px);
     background: linear-gradient(160deg, rgba(11, 24, 43, 0.72), rgba(8, 18, 34, 0.56));
     border-radius: calc(var(--radius-xl, 16px) + 4px);
     box-shadow: var(--shadow-float), inset 0 1px 0 rgba(232, 248, 255, 0.2);
@@ -40,6 +44,9 @@
     -webkit-backdrop-filter: var(--glass-blur, blur(16px));
     overflow: hidden;
     position: relative;
+    display: flex;
+    flex-direction: column;
+    margin: auto 0;
 }
 
 .container::after {
@@ -58,6 +65,7 @@
     justify-content: center;
     gap: 8px;
     padding: 22px 24px 0;
+    flex-shrink: 0;
 }
 
 .stepDot {
@@ -81,9 +89,11 @@
 /* Content area */
 .content {
     padding: 32px 32px 24px;
-    min-height: 330px;
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 /* Footer / navigation */
@@ -95,6 +105,7 @@
     gap: 12px;
     border-top: 1px solid rgba(151, 209, 255, 0.22);
     background: linear-gradient(180deg, rgba(16, 30, 50, 0.25), rgba(11, 20, 35, 0.58));
+    flex-shrink: 0;
 }
 
 .footerRight {
@@ -366,4 +377,173 @@
 .summaryValue {
     color: var(--text-primary);
     font-weight: var(--font-medium, 500);
+}
+
+.stepLayout {
+    display: grid;
+    gap: 18px;
+}
+
+.stepIntro {
+    display: grid;
+    gap: 10px;
+}
+
+.stepEyebrow {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(151, 209, 255, 0.24);
+    background: rgba(15, 29, 49, 0.56);
+    font-family: var(--font-code, monospace);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #c9def7;
+}
+
+.runtimeHero {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    border: 1px solid rgba(151, 209, 255, 0.18);
+    background: rgba(14, 27, 47, 0.58);
+}
+
+.runtimeHeroCopy {
+    display: grid;
+    gap: 6px;
+}
+
+.runtimeHeroCopy strong {
+    color: #e4f0ff;
+    font-size: 15px;
+}
+
+.runtimeHeroCopy span,
+.optionalHeader span,
+.runtimeCard p {
+    color: #b6cbdf;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.runtimeCardGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.runtimeCard {
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(151, 209, 255, 0.18);
+    background: rgba(13, 24, 42, 0.58);
+}
+
+.runtimeCardTop {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.runtimeCardTop strong,
+.optionalHeader strong {
+    color: #e4f0ff;
+    font-size: 15px;
+}
+
+.runtimeCardTitleRow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.runtimeMetaRow {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.runtimeBadgeReady,
+.runtimeBadgePending,
+.runtimeBadgeMuted {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-family: var(--font-code, monospace);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.runtimeBadgeReady {
+    color: var(--status-success);
+    background: rgba(80, 224, 160, 0.14);
+    border: 1px solid rgba(115, 240, 184, 0.28);
+}
+
+.runtimeBadgePending {
+    color: #ffd79b;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.24);
+}
+
+.runtimeBadgeMuted {
+    color: #c9def7;
+    background: rgba(21, 39, 65, 0.56);
+    border: 1px solid rgba(151, 209, 255, 0.16);
+}
+
+.optionalBlock {
+    display: grid;
+    gap: 12px;
+}
+
+.optionalHeader {
+    display: grid;
+    gap: 6px;
+}
+
+@media (max-width: 768px) {
+    .backdrop {
+        padding: 12px;
+    }
+
+    .container {
+        width: min(100vw - 24px, 680px);
+        max-height: calc(100dvh - var(--setup-top-offset, 0px) - 24px);
+    }
+
+    .content {
+        padding: 24px 20px 20px;
+    }
+
+    .footer {
+        padding: 16px 20px 20px;
+        flex-wrap: wrap;
+    }
+
+    .runtimeHero,
+    .runtimeCardTop {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .runtimeCardGrid {
+        grid-template-columns: 1fr;
+    }
 }

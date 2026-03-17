@@ -49,6 +49,9 @@ interface UseSkillsOptions {
     autoRefresh?: boolean;
 }
 
+let skillsLoadPromise: Promise<SkillRecord[]> | null = null;
+let cachedSkills: SkillRecord[] | null = null;
+
 export function useSkills(options: UseSkillsOptions = {}) {
     const { autoRefresh = true } = options;
     const [skills, setSkills] = useState<SkillRecord[]>([]);
@@ -56,21 +59,34 @@ export function useSkills(options: UseSkillsOptions = {}) {
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
+        if (skillsLoadPromise) {
+            const list = await skillsLoadPromise;
+            setSkills(list);
+            return;
+        }
+
         setLoading(true);
         setError(null);
-        try {
-            const result = await invoke<IpcResult>('list_claude_skills', {
-                input: { includeDisabled: true },
-            });
-            const payload = extractPayload(result);
-            if (Array.isArray(payload.skills)) {
-                setSkills(payload.skills as SkillRecord[]);
+        skillsLoadPromise = (async () => {
+            try {
+                const result = await invoke<IpcResult>('list_claude_skills', {
+                    input: { includeDisabled: true },
+                });
+                const payload = extractPayload(result);
+                const list = Array.isArray(payload.skills) ? (payload.skills as SkillRecord[]) : [];
+                cachedSkills = list;
+                setSkills(list);
+                return list;
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                return cachedSkills ?? [];
+            } finally {
+                setLoading(false);
+                skillsLoadPromise = null;
             }
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setLoading(false);
-        }
+        })();
+
+        await skillsLoadPromise;
     }, []);
 
     const importSkill = useCallback(async (path: string) => {
@@ -133,9 +149,13 @@ export function useSkills(options: UseSkillsOptions = {}) {
         if (!autoRefresh) return;
 
         let unlisten: UnlistenFn | undefined;
-        refresh();
+        if (cachedSkills) {
+            setSkills(cachedSkills);
+        } else {
+            void refresh();
+        }
         listen('skills-updated', () => {
-            refresh();
+            void refresh();
         })
             .then((fn) => {
                 unlisten = fn;

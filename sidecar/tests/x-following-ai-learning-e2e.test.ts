@@ -9,6 +9,7 @@ import {
     saveTestArtifacts,
     ScenarioVerifier,
 } from './helpers/sidecar-harness';
+import { shouldRunSocialLoginTests } from './helpers/social-login';
 
 const TIMEOUT_E2E = 18 * 60 * 1000;
 const REPORT_PATH = path.join(process.cwd(), 'test-results', 'x-following-ai-learning-report.md');
@@ -17,6 +18,7 @@ const SKILLS_DIR = path.join(process.cwd(), '.coworkany', 'skills');
 const GENERATED_SKILL_DIR = path.join(SKILLS_DIR, 'auto-generated', 'x-following-ai-learning');
 const GENERATED_SKILL_MD = path.join(GENERATED_SKILL_DIR, 'SKILL.md');
 const GENERATED_TOOL_TS = path.join(GENERATED_SKILL_DIR, 'tool-template.ts');
+const describeSocialLogin = shouldRunSocialLoginTests() ? describe : describe.skip;
 
 function listSkillDirsWithMtime(baseDir: string): Map<string, number> {
     const result = new Map<string, number>();
@@ -118,7 +120,7 @@ function writeMarkdownReport(data: {
     fs.writeFileSync(REPORT_PATH, content, 'utf-8');
 }
 
-describe('X Following AI Learning E2E', () => {
+describeSocialLogin('X Following AI Learning E2E', () => {
     let sidecar: SidecarProcess;
 
     afterAll(() => sidecar?.kill());

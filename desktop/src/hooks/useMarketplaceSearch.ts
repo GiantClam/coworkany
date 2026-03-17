@@ -71,6 +71,10 @@ function normalizeSource(input: string): string {
     return trimmed;
 }
 
+function isGitHubSource(input: string): boolean {
+    return input.startsWith('github:') || /github\.com\//i.test(input);
+}
+
 export function useMarketplaceSearch() {
     const [items, setItems] = useState<MarketplaceItem[]>([]);
     const [loading, setLoading] = useState(false);
@@ -96,23 +100,33 @@ export function useMarketplaceSearch() {
     const scanSource = useCallback(async (sourceInput: string) => {
         const source = normalizeSource(sourceInput);
         if (!source) {
-            setError('请输入 GitHub 源，例如 github:owner/repo');
+            setError('请输入 Skillhub 关键词或 GitHub 源');
             return;
         }
 
         setLoading(true);
         setError(null);
         try {
-            const [skillsResult, mcpResult] = await Promise.all([
-                invoke<GenericIpcResult>('scan_skills', { input: { source } }),
-                invoke<GenericIpcResult>('scan_mcp_servers', { input: { source } }),
-            ]);
+            if (isGitHubSource(source)) {
+                const [skillsResult, mcpResult] = await Promise.all([
+                    invoke<GenericIpcResult>('scan_skills', { input: { source } }),
+                    invoke<GenericIpcResult>('scan_mcp_servers', { input: { source } }),
+                ]);
 
-            const skillsPayload = unwrapPayload(skillsResult);
-            const mcpPayload = unwrapPayload(mcpResult);
-            const skills = toMarketplaceItems('skill', skillsPayload.skills as unknown[] | undefined);
-            const mcps = toMarketplaceItems('mcp', mcpPayload.servers as unknown[] | undefined);
-            setItems([...skills, ...mcps]);
+                const skillsPayload = unwrapPayload(skillsResult);
+                const mcpPayload = unwrapPayload(mcpResult);
+                const skills = toMarketplaceItems('skill', skillsPayload.skills as unknown[] | undefined);
+                const mcps = toMarketplaceItems('mcp', mcpPayload.servers as unknown[] | undefined);
+                setItems([...skills, ...mcps]);
+                return;
+            }
+
+            const result = await invoke<GenericIpcResult>('search_skillhub_skills', {
+                input: { query: source },
+            });
+            const payload = unwrapPayload(result);
+            const skills = toMarketplaceItems('skill', payload.skills as unknown[] | undefined);
+            setItems(skills);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
             setItems([]);
@@ -123,13 +137,21 @@ export function useMarketplaceSearch() {
 
     const installItem = useCallback(async (item: MarketplaceItem) => {
         const workspacePath = await invoke<string>('get_workspace_root');
-        const result = await invoke<GenericIpcResult>('install_from_github', {
-            input: {
-                workspacePath,
-                source: item.source,
-                targetType: item.type,
-            },
-        });
+        const isSkillhub = item.source.startsWith('skillhub:');
+        const result = isSkillhub
+            ? await invoke<GenericIpcResult>('install_from_skillhub', {
+                input: {
+                    workspacePath,
+                    slug: item.path || item.source.replace(/^skillhub:/, ''),
+                },
+            })
+            : await invoke<GenericIpcResult>('install_from_github', {
+                input: {
+                    workspacePath,
+                    source: item.source,
+                    targetType: item.type,
+                },
+            });
         const payload = unwrapPayload(result);
         if (payload.success === false || payload.error) {
             throw new Error(String(payload.error ?? 'Install failed'));

@@ -5,6 +5,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import styles from './Timeline.module.css';
 import type { TaskSession } from '../../../types';
 import { useTimelineItems } from './hooks/useTimelineItems';
@@ -12,15 +13,30 @@ import { ToolCard } from './components/ToolCard';
 import { MessageBubble } from './components/MessageBubble';
 import { SystemBadge } from './components/SystemBadge';
 import { IS_STARTUP_BASELINE } from '../../../lib/startupProfile';
+import { getPendingTaskStatus } from './pendingTaskStatus';
 
 // ============================================================================
 // Main Timeline Component
 // ============================================================================
 
 export const Timeline: React.FC<{ session: TaskSession }> = ({ session }) => {
+    const { t } = useTranslation();
     const [showFullHistory, setShowFullHistory] = React.useState(false);
     const shouldCollapseHistory = !IS_STARTUP_BASELINE && !showFullHistory && session.events.length > 320;
     const { items, hiddenEventCount } = useTimelineItems(session, shouldCollapseHistory ? 320 : undefined);
+    const pendingStatus = React.useMemo(() => getPendingTaskStatus(session), [session]);
+    const pendingLabel = React.useMemo(() => {
+        switch (pendingStatus?.phase) {
+            case 'waiting_for_model':
+                return t('chat.pendingWaitingForModel');
+            case 'running_tool':
+                return t('chat.pendingUsingTool', { tool: pendingStatus.toolName ?? t('chat.genericTool') });
+            case 'retrying':
+                return t('chat.pendingRetrying');
+            default:
+                return '';
+        }
+    }, [pendingStatus, t]);
     const endRef = React.useRef<HTMLDivElement>(null);
     const containerRef = React.useRef<HTMLDivElement>(null);
     const [userScrolled, setUserScrolled] = React.useState(false);
@@ -105,6 +121,9 @@ export const Timeline: React.FC<{ session: TaskSession }> = ({ session }) => {
                         return null;
                 }
             })}
+            {pendingLabel && (
+                <SystemBadge content={pendingLabel} pending={true} />
+            )}
             <div ref={endRef} />
         </div>
     );

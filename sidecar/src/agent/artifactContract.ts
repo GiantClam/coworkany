@@ -70,6 +70,20 @@ const FILE_RULES: Array<{ pattern: RegExp; extension: string; description: strin
 ];
 
 const SECTION_HINTS: string[] = ['包含', '需要包含', 'include', 'must include', '目录'];
+const EXPLICIT_FILE_PATH_PATTERN = /([A-Za-z0-9_./\-\u4e00-\u9fa5]+?\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig;
+const EXPLICIT_OUTPUT_TARGET_PATTERNS: RegExp[] = [
+    /(?:保存到|写入到|写到|输出到|导出到|导出为|生成到)\s*[:："]?\s*([A-Za-z0-9_./\-\u4e00-\u9fa5]+?\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig,
+    /(?:save to|write to|output to|export to|export as)\s*[:"]?\s*([A-Za-z0-9_./\-\u4e00-\u9fa5]+?\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig,
+];
+const EXTENSION_TO_DESCRIPTION: Record<string, string> = {
+    '.md': '需要Markdown文件',
+    '.txt': '需要文本文件',
+    '.docx': '需要Word文档文件',
+    '.pptx': '需要PPT/PPTX演示文稿文件',
+    '.pdf': '需要PDF文件',
+    '.xlsx': '需要Excel文件',
+    '.json': '需要JSON文件',
+};
 
 function normalizePath(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -79,6 +93,30 @@ function normalizePath(value: unknown): string | null {
 
 function uniq<T>(items: T[]): T[] {
     return Array.from(new Set(items));
+}
+
+function normalizeExtensionFromPath(value: string): string {
+    const normalized = value.trim().toLowerCase();
+    const dotIndex = normalized.lastIndexOf('.');
+    return dotIndex >= 0 ? normalized.slice(dotIndex) : normalized;
+}
+
+function extractExplicitOutputArtifactExtensions(query: string): string[] {
+    const matches: string[] = [];
+    for (const pattern of EXPLICIT_OUTPUT_TARGET_PATTERNS) {
+        const found = query.matchAll(pattern);
+        for (const match of found) {
+            if (match[1]) matches.push(match[1]);
+        }
+    }
+
+    if (matches.length === 0) {
+        return [];
+    }
+
+    return uniq(matches.map((match) => {
+        return normalizeExtensionFromPath(match);
+    }));
 }
 
 function extractSectionRequirements(query: string): ArtifactRequirement[] {
@@ -185,7 +223,7 @@ function extractToolCallRequirements(query: string): ArtifactRequirement[] {
     const knownToolHints: Array<{ pattern: RegExp; tool: string }> = [
         { pattern: /search_web|网页搜索|先搜索|联网搜索/i, tool: 'search_web' },
         { pattern: /write_to_file|写入文件|保存到文件/i, tool: 'write_to_file' },
-        { pattern: /run_command|命令行|执行命令/i, tool: 'run_command' },
+        { pattern: /run_command|命令行|执行命令|运行(?:代码|程序|脚本|它)?|执行(?:代码|程序|脚本|它)?|跑一下|test it|verify it|run it|execute it/i, tool: 'run_command' },
     ];
 
     const tools = knownToolHints
@@ -207,8 +245,18 @@ function extractToolCallRequirements(query: string): ArtifactRequirement[] {
 
 export function buildArtifactContract(query: string): ArtifactContract {
     const requirements: ArtifactRequirement[] = [];
+    const explicitPathMentions = query.match(EXPLICIT_FILE_PATH_PATTERN) || [];
+    const explicitExtensions = extractExplicitOutputArtifactExtensions(query);
+    const hasExplicitFileMention = explicitPathMentions.length > 0;
+    const hasExplicitFileTarget = explicitExtensions.length > 0;
 
     for (const rule of FILE_RULES) {
+        if (hasExplicitFileMention && !hasExplicitFileTarget) {
+            continue;
+        }
+        if (hasExplicitFileTarget && !explicitExtensions.includes(rule.extension)) {
+            continue;
+        }
         if (rule.pattern.test(query)) {
             requirements.push({
                 id: `file-${rule.extension}`,
@@ -218,6 +266,16 @@ export function buildArtifactContract(query: string): ArtifactContract {
                 payload: { extension: rule.extension },
             });
         }
+    }
+
+    for (const extension of explicitExtensions) {
+        requirements.push({
+            id: `file-explicit-${extension}`,
+            kind: 'file',
+            description: EXTENSION_TO_DESCRIPTION[extension] || `需要 ${extension} 文件`,
+            strictness: 'hard',
+            payload: { extension },
+        });
     }
 
     requirements.push(...extractSectionRequirements(query));

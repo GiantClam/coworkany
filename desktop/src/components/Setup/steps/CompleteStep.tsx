@@ -10,9 +10,14 @@ import styles from '../SetupWizard.module.css';
 interface CompleteStepProps {
     provider: string | null;
     apiKeyConfigured: boolean;
+    runtimeStatus: {
+        skillhubReady: boolean;
+        ragReady: boolean;
+        browserReady: boolean;
+    };
 }
 
-export function CompleteStep({ provider, apiKeyConfigured }: CompleteStepProps) {
+export function CompleteStep({ provider, apiKeyConfigured, runtimeStatus }: CompleteStepProps) {
     const { t } = useTranslation();
 
     return (
@@ -42,6 +47,36 @@ export function CompleteStep({ provider, apiKeyConfigured }: CompleteStepProps) 
                     <span className={styles.summaryLabel}>{t('setup.theme')}</span>
                     <span className={styles.summaryValue}>
                         {t('setup.systemDefault')}
+                    </span>
+                </div>
+                <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>
+                        {t('setup.marketplaceReady', 'Marketplace')}
+                    </span>
+                    <span className={styles.summaryValue}>
+                        {runtimeStatus.skillhubReady
+                            ? t('setup.configuredVerified')
+                            : t('setup.configureLater')}
+                    </span>
+                </div>
+                <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>
+                        {t('setup.memoryReady', 'Local memory')}
+                    </span>
+                    <span className={styles.summaryValue}>
+                        {runtimeStatus.ragReady
+                            ? t('setup.configuredVerified')
+                            : t('setup.configureLater')}
+                    </span>
+                </div>
+                <div className={styles.summaryItem}>
+                    <span className={styles.summaryLabel}>
+                        {t('setup.browserModeReady', 'Browser smart mode')}
+                    </span>
+                    <span className={styles.summaryValue}>
+                        {runtimeStatus.browserReady
+                            ? t('setup.configuredVerified')
+                            : t('setup.configureLater')}
                     </span>
                 </div>
             </div>

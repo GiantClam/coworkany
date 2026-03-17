@@ -20,6 +20,12 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::diff::{apply_patch as apply_patch_diff, DiffHunk, FilePatch, PatchOperation};
+use crate::platform_runtime::{
+    build_platform_runtime_context,
+    resolve_app_data_dir,
+    resolve_app_dir,
+    resolve_sidecar_entry_path,
+};
 use crate::policy::commands as policy_commands;
 use crate::policy::{
     EffectContext, EffectPayload, EffectRequest, EffectResponse, EffectScope, EffectSource,
@@ -218,9 +224,8 @@ fn chrono_now() -> String {
 
 pub struct SidecarManager {
     child: Option<Child>,
-    stdin_tx: Option<Sender<String>>,
+    stdin: Option<Arc<Mutex<ChildStdin>>>,
     stdout_handle: Option<thread::JoinHandle<()>>,
-    stdin_handle: Option<thread::JoinHandle<()>>,
     stderr_handle: Option<thread::JoinHandle<()>>,
     pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
 }
@@ -229,9 +234,8 @@ impl SidecarManager {
     pub fn new() -> Self {
         Self {
             child: None,
-            stdin_tx: None,
+            stdin: None,
             stdout_handle: None,
-            stdin_handle: None,
             stderr_handle: None,
             pending_responses: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -246,16 +250,19 @@ impl SidecarManager {
 
         info!("Spawning sidecar process...");
 
-        let app_dir = Self::resolve_app_dir();
-        let app_data_dir = Self::resolve_app_data_dir(&app_handle);
+        let app_dir = resolve_app_dir();
+        let app_data_dir = resolve_app_data_dir(&app_handle);
+        let mut launch_mode = "development".to_string();
         let mut child = if !cfg!(debug_assertions) {
             if let Some(packaged) = Self::resolve_packaged_sidecar(&app_handle) {
+                launch_mode = "packaged".to_string();
                 Self::spawn_packaged_sidecar(&packaged, &app_dir, &app_data_dir)
                     .or_else(|error| {
                         warn!(
                             "Failed to start packaged sidecar ({}), falling back to development entry",
                             error
                         );
+                        launch_mode = "development".to_string();
                         Self::spawn_development_sidecar(&app_dir, &app_data_dir)
                     })?
             } else {
@@ -268,25 +275,17 @@ impl SidecarManager {
         info!("Sidecar spawned with PID: {:?}", child.id());
 
         // Take ownership of stdin/stdout/stderr
-        let stdin = child.stdin.take().expect("Failed to get stdin");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("Failed to get stdin")));
         let stdout = child.stdout.take().expect("Failed to get stdout");
         let stderr = child.stderr.take().expect("Failed to get stderr");
+        self.stdin = Some(stdin.clone());
 
-        // Create channel for sending commands to stdin writer thread
-        let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
-        self.stdin_tx = Some(tx.clone());
-
-        // Spawn stdin writer thread
-        let stdin_handle = thread::spawn(move || {
-            Self::stdin_writer_loop(stdin, rx);
-        });
-        self.stdin_handle = Some(stdin_handle);
+        let runtime_context = build_platform_runtime_context(&app_handle, Some(&launch_mode));
 
         // Spawn stdout reader thread
-        let stdout_tx = tx.clone();
         let pending_responses = self.pending_responses.clone();
         let stdout_handle = thread::spawn(move || {
-            Self::stdout_reader_loop(stdout, app_handle, stdout_tx, pending_responses);
+            Self::stdout_reader_loop(stdout, app_handle, stdin, pending_responses);
         });
         self.stdout_handle = Some(stdout_handle);
 
@@ -296,6 +295,7 @@ impl SidecarManager {
         });
         self.stderr_handle = Some(stderr_handle);
 
+        self.send_runtime_bootstrap(&runtime_context)?;
         self.child = Some(child);
 
         Ok(())
@@ -303,25 +303,16 @@ impl SidecarManager {
 
     /// Send a command to the sidecar
     pub fn send_command(&self, command: IpcCommand) -> Result<(), SidecarError> {
-        let tx = self.stdin_tx.as_ref().ok_or(SidecarError::NotRunning)?;
-
         let json = serde_json::to_string(&command)?;
         debug!("Sending command to sidecar: {}", json);
-
-        tx.send(json)
-            .map_err(|e| SidecarError::SendError(e.to_string()))?;
-
-        Ok(())
+        self.write_stdin_line(&json)
     }
 
     /// Send a raw JSON command to the sidecar
     pub fn send_raw_command(&self, command: serde_json::Value) -> Result<(), SidecarError> {
-        let tx = self.stdin_tx.as_ref().ok_or(SidecarError::NotRunning)?;
         let json = serde_json::to_string(&command)?;
         debug!("Sending raw command to sidecar: {}", json);
-        tx.send(json)
-            .map_err(|e| SidecarError::SendError(e.to_string()))?;
-        Ok(())
+        self.write_stdin_line(&json)
     }
 
     /// Send a raw JSON command to the sidecar and return a receiver for the response
@@ -349,13 +340,28 @@ impl SidecarManager {
         Ok(rx)
     }
 
+    fn send_runtime_bootstrap(
+        &self,
+        runtime_context: &crate::platform_runtime::PlatformRuntimeContext,
+    ) -> Result<(), SidecarError> {
+        let command = json!({
+            "id": Uuid::new_v4().to_string(),
+            "timestamp": chrono_now(),
+            "type": "bootstrap_runtime_context",
+            "payload": {
+                "runtimeContext": runtime_context
+            }
+        });
+        self.send_raw_command(command)
+    }
+
     /// Shutdown the sidecar process
     pub fn shutdown(&mut self) {
         if let Some(mut child) = self.child.take() {
             info!("Shutting down sidecar...");
 
             // Drop stdin to signal EOF
-            drop(self.stdin_tx.take());
+            drop(self.stdin.take());
 
             // Give it a moment to exit gracefully
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -378,7 +384,7 @@ impl SidecarManager {
                     warn!("Sidecar process exited with status: {:?}", status);
                     // Clean up the dead process
                     self.child = None;
-                    self.stdin_tx = None;
+                    self.stdin = None;
                     false
                 }
                 Ok(None) => {
@@ -399,24 +405,10 @@ impl SidecarManager {
     // Internal threads
     // -------------------------------------------------------------------------
 
-    fn stdin_writer_loop(mut stdin: ChildStdin, rx: Receiver<String>) {
-        for line in rx {
-            if let Err(e) = writeln!(stdin, "{}", line) {
-                error!("Failed to write to sidecar stdin: {}", e);
-                break;
-            }
-            if let Err(e) = stdin.flush() {
-                error!("Failed to flush sidecar stdin: {}", e);
-                break;
-            }
-        }
-        debug!("Stdin writer loop ended");
-    }
-
     fn stdout_reader_loop(
         stdout: ChildStdout,
         app_handle: AppHandle,
-        tx: Sender<String>,
+        stdin: Arc<Mutex<ChildStdin>>,
         pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
     ) {
         let reader = BufReader::new(stdout);
@@ -454,7 +446,7 @@ impl SidecarManager {
                                 }
                             }
                             Some(SidecarMessageKind::IpcCommand) => {
-                                handle_sidecar_command(message, app_handle.clone(), tx.clone());
+                                handle_sidecar_command(message, app_handle.clone(), stdin.clone());
                             }
                             None => warn!("Ignoring unclassified sidecar message: {}", line),
                         },
@@ -498,22 +490,9 @@ impl SidecarManager {
         debug!("Stderr reader loop ended");
     }
 
-    fn resolve_app_dir() -> String {
-        std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-            .to_string_lossy()
-            .to_string()
-    }
-
-    fn resolve_app_data_dir(app_handle: &AppHandle) -> String {
-        app_handle
-            .path()
-            .app_data_dir()
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
-            .to_string_lossy()
-            .to_string()
+    fn write_stdin_line(&self, line: &str) -> Result<(), SidecarError> {
+        let stdin = self.stdin.as_ref().ok_or(SidecarError::NotRunning)?;
+        write_json_line(stdin, line)
     }
 
     fn spawn_packaged_sidecar(
@@ -550,60 +529,64 @@ impl SidecarManager {
     }
 
     fn spawn_development_sidecar(app_dir: &str, app_data_dir: &str) -> Result<Child, SidecarError> {
-        let sidecar_path = Self::resolve_sidecar_entry_path()?;
+        let sidecar_path =
+            resolve_sidecar_entry_path().map_err(SidecarError::SendError)?;
         let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
+        let tsx_path = sidecar_dir.join("node_modules/tsx/dist/cli.mjs");
 
         info!(
             "Resolved development sidecar entry: {}",
             sidecar_path.display()
         );
 
-        let mut bun_cmd = Command::new("bun");
-        bun_cmd
+        // Prefer Node/tsx in development. Bun has been observed to delay
+        // stdin delivery for desktop-spawned sidecar IPC, which surfaces as
+        // `timed out waiting on channel` on the desktop side.
+        if tsx_path.exists() {
+            let mut node_cmd = Command::new("node");
+            node_cmd
+                .current_dir(sidecar_dir)
+                .args([tsx_path.to_str().unwrap(), "src/main.ts"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .env("COWORKANY_APP_DIR", app_dir)
+                .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+            Self::apply_proxy_env(&mut node_cmd);
+
+            return node_cmd.spawn().map_err(SidecarError::from);
+        }
+
+        let cmd = if cfg!(target_os = "windows") {
+            "npx.cmd"
+        } else {
+            "npx"
+        };
+        let mut npx_cmd = Command::new(cmd);
+        npx_cmd
             .current_dir(sidecar_dir)
-            .args(["run", "src/main.ts"])
+            .args(["tsx", "src/main.ts"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("COWORKANY_APP_DIR", app_dir)
             .env("COWORKANY_APP_DATA_DIR", app_data_dir);
-        Self::apply_proxy_env(&mut bun_cmd);
+        Self::apply_proxy_env(&mut npx_cmd);
 
-        bun_cmd
+        npx_cmd
             .spawn()
             .or_else(|_| {
-                let tsx_path = sidecar_dir.join("node_modules/tsx/dist/cli.mjs");
-
-                if tsx_path.exists() {
-                    let mut node_cmd = Command::new("node");
-                    node_cmd
-                        .current_dir(sidecar_dir)
-                        .args([tsx_path.to_str().unwrap(), "src/main.ts"])
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .env("COWORKANY_APP_DIR", app_dir)
-                        .env("COWORKANY_APP_DATA_DIR", app_data_dir);
-                    Self::apply_proxy_env(&mut node_cmd);
-                    node_cmd.spawn()
-                } else {
-                    let cmd = if cfg!(target_os = "windows") {
-                        "npx.cmd"
-                    } else {
-                        "npx"
-                    };
-                    let mut npx_cmd = Command::new(cmd);
-                    npx_cmd
-                        .current_dir(sidecar_dir)
-                        .args(["tsx", "src/main.ts"])
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .env("COWORKANY_APP_DIR", app_dir)
-                        .env("COWORKANY_APP_DATA_DIR", app_data_dir);
-                    Self::apply_proxy_env(&mut npx_cmd);
-                    npx_cmd.spawn()
-                }
+                let mut bun_cmd = Command::new("bun");
+                bun_cmd
+                    .current_dir(sidecar_dir)
+                    .args(["run", "src/main.ts"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .env("COWORKANY_APP_DIR", app_dir)
+                    .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+                Self::apply_proxy_env(&mut bun_cmd);
+                bun_cmd.spawn()
             })
             .map_err(SidecarError::from)
     }
@@ -631,39 +614,6 @@ impl SidecarManager {
             executable,
             bridge_script,
         })
-    }
-
-    fn resolve_sidecar_entry_path() -> Result<std::path::PathBuf, SidecarError> {
-        if let Ok(explicit) = std::env::var("COWORKANY_SIDECAR_ENTRY") {
-            let explicit_path = std::path::PathBuf::from(explicit);
-            if explicit_path.exists() {
-                return Ok(explicit_path);
-            }
-        }
-
-        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-
-        if let Ok(cwd) = std::env::current_dir() {
-            candidates.push(cwd.join("../sidecar/src/main.ts"));
-            candidates.push(cwd.join("../../sidecar/src/main.ts"));
-        }
-
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                candidates.push(exe_dir.join("../../../../sidecar/src/main.ts"));
-                candidates.push(exe_dir.join("../../../sidecar/src/main.ts"));
-                candidates.push(exe_dir.join("../../sidecar/src/main.ts"));
-                candidates.push(exe_dir.join("../sidecar/src/main.ts"));
-            }
-        }
-
-        if let Some(path) = candidates.into_iter().find(|candidate| candidate.exists()) {
-            return Ok(path);
-        }
-
-        Err(SidecarError::SendError(
-            "Unable to locate sidecar/src/main.ts from current runtime paths".to_string(),
-        ))
     }
 
     fn first_non_empty_env(keys: &[&str]) -> Option<String> {
@@ -876,7 +826,11 @@ fn operation_as_str(operation: &PatchOperation) -> &'static str {
     }
 }
 
-fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx: Sender<String>) {
+fn handle_sidecar_command(
+    message: serde_json::Value,
+    app_handle: AppHandle,
+    stdin: Arc<Mutex<ChildStdin>>,
+) {
     let msg_type = match message.get("type").and_then(|v| v.as_str()) {
         Some(value) => value.to_string(),
         None => return,
@@ -898,7 +852,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(request) = request else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "request_effect_response",
@@ -936,7 +890,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     "payload": payload
                 });
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "propose_patch" => {
@@ -954,7 +908,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(patch) = patch else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "propose_patch_response",
@@ -991,7 +945,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     Ok(value) => value,
                     Err(err) => {
                         send_raw(
-                            &tx,
+                            &stdin,
                             build_error_response(&command_id, "propose_patch_response", &err),
                         );
                         return;
@@ -1020,7 +974,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     Err(err) => build_error_response(&command_id, "propose_patch_response", &err),
                 };
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "apply_patch" => {
@@ -1040,7 +994,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(patch_id) = patch_id else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "apply_patch_response",
@@ -1081,7 +1035,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                                         "error": response.denial_reason.clone().unwrap_or_else(|| "awaiting_confirmation".to_string())
                                     }
                                 });
-                                send_raw(&tx, response_msg);
+                                send_raw(&stdin, response_msg);
                                 return;
                             }
                         }
@@ -1130,7 +1084,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     }
                 }
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "reject_patch" => {
@@ -1160,7 +1114,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     }
                 });
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "register_agent_identity" => {
@@ -1177,7 +1131,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(identity) = identity else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "register_agent_identity_response",
@@ -1205,7 +1159,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     }
                 };
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "record_agent_delegation" => {
@@ -1231,7 +1185,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(delegation) = delegation else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "record_agent_delegation_response",
@@ -1260,7 +1214,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     }
                 };
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "report_mcp_gateway_decision" => {
@@ -1277,7 +1231,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(decision) = decision else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "report_mcp_gateway_decision_response",
@@ -1304,7 +1258,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     ),
                 };
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         "report_runtime_security_alert" => {
@@ -1321,7 +1275,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
 
                 let Some(alert) = alert else {
                     send_raw(
-                        &tx,
+                        &stdin,
                         build_error_response(
                             &command_id,
                             "report_runtime_security_alert_response",
@@ -1348,7 +1302,7 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
                     ),
                 };
 
-                send_raw(&tx, response_msg);
+                send_raw(&stdin, response_msg);
             });
         }
         _ => {
@@ -1357,9 +1311,22 @@ fn handle_sidecar_command(message: serde_json::Value, app_handle: AppHandle, tx:
     }
 }
 
-fn send_raw(tx: &Sender<String>, message: serde_json::Value) {
+fn write_json_line(stdin: &Arc<Mutex<ChildStdin>>, line: &str) -> Result<(), SidecarError> {
+    let mut guard = stdin
+        .lock()
+        .map_err(|e| SidecarError::SendError(e.to_string()))?;
+    writeln!(&mut *guard, "{}", line).map_err(|e| SidecarError::SendError(e.to_string()))?;
+    guard
+        .flush()
+        .map_err(|e| SidecarError::SendError(e.to_string()))?;
+    Ok(())
+}
+
+fn send_raw(stdin: &Arc<Mutex<ChildStdin>>, message: serde_json::Value) {
     if let Ok(line) = serde_json::to_string(&message) {
-        let _ = tx.send(line);
+        if let Err(error) = write_json_line(stdin, &line) {
+            error!("Failed to write sidecar response to stdin bridge: {}", error);
+        }
     }
 }
 

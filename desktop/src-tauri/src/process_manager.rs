@@ -7,8 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::fs;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -16,6 +17,10 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
+use crate::platform_runtime::find_system_python;
+
+const MANAGED_PYTHON_RELEASE_TAG: &str = "20251217";
+const MANAGED_PYTHON_VERSION: &str = "3.10.19";
 
 // ============================================================================
 // Error Types
@@ -108,6 +113,322 @@ pub trait ManagedService: Send + Sync {
     fn health_check(&self) -> Result<bool, ProcessError>;
 }
 
+fn managed_python_asset_name() -> Result<String, ProcessError> {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "aarch64",
+        "x86_64" => "x86_64",
+        other => {
+            return Err(ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!("Unsupported macOS architecture for managed Python: {other}"),
+            )))
+        }
+    };
+
+    Ok(format!(
+        "cpython-{version}+{tag}-{arch}-apple-darwin-install_only.tar.gz",
+        version = MANAGED_PYTHON_VERSION,
+        tag = MANAGED_PYTHON_RELEASE_TAG,
+        arch = arch,
+    ))
+}
+
+fn managed_python_download_url() -> Result<String, ProcessError> {
+    let asset = managed_python_asset_name()?;
+    Ok(format!(
+        "https://github.com/astral-sh/python-build-standalone/releases/download/{tag}/{asset}",
+        tag = MANAGED_PYTHON_RELEASE_TAG,
+        asset = asset,
+    ))
+}
+
+fn managed_python_root(app_handle: &AppHandle) -> Result<PathBuf, ProcessError> {
+    let base = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    Ok(base.join("managed-python"))
+}
+
+fn find_python_binary_under(root: &Path) -> Option<PathBuf> {
+    let direct = [
+        root.join("python").join("install").join("bin").join("python3"),
+        root.join("install").join("bin").join("python3"),
+        root.join("bin").join("python3"),
+    ];
+
+    if let Some(found) = direct.into_iter().find(|candidate| candidate.exists()) {
+        return Some(found);
+    }
+
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_python_binary_under(&path) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn install_managed_python(app_handle: &AppHandle) -> Result<PathBuf, ProcessError> {
+    let root = managed_python_root(app_handle)?;
+    if let Some(existing) = find_python_binary_under(&root) {
+        return Ok(existing);
+    }
+
+    let cache_dir = app_handle
+        .path()
+        .app_cache_dir()
+        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+        .join("python-downloads");
+    fs::create_dir_all(&cache_dir)?;
+
+    let asset_name = managed_python_asset_name()?;
+    let archive_path = cache_dir.join(&asset_name);
+    let download_url = managed_python_download_url()?;
+
+    let mut curl = Command::new("curl");
+    curl.arg("-L")
+        .arg("--fail")
+        .arg("--output")
+        .arg(&archive_path)
+        .arg(&download_url);
+    RagService::apply_proxy_env(&mut curl, app_handle);
+    run_checked_command(curl, "Download managed Python runtime")?;
+
+    if root.exists() {
+        fs::remove_dir_all(&root)?;
+    }
+    fs::create_dir_all(&root)?;
+
+    let mut untar = Command::new("tar");
+    untar.arg("-xzf").arg(&archive_path).arg("-C").arg(&root);
+    run_checked_command(untar, "Extract managed Python runtime")?;
+
+    find_python_binary_under(&root).ok_or_else(|| {
+        ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Managed Python downloaded but python3 binary was not found after extraction.",
+        ))
+    })
+}
+
+fn running_from_app_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().contains(".app/Contents/MacOS/"))
+        .unwrap_or(false)
+}
+
+fn bootstrap_python_path(app_handle: &AppHandle) -> Result<PathBuf, ProcessError> {
+    if running_from_app_bundle() {
+        match install_managed_python(app_handle) {
+            Ok(path) => return Ok(path),
+            Err(err) => warn!("[ProcessManager] Failed to prepare managed Python, falling back to system Python: {}", err),
+        }
+    }
+
+    if let Some(system) = find_system_python() {
+        return Ok(system);
+    }
+
+    install_managed_python(app_handle)
+}
+
+fn venv_python_path(venv_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        return venv_dir.join("Scripts").join("python.exe");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        venv_dir.join("bin").join("python3")
+    }
+}
+
+fn run_checked_command(mut cmd: Command, label: &str) -> Result<(), ProcessError> {
+    let output = cmd.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    Err(ProcessError::SpawnError(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("{label} failed: {detail}"),
+    )))
+}
+
+fn python_runtime_identity(python: &Path) -> Result<String, ProcessError> {
+    let output = Command::new(python)
+        .arg("-c")
+        .arg("import platform, sys; print(platform.python_implementation() + ':' + '.'.join(map(str, sys.version_info[:3])))")
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Unable to inspect Python runtime: {}", stderr),
+        )));
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let resolved_path = python
+        .canonicalize()
+        .unwrap_or_else(|_| python.to_path_buf())
+        .display()
+        .to_string();
+
+    Ok(format!("python={resolved_path}\nversion={version}"))
+}
+
+fn resource_service_dir(
+    app_handle: &AppHandle,
+    env_key: &str,
+    resource_subdir: &str,
+    dev_dir_name: &str,
+) -> Result<PathBuf, ProcessError> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(path) = std::env::var(env_key) {
+        candidates.push(PathBuf::from(path));
+    }
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join(resource_subdir));
+    }
+
+    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(PathBuf::from(dir).join("..").join("..").join(dev_dir_name));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("..").join("..").join("..").join("..").join(dev_dir_name));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(dev_dir_name));
+        candidates.push(cwd.join("..").join(dev_dir_name));
+    }
+
+    for candidate in candidates {
+        let main_py = candidate.join("main.py");
+        if main_py.exists() {
+            return Ok(candidate.canonicalize().unwrap_or(candidate));
+        }
+    }
+
+    Err(ProcessError::SpawnError(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!(
+            "Unable to locate {dev_dir_name}/main.py. Bundle the service resources or set {env_key}."
+        ),
+    )))
+}
+
+fn service_venv_dir(app_handle: &AppHandle, service_name: &str) -> Result<PathBuf, ProcessError> {
+    let base = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    Ok(base.join("managed-services").join(service_name).join(".venv"))
+}
+
+fn pip_cache_dir(app_handle: &AppHandle, service_name: &str) -> Result<PathBuf, ProcessError> {
+    let base = app_handle
+        .path()
+        .app_cache_dir()
+        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    Ok(base.join("pip").join(service_name))
+}
+
+fn ensure_service_runtime(
+    app_handle: &AppHandle,
+    service_name: &str,
+    env_key: &str,
+    resource_subdir: &str,
+    dev_dir_name: &str,
+    display_name: &str,
+) -> Result<(PathBuf, PathBuf), ProcessError> {
+    let service_dir = resource_service_dir(app_handle, env_key, resource_subdir, dev_dir_name)?;
+    let requirements_path = service_dir.join("requirements.txt");
+    let requirements = fs::read_to_string(&requirements_path).map_err(|e| {
+        ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Missing requirements for {display_name}: {e}"),
+        ))
+    })?;
+
+    let bootstrap_python = bootstrap_python_path(app_handle)?;
+    let runtime_identity = python_runtime_identity(&bootstrap_python)?;
+
+    let venv_dir = service_venv_dir(app_handle, service_name)?;
+    let venv_python = venv_python_path(&venv_dir);
+    let stamp_path = venv_dir.join(".requirements-stamp");
+    let runtime_stamp = format!("{requirements}\n---\n{runtime_identity}");
+    let stamp_matches = stamp_path.exists()
+        && fs::read_to_string(&stamp_path).ok().as_deref() == Some(runtime_stamp.as_str())
+        && venv_python.exists();
+
+    if stamp_matches {
+        return Ok((service_dir, venv_python));
+    }
+
+    if let Some(parent) = venv_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if venv_dir.exists() {
+        fs::remove_dir_all(&venv_dir)?;
+    }
+
+    let mut create_venv = Command::new(&bootstrap_python);
+    create_venv.arg("-m").arg("venv").arg(&venv_dir);
+    RagService::apply_proxy_env(&mut create_venv, app_handle);
+    run_checked_command(create_venv, &format!("Create virtualenv for {display_name}"))?;
+
+    let cache_dir = pip_cache_dir(app_handle, service_name)?;
+    fs::create_dir_all(&cache_dir)?;
+
+    let mut upgrade_pip = Command::new(&venv_python);
+    upgrade_pip
+        .arg("-m")
+        .arg("pip")
+        .arg("install")
+        .arg("--upgrade")
+        .arg("pip")
+        .env("PIP_CACHE_DIR", &cache_dir);
+    RagService::apply_proxy_env(&mut upgrade_pip, app_handle);
+    run_checked_command(upgrade_pip, &format!("Upgrade pip for {display_name}"))?;
+
+    let mut install_requirements = Command::new(&venv_python);
+    install_requirements
+        .arg("-m")
+        .arg("pip")
+        .arg("install")
+        .arg("-r")
+        .arg(&requirements_path)
+        .env("PIP_CACHE_DIR", &cache_dir);
+    RagService::apply_proxy_env(&mut install_requirements, app_handle);
+    run_checked_command(
+        install_requirements,
+        &format!("Install Python dependencies for {display_name}"),
+    )?;
+
+    fs::write(&stamp_path, runtime_stamp)?;
+
+    Ok((service_dir, venv_python))
+}
+
 // ============================================================================
 // Python RAG Service
 // ============================================================================
@@ -142,7 +463,7 @@ impl RagService {
             config: ServiceConfig {
                 name: "rag-service".to_string(),
                 enabled: true,
-                auto_start: true,
+                auto_start: false,
                 auto_restart: true,
                 health_check_url: Some("http://127.0.0.1:8787/health".to_string()),
                 health_check_interval_secs: 30,
@@ -155,21 +476,6 @@ impl RagService {
             restart_count: 0,
             last_error: None,
         }
-    }
-
-    fn find_python() -> Option<String> {
-        // Try different Python commands
-        for cmd in &["python3", "python", "py"] {
-            if let Ok(output) = Command::new(cmd)
-                .arg("--version")
-                .output()
-            {
-                if output.status.success() {
-                    return Some(cmd.to_string());
-                }
-            }
-        }
-        None
     }
 
     fn first_non_empty_env(keys: &[&str]) -> Option<String> {
@@ -304,50 +610,6 @@ impl RagService {
             .env("TRANSFORMERS_CACHE", transformers_cache.to_string_lossy().as_ref());
     }
 
-    fn get_rag_service_path(&self) -> Result<std::path::PathBuf, ProcessError> {
-        // Try multiple paths to find rag-service directory
-        let candidates = vec![
-            // 1. Environment variable (can be set by user)
-            std::env::var("RAG_SERVICE_PATH").ok().map(std::path::PathBuf::from),
-
-            // 2. Development path from Cargo manifest dir
-            // CARGO_MANIFEST_DIR is desktop/src-tauri, so go up 2 levels
-            std::env::var("CARGO_MANIFEST_DIR").ok().map(|dir| {
-                std::path::PathBuf::from(dir)
-                    .join("..")
-                    .join("..")
-                    .join("rag-service")
-            }),
-
-            // 3. From executable path (debug: target/debug/exe)
-            // Path: desktop/src-tauri/target/debug/exe -> ../../../../rag-service
-            std::env::current_exe().ok().and_then(|exe| {
-                exe.parent().map(|dir| {
-                    dir.join("..").join("..").join("..").join("..").join("rag-service")
-                })
-            }),
-
-            // 4. From current working directory
-            std::env::current_dir().ok().map(|cwd| cwd.join("rag-service")),
-
-            // 5. From current working directory going up (if CWD is desktop)
-            std::env::current_dir().ok().map(|cwd| cwd.join("..").join("rag-service")),
-        ];
-
-        for candidate in candidates.into_iter().flatten() {
-            let main_py = candidate.join("main.py");
-            if main_py.exists() {
-                info!("[RAG] Found service at: {:?}", candidate);
-                return Ok(candidate.canonicalize().unwrap_or(candidate));
-            }
-        }
-
-        Err(ProcessError::SpawnError(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Unable to locate rag-service/main.py. Set RAG_SERVICE_PATH or keep rag-service adjacent to the desktop app.".to_string(),
-        )))
-    }
-
     fn ensure_rag_port_available(&self) -> Result<(), ProcessError> {
         if let Ok(true) = self.health_check() {
             return Err(ProcessError::SpawnError(std::io::Error::new(
@@ -359,14 +621,14 @@ impl RagService {
     }
 
     pub fn predownload_embedding_model(app_handle: &AppHandle) -> Result<String, ProcessError> {
-        let python = Self::find_python().ok_or_else(|| {
-            ProcessError::SpawnError(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Python not found. Please install Python 3.8+",
-            ))
-        })?;
-
-        let rag_path = Self::new().get_rag_service_path()?;
+        let (rag_path, python) = ensure_service_runtime(
+            app_handle,
+            "rag-service",
+            "RAG_SERVICE_PATH",
+            "rag-service",
+            "rag-service",
+            "RAG service",
+        )?;
         let model_name = std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
         info!("[RAG] Predownloading embedding model: {}", model_name);
 
@@ -413,7 +675,7 @@ impl ManagedService for RagService {
         &self.config
     }
 
-    fn spawn(&mut self, _app_handle: &AppHandle) -> Result<(), ProcessError> {
+    fn spawn(&mut self, app_handle: &AppHandle) -> Result<(), ProcessError> {
         if self.is_running() {
             info!("[RAG] Service already running");
             return Ok(());
@@ -423,14 +685,14 @@ impl ManagedService for RagService {
         // already live, surface a clear error so beta users can resolve it.
         self.ensure_rag_port_available()?;
 
-        let python = Self::find_python().ok_or_else(|| {
-            ProcessError::SpawnError(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Python not found. Please install Python 3.8+",
-            ))
-        })?;
-
-        let rag_path = self.get_rag_service_path()?;
+        let (rag_path, python) = ensure_service_runtime(
+            app_handle,
+            "rag-service",
+            "RAG_SERVICE_PATH",
+            "rag-service",
+            "rag-service",
+            "RAG service",
+        )?;
         let main_py = rag_path.join("main.py");
 
         if !main_py.exists() {
@@ -441,7 +703,11 @@ impl ManagedService for RagService {
             )));
         }
 
-        info!("[RAG] Starting service with {} at {:?}", python, main_py);
+        info!(
+            "[RAG] Starting service with {} at {}",
+            python.display(),
+            main_py.display()
+        );
 
         // Set environment variables
         let vault_path = dirs::home_dir()
@@ -461,7 +727,7 @@ impl ManagedService for RagService {
             .env("RAG_PORT", "8787")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        Self::apply_proxy_env(&mut cmd, _app_handle);
+        Self::apply_proxy_env(&mut cmd, app_handle);
         Self::apply_model_cache_env(&mut cmd);
 
         let mut child = cmd.spawn()?;
@@ -584,6 +850,278 @@ impl RagService {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct BrowserUseSettings {
+    api_key: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+}
+
+pub struct BrowserUseService {
+    config: ServiceConfig,
+    process: Option<Child>,
+    process_pid: Option<u32>,
+    started_at: Option<Instant>,
+}
+
+impl BrowserUseService {
+    pub fn new() -> Self {
+        Self {
+            config: ServiceConfig {
+                name: "browser-use-service".to_string(),
+                enabled: true,
+                auto_start: false,
+                auto_restart: true,
+                health_check_url: Some("http://127.0.0.1:8100/health".to_string()),
+                health_check_interval_secs: 30,
+                startup_timeout_secs: 90,
+                max_restart_attempts: 3,
+            },
+            process: None,
+            process_pid: None,
+            started_at: None,
+        }
+    }
+
+    fn llm_config_path(app_handle: &AppHandle) -> Result<PathBuf, ProcessError> {
+        app_handle
+            .path()
+            .app_data_dir()
+            .map(|dir| dir.join("llm-config.json"))
+            .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+    }
+
+    fn normalize_base_url(url: Option<String>) -> Option<String> {
+        url.map(|raw| raw.trim().trim_end_matches('/').to_string())
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| {
+                if raw.ends_with("/chat/completions") {
+                    raw.trim_end_matches("/chat/completions").to_string()
+                } else {
+                    raw
+                }
+            })
+    }
+
+    fn active_openai_compatible_settings(app_handle: &AppHandle) -> Result<BrowserUseSettings, ProcessError> {
+        let path = Self::llm_config_path(app_handle)?;
+        let raw = fs::read_to_string(&path)?;
+        let data: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+            ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+        })?;
+
+        let provider = data
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("openai");
+
+        let active_profile_id = data.get("activeProfileId").and_then(|v| v.as_str());
+        let profile = data
+            .get("profiles")
+            .and_then(|v| v.as_array())
+            .and_then(|profiles| {
+                active_profile_id.and_then(|id| {
+                    profiles.iter().find(|item| item.get("id").and_then(|v| v.as_str()) == Some(id))
+                })
+            });
+
+        let root = profile.unwrap_or(&data);
+        let openai_block = if provider == "openrouter" {
+            root.get("openrouter")
+        } else if provider == "custom" {
+            root.get("custom")
+        } else if provider == "anthropic" {
+            None
+        } else {
+            root.get("openai")
+        };
+
+        let settings = openai_block.ok_or_else(|| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Browser smart mode requires an OpenAI-compatible profile (OpenAI/Aiberm/OpenRouter/Custom).",
+            ))
+        })?;
+
+        let api_key = settings
+            .get("apiKey")
+            .and_then(|v| v.as_str())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let mut base_url = settings
+            .get("baseUrl")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+        let model = settings
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
+
+        if provider == "openrouter" && base_url.is_none() {
+            base_url = Some("https://openrouter.ai/api/v1".to_string());
+        }
+
+        let api_key = api_key.ok_or_else(|| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Browser smart mode requires an API key in the active OpenAI-compatible profile.",
+            ))
+        })?;
+
+        Ok(BrowserUseSettings {
+            api_key: Some(api_key),
+            base_url: Self::normalize_base_url(base_url),
+            model,
+        })
+    }
+
+    fn ensure_port_available(&self) -> Result<(), ProcessError> {
+        if let Ok(true) = self.health_check() {
+            return Err(ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "Port 8100 is already serving browser-use requests. Stop the existing service before starting CoworkAny's managed instance.",
+            )));
+        }
+        Ok(())
+    }
+
+    fn wait_for_healthy(&self) -> Result<(), ProcessError> {
+        let timeout = Duration::from_secs(self.config.startup_timeout_secs);
+        let start = Instant::now();
+        let check_interval = Duration::from_millis(500);
+
+        while start.elapsed() < timeout {
+            if let Ok(true) = self.health_check() {
+                return Ok(());
+            }
+            thread::sleep(check_interval);
+        }
+
+        Err(ProcessError::Timeout(format!(
+            "browser-use service failed to start within {} seconds",
+            self.config.startup_timeout_secs
+        )))
+    }
+}
+
+impl ManagedService for BrowserUseService {
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+
+    fn config(&self) -> &ServiceConfig {
+        &self.config
+    }
+
+    fn spawn(&mut self, app_handle: &AppHandle) -> Result<(), ProcessError> {
+        if self.is_running() {
+            info!("[BrowserUse] Service already running");
+            return Ok(());
+        }
+
+        self.ensure_port_available()?;
+
+        let (service_dir, python) = ensure_service_runtime(
+            app_handle,
+            "browser-use-service",
+            "BROWSER_USE_SERVICE_PATH",
+            "browser-use-service",
+            "browser-use-service",
+            "browser-use service",
+        )?;
+        let settings = Self::active_openai_compatible_settings(app_handle)?;
+        let main_py = service_dir.join("main.py");
+
+        let mut cmd = Command::new(&python);
+        cmd.arg(&main_py)
+            .current_dir(&service_dir)
+            .env("BROWSER_USE_HOST", "127.0.0.1")
+            .env("BROWSER_USE_PORT", "8100")
+            .env(
+                "BROWSER_USE_LLM_MODEL",
+                settings.model.unwrap_or_else(|| "gpt-4o".to_string()),
+            )
+            .env("OPENAI_API_KEY", settings.api_key.unwrap_or_default())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(base_url) = settings.base_url {
+            cmd.env("LITELLM_BASE_URL", base_url);
+        }
+
+        RagService::apply_proxy_env(&mut cmd, app_handle);
+
+        let mut child = cmd.spawn()?;
+        let pid = child.id();
+
+        if let Some(stderr) = child.stderr.take() {
+            let service_name = self.config.name.clone();
+            thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        debug!("[{}] {}", service_name, line);
+                    }
+                }
+            });
+        }
+
+        self.process = Some(child);
+        self.process_pid = Some(pid);
+        self.started_at = Some(Instant::now());
+
+        self.wait_for_healthy()?;
+        Ok(())
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(mut process) = self.process.take() {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = self.process_pid {
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .output();
+                }
+            }
+
+            thread::sleep(Duration::from_millis(300));
+            let _ = process.kill();
+            let _ = process.wait();
+            self.process_pid = None;
+            self.started_at = None;
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        if self.process_pid.is_some() {
+            if let Some(ref url) = self.config.health_check_url {
+                matches!(ureq::get(url).timeout(Duration::from_secs(2)).call(), Ok(response) if response.status() == 200)
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.process_pid
+    }
+
+    fn health_check(&self) -> Result<bool, ProcessError> {
+        if let Some(ref url) = self.config.health_check_url {
+            match ureq::get(url).timeout(Duration::from_secs(5)).call() {
+                Ok(response) => Ok(response.status() == 200),
+                Err(_) => Ok(false),
+            }
+        } else {
+            Ok(self.process_pid.is_some())
+        }
+    }
+}
+
 // ============================================================================
 // Unified Process Manager
 // ============================================================================
@@ -594,6 +1132,40 @@ pub struct ProcessManager {
 }
 
 impl ProcessManager {
+    pub fn prepare_managed_runtime(
+        app_handle: &AppHandle,
+        name: &str,
+    ) -> Result<String, ProcessError> {
+        match name {
+            "rag-service" => {
+                ensure_service_runtime(
+                    app_handle,
+                    "rag-service",
+                    "RAG_SERVICE_PATH",
+                    "rag-service",
+                    "rag-service",
+                    "RAG service",
+                )?;
+                Ok("RAG service runtime prepared".to_string())
+            }
+            "browser-use-service" => {
+                ensure_service_runtime(
+                    app_handle,
+                    "browser-use-service",
+                    "BROWSER_USE_SERVICE_PATH",
+                    "browser-use-service",
+                    "browser-use-service",
+                    "browser-use service",
+                )?;
+                Ok("browser-use service runtime prepared".to_string())
+            }
+            other => Err(ProcessError::NotRunning(format!(
+                "Unknown managed runtime: {}",
+                other
+            ))),
+        }
+    }
+
     pub fn new() -> Self {
         let mut manager = Self {
             services: HashMap::new(),
@@ -602,6 +1174,7 @@ impl ProcessManager {
 
         // Register RAG service
         manager.register_service(Box::new(RagService::new()));
+        manager.register_service(Box::new(BrowserUseService::new()));
 
         manager
     }
@@ -739,6 +1312,17 @@ impl ProcessManager {
             ))
         })?;
         RagService::predownload_embedding_model(&app_handle)
+    }
+
+    pub fn prepare_service_runtime(&mut self, name: &str) -> Result<String, ProcessError> {
+        let app_handle = self.app_handle.clone().ok_or_else(|| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "No app handle set",
+            ))
+        })?;
+
+        Self::prepare_managed_runtime(&app_handle, name)
     }
 }
 

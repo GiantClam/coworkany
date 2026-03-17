@@ -60,7 +60,9 @@ export function buildStartTaskCommand(opts: {
     enabledToolpacks?: string[];
     disabledTools?: string[];
     workspacePath?: string;
+    modelId?: string;
 }): string {
+    const modelId = opts.modelId || process.env.TEST_MODEL_ID;
     return JSON.stringify({
         type: 'start_task',
         id: randomUUID(),
@@ -76,6 +78,7 @@ export function buildStartTaskCommand(opts: {
                 enabledToolpacks: opts.enabledToolpacks || [],
                 enabledSkills: opts.enabledSkills || [],
                 disabledTools: opts.disabledTools || [],
+                modelId,
             },
         },
     });
@@ -193,7 +196,17 @@ export class EventCollector {
     /** Check if the task failed due to API/external issues (not a real bug) */
     isExternalFailure(): boolean {
         if (!this.taskFailed || !this.taskError) return false;
-        const externalPatterns = ['402', 'rate_limit', 'quota', 'billing', 'insufficient_funds'];
+        const externalPatterns = [
+            '401',
+            '402',
+            '403',
+            'rate_limit',
+            'quota',
+            'billing',
+            'insufficient_funds',
+            'unauthorized',
+            '无效的令牌',
+        ];
         return externalPatterns.some(p => this.taskError!.includes(p));
     }
 

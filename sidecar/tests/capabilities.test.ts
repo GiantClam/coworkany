@@ -91,6 +91,7 @@ describe('CoworkAny 关键能力测试', () => {
             '工具调用次数: ' + result.toolCalls.length,
             '任务状态: ' + (result.finished ? '完成' : '未完成'),
             '包含 list_dir: ' + result.toolCalls.includes('list_dir'),
+            '包含 run_command: ' + result.toolCalls.includes('run_command'),
         ];
 
         if (result.toolCalls.length === 0 && result.finished) {
@@ -99,8 +100,11 @@ describe('CoworkAny 关键能力测试', () => {
             return;
         }
 
-        // 验证：Agent 应该尝试执行，即使目录不存在
-        const passed = result.toolCalls.includes('list_dir');
+        // 验证：Agent 应该尝试执行文件系统查询，即使目录不存在。
+        // 不同模型会在 list_dir 和 run_command 之间做不同选择。
+        const passed =
+            result.finished &&
+            (result.toolCalls.includes('list_dir') || result.toolCalls.includes('run_command'));
         
         results.push({ capability, description: '9种纠错策略', passed, toolCalls: result.toolCalls, details });
         console.log('\n[' + capability + '] ' + (passed ? '✅' : '❌'));

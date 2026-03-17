@@ -51,6 +51,7 @@
     "openRouterHint": "从 openrouter.ai/keys 获取密钥",
     "verifying": "验证中...",
     "verifyApiKey": "验证 API 密钥",
+    "savingConfig": "正在保存配置...",
     "apiKeyVerified": "API 密钥验证成功！",
     "verificationFailed": "验证失败",
     "connectionError": "连接错误 — sidecar 是否已启动？",
@@ -182,6 +183,9 @@
     "llmSettings": "LLM 设置",
     "clearConfirm": "清除此任务的对话历史？",
     "statusInProgress": "进行中",
+    "statusWaitingForModel": "等待模型响应",
+    "statusUsingTool": "正在调用 {{tool}}",
+    "statusRetrying": "自动重试中",
     "statusReady": "等待后续指令",
     "statusFailed": "失败",
     "statusIdle": "空闲",
@@ -203,6 +207,10 @@
     "exportChat": "导出为 Markdown",
     "copied": "已复制！",
     "copyMessage": "复制消息",
+    "pendingWaitingForModel": "消息已发送，正在等待模型响应…",
+    "pendingUsingTool": "消息已发送，正在调用 {{tool}}…",
+    "pendingRetrying": "请求暂时受限，正在自动重试…",
+    "genericTool": "工具",
     "tokenUsage": "Token 用量",
     "inputTokens": "输入: {{value}}",
     "outputTokens": "输出: {{value}}",
@@ -592,4 +600,3 @@
     "failedDescription": "当前无法导出诊断信息。"
   }
 }
-

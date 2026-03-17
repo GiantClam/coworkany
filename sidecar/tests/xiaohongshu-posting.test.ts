@@ -22,6 +22,7 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { spawn, type Subprocess } from 'bun';
 import { randomUUID } from 'crypto';
+import { shouldRunSocialLoginTests } from './helpers/social-login';
 
 // ============================================================================
 // Config
@@ -32,6 +33,7 @@ const TASK_TITLE = '小红书发帖测试 - E2E';
 const SIDECAR_INIT_WAIT_MS = 5000;
 const TASK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const POLL_INTERVAL_MS = 1000;
+const describeSocialLogin = shouldRunSocialLoginTests() ? describe : describe.skip;
 
 /**
  * 环境预检查说明：
@@ -468,7 +470,7 @@ class SidecarProcess {
 // Test Suite
 // ============================================================================
 
-describe('小红书发帖 - Sidecar E2E 测试', () => {
+describeSocialLogin('小红书发帖 - Sidecar E2E 测试', () => {
     let sidecar: SidecarProcess;
     let report: TestReport;
 

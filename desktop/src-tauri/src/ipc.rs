@@ -8,17 +8,23 @@ use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
+use crate::platform_runtime::{
+    build_runtime_snapshot,
+    resolve_skillhub_executable,
+};
 use crate::process_manager::{ProcessManagerState, ServiceInfo};
 use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
 
 static STARTUP_PROCESS_INSTANT: OnceLock<Instant> = OnceLock::new();
 static STARTUP_PROCESS_EPOCH_MS: OnceLock<u128> = OnceLock::new();
+const SKILLHUB_INSTALL_SCRIPT_URL: &str = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh";
 
 pub fn init_startup_clock() {
     STARTUP_PROCESS_INSTANT.get_or_init(Instant::now);
@@ -163,6 +169,12 @@ pub struct RemoveClaudeSkillInput {
     pub delete_files: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareServiceRuntimeInput {
+    pub name: String,
+}
+
 // ============================================================================
 // Command Response Types
 // ============================================================================
@@ -267,6 +279,7 @@ pub struct LlmProfile {
     pub openai: Option<OpenAIProviderSettings>,
     pub ollama: Option<OllamaProviderSettings>,
     pub custom: Option<CustomProviderSettings>,
+    #[serde(default)]
     pub verified: bool,
 }
 
@@ -385,6 +398,55 @@ fn build_command(command_type: &str, payload: Value) -> Value {
         "type": command_type,
         "payload": prune_nulls(payload)
     })
+}
+
+fn runtime_snapshot_payload(
+    app_handle: &AppHandle,
+    manager: Option<&crate::process_manager::ProcessManager>,
+    extras: Value,
+) -> Value {
+    let snapshot = build_runtime_snapshot(app_handle, manager, None);
+    let mut payload = json!({
+        "runtimeContext": snapshot.runtime_context,
+        "dependencies": snapshot.dependencies,
+    });
+
+    if let (Value::Object(base), Value::Object(extra)) = (&mut payload, extras) {
+        base.extend(extra);
+    }
+
+    payload
+}
+
+fn collect_dependency_statuses(
+    app_handle: &AppHandle,
+    manager: &crate::process_manager::ProcessManager,
+) -> Value {
+    runtime_snapshot_payload(app_handle, Some(manager), json!({}))
+}
+
+fn run_skillhub(args: &[String]) -> Result<String, String> {
+    let executable = resolve_skillhub_executable()?;
+    let output = Command::new(executable)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to run skillhub: {e}"))?;
+
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Err(if !stderr.is_empty() { stderr } else { stdout })
+}
+
+fn sanitize_skillhub_name(slug: &str, raw_name: Option<&str>) -> String {
+    let candidate = raw_name.unwrap_or("").trim();
+    if candidate.is_empty() || candidate.starts_with("description:") {
+        return slug.to_string();
+    }
+    candidate.to_string()
 }
 
 async fn ensure_sidecar_running(
@@ -514,7 +576,7 @@ pub async fn start_task(
     ))
     .map_err(|e| e.to_string())?;
 
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = send_command_and_wait(&state, command, 10000).await?;
     let payload = response
         .get("payload")
         .cloned()
@@ -822,16 +884,25 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
         .build()
         .map_err(|e| e.to_string())?;
 
+    let normalize_openai_compatible_url = |raw: &str| -> String {
+        let trimmed = raw.trim().trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") {
+            trimmed.to_string()
+        } else {
+            format!("{}/chat/completions", trimmed)
+        }
+    };
+
     let openai_compatible_default = |provider: &str| -> Option<(&'static str, &'static str)> {
         match provider {
-            "openai" => Some(("https://api.openai.com/v1/chat/completions", "gpt-4o")),
-            "aiberm" => Some(("https://aiberm.com/v1/chat/completions", "claude-sonnet-4-5-20250929-thinking")),
-            "nvidia" => Some(("https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-70b-instruct")),
-            "siliconflow" => Some(("https://api.siliconflow.cn/v1/chat/completions", "Qwen/Qwen2.5-7B-Instruct")),
-            "gemini" => Some(("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.0-flash")),
-            "qwen" => Some(("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "qwen-plus")),
-            "minimax" => Some(("https://api.minimax.chat/v1/chat/completions", "MiniMax-Text-01")),
-            "kimi" => Some(("https://api.moonshot.cn/v1/chat/completions", "moonshot-v1-8k")),
+            "openai" => Some(("https://api.openai.com/v1", "gpt-4o")),
+            "aiberm" => Some(("https://aiberm.com/v1", "gpt-5.3-codex")),
+            "nvidia" => Some(("https://integrate.api.nvidia.com/v1", "meta/llama-3.1-70b-instruct")),
+            "siliconflow" => Some(("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct")),
+            "gemini" => Some(("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash")),
+            "qwen" => Some(("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus")),
+            "minimax" => Some(("https://api.minimax.chat/v1", "MiniMax-Text-01")),
+            "kimi" => Some(("https://api.moonshot.cn/v1", "moonshot-v1-8k")),
             _ => None,
         }
     };
@@ -899,8 +970,11 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
                 let settings = input.openai.ok_or("Missing OpenAI-compatible settings")?;
                 let key = settings.api_key.ok_or("Missing API key")?;
                 let model = settings.model.unwrap_or_else(|| default_model.to_string());
+                let request_url = normalize_openai_compatible_url(
+                    settings.base_url.as_deref().unwrap_or(default_url)
+                );
                 (
-                    settings.base_url.unwrap_or_else(|| default_url.to_string()),
+                    request_url,
                     key,
                     json!({
                         "model": model,
@@ -931,6 +1005,7 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
     
     let status = res.status();
     if status.is_success() {
+        info!("validate_llm_settings: connectivity verified for {}", input.provider);
         Ok(GenericIpcResult {
             success: true,
             payload: json!({ "message": "Connection successful" }),
@@ -1068,6 +1143,13 @@ pub async fn get_workspace_root() -> Result<String, String> {
     std::env::current_dir()
         .map_err(|e| e.to_string())
         .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn get_default_workspace_path(app_handle: AppHandle) -> Result<String, String> {
+    let dir = app_data_dir(&app_handle)?.join("workspaces").join("workspace");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().to_string())
 }
 
 /// Manually spawn the sidecar (for testing)
@@ -1338,6 +1420,20 @@ pub struct InstallFromGitHubInput {
     pub target_type: String, // "skill" | "mcp"
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSkillhubInput {
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallFromSkillhubInput {
+    pub slug: String,
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: String,
+}
+
 #[tauri::command]
 pub async fn list_workspaces(
     state: State<'_, SidecarState>,
@@ -1443,6 +1539,225 @@ pub async fn install_from_github(
     Ok(GenericIpcResult {
         success: true,
         payload: response,
+    })
+}
+
+#[tauri::command]
+pub async fn search_skillhub_skills(
+    input: SearchSkillhubInput,
+) -> Result<GenericIpcResult, String> {
+    let mut args = vec![
+        "--skip-self-upgrade".to_string(),
+        "search".to_string(),
+    ];
+    if let Some(query) = input.query {
+        let trimmed = query.trim();
+        if !trimmed.is_empty() {
+            args.extend(trimmed.split_whitespace().map(|part| part.to_string()));
+        }
+    }
+    args.push("--json".to_string());
+
+    let stdout = run_skillhub(&args)?;
+    let raw: Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse skillhub search output: {e}"))?;
+
+    let skills = raw
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            let slug = entry.get("slug")?.as_str()?.trim().to_string();
+            if slug.is_empty() {
+                return None;
+            }
+            let name = sanitize_skillhub_name(&slug, entry.get("name").and_then(|v| v.as_str()));
+            let description = entry
+                .get("description")
+                .and_then(|v| v.as_str())
+                .or_else(|| entry.get("summary").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            Some(json!({
+                "name": name,
+                "description": description,
+                "path": slug,
+                "source": format!("skillhub:{slug}"),
+                "runtime": "unknown",
+                "hasScripts": false,
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: json!({
+            "skills": skills,
+            "source": "skillhub",
+        }),
+    })
+}
+
+#[tauri::command]
+pub async fn install_from_skillhub(
+    input: InstallFromSkillhubInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    let install_root = PathBuf::from(&input.workspace_path)
+        .join(".coworkany")
+        .join("skills");
+
+    fs::create_dir_all(&install_root)
+        .map_err(|e| format!("Failed to create skill install dir: {e}"))?;
+
+    let args = vec![
+        "--skip-self-upgrade".to_string(),
+        "--dir".to_string(),
+        install_root.to_string_lossy().to_string(),
+        "install".to_string(),
+        input.slug.clone(),
+    ];
+
+    let stdout = run_skillhub(&args)?;
+    let skill_path = install_root.join(&input.slug);
+    if !skill_path.exists() {
+        return Err(format!(
+            "Skillhub reported success, but installed skill directory was not found: {}",
+            skill_path.display()
+        ));
+    }
+
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let import_payload = json!({
+        "source": "local_folder",
+        "path": skill_path,
+        "overwrite": true,
+    });
+    let command = build_command("import_claude_skill", import_payload);
+    let response = send_command_and_wait(&state, command, 5000).await?;
+    let imported = response
+        .get("payload")
+        .and_then(|p| p.get("success"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if imported {
+        let _ = app_handle.emit("skills-updated", ());
+    }
+
+    Ok(GenericIpcResult {
+        success: imported,
+        payload: json!({
+            "success": imported,
+            "slug": input.slug,
+            "path": skill_path,
+            "cliOutput": stdout,
+            "sidecar": response,
+        }),
+    })
+}
+
+#[tauri::command]
+pub fn get_dependency_statuses(
+    state: State<'_, ProcessManagerState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+    manager.set_app_handle(app_handle.clone());
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: collect_dependency_statuses(&app_handle, &manager),
+    })
+}
+
+#[tauri::command]
+pub async fn install_skillhub_cli(app_handle: AppHandle) -> Result<GenericIpcResult, String> {
+    let extras = tauri::async_runtime::spawn_blocking(move || {
+        info!("install_skillhub_cli: starting installer");
+        if let Ok(path) = resolve_skillhub_executable() {
+            info!("install_skillhub_cli: already installed at {:?}", path);
+            return Ok(json!({
+                "message": "Skillhub CLI already installed",
+                "path": path,
+                "errors": Value::Null,
+            }));
+        }
+
+        let mut command = Command::new("bash");
+        command.arg("-lc").arg(format!(
+            "curl -fsSL {url} | bash -s -- --cli-only",
+            url = SKILLHUB_INSTALL_SCRIPT_URL
+        ));
+
+        let output = command
+            .output()
+            .map_err(|e| format!("Failed to run Skillhub installer: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let message = if !stderr.is_empty() { stderr } else { stdout };
+            error!("install_skillhub_cli: installer failed: {}", message);
+            return Err(message);
+        }
+
+        let executable = resolve_skillhub_executable().map_err(|_| {
+            "Skillhub installer finished but executable was not found in ~/.local/bin or PATH".to_string()
+        })?;
+
+        info!("install_skillhub_cli: completed at {:?}", executable);
+        Ok(json!({
+            "message": "Skillhub CLI installed",
+            "path": executable,
+            "stdout": String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            "errors": Value::Null,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: runtime_snapshot_payload(&app_handle, None, extras),
+    })
+}
+
+#[tauri::command]
+pub async fn prepare_service_runtime(
+    input: PrepareServiceRuntimeInput,
+    state: State<'_, ProcessManagerState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    let service_name = input.name.clone();
+    let app_handle_for_task = app_handle.clone();
+
+    let message = tauri::async_runtime::spawn_blocking(move || {
+        info!("prepare_service_runtime: preparing {}", service_name);
+        let message = crate::process_manager::ProcessManager::prepare_managed_runtime(
+            &app_handle_for_task,
+            &service_name,
+        )
+        .map_err(|e| e.to_string())?;
+        info!("prepare_service_runtime: prepared {}", service_name);
+        Ok::<String, String>(message)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+    manager.set_app_handle(app_handle.clone());
+    Ok(GenericIpcResult {
+        success: true,
+        payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
+            "message": message,
+            "service": input.name,
+            "errors": Value::Null,
+        })),
     })
 }
 
@@ -1713,19 +2028,27 @@ pub fn stop_all_services(
 pub fn start_service(
     name: String,
     state: State<'_, ProcessManagerState>,
-) -> Result<ServiceOperationResult, String> {
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+    manager.set_app_handle(app_handle.clone());
 
     match manager.start_service(&name) {
-        Ok(()) => Ok(ServiceOperationResult {
+        Ok(()) => Ok(GenericIpcResult {
             success: true,
-            message: format!("Service '{}' started", name),
-            errors: None,
+            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
+                "message": format!("Service '{}' started", name),
+                "service": name,
+                "errors": Value::Null,
+            })),
         }),
-        Err(e) => Ok(ServiceOperationResult {
+        Err(e) => Ok(GenericIpcResult {
             success: false,
-            message: format!("Failed to start service '{}'", name),
-            errors: Some(vec![e.to_string()]),
+            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
+                "message": format!("Failed to start service '{}'", name),
+                "service": name,
+                "errors": [e.to_string()],
+            })),
         }),
     }
 }
@@ -1735,19 +2058,27 @@ pub fn start_service(
 pub fn stop_service(
     name: String,
     state: State<'_, ProcessManagerState>,
-) -> Result<ServiceOperationResult, String> {
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+    manager.set_app_handle(app_handle.clone());
 
     match manager.stop_service(&name) {
-        Ok(()) => Ok(ServiceOperationResult {
+        Ok(()) => Ok(GenericIpcResult {
             success: true,
-            message: format!("Service '{}' stopped", name),
-            errors: None,
+            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
+                "message": format!("Service '{}' stopped", name),
+                "service": name,
+                "errors": Value::Null,
+            })),
         }),
-        Err(e) => Ok(ServiceOperationResult {
+        Err(e) => Ok(GenericIpcResult {
             success: false,
-            message: format!("Failed to stop service '{}'", name),
-            errors: Some(vec![e.to_string()]),
+            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
+                "message": format!("Failed to stop service '{}'", name),
+                "service": name,
+                "errors": [e.to_string()],
+            })),
         }),
     }
 }
@@ -1808,14 +2139,12 @@ pub fn health_check_service(
 /// Predownload embedding model for RAG on first-run setup.
 /// Uses persistent cache path so subsequent runs do not redownload.
 #[tauri::command]
-pub fn prepare_rag_embedding_model(
-    state: State<'_, ProcessManagerState>,
-    app_handle: AppHandle,
-) -> Result<GenericIpcResult, String> {
-    let mut manager = state.0.lock().map_err(|e| e.to_string())?;
-    manager.set_app_handle(app_handle);
-
-    match manager.predownload_rag_model() {
+pub async fn prepare_rag_embedding_model(app_handle: AppHandle) -> Result<GenericIpcResult, String> {
+    match tauri::async_runtime::spawn_blocking(move || {
+        crate::process_manager::RagService::predownload_embedding_model(&app_handle)
+    })
+    .await
+    .map_err(|e| e.to_string())? {
         Ok(message) => Ok(GenericIpcResult {
             success: true,
             payload: json!({

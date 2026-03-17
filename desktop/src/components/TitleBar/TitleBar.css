@@ -13,9 +13,10 @@
     backdrop-filter: blur(14px) saturate(135%);
     -webkit-backdrop-filter: blur(14px) saturate(135%);
     color: var(--text-primary);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
     -webkit-app-region: drag;
     app-region: drag;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
+    cursor: grab;
 }
 
 .titlebar-drag-region {
@@ -23,11 +24,12 @@
     height: 100%;
     display: flex;
     align-items: center;
+    justify-content: flex-start;
     padding-left: 18px;
-    cursor: grab;
+    min-width: 0;
 }
 
-.titlebar-drag-region:active {
+.titlebar:active {
     cursor: grabbing;
 }
 
@@ -36,6 +38,7 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+    pointer-events: none;
 }
 
 .titlebar-brand-dot {
@@ -47,7 +50,7 @@
 }
 
 .titlebar-brand-wordmark {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -61,7 +64,7 @@
     border: 1px solid rgba(138, 232, 219, 0.14);
     background: rgba(14, 53, 49, 0.58);
     color: var(--text-tertiary);
-    font-size: 10px;
+    font-size: 9px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
@@ -76,6 +79,7 @@
     border: 1px solid rgba(138, 232, 219, 0.12);
     -webkit-app-region: no-drag;
     app-region: no-drag;
+    cursor: default;
 }
 
 .titlebar-controls {

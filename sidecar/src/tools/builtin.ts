@@ -428,8 +428,14 @@ export const planStepTool: ToolDefinition = {
                     planContent = fs.readFileSync(planPath, 'utf-8');
                 }
 
-                // First call — initialize the plan file
-                if (!planContent || planContent.trim() === '') {
+                const shouldResetPlan =
+                    args.step_number === 1 &&
+                    typeof args.goal === 'string' &&
+                    args.goal.trim().length > 0 &&
+                    !planContent.includes(`**Goal**: ${args.goal}`);
+
+                // Start a fresh plan for a new task when step 1 provides a goal.
+                if (shouldResetPlan || !planContent || planContent.trim() === '') {
                     const goalLine = args.goal ? `\n**Goal**: ${args.goal}\n` : '';
                     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
                     planContent = `# Task Plan\n\nCreated: ${timestamp}${goalLine}\n## Steps\n\n`;

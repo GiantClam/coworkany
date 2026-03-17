@@ -12,6 +12,7 @@ import { ProfileList } from './components/ProfileList';
 import { SearchSettings } from './components/SearchSettings';
 import { ProxySettings } from './components/ProxySettings';
 import { ShortcutSettings } from './components/ShortcutSettings';
+import { DependencySetupSection } from './components/DependencySetupSection';
 import { useSettings } from './hooks/useSettings';
 import { toast } from '../Common/ToastProvider';
 import { useThemeStore } from '../../stores/themeStore';
@@ -100,6 +101,21 @@ export function SettingsView() {
         }
     }, [proxySaved, t]);
 
+    const activeProfile = config.profiles?.find((profile) => profile.id === config.activeProfileId)
+        ?? config.profiles?.[0];
+    const hasSearchCredential = Boolean(
+        searchSettings.serperApiKey
+        || searchSettings.tavilyApiKey
+        || searchSettings.braveApiKey
+        || searchSettings.searxngUrl
+    );
+    const searchProviderLabel = {
+        serper: 'Serper',
+        tavily: 'Tavily',
+        brave: 'Brave',
+        searxng: 'SearXNG',
+    }[searchSettings.provider ?? 'searxng'];
+
     return (
         <div className={styles.container}>
             <div className={styles.header}>
@@ -118,40 +134,71 @@ export function SettingsView() {
                 </button>
             </div>
 
-            <AppearanceSection />
-
-            <div className={styles.section}>
-                <DirectivesEditor />
+            <div className={styles.overviewGrid}>
+                <SummaryCard
+                    eyebrow={t('settings.summaryAiEyebrow', 'AI')}
+                    title={activeProfile?.name ?? t('settings.summaryAiTitle', 'No active model yet')}
+                    description={activeProfile
+                        ? `${activeProfile.provider}${activeProfile.verified ? ' · verified' : ''}`
+                        : t('settings.summaryAiDescription', 'Run onboarding or add your first model profile below.')}
+                />
+                <SummaryCard
+                    eyebrow={t('settings.summaryConnectivityEyebrow', 'Connectivity')}
+                    title={`${searchProviderLabel}${proxySettings.enabled ? ' + Proxy' : ''}`}
+                    description={hasSearchCredential
+                        ? t('settings.summaryConnectivityConfigured', 'Search is configured. Network controls are ready below.')
+                        : t('settings.summaryConnectivityPending', 'Search keys and proxy are optional, but configure them here before heavy research tasks.')}
+                />
+                <SummaryCard
+                    eyebrow={t('settings.summaryRuntimeEyebrow', 'Capabilities')}
+                    title={t('settings.summaryRuntimeTitle', 'Marketplace, memory, and browser automation')}
+                    description={t(
+                        'settings.summaryRuntimeDescription',
+                        'Use Runtime Setup to prepare Skillhub, local RAG, and optional browser smart mode on a fresh machine.'
+                    )}
+                />
             </div>
 
-            <div className={styles.grid}>
-                <ProfileEditor
-                    onSave={validateAndAddProfile}
-                    isValidating={isValidating}
-                    validationMsg={validationMsg}
-                />
+            <DependencySetupSection />
 
-                <ProfileList
-                    config={config}
-                    onSwitch={switchProfile}
-                    onDelete={deleteProfile}
-                    onUpdateMaxHistory={updateMaxHistoryMessages}
-                />
+            <div className={styles.settingsColumns}>
+                <div className={styles.settingsColumn}>
+                    <ProfileEditor
+                        onSave={validateAndAddProfile}
+                        isValidating={isValidating}
+                        validationMsg={validationMsg}
+                    />
+
+                    <div className={styles.section}>
+                        <ProfileList
+                            config={config}
+                            onSwitch={switchProfile}
+                            onDelete={deleteProfile}
+                            onUpdateMaxHistory={updateMaxHistoryMessages}
+                        />
+                    </div>
+
+                    <SearchSettings
+                        settings={searchSettings}
+                        onSave={saveSearchSettings}
+                        saved={searchSaved}
+                    />
+
+                    <ProxySettings
+                        settings={proxySettings}
+                        onSave={saveProxySettings}
+                        saved={proxySaved}
+                    />
+                </div>
+
+                <div className={styles.settingsColumn}>
+                    <AppearanceSection />
+                    <ShortcutSettings />
+                    <div className={styles.section}>
+                        <DirectivesEditor />
+                    </div>
+                </div>
             </div>
-
-            <ShortcutSettings />
-
-            <SearchSettings
-                settings={searchSettings}
-                onSave={saveSearchSettings}
-                saved={searchSaved}
-            />
-
-            <ProxySettings
-                settings={proxySettings}
-                onSave={saveProxySettings}
-                saved={proxySaved}
-            />
 
             <div className={styles.footer}>
                 {t('settings.footerNote')}
@@ -223,3 +270,20 @@ function AppearanceSection() {
     );
 }
 
+function SummaryCard({
+    eyebrow,
+    title,
+    description,
+}: {
+    eyebrow: string;
+    title: string;
+    description: string;
+}) {
+    return (
+        <div className={styles.summaryCard}>
+            <span className={styles.summaryEyebrow}>{eyebrow}</span>
+            <strong className={styles.summaryTitle}>{title}</strong>
+            <p className={styles.summaryDescription}>{description}</p>
+        </div>
+    );
+}

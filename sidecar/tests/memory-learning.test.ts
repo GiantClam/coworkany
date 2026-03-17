@@ -82,14 +82,13 @@ describe('MEM-02: 记忆检索', () => {
     afterAll(() => sidecar?.kill());
 
     test('Agent 应使用 recall 工具检索记忆', async () => {
-        // First, ensure there's something to recall
+        // Seed a deterministic memory entry so recall behavior doesn't depend on
+        // how the previous test happened to structure its remember payload.
         const memDir = path.dirname(MEMORY_FILE);
         fs.mkdirSync(memDir, { recursive: true });
-        if (!fs.existsSync(MEMORY_FILE)) {
-            fs.writeFileSync(MEMORY_FILE, JSON.stringify([
-                { key: 'favorite_lang', value: 'TypeScript', category: 'preferences', timestamp: new Date().toISOString() },
-            ], null, 2));
-        }
+        fs.writeFileSync(MEMORY_FILE, JSON.stringify([
+            { key: 'favorite_lang', value: 'TypeScript', category: 'preferences', timestamp: new Date().toISOString() },
+        ], null, 2));
 
         sidecar = new SidecarProcess();
         await sidecar.start();

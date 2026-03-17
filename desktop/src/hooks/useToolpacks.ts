@@ -52,6 +52,9 @@ interface UseToolpacksOptions {
     autoRefresh?: boolean;
 }
 
+let toolpacksLoadPromise: Promise<ToolpackRecord[]> | null = null;
+let cachedToolpacks: ToolpackRecord[] | null = null;
+
 export function useToolpacks(options: UseToolpacksOptions = {}) {
     const { autoRefresh = true } = options;
     const [toolpacks, setToolpacks] = useState<ToolpackRecord[]>([]);
@@ -59,21 +62,34 @@ export function useToolpacks(options: UseToolpacksOptions = {}) {
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
+        if (toolpacksLoadPromise) {
+            const list = await toolpacksLoadPromise;
+            setToolpacks(list);
+            return;
+        }
+
         setLoading(true);
         setError(null);
-        try {
-            const result = await invoke<IpcResult>('list_toolpacks', {
-                input: { includeDisabled: true },
-            });
-            const payload = extractPayload(result);
-            if (Array.isArray(payload.toolpacks)) {
-                setToolpacks(payload.toolpacks as ToolpackRecord[]);
+        toolpacksLoadPromise = (async () => {
+            try {
+                const result = await invoke<IpcResult>('list_toolpacks', {
+                    input: { includeDisabled: true },
+                });
+                const payload = extractPayload(result);
+                const list = Array.isArray(payload.toolpacks) ? (payload.toolpacks as ToolpackRecord[]) : [];
+                cachedToolpacks = list;
+                setToolpacks(list);
+                return list;
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                return cachedToolpacks ?? [];
+            } finally {
+                setLoading(false);
+                toolpacksLoadPromise = null;
             }
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setLoading(false);
-        }
+        })();
+
+        await toolpacksLoadPromise;
     }, []);
 
     const install = useCallback(async (path: string, allowUnsigned = true) => {
@@ -135,7 +151,11 @@ export function useToolpacks(options: UseToolpacksOptions = {}) {
     // Load on mount
     useEffect(() => {
         if (!autoRefresh) return;
-        refresh();
+        if (cachedToolpacks) {
+            setToolpacks(cachedToolpacks);
+        } else {
+            void refresh();
+        }
     }, [refresh, autoRefresh]);
 
     return {

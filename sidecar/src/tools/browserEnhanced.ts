@@ -155,16 +155,22 @@ export function createEnhancedBrowserTools(
                             const currentUrl = contentResult.url || args.url || '';
 
                             // Detect login page by content keywords and URL patterns
-                            const loginKeywords = ['登录', '登 录', 'Sign in', 'Log in', 'Login', '验证码'];
+                            const loginKeywords = ['登录', '登 录', 'Sign in', 'Log in', 'Login'];
+                            const authFormKeywords = ['验证码', '密码', 'Password', '短信验证码', '手机号', '邮箱', 'Email'];
                             const loginUrlPatterns = ['/login', '/signin', '/auth'];
                             const loggedInKeywords = ['退出', '注销', 'Logout', 'Sign out', '我的主页', '创作中心', '发布笔记'];
 
-                            const hasLoginKeyword = loginKeywords.some(kw => pageText.includes(kw));
+                            const matchedLoginKeywords = loginKeywords.filter(kw => pageText.includes(kw));
+                            const matchedAuthFormKeywords = authFormKeywords.filter(kw => pageText.includes(kw));
+                            const hasLoginKeyword = matchedLoginKeywords.length > 0;
+                            const hasAuthFormKeyword = matchedAuthFormKeywords.length > 0;
                             const hasLoginUrl = loginUrlPatterns.some(pat => currentUrl.toLowerCase().includes(pat));
                             const hasLoggedInKeyword = loggedInKeywords.some(kw => pageText.includes(kw));
 
                             // Domain-specific hardening for X/Twitter: use DOM state first, then fallback.
-                            let needsLogin = (hasLoginKeyword || hasLoginUrl) && !hasLoggedInKeyword;
+                            let needsLogin =
+                                (hasLoginUrl || (hasLoginKeyword && hasAuthFormKeyword)) &&
+                                !hasLoggedInKeyword;
                             if (isXDomain(currentUrl || args.url || '')) {
                                 const xState = await detectXLoginState();
                                 if (xState.loggedIn) {
@@ -181,7 +187,8 @@ export function createEnhancedBrowserTools(
                                 try { domain = new URL(url).hostname; } catch { /* ignore */ }
 
                                 console.log(`[BrowserEnhanced] Login detected on ${domain}, suspending task ${taskId}`);
-                                console.log(`[BrowserEnhanced] Login keywords found: ${loginKeywords.filter(kw => pageText.includes(kw)).join(', ')}`);
+                                console.log(`[BrowserEnhanced] Login keywords found: ${matchedLoginKeywords.join(', ')}`);
+                                console.log(`[BrowserEnhanced] Auth form keywords found: ${matchedAuthFormKeywords.join(', ')}`);
                                 console.log(`[BrowserEnhanced] URL pattern match: ${hasLoginUrl}`);
 
                                 await suspendResumeManager.suspend(

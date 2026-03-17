@@ -64,20 +64,26 @@ export const TitleBar: React.FC = () => {
     const handleStartDragging: React.MouseEventHandler<HTMLDivElement> = (event) => {
         if (!appWindow) return;
         if (event.button !== 0) return;
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('.titlebar-controls-shell, .titlebar-button')) {
+            return;
+        }
         void appWindow.startDragging().catch(() => {
-            // Fallback to CSS drag region behavior.
+            // Keep drag-region attributes as fallback on macOS.
         });
     };
 
     return (
-        <div className="titlebar" data-tauri-drag-region>
+        <div
+            className="titlebar"
+            data-tauri-drag-region={isDesktop ? '' : undefined}
+            onMouseDown={handleStartDragging}
+            onDoubleClick={handleMaximize}
+        >
             <div
                 className="titlebar-drag-region"
-                data-tauri-drag-region
-                onMouseDown={handleStartDragging}
-                onDoubleClick={handleMaximize}
             >
-                <div className="titlebar-brand" data-tauri-drag-region>
+                <div className="titlebar-brand">
                     <span className="titlebar-brand-dot" aria-hidden="true" />
                     <span className="titlebar-brand-wordmark">{t('titlebar.coworkAny')}</span>
                     <span className="titlebar-brand-chip">Desktop</span>

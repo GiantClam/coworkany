@@ -7,9 +7,11 @@ import {
     ScenarioVerifier,
     saveTestArtifacts,
 } from './helpers/sidecar-harness';
+import { resolvePythonExecutable } from './helpers/python';
 
 const TARGET_PDF = 'C:\\Users\\liula\\Downloads\\Resume-YuZiJie.pdf';
 const TIMEOUT_LONG = 6 * 60 * 1000;
+const PYTHON_EXECUTABLE = resolvePythonExecutable();
 
 async function waitForProgressOrIdle(
     sidecar: SidecarProcess,
@@ -44,7 +46,7 @@ async function waitForProgressOrIdle(
 
 function ensurePythonPdfDependencies(): void {
     const install = Bun.spawnSync({
-        cmd: ['python', '-m', 'pip', 'install', '--disable-pip-version-check', 'pypdf', 'PyPDF2', 'reportlab'],
+        cmd: [PYTHON_EXECUTABLE, '-m', 'pip', 'install', '--disable-pip-version-check', 'pypdf', 'PyPDF2', 'reportlab'],
         stdout: 'pipe',
         stderr: 'pipe',
     });
@@ -78,7 +80,7 @@ function detectCoworkanyByPythonExtract(filePath: string): { ran: boolean; found
     ].join('\n');
 
     const proc = Bun.spawnSync({
-        cmd: ['python', '-c', script],
+        cmd: [PYTHON_EXECUTABLE, '-c', script],
         stdout: 'pipe',
         stderr: 'pipe',
     });

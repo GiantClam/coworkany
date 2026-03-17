@@ -22,6 +22,7 @@ import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
+import { getPendingTaskStatus } from './Timeline/pendingTaskStatus';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('../Skills/SkillsView');
@@ -83,7 +84,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
     const { skills } = useSkills({ autoRefresh: true });
     const { toolpacks } = useToolpacks({ autoRefresh: true });
-    const { activeWorkspace, createWorkspace, selectWorkspace } = useWorkspace({ autoLoad: true });
+    const { activeWorkspace, createWorkspace, selectWorkspace, syncWorkspace } = useWorkspace({ autoLoad: true });
     const [llmConfig, setLlmConfig] = useState<LlmConfig>({});
     const {
         attachments,
@@ -139,6 +140,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         [toolpacks]
     );
 
+    const pendingTaskStatus = useMemo(
+        () => activeSession ? getPendingTaskStatus(activeSession) : null,
+        [activeSession]
+    );
+
     const setActiveProfile = useCallback(async (id: string) => {
         try {
             const newConfig = { ...llmConfig, activeProfileId: id };
@@ -152,7 +158,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeSession) return '';
         switch (activeSession.status) {
             case 'running':
-                return t('chat.statusInProgress');
+                switch (pendingTaskStatus?.phase) {
+                    case 'waiting_for_model':
+                        return t('chat.statusWaitingForModel');
+                    case 'running_tool':
+                        return t('chat.statusUsingTool', { tool: pendingTaskStatus.toolName ?? t('chat.genericTool') });
+                    case 'retrying':
+                        return t('chat.statusRetrying');
+                    default:
+                        return t('chat.statusInProgress');
+                }
             case 'finished':
                 return t('chat.statusReady');
             case 'failed':
@@ -160,7 +175,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             default:
                 return t('chat.statusIdle');
         }
-    }, [activeSession]);
+    }, [activeSession, pendingTaskStatus, t]);
 
     const handleClearHistory = useCallback(async () => {
         if (!activeSession?.taskId) return;
@@ -188,8 +203,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         void addFiles(imageFiles);
     }, [addFiles]);
 
-    const handleSubmit = useCallback(async (e: React.FormEvent) => {
-        e.preventDefault();
+    const handleSubmit = useCallback(async () => {
         const trimmedQuery = query.trim();
         if (!trimmedQuery && attachments.length === 0) return;
         const requestContent = buildContentWithAttachments(query);
@@ -237,6 +251,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
 
+        if (!currentWorkspace?.path) {
+            try {
+                const fallbackPath = await invoke<string>('get_default_workspace_path');
+                const fallbackWorkspace = {
+                    id: crypto.randomUUID(),
+                    name: 'New workspace',
+                    path: fallbackPath,
+                    createdAt: new Date().toISOString(),
+                    lastUsedAt: new Date().toISOString(),
+                    autoNamed: true,
+                    defaultSkills: [],
+                    defaultToolpacks: ['builtin-websearch'],
+                };
+                syncWorkspace(fallbackWorkspace);
+                selectWorkspace(fallbackWorkspace);
+                currentWorkspace = fallbackWorkspace;
+            } catch (err) {
+                console.error('Failed to provision fallback workspace', err);
+            }
+        }
+
         const currentPath = currentWorkspace?.path;
         if (!currentPath) {
             setWorkspaceError('Workspace path is not available and could not be created.');
@@ -258,7 +293,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setQuery('');
             clearAttachments();
         }
-    }, [query, attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession?.taskId, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask]);
+    }, [query, attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession?.taskId, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask, syncWorkspace]);
 
     const handleCancel = useCallback(async () => {
         if (activeSession?.taskId) {
@@ -362,8 +397,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             <InputArea
                 query={query}
-                placeholder={activeSession.status === 'running' ? t('chat.taskInProgress') : t('chat.newInstructions')}
-                disabled={activeSession.status === 'running' || isSending}
+                placeholder={activeSession.status === 'running' ? t('chat.newInstructions') : t('chat.newInstructions')}
+                disabled={isSending || isStarting}
                 onQueryChange={setQuery}
                 onSubmit={handleSubmit}
                 attachments={attachments}

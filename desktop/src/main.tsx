@@ -74,15 +74,17 @@ function renderApp() {
         startupMeasurement: defaultStartupMeasurement,
     };
 
+    const isDev = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
+    const RootWrapper = isDev ? React.Fragment : React.StrictMode;
     const root = ReactDOM.createRoot(document.getElementById('root')!);
     root.render(
-        <React.StrictMode>
+        <RootWrapper>
             <GlobalErrorBoundary>
                 <ToastProvider>
                     <App />
                 </ToastProvider>
             </GlobalErrorBoundary>
-        </React.StrictMode>
+        </RootWrapper>
     );
     hideBootSkeleton();
 

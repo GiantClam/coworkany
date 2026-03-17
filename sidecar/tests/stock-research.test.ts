@@ -661,13 +661,14 @@ describe('AI新闻总结与股票投资建议 - Sidecar E2E 测试', () => {
     });
 
     test('3. 任务应该成功完成（非失败）', () => {
-        // Skip external failures (API quota, rate limits)
-        if (report.taskFailed && report.taskError?.includes('402')) {
-            console.log('[SKIP] 任务因 API 余额不足 (402) 而失败，非功能问题。');
-            return;
-        }
-        if (report.taskFailed && report.taskError?.includes('rate_limit')) {
-            console.log('[SKIP] 任务因 API 限流而失败，非功能问题。');
+        // Skip external failures (API auth, quota, rate limits)
+        if (
+            report.taskFailed &&
+            /(401|402|403|rate_limit|quota|billing|insufficient_funds|unauthorized|无效的令牌)/i.test(
+                report.taskError || ''
+            )
+        ) {
+            console.log('[SKIP] 任务因外部 API 鉴权/计费/限流问题失败，非功能问题。');
             return;
         }
         expect(report.taskFailed).toBe(false);

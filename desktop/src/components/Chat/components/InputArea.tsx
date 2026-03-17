@@ -23,7 +23,7 @@ interface InputAreaProps {
     placeholder: string;
     disabled: boolean;
     onQueryChange: (value: string) => void;
-    onSubmit: (e: React.FormEvent) => void;
+    onSubmit: () => void | Promise<void>;
     attachments: FileAttachment[];
     attachmentError: string | null;
     onRemoveAttachment: (id: string) => void;
@@ -111,6 +111,11 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
         onDrop(event);
     };
 
+    const submit = () => {
+        if (disabled || !canSubmit) return;
+        void onSubmit();
+    };
+
     return (
         <div className="input-area" onPaste={handlePasteEvent}>
             {voiceInput.isListening && voiceInput.interimTranscript && (
@@ -126,7 +131,10 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                 onRemove={onRemoveAttachment}
             />
             <form
-                onSubmit={onSubmit}
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    submit();
+                }}
                 onDrop={handleDropEvent}
                 onDragOver={(event) => event.preventDefault()}
                 className="input-container"
@@ -149,6 +157,12 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                     placeholder={placeholder}
                     value={query}
                     onChange={(e) => onQueryChange(e.target.value)}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                            event.preventDefault();
+                            submit();
+                        }
+                    }}
                     disabled={disabled}
                     aria-label={placeholder}
                 />
@@ -184,8 +198,9 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                     </button>
                 )}
                 <button
-                    type="submit"
+                    type="button"
                     className="send-button"
+                    onClick={submit}
                     disabled={!canSubmit || disabled}
                     aria-label={t('chat.sendMessage')}
                 >

@@ -2263,7 +2263,61 @@ export class BrowserService {
                 error: 'browser-use-service is not available. Start it with: cd browser-use-service && python main.py',
             };
         }
-        return this.browserUseBackend.aiAction(options);
+
+        const ensureSmartSession = async (): Promise<void> => {
+            if (this.browserUseBackend.isConnected()) {
+                return;
+            }
+
+            const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
+            const connectOptions: ConnectOptions = activeCdpPort
+                ? { cdpUrl: `http://localhost:${activeCdpPort}` }
+                : { headless: false };
+
+            await this.browserUseBackend.connect(connectOptions);
+
+            // If smart mode had to launch its own browser session, sync it to the
+            // currently active Playwright page so ai_action works on the same URL.
+            if (!activeCdpPort && this.playwrightBackend.isConnected()) {
+                try {
+                    const currentPage = await this.playwrightBackend.getContent(true);
+                    if (currentPage.url) {
+                        await this.browserUseBackend.navigate(currentPage.url);
+                    }
+                } catch (error) {
+                    console.error('[BrowserService] Failed to sync URL to browser-use session:', error);
+                }
+            }
+        };
+
+        try {
+            await ensureSmartSession();
+            return await this.browserUseBackend.aiAction(options);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            const needsReconnect =
+                message.includes('Browser not connected') ||
+                message.includes('Call POST /connect first');
+
+            if (needsReconnect) {
+                try {
+                    await this.browserUseBackend.disconnect().catch(() => {});
+                    await ensureSmartSession();
+                    return await this.browserUseBackend.aiAction(options);
+                } catch (retryError) {
+                    return {
+                        success: false,
+                        error: retryError instanceof Error ? retryError.message : String(retryError),
+                    };
+                }
+            }
+
+            return {
+                success: false,
+                error: message,
+            };
+        }
     }
 
     /**

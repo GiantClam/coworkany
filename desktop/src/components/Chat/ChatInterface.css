@@ -99,7 +99,7 @@
 
 .chat-title {
     font-family: var(--font-heading);
-    font-size: 18px;
+    font-size: 16px;
     line-height: 1.2;
     letter-spacing: 0.02em;
     font-weight: 600;
@@ -329,6 +329,8 @@
         0 14px 28px rgba(2, 10, 12, 0.18),
         inset 0 1px 0 rgba(239, 255, 252, 0.04);
     transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
 }
 
 .file-input-hidden {
@@ -349,7 +351,7 @@
     background: transparent;
     border: none;
     font-family: var(--font-body);
-    font-size: 15px;
+    font-size: 14px;
     color: var(--text-primary);
     padding: 8px 12px;
     min-width: 0;
@@ -508,7 +510,7 @@
 
 .input-mode-badge {
     font-family: var(--font-code);
-    font-size: 11px;
+    font-size: 10px;
     padding: 6px 10px;
     border-radius: 999px;
     border: 1px solid rgba(138, 232, 219, 0.12);
@@ -539,7 +541,7 @@
     background: transparent;
     border: none;
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 11px;
     min-width: 200px;
     max-width: 360px;
     font-family: var(--font-body);

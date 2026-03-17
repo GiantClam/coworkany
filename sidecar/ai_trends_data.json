@@ -1,0 +1,131 @@
+{
+  "trends": {
+    "AI Agents": {
+      "market_impact": 9,
+      "maturity": 7,
+      "growth_rate": 85,
+      "investment_priority": 9,
+      "adoption_rate": 65
+    },
+    "Multimodal AI": {
+      "market_impact": 9,
+      "maturity": 8,
+      "growth_rate": 75,
+      "investment_priority": 8,
+      "adoption_rate": 70
+    },
+    "Enterprise AI Infrastructure": {
+      "market_impact": 8,
+      "maturity": 7,
+      "growth_rate": 40,
+      "investment_priority": 9,
+      "adoption_rate": 55
+    },
+    "Federated AI": {
+      "market_impact": 7,
+      "maturity": 6,
+      "growth_rate": 60,
+      "investment_priority": 7,
+      "adoption_rate": 45
+    },
+    "Embodied Intelligence": {
+      "market_impact": 8,
+      "maturity": 5,
+      "growth_rate": 90,
+      "investment_priority": 8,
+      "adoption_rate": 30
+    },
+    "Generative AI Security": {
+      "market_impact": 8,
+      "maturity": 6,
+      "growth_rate": 70,
+      "investment_priority": 9,
+      "adoption_rate": 50
+    },
+    "AI-Enhanced Research": {
+      "market_impact": 7,
+      "maturity": 7,
+      "growth_rate": 55,
+      "investment_priority": 6,
+      "adoption_rate": 60
+    },
+    "Quantum AI": {
+      "market_impact": 6,
+      "maturity": 3,
+      "growth_rate": 95,
+      "investment_priority": 5,
+      "adoption_rate": 10
+    },
+    "AI ROI Measurement": {
+      "market_impact": 7,
+      "maturity": 6,
+      "growth_rate": 50,
+      "investment_priority": 8,
+      "adoption_rate": 55
+    },
+    "Hyper-Personalization": {
+      "market_impact": 7,
+      "maturity": 8,
+      "growth_rate": 45,
+      "investment_priority": 7,
+      "adoption_rate": 75
+    }
+  },
+  "market_data": {
+    "china_ai_market_size": 1200,
+    "china_growth_rate": 30,
+    "china_companies": 6000,
+    "global_downloads": 10000,
+    "productivity_increase": 40
+  },
+  "rankings": [
+    [
+      "AI Agents",
+      33.2
+    ],
+    [
+      "Multimodal AI",
+      31.25
+    ],
+    [
+      "Embodied Intelligence",
+      30.1
+    ],
+    [
+      "Quantum AI",
+      27.9
+    ],
+    [
+      "Generative AI Security",
+      27.45
+    ],
+    [
+      "AI-Enhanced Research",
+      24.15
+    ],
+    [
+      "Federated AI",
+      23.85
+    ],
+    [
+      "Hyper-Personalization",
+      23.5
+    ],
+    [
+      "AI ROI Measurement",
+      22.5
+    ],
+    [
+      "Enterprise AI Infrastructure",
+      20.65
+    ]
+  ],
+  "statistics": {
+    "average_market_impact": 7.6,
+    "average_growth_rate": 66.5,
+    "average_adoption_rate": 51.5,
+    "median_growth_rate": 65.0,
+    "stdev_growth_rate": 19.44
+  },
+  "generated_at": "2026-03-16T21:23:54.457111"
+}

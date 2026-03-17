@@ -43,17 +43,17 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'OpenAI API Key',
         hint: 'Get your key from platform.openai.com/api-keys',
         placeholder: 'sk-...',
-        baseUrl: 'https://api.openai.com/v1/chat/completions',
+        baseUrl: 'https://api.openai.com/v1',
         model: 'gpt-4o',
     },
     {
         provider: 'aiberm',
         label: 'Aiberm',
         apiKeyLabel: 'Aiberm API Key',
-        hint: 'Use your Aiberm platform API key',
+        hint: 'Use your Aiberm platform API key. Base URL defaults to https://aiberm.com/v1',
         placeholder: 'sk-...',
-        baseUrl: 'https://aiberm.com/v1/chat/completions',
-        model: 'claude-sonnet-4-5-20250929-thinking',
+        baseUrl: 'https://aiberm.com/v1',
+        model: 'gpt-5.3-codex',
     },
     {
         provider: 'nvidia',
@@ -61,7 +61,7 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'NVIDIA API Key',
         hint: 'Get your key from build.nvidia.com',
         placeholder: 'nvapi-...',
-        baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
         model: 'meta/llama-3.1-70b-instruct',
     },
     {
@@ -70,7 +70,7 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'SiliconFlow API Key',
         hint: 'Use your SiliconFlow API key',
         placeholder: 'sk-...',
-        baseUrl: 'https://api.siliconflow.cn/v1/chat/completions',
+        baseUrl: 'https://api.siliconflow.cn/v1',
         model: 'Qwen/Qwen2.5-7B-Instruct',
     },
     {
@@ -79,7 +79,7 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'Gemini API Key',
         hint: 'Get your key from ai.google.dev',
         placeholder: 'AIza...',
-        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
         model: 'gemini-2.0-flash',
     },
     {
@@ -88,7 +88,7 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'Qwen API Key',
         hint: 'Use your DashScope API key',
         placeholder: 'sk-...',
-        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         model: 'qwen-plus',
     },
     {
@@ -97,7 +97,7 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'MiniMax API Key',
         hint: 'Use your MiniMax API key',
         placeholder: 'sk-...',
-        baseUrl: 'https://api.minimax.chat/v1/chat/completions',
+        baseUrl: 'https://api.minimax.chat/v1',
         model: 'MiniMax-Text-01',
     },
     {
@@ -106,7 +106,7 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         apiKeyLabel: 'Kimi API Key',
         hint: 'Get your key from platform.moonshot.ai',
         placeholder: 'sk-...',
-        baseUrl: 'https://api.moonshot.cn/v1/chat/completions',
+        baseUrl: 'https://api.moonshot.cn/v1',
         model: 'moonshot-v1-8k',
     },
 ];
@@ -166,6 +166,7 @@ export function buildSetupProfileConfig(provider: SetupProvider, apiKey: string,
         id: profileId,
         name: `${preset.label} (Setup)`,
         provider,
+        verified: true,
     };
 
     if (provider === 'anthropic') {

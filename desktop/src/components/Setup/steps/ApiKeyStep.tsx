@@ -22,9 +22,10 @@ interface ApiKeyStepProps {
         apiKey: string,
         proxy: { enabled: boolean; url?: string; bypass?: string }
     ) => Promise<void>;
+    onValidated?: () => void;
 }
 
-export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
+export function ApiKeyStep({ onConfigured, onValidated }: ApiKeyStepProps) {
     const { t } = useTranslation();
     const DEFAULT_PROXY_URL = 'http://127.0.0.1:7890';
     const [provider, setProvider] = useState<SetupProvider>('anthropic');
@@ -33,13 +34,15 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
     const [proxyUrl, setProxyUrl] = useState(DEFAULT_PROXY_URL);
     const [proxyBypass, setProxyBypass] = useState('localhost,127.0.0.1,::1');
     const [isValidating, setIsValidating] = useState(false);
+    const [isApplying, setIsApplying] = useState(false);
     const [validationResult, setValidationResult] = useState<{ ok: boolean; msg: string } | null>(null);
     const preset = getSetupProviderPreset(provider);
 
     const handleValidate = async () => {
-        if (!apiKey.trim()) return;
+        if (!apiKey.trim() || isValidating || isApplying) return;
         setIsValidating(true);
         setValidationResult(null);
+        let handedOff = false;
 
         try {
             const input = buildSetupValidationInput(provider, apiKey.trim());
@@ -51,10 +54,21 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
 
             if (result.success) {
                 setValidationResult({ ok: true, msg: t('setup.apiKeyVerified') });
-                await onConfigured(provider, apiKey.trim(), {
+                handedOff = true;
+                setIsValidating(false);
+                setIsApplying(true);
+                onValidated?.();
+                void onConfigured(provider, apiKey.trim(), {
                     enabled: proxyEnabled,
                     url: proxyEnabled ? (proxyUrl.trim() || DEFAULT_PROXY_URL) : undefined,
                     bypass: proxyEnabled ? (proxyBypass.trim() || undefined) : undefined,
+                }).catch((err) => {
+                    setValidationResult({
+                        ok: false,
+                        msg: err instanceof Error ? err.message : t('setup.saveFailedDesc'),
+                    });
+                }).finally(() => {
+                    setIsApplying(false);
                 });
             } else {
                 setValidationResult({ ok: false, msg: result.payload?.error || t('setup.verificationFailed') });
@@ -65,7 +79,9 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
                 msg: err instanceof Error ? err.message : t('setup.connectionError'),
             });
         } finally {
-            setIsValidating(false);
+            if (!handedOff) {
+                setIsValidating(false);
+            }
         }
     };
 
@@ -165,10 +181,14 @@ export function ApiKeyStep({ onConfigured }: ApiKeyStepProps) {
             <button
                 className={styles.btnPrimary}
                 onClick={handleValidate}
-                disabled={!apiKey.trim() || isValidating}
+                disabled={!apiKey.trim() || isValidating || isApplying}
                 style={{ width: '100%' }}
             >
-                {isValidating ? t('setup.verifying') : t('setup.verifyApiKey')}
+                {isValidating
+                    ? t('setup.verifying')
+                    : isApplying
+                        ? t('setup.savingConfig', 'Saving configuration...')
+                        : t('setup.verifyApiKey')}
             </button>
 
             {validationResult && (

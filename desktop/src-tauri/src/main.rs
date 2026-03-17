@@ -12,6 +12,7 @@
 mod diff;
 mod git_integration;
 mod ipc;
+mod platform_runtime;
 mod policy;
 mod process_manager;
 mod shadow_fs;
@@ -27,6 +28,8 @@ use shadow_fs::ShadowFsState;
 use sidecar::SidecarState;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
+#[cfg(target_os = "macos")]
+use tauri::TitleBarStyle;
 use tokio::sync::Mutex;
 use tracing::{info, warn, error};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -108,6 +111,7 @@ fn main() {
             ipc::save_llm_settings,
             ipc::validate_llm_settings,
             ipc::get_workspace_root,
+            ipc::get_default_workspace_path,
             ipc::load_sessions,
             ipc::save_sessions,
             ipc::get_startup_measurement_config,
@@ -130,6 +134,11 @@ fn main() {
             ipc::update_workspace,
             ipc::delete_workspace,
             ipc::install_from_github,
+            ipc::search_skillhub_skills,
+            ipc::install_from_skillhub,
+            ipc::get_dependency_statuses,
+            ipc::install_skillhub_cli,
+            ipc::prepare_service_runtime,
             // Scanning commands
             ipc::scan_default_repos,
             ipc::scan_skills,
@@ -202,6 +211,23 @@ fn main() {
 
             let app_handle = app.handle().clone();
 
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(not(target_os = "macos"))]
+                if let Err(e) = window.set_decorations(false) {
+                    tracing::warn!("Failed to disable custom window decorations: {}", e);
+                }
+
+                #[cfg(target_os = "macos")]
+                if let Err(e) = window.set_decorations(true) {
+                    tracing::warn!("Failed to enable native macOS window decorations: {}", e);
+                }
+
+                #[cfg(target_os = "macos")]
+                if let Err(e) = window.set_title_bar_style(TitleBarStyle::Visible) {
+                    tracing::warn!("Failed to enable native macOS title bar: {}", e);
+                }
+            }
+
             // Register global shortcut — unregister first to avoid "already registered"
             // errors that occur during dev-mode hot reloads.
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -211,20 +237,34 @@ fn main() {
                 // Continue application startup even if shortcut fails
             }
 
-            // Initialize Shadow FS with workspace path
+            // Initialize Shadow FS in app data so packaged apps never point
+            // at the read-only .app bundle as their workspace root.
             let shadow_state = app.state::<ShadowFsState>();
 
-            // Get workspace path (current dir for now, can be configurable)
-            if let Ok(cwd) = std::env::current_dir() {
-                let mut guard = shadow_state.blocking_lock();
-                match shadow_fs::ShadowFs::new(cwd) {
-                    Ok(fs) => {
-                        *guard = Some(fs);
-                        info!("Shadow FS initialized");
+            match app.path().app_data_dir() {
+                Ok(app_data_dir) => {
+                    let shadow_workspace = app_data_dir.join("shadow-workspace");
+                    if let Err(e) = std::fs::create_dir_all(&shadow_workspace) {
+                        tracing::warn!(
+                            "Failed to prepare Shadow FS directory {:?}: {}",
+                            shadow_workspace,
+                            e
+                        );
+                    } else {
+                        let mut guard = shadow_state.blocking_lock();
+                        match shadow_fs::ShadowFs::new(shadow_workspace) {
+                            Ok(fs) => {
+                                *guard = Some(fs);
+                                info!("Shadow FS initialized");
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to initialize Shadow FS: {}", e);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to initialize Shadow FS: {}", e);
-                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to resolve app data dir for Shadow FS: {}", e);
                 }
             }
 

@@ -145,6 +145,44 @@ export const SendTaskMessageResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+export const RuntimeBinaryInfoSchema = z.object({
+    available: z.boolean(),
+    path: z.string().optional(),
+    source: z.string().optional(),
+});
+
+export const ManagedServiceCapabilitySchema = z.object({
+    id: z.string(),
+    bundled: z.boolean(),
+    runtimeReady: z.boolean(),
+});
+
+export const PlatformRuntimeContextSchema = z.object({
+    platform: z.string(),
+    arch: z.string(),
+    appDir: z.string(),
+    appDataDir: z.string(),
+    shell: z.string(),
+    sidecarLaunchMode: z.string().optional(),
+    python: RuntimeBinaryInfoSchema,
+    skillhub: RuntimeBinaryInfoSchema,
+    managedServices: z.array(ManagedServiceCapabilitySchema),
+});
+
+export const BootstrapRuntimeContextCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('bootstrap_runtime_context'),
+    payload: z.object({
+        runtimeContext: PlatformRuntimeContextSchema,
+    }),
+});
+
+export const BootstrapRuntimeContextResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('bootstrap_runtime_context_response'),
+    payload: z.object({
+        success: z.boolean(),
+    }),
+});
+
 // ============================================================================
 // Effect Commands
 // ============================================================================
@@ -942,6 +980,7 @@ export const ListAutonomousTasksCommandSchema = BaseCommandSchema.extend({
 // ============================================================================
 
 export const IpcCommandSchema = z.discriminatedUnion('type', [
+    BootstrapRuntimeContextCommandSchema,
     StartTaskCommandSchema,
     CancelTaskCommandSchema,
     ClearTaskHistoryCommandSchema,
@@ -991,6 +1030,7 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
 ]);
 
 export const IpcResponseSchema = z.discriminatedUnion('type', [
+    BootstrapRuntimeContextResponseSchema,
     StartTaskResponseSchema,
     CancelTaskResponseSchema,
     ClearTaskHistoryResponseSchema,
@@ -1033,6 +1073,11 @@ export type IpcCommand = z.infer<typeof IpcCommandSchema>;
 export type IpcResponse = z.infer<typeof IpcResponseSchema>;
 
 // Individual types
+export type RuntimeBinaryInfo = z.infer<typeof RuntimeBinaryInfoSchema>;
+export type ManagedServiceCapability = z.infer<typeof ManagedServiceCapabilitySchema>;
+export type PlatformRuntimeContext = z.infer<typeof PlatformRuntimeContextSchema>;
+export type BootstrapRuntimeContextCommand = z.infer<typeof BootstrapRuntimeContextCommandSchema>;
+export type BootstrapRuntimeContextResponse = z.infer<typeof BootstrapRuntimeContextResponseSchema>;
 export type StartTaskCommand = z.infer<typeof StartTaskCommandSchema>;
 export type CancelTaskCommand = z.infer<typeof CancelTaskCommandSchema>;
 export type ClearTaskHistoryCommand = z.infer<typeof ClearTaskHistoryCommandSchema>;

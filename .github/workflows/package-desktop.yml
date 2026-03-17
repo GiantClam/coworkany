@@ -68,6 +68,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Import Apple signing certificate
+        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != ''
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       - name: Install system dependencies (Ubuntu)
         if: matrix.runner == 'ubuntu-latest'
         run: |
@@ -92,7 +99,27 @@ jobs:
       - name: Build desktop bundle
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
         working-directory: desktop
-        run: npx tauri build --target ${{ matrix.target }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          # npm run tauri build
+          npm run tauri -- build --target ${{ matrix.target }}
+
+      - name: Sign and notarize macOS app bundle
+        if: runner.os == 'macOS' && (inputs.platform == 'all' || inputs.platform == matrix.artifact_name)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          bash desktop/scripts/macos-sign-and-notarize.sh \
+            desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/CoworkAny.app
 
       - name: Upload desktop bundle
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}

@@ -104,4 +104,28 @@ describe('artifact contract', () => {
 
         expect(evaluation.warnings.some(w => w.includes('缺少关键工具调用'))).toBe(true);
     });
+
+    test('prefers explicit markdown path over generic report docx heuristic', () => {
+        const contract = buildArtifactContract('读取 sales.csv 的数据，分析趋势，将分析报告保存到 /tmp/sales-report.md');
+        const evaluation = evaluateArtifactContract(contract, {
+            files: ['/tmp/sales-report.md'],
+            toolsUsed: ['view_file', 'write_to_file'],
+            outputText: '分析报告已生成。',
+        });
+
+        expect(evaluation.passed).toBe(true);
+        expect(evaluation.failed.length).toBe(0);
+    });
+
+    test('does not require a new txt artifact when only reading an existing txt file', () => {
+        const contract = buildArtifactContract('读取 /tmp/test-read.txt 文件的内容');
+        const evaluation = evaluateArtifactContract(contract, {
+            files: [],
+            toolsUsed: ['view_file'],
+            outputText: '文件内容如下：Hello from CoworkAny test!',
+        });
+
+        expect(evaluation.passed).toBe(true);
+        expect(contract.requirements.some(r => r.kind === 'file')).toBe(false);
+    });
 });

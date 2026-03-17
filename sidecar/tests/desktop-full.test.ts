@@ -8,11 +8,22 @@
 
 import { describe, test, expect, afterAll } from 'bun:test';
 import { spawn, type Subprocess } from 'bun';
-import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const DESKTOP_EXE = path.join(process.cwd(), '..', 'desktop', 'src-tauri', 'target', 'debug', 'coworkany-desktop.exe');
+function resolveDesktopExecutable(): string {
+    const desktopTargetDir = path.join(process.cwd(), '..', 'desktop', 'src-tauri', 'target');
+    const binaryName = process.platform === 'win32' ? 'coworkany-desktop.exe' : 'coworkany-desktop';
+    const candidates = [
+        path.join(desktopTargetDir, 'debug', binaryName),
+        path.join(desktopTargetDir, 'release', binaryName),
+        path.join(desktopTargetDir, 'release', 'bundle', 'macos', 'CoworkAny.app', 'Contents', 'MacOS', 'CoworkAny'),
+    ];
+
+    return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0];
+}
+
+const DESKTOP_EXE = resolveDesktopExecutable();
 const TEST_WORKSPACE = path.join(process.cwd(), '.coworkany', 'test-workspace');
 
 function ensureWorkspace(): void {

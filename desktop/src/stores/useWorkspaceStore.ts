@@ -27,14 +27,17 @@ interface WorkspaceState {
     activeWorkspace: Workspace | null;
     isLoading: boolean;
     error: string | null;
+    hasLoaded: boolean;
 
-    loadWorkspaces: () => Promise<Workspace[]>;
+    loadWorkspaces: (force?: boolean) => Promise<Workspace[]>;
     createWorkspace: (name?: string, path?: string) => Promise<Workspace | null>;
     updateWorkspace: (id: string, updates: { name?: string; path?: string; autoNamed?: boolean }) => Promise<boolean>;
     deleteWorkspace: (id: string) => Promise<boolean>;
     selectWorkspace: (workspace: Workspace | null) => void;
     syncWorkspace: (workspace: Workspace) => void;
 }
+
+let workspaceLoadPromise: Promise<Workspace[]> | null = null;
 
 function toPayload(result: IpcResult): any {
     return typeof result.payload === 'string'
@@ -132,38 +135,58 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     activeWorkspace: null,
     isLoading: false,
     error: null,
+    hasLoaded: false,
 
-    loadWorkspaces: async () => {
-        set({ isLoading: true, error: null });
-
-        try {
-            const result = await invoke<IpcResult>('list_workspaces');
-            if (!result.success || !result.payload) {
-                set({ isLoading: false });
-                return [];
-            }
-
-            const data = toPayload(result);
-            const list = extractWorkspaces(data);
-            const savedId = await getConfig<string>('activeWorkspaceId');
-
-            const activeWorkspace = resolveActiveWorkspace(list, get().activeWorkspace, savedId);
-            set({ activeWorkspace, workspaces: [] });
-
-            if (activeWorkspace) {
-                await saveConfig('activeWorkspaceId', activeWorkspace.id);
-            } else {
-                await deleteConfig('activeWorkspaceId');
-            }
-
-            set({ workspaces: list, isLoading: false });
-            return list;
-        } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            set({ error: message, isLoading: false });
-            console.error('[loadWorkspaces] Error:', err);
-            return [];
+    loadWorkspaces: async (force = false) => {
+        const state = get();
+        if (!force && state.hasLoaded) {
+            return state.workspaces;
         }
+
+        if (workspaceLoadPromise) {
+            return workspaceLoadPromise;
+        }
+
+        workspaceLoadPromise = (async () => {
+            set({ isLoading: true, error: null });
+
+            try {
+                const result = await invoke<IpcResult>('list_workspaces');
+                if (!result.success) {
+                    set({ isLoading: false });
+                    return get().workspaces;
+                }
+
+                const data = result.payload ? toPayload(result) : {};
+                const list = extractWorkspaces(data);
+                const savedId = await getConfig<string>('activeWorkspaceId');
+                const activeWorkspace = resolveActiveWorkspace(list, get().activeWorkspace, savedId);
+
+                if (activeWorkspace) {
+                    await saveConfig('activeWorkspaceId', activeWorkspace.id);
+                } else {
+                    await deleteConfig('activeWorkspaceId');
+                }
+
+                set({
+                    activeWorkspace,
+                    workspaces: list,
+                    isLoading: false,
+                    error: null,
+                    hasLoaded: true,
+                });
+                return list;
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                set({ error: message, isLoading: false });
+                console.error('[loadWorkspaces] Error:', err);
+                return [];
+            } finally {
+                workspaceLoadPromise = null;
+            }
+        })();
+
+        return workspaceLoadPromise;
     },
 
     createWorkspace: async (name = '', path = '') => {
@@ -179,6 +202,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                     set((state) => ({
                         workspaces: [...state.workspaces, newWorkspace],
                         activeWorkspace: newWorkspace,
+                        hasLoaded: true,
                     }));
                     await saveConfig('activeWorkspaceId', newWorkspace.id);
                     return newWorkspace;
@@ -246,7 +270,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                                 void deleteConfig('activeWorkspaceId');
                             }
                         }
-                        return { workspaces: newWorkspaces, activeWorkspace: newActiveWorkspace };
+                        return {
+                            workspaces: newWorkspaces,
+                            activeWorkspace: newActiveWorkspace,
+                            hasLoaded: true,
+                        };
                     });
                     return true;
                 }
@@ -263,7 +291,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
 
     selectWorkspace: (workspace: Workspace | null) => {
-        set({ activeWorkspace: workspace });
+        set({ activeWorkspace: workspace, hasLoaded: true });
         if (workspace) {
             void saveConfig('activeWorkspaceId', workspace.id);
         } else {
@@ -285,7 +313,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                 ? { ...state.activeWorkspace, ...workspace }
                 : state.activeWorkspace;
 
-            return { workspaces, activeWorkspace };
+            return { workspaces, activeWorkspace, hasLoaded: true };
         });
     },
 }));

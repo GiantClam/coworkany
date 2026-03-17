@@ -11,9 +11,21 @@
     },
     "bundle": {
         "active": true,
+        "icon": [
+            "icons/icon.png",
+            "icons/icon.ico",
+            "icons/icon.icns"
+        ],
         "resources": {
             "../../sidecar/dist/coworkany-sidecar*": "sidecar/",
-            "../../sidecar/dist/playwright-bridge.cjs": "sidecar/playwright-bridge.cjs"
+            "../../sidecar/dist/playwright-bridge.cjs": "sidecar/playwright-bridge.cjs",
+            "../../rag-service/main.py": "rag-service/main.py",
+            "../../rag-service/indexer.py": "rag-service/indexer.py",
+            "../../rag-service/embeddings.py": "rag-service/embeddings.py",
+            "../../rag-service/requirements.txt": "rag-service/requirements.txt",
+            "../../browser-use-service/main.py": "browser-use-service/main.py",
+            "../../browser-use-service/requirements.txt": "browser-use-service/requirements.txt",
+            "../../browser-use-service/README.md": "browser-use-service/README.md"
         },
         "targets": [
             "nsis",
@@ -32,7 +44,7 @@
                 "height": 860,
                 "resizable": true,
                 "fullscreen": false,
-                "decorations": false,
+                "decorations": true,
                 "transparent": false,
                 "dragDropEnabled": false,
                 "shadow": true,

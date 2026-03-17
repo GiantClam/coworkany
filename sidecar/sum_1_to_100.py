@@ -7,7 +7,7 @@ for i in range(1, 101):
 
 print(f"使用循环计算: 1+2+3+...+100 = {total}")
 
-# 方法2: 使用求和公式 n*(n+1)/2
+# 方法2: 使用数学公式 n*(n+1)/2
 n = 100
 formula_result = n * (n + 1) // 2
 print(f"使用公式计算: 1+2+3+...+100 = {formula_result}")

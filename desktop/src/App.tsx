@@ -17,6 +17,7 @@ import { CommandPalette } from './components/CommandPalette/CommandPalette';
 import { ShortcutOverlay } from './components/ShortcutOverlay/ShortcutOverlay';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
 import { formatShortcutForDisplay } from './lib/shortcuts';
+import { isMacPlatform } from './lib/shortcuts';
 import { createCommandRegistry } from './lib/commandRegistry';
 import type { AppCommandId } from './lib/commandRegistry';
 import { ModalDialog } from './components/Common/ModalDialog';
@@ -49,6 +50,7 @@ function App() {
     const newTaskShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.newTask);
     const openSettingsShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.openSettings);
     const showShortcutsShortcut = formatShortcutForDisplay(DEFAULT_SHORTCUTS.showShortcuts);
+    const useNativeMacTitleBar = isMacPlatform();
 
     useTauriEvents();
 
@@ -64,6 +66,7 @@ function App() {
     const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
     const [activeTab, setActiveTab] = useState<SidebarTab>('chat');
     const startupSkeletonStartRef = useRef<number>(performance.now());
+    const titlebarOffset = useNativeMacTitleBar ? 0 : 40;
 
     useEffect(() => {
         let cancelled = false;
@@ -101,7 +104,7 @@ function App() {
             const windowLabel = window.__coworkanyPerf?.windowLabel ?? 'main';
             void recordStartupMetric('frontend_ready', now - appStart, now, windowLabel);
             setStartupReadySent(true);
-        }, 450);
+        }, 150);
 
         return () => {
             window.clearTimeout(timer);
@@ -111,7 +114,7 @@ function App() {
     useEffect(() => {
         const timer = window.setTimeout(() => {
             setShowStartupSkeleton(false);
-        }, 2400);
+        }, 450);
 
         return () => {
             window.clearTimeout(timer);
@@ -303,8 +306,8 @@ function App() {
     if (!setupStateResolved) {
         return (
             <div className="app-shell bg-app font-sans text-primary">
-                <TitleBar />
-                <div className="app-content">
+                {!useNativeMacTitleBar && <TitleBar />}
+                <div className="app-content" style={useNativeMacTitleBar ? { inset: 0 } : undefined}>
                     <StartupSkeleton visible />
                 </div>
             </div>
@@ -314,9 +317,9 @@ function App() {
     if (showSetup) {
         return (
             <div className="app-shell bg-app font-sans text-primary">
-                <TitleBar />
-                <div className="app-content">
-                    <SetupWizard onComplete={() => setShowSetup(false)} topOffset={0} />
+                {!useNativeMacTitleBar && <TitleBar />}
+                <div className="app-content" style={useNativeMacTitleBar ? { inset: 0 } : undefined}>
+                    <SetupWizard onComplete={() => setShowSetup(false)} topOffset={titlebarOffset} />
                 </div>
             </div>
         );
@@ -328,8 +331,8 @@ function App() {
             <div className="app-aurora app-aurora-two" />
             <div className="app-aurora app-aurora-three" />
             <div className="app-noise-overlay" />
-            <TitleBar />
-            <div className="app-content">
+            {!useNativeMacTitleBar && <TitleBar />}
+            <div className="app-content" style={useNativeMacTitleBar ? { inset: 0 } : undefined}>
                 <StartupSkeleton visible={showStartupSkeleton} />
 
                 <CommandPalette

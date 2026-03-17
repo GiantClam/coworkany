@@ -151,6 +151,9 @@ export {
     ClearTaskHistoryResponseSchema,
     SendTaskMessageCommandSchema,
     SendTaskMessageResponseSchema,
+    BootstrapRuntimeContextCommandSchema,
+    BootstrapRuntimeContextResponseSchema,
+    PlatformRuntimeContextSchema,
     RequestEffectCommandSchema,
     ApplyPatchCommandSchema,
     ReadFileCommandSchema,
@@ -200,6 +203,7 @@ export {
     // TypeScript types
     type IpcCommand,
     type IpcResponse,
+    type PlatformRuntimeContext,
     type StartTaskCommand,
     type CancelTaskCommand,
     type ClearTaskHistoryCommand,
