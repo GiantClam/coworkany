@@ -257,6 +257,19 @@ export const test = base.extend<TauriFixtures>({
 
         console.log(`[Fixture] Starting Tauri app (WebView2 CDP port: ${CDP_PORT})...`);
 
+        // Build environment - only set WEBVIEW2 vars on Windows
+        const env: Record<string, string> = { ...process.env };
+        if (process.platform === 'win32') {
+            env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${CDP_PORT}`;
+            env.WEBVIEW2_USER_DATA_FOLDER = path.join(
+                fs.realpathSync(os.tmpdir()),
+                `coworkany-e2e-test-${testInfo.workerIndex}`,
+            );
+        } else if (process.platform === 'darwin') {
+            // macOS: Use WebKit debugging via WEBKIT_INSPECTOR_SERVER
+            env.WEBKIT_INSPECTOR_SERVER = `localhost:${CDP_PORT}`;
+        }
+
         // Use `npx tauri dev` which handles Vite + Rust build + launch
         // @tauri-apps/cli is in devDependencies of desktop/package.json
         const tauriProc = childProcess.spawn(
@@ -265,15 +278,7 @@ export const test = base.extend<TauriFixtures>({
             {
                 cwd: DESKTOP_DIR,
                 shell: true,
-                env: {
-                    ...process.env,
-                    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
-                    // Prevent Tauri from using the same user data as normal usage
-                    WEBVIEW2_USER_DATA_FOLDER: path.join(
-                        fs.realpathSync(os.tmpdir()),
-                        `coworkany-e2e-test-${testInfo.workerIndex}`,
-                    ),
-                },
+                env,
                 stdio: ['pipe', 'pipe', 'pipe'],
             }
         );

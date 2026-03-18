@@ -199,21 +199,54 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (effectiveTaskConfig?.workspacePath as string | undefined) ||
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
-            const preparedWorkRequest = deps.prepareWorkRequestContext({
+
+            const artifactContract = deps.taskSessionStore.getArtifactContract(taskId) || deps.buildArtifactContract(content);
+
+            const language = /[\u4e00-\u9fff]/.test(content) ? 'zh-CN' : 'en';
+            const frozenWorkRequest = {
+                schemaVersion: 1,
+                id: `followup-${Date.now()}`,
+                mode: 'chat' as const,
                 sourceText: content,
                 workspacePath,
-                workRequestStore: deps.workRequestStore,
-            });
-            const {
-                frozenWorkRequest,
-                executionQuery,
-                workRequestExecutionPrompt,
-            } = preparedWorkRequest;
+                tasks: [{
+                    id: `task-${Date.now()}`,
+                    title: 'Follow-up',
+                    objective: content,
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: [],
+                    preferredSkills: [],
+                    preferredTools: [],
+                }],
+                clarification: {
+                    required: false,
+                    reason: undefined,
+                    questions: [],
+                    missingFields: [],
+                    canDefault: true,
+                    assumptions: [],
+                },
+                presentation: {
+                    uiFormat: 'chat_message' as const,
+                    ttsEnabled: false,
+                    ttsMode: 'full' as const,
+                    ttsMaxChars: 0,
+                    language,
+                },
+                createdAt: new Date().toISOString(),
+                frozenAt: new Date().toISOString(),
+            };
 
-            const artifactContract =
-                deps.taskSessionStore.getArtifactContract(taskId) ||
-                deps.buildArtifactContract(executionQuery);
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
+
+            const preparedWorkRequest = {
+                frozenWorkRequest,
+                executionPlan: { workRequestId: frozenWorkRequest.id, runMode: 'single' as const, steps: [] },
+                executionQuery: content,
+                preferredSkillIds: [],
+                workRequestExecutionPrompt: undefined,
+            };
 
             if (frozenWorkRequest.clarification.required) {
                 const clarificationMessage = deps.buildClarificationMessage(frozenWorkRequest);
@@ -238,33 +271,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 return true;
             }
 
-            if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
-                deps.pushConversationMessage(taskId, { role: 'user', content });
-                const primaryTask = frozenWorkRequest.tasks[0];
-                const record = deps.scheduleTaskInternal({
-                    title: primaryTask?.title || executionQuery.trim().slice(0, 60) || 'Scheduled Task',
-                    taskQuery: executionQuery,
-                    executeAt: new Date(frozenWorkRequest.schedule.executeAt),
-                    workspacePath,
-                    speakResult: frozenWorkRequest.presentation.ttsEnabled,
-                    sourceTaskId: taskId,
-                    config: deps.toScheduledTaskConfig(effectiveTaskConfig),
-                    workRequestId: frozenWorkRequest.id,
-                    frozenWorkRequest,
-                });
-                const confirmation = deps.buildScheduledConfirmationMessage(record);
-                deps.pushConversationMessage(taskId, { role: 'assistant', content: confirmation });
-                deps.emit(deps.createChatMessageEvent(taskId, {
-                    role: 'assistant',
-                    content: confirmation,
-                }));
-                deps.emit(deps.createTaskFinishedEvent(taskId, {
-                    summary: confirmation,
-                    duration: 0,
-                }));
-                return true;
-            }
-
             deps.markWorkRequestExecutionStarted(preparedWorkRequest);
             const explicitSkillIds =
                 (effectiveTaskConfig?.enabledClaudeSkills as string[] | undefined) ??
@@ -279,7 +285,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 workspacePath,
                 config: effectiveTaskConfig,
                 preparedWorkRequest,
-                workRequestExecutionPrompt,
+                workRequestExecutionPrompt: preparedWorkRequest.workRequestExecutionPrompt,
                 conversation,
                 artifactContract,
                 explicitSkillIds,

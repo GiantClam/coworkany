@@ -77,7 +77,8 @@ export function getPendingTaskStatus(session: Pick<TaskSession, 'status' | 'even
         return { phase: 'retrying' };
     }
 
-    const lastRunningTool = Array.from(runningTools.values()).at(-1);
+    const runningToolsArray = Array.from(runningTools.values());
+    const lastRunningTool = runningToolsArray[runningToolsArray.length - 1];
     if (lastRunningTool) {
         return { phase: 'running_tool', toolName: lastRunningTool };
     }

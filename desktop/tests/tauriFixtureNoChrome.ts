@@ -54,20 +54,26 @@ export const test = base.extend<TauriFixtures>({
     tauriProcess: [async ({}, use, testInfo) => {
         console.log('[Fixture-NoChrome] Starting Tauri app (NO Chrome)...');
 
+        // Build environment - only set WEBVIEW2 vars on Windows
+        const env: Record<string, string> = { ...process.env };
+        if (process.platform === 'win32') {
+            env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${CDP_PORT}`;
+            env.WEBVIEW2_USER_DATA_FOLDER = path.join(
+                fs.realpathSync(os.tmpdir()),
+                `coworkany-tts-test-${testInfo.workerIndex}`,
+            );
+        } else if (process.platform === 'darwin') {
+            // macOS: Use WebKit debugging via WEBKIT_INSPECTOR_SERVER
+            env.WEBKIT_INSPECTOR_SERVER = `localhost:${CDP_PORT}`;
+        }
+
         const tauriProc = childProcess.spawn(
             process.platform === 'win32' ? 'npx.cmd' : 'npx',
             ['tauri', 'dev'],
             {
                 cwd: DESKTOP_DIR,
                 shell: true,
-                env: {
-                    ...process.env,
-                    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
-                    WEBVIEW2_USER_DATA_FOLDER: path.join(
-                        fs.realpathSync(os.tmpdir()),
-                        `coworkany-tts-test-${testInfo.workerIndex}`,
-                    ),
-                },
+                env,
                 stdio: ['pipe', 'pipe', 'pipe'],
             }
         );

@@ -196,9 +196,9 @@ impl PolicyConfig {
     pub fn default_config() -> Self {
         let mut default_policies = HashMap::new();
         default_policies.insert(EffectType::FilesystemRead, ConfirmationPolicy::Never);
-        default_policies.insert(EffectType::FilesystemWrite, ConfirmationPolicy::Always);
+        default_policies.insert(EffectType::FilesystemWrite, ConfirmationPolicy::Once);
         default_policies.insert(EffectType::ShellRead, ConfirmationPolicy::Once);
-        default_policies.insert(EffectType::ShellWrite, ConfirmationPolicy::Always);
+        default_policies.insert(EffectType::ShellWrite, ConfirmationPolicy::Once);
         default_policies.insert(EffectType::NetworkOutbound, ConfirmationPolicy::Once);
         default_policies.insert(EffectType::SecretsRead, ConfirmationPolicy::Always);
         default_policies.insert(EffectType::ScreenCapture, ConfirmationPolicy::Always);

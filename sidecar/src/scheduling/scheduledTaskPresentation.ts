@@ -11,6 +11,7 @@ function stripMarkdownSyntax(text: string): string {
         .replace(/^#{1,6}\s*/gm, '')
         .replace(/^>\s*/gm, '')
         .replace(/^\s*[-*+]\s+/gm, '- ')
+        .replace(/```(\w+)?\s*[\s\S]*?```/g, ' ') // 过滤代码块，包括语言标识符
         .replace(/`([^`]+)`/g, '$1')
         .replace(/\*\*([^*]+)\*\*/g, '$1')
         .replace(/\*([^*]+)\*/g, '$1')
@@ -84,8 +85,13 @@ export function cleanScheduledTaskResultText(text: string): string {
 }
 
 export function normalizeScheduledTaskResultText(text: string): string {
-    return cleanScheduledTaskResultText(text)
+    const cleaned = cleanScheduledTaskResultText(text);
+    return cleaned
+        .replace(/```\w*\s*[\s\S]*?```/g, ' ') // 过滤代码块（包含语言标识符）- 先处理
+        .replace(/`([^`]+)`/g, '$1') // 过滤行内代码，保留内容
         .replace(/[-*#>`]/g, ' ')
+        .replace(/^\s*\d+\.\s+/gm, '') // 过滤有序列表 (1. 2. 等)
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // 过滤控制字符
         .replace(/\s+/g, ' ')
         .trim();
 }

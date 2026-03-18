@@ -57,8 +57,8 @@ export function DependencySetupSection() {
                         Prepare bundled services and marketplace dependencies for a fresh Mac install.
                     </p>
                     {runtimeContext && (
-                        <p>
-                            {runtimeContext.platform}/{runtimeContext.arch} · {runtimeContext.sidecarLaunchMode ?? 'unknown'} · {runtimeContext.appDataDir}
+                        <p style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
+                            {runtimeContext.platform}/{runtimeContext.arch} · {runtimeContext.sidecarLaunchMode ?? 'unknown'}
                         </p>
                     )}
                 </div>
