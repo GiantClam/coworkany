@@ -429,6 +429,12 @@ impl SidecarManager {
                                     error!("Failed to emit task-event: {}", e);
                                 }
                             }
+                            Some(SidecarMessageKind::VoiceState) => {
+                                let payload = message.get("payload").cloned().unwrap_or(message.clone());
+                                if let Err(e) = app_handle.emit("voice-state", payload) {
+                                    error!("Failed to emit voice-state: {}", e);
+                                }
+                            }
                             Some(SidecarMessageKind::IpcResponse) => {
                                 if let Some(command_id) = message
                                     .get("commandId")
@@ -684,10 +690,14 @@ enum SidecarMessageKind {
     TaskEvent,
     IpcResponse,
     IpcCommand,
+    VoiceState,
 }
 
 fn classify_sidecar_message(message: &serde_json::Value) -> Option<SidecarMessageKind> {
     let msg_type = message.get("type")?.as_str()?;
+    if msg_type == "voice_state" {
+        return Some(SidecarMessageKind::VoiceState);
+    }
     if msg_type.ends_with("_response") {
         return Some(SidecarMessageKind::IpcResponse);
     }

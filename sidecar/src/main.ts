@@ -101,7 +101,13 @@ import { globalToolRegistry } from './tools/registry';
 import { MCPGateway } from './mcp/gateway';
 import { setSearchConfig, webSearchTool, type SearchConfig, type SearchProvider } from './tools/websearch';
 import { BUILTIN_TOOLS, readTaskPlanHead, countIncompletePlanSteps } from './tools/builtin';
-import { voiceSpeakTool } from './tools/core/voice';
+import {
+    voiceSpeakTool,
+    speakText,
+    stopVoicePlayback,
+    getVoicePlaybackState,
+    setVoicePlaybackReporter,
+} from './tools/core/voice';
 import { CONTROL_PLANE_TOOLS } from './tools/controlPlane';
 import { createEnhancedBrowserTools } from './tools/browserEnhanced';
 import { DATABASE_TOOLS } from './tools/database';
@@ -253,6 +259,13 @@ function emitAny(message: Record<string, unknown>): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
 }
+
+setVoicePlaybackReporter((state) => {
+    emitAny({
+        type: 'voice_state',
+        payload: state,
+    });
+});
 
 // ============================================================================
 // Fetch Utilities (with timeout and retry)
@@ -1418,6 +1431,8 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         resolveProviderConfig,
         autonomousLlmAdapter,
         getAutonomousAgent,
+        stopVoicePlayback,
+        getVoicePlaybackState,
     };
 }
 
@@ -2775,7 +2790,11 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                 finalAssistantText: reducedPresentation.ttsSummary || presentedResultText,
                 errorText: result.error,
             });
-            const voiceResult = await voiceSpeakTool.handler({ text: spokenText }, { taskId, workspacePath: record.workspacePath });
+            const voiceResult = await speakText(
+                spokenText,
+                { taskId, workspacePath: record.workspacePath },
+                'scheduled_task'
+            );
             if (voiceResult?.success) {
                 console.error(`[Scheduler] Voice playback completed for scheduled task ${record.id}`);
             } else {

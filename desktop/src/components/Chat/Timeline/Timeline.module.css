@@ -22,6 +22,8 @@
 
 .timelineItem {
     animation: fadeIn var(--transition-base);
+    min-width: 0;
+    max-width: 100%;
 }
 
 @keyframes fadeIn {
@@ -74,6 +76,10 @@
 .contentBubble {
     font-size: 15px;
     line-height: 1.7;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 /* ============================================================================
@@ -311,6 +317,8 @@
     font-family: var(--font-code);
     font-size: 13px;
     color: var(--accent-primary);
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .markdownBody pre {
@@ -320,12 +328,15 @@
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     overflow-x: auto;
+    max-width: 100%;
 }
 
 .markdownBody pre code {
     background: none;
     padding: 0;
     color: inherit;
+    overflow-wrap: normal;
+    word-break: normal;
 }
 
 .markdownBody ul,
@@ -390,6 +401,8 @@
 
 .messageWrapper {
     position: relative;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .copyButton {
@@ -415,6 +428,8 @@
 
 .userText {
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 /* ============================================================================

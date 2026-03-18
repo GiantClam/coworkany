@@ -714,6 +714,40 @@ pub async fn get_tasks(
     })
 }
 
+/// Get current voice playback state from sidecar
+#[tauri::command]
+pub async fn get_voice_state(
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let command = build_command("get_voice_state", json!({}));
+    let response = send_command_and_wait(&state, command, 3000).await?;
+    let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: inner_payload,
+    })
+}
+
+/// Stop current voice playback in sidecar
+#[tauri::command]
+pub async fn stop_voice(
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let command = build_command("stop_voice", json!({}));
+    let response = send_command_and_wait(&state, command, 3000).await?;
+    let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: inner_payload,
+    })
+}
+
 /// Send a message to an existing task
 #[tauri::command]
 pub async fn send_task_message(

@@ -93,6 +93,8 @@ export type RuntimeCommandDeps = {
         cancelTask: (taskId: string) => boolean;
         getAllTasks: () => any[];
     };
+    stopVoicePlayback: (reason?: string) => Promise<boolean>;
+    getVoicePlaybackState: () => unknown;
 };
 
 export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCommandDeps): Promise<boolean> {
@@ -376,6 +378,24 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     summary: task.summary,
                     memoryExtracted: task.memoryExtracted,
                 } : null,
+            }));
+            return true;
+        }
+
+        case 'get_voice_state': {
+            deps.emit(respond(command.id, 'get_voice_state_response', {
+                success: true,
+                state: deps.getVoicePlaybackState(),
+            }));
+            return true;
+        }
+
+        case 'stop_voice': {
+            const stopped = await deps.stopVoicePlayback('user_requested');
+            deps.emit(respond(command.id, 'stop_voice_response', {
+                success: true,
+                stopped,
+                state: deps.getVoicePlaybackState(),
             }));
             return true;
         }

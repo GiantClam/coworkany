@@ -210,6 +210,10 @@
     "pendingWaitingForModel": "消息已发送，正在等待模型响应…",
     "pendingUsingTool": "消息已发送，正在调用 {{tool}}…",
     "pendingRetrying": "请求暂时受限，正在自动重试…",
+    "stopVoice": "终止播报",
+    "stoppingVoice": "终止中…",
+    "voicePlaybackActive": "正在播报任务结果",
+    "voicePlaybackNoPreview": "正在朗读最新任务结果",
     "genericTool": "工具",
     "tokenUsage": "Token 用量",
     "inputTokens": "输入: {{value}}",
@@ -249,6 +253,7 @@
     "managedBy": "由统一核心技能管理",
     "inProgress": "进行中",
     "noActiveTasks": "当前工作区还没有结构化任务。",
+    "history": "历史任务",
     "completed": "已完成"
   },
 

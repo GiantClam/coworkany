@@ -15,6 +15,7 @@ import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
 import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useClearTaskHistory } from '../../hooks/useClearTaskHistory';
+import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { useWorkspace } from '../../hooks/useWorkspace';
 import { Timeline } from './Timeline/Timeline';
 import { ModalDialog } from '../Common/ModalDialog';
@@ -82,6 +83,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
+    const { voiceState, stopPlayback, isStopping: isStoppingVoice, error: stopVoiceError } = useVoicePlayback();
     const { skills } = useSkills({ autoRefresh: true });
     const { toolpacks } = useToolpacks({ autoRefresh: true });
     const { activeWorkspace, createWorkspace, selectWorkspace, syncWorkspace } = useWorkspace({ autoLoad: true });
@@ -304,6 +306,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [activeSession?.taskId, cancelTask]);
 
+    const handleStopVoice = useCallback(async () => {
+        await stopPlayback();
+    }, [stopPlayback]);
+
     const handleShowSettings = useCallback(() => {
         if (onOpenSettings) {
             onOpenSettings();
@@ -342,9 +348,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenProject={() => {}}
                     onTaskList={onOpenTasks ?? (() => {})}
                 />
-                {(workspaceError || startError || cancelError || sendError || clearError) && (
+                {(workspaceError || startError || cancelError || sendError || clearError || stopVoiceError) && (
                     <div className="chat-error">
-                        {workspaceError || startError || cancelError || sendError || clearError}
+                        {workspaceError || startError || cancelError || sendError || clearError || stopVoiceError}
                     </div>
                 )}
                 <InputArea
@@ -378,17 +384,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 enabledToolpacksCount={enabledToolpacks.length}
                 isClearing={isClearing}
                 isCancelling={isCancelling}
+                isSpeaking={voiceState.isSpeaking}
+                isStoppingVoice={isStoppingVoice}
                 onSetActiveProfile={setActiveProfile}
                 onShowSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowMcp={handleShowMcp}
                 onClearHistory={handleClearHistory}
                 onCancel={handleCancel}
+                onStopVoice={handleStopVoice}
             />
 
-            {(workspaceError || startError || cancelError || sendError || clearError) && (
+            {(workspaceError || startError || cancelError || sendError || clearError || stopVoiceError) && (
                 <div className="chat-error">
-                    {workspaceError || startError || cancelError || sendError || clearError}
+                    {workspaceError || startError || cancelError || sendError || clearError || stopVoiceError}
                 </div>
             )}
 

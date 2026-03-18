@@ -212,6 +212,10 @@
     "pendingWaitingForModel": "Message sent. Waiting for model response...",
     "pendingUsingTool": "Message sent. Running {{tool}}...",
     "pendingRetrying": "Rate limited. Retrying automatically...",
+    "stopVoice": "Stop voice",
+    "stoppingVoice": "Stopping...",
+    "voicePlaybackActive": "Voice playback active",
+    "voicePlaybackNoPreview": "Speaking the latest task result",
     "genericTool": "tool",
     "tokenUsage": "Token Usage",
     "inputTokens": "In: {{value}}",
@@ -251,6 +255,7 @@
     "managedBy": "Managed by Unified Core Skills",
     "inProgress": "In Progress",
     "noActiveTasks": "No structured tasks in this workspace yet.",
+    "history": "History",
     "completed": "Completed"
   },
 

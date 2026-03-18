@@ -6,17 +6,67 @@
  */
 
 import { ToolDefinition, ToolContext } from '../standard';
-import { createVoiceInterface } from '../../agent/jarvis/voiceInterface';
+import {
+    createVoiceInterface,
+    type VoicePlaybackState,
+} from '../../agent/jarvis/voiceInterface';
 
 // Singleton instance with lazy initialization
 let voiceInterface = createVoiceInterface();
 let initialized = false;
+let voicePlaybackReporter: ((state: VoicePlaybackState) => void) | null = null;
 
 async function ensureInitialized(): Promise<void> {
     if (!initialized) {
         await voiceInterface.initialize();
+        voiceInterface.subscribeToPlaybackState((state) => {
+            voicePlaybackReporter?.(state);
+        });
         initialized = true;
     }
+}
+
+export function setVoicePlaybackReporter(reporter: ((state: VoicePlaybackState) => void) | null): void {
+    voicePlaybackReporter = reporter;
+    if (reporter) {
+        reporter(voiceInterface.getPlaybackState());
+    }
+}
+
+export async function speakText(
+    text: string,
+    context: ToolContext,
+    source = 'tool',
+): Promise<{ success: boolean; message?: string; text_spoken?: string; error?: string }> {
+    await ensureInitialized();
+
+    const availability = voiceInterface.isAvailable();
+    if (!availability.tts) {
+        return {
+            success: false,
+            error: `TTS unavailable on platform: ${availability.platform}`,
+        };
+    }
+
+    await voiceInterface.forcedSpeak(text, {
+        taskId: context.taskId,
+        source,
+    });
+
+    return {
+        success: true,
+        message: 'Speech synthesized successfully',
+        text_spoken: text,
+    };
+}
+
+export async function stopVoicePlayback(reason = 'user_requested'): Promise<boolean> {
+    await ensureInitialized();
+    return voiceInterface.stopSpeaking(reason);
+}
+
+export function getVoicePlaybackState(): VoicePlaybackState {
+    return voiceInterface.getPlaybackState();
 }
 
 export const voiceSpeakTool: ToolDefinition = {
@@ -33,27 +83,9 @@ export const voiceSpeakTool: ToolDefinition = {
         },
         required: ['text'],
     },
-    handler: async (args: { text: string }, _context: ToolContext) => {
+    handler: async (args: { text: string }, context: ToolContext) => {
         try {
-            // Lazy initialize the voice interface on first use
-            await ensureInitialized();
-
-            const availability = voiceInterface.isAvailable();
-            if (!availability.tts) {
-                return {
-                    success: false,
-                    error: `TTS unavailable on platform: ${availability.platform}`,
-                };
-            }
-
-            // Use forcedSpeak to bypass the enabled check — the user explicitly called this tool
-            await voiceInterface.forcedSpeak(args.text);
-
-            return {
-                success: true,
-                message: 'Speech synthesized successfully',
-                text_spoken: args.text
-            };
+            return await speakText(args.text, context, 'tool');
         } catch (error) {
             console.error('[VoiceTool] Error speaking:', error);
             return {

@@ -282,6 +282,18 @@
     background: linear-gradient(135deg, rgba(249, 115, 22, 0.34), rgba(234, 88, 12, 0.46));
 }
 
+.status-action.warning {
+    color: #fff4d6;
+    border-color: rgba(251, 191, 36, 0.28);
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(180, 83, 9, 0.4));
+}
+
+.status-action.warning:hover:not(:disabled) {
+    border-color: rgba(251, 191, 36, 0.42);
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.3), rgba(180, 83, 9, 0.5));
+    color: #fff8e8;
+}
+
 .status-action:disabled {
     opacity: 0.5;
     cursor: not-allowed;

@@ -11,7 +11,7 @@
  * - OpenAI TTS / ElevenLabs (TTS)
  */
 
-import { exec } from 'child_process';
+import { exec, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -80,6 +80,24 @@ export interface SpeechRecognitionResult {
     alternatives?: Array<{ text: string; confidence: number }>;
 }
 
+export interface VoicePlaybackState {
+    isSpeaking: boolean;
+    canStop: boolean;
+    previewText?: string;
+    fullTextLength?: number;
+    taskId?: string;
+    source?: string;
+    startedAt?: string;
+    endedAt?: string;
+    reason?: string;
+    error?: string;
+}
+
+type VoicePlaybackMetadata = {
+    taskId?: string;
+    source?: string;
+};
+
 // ============================================================================
 // VoiceInterface Class
 // ============================================================================
@@ -89,12 +107,27 @@ export class VoiceInterface {
     private platform: 'windows' | 'darwin' | 'linux' | 'unknown';
     private nativeASRAvailable: boolean;
     private nativeTTSAvailable: boolean;
+    private currentPlayback: { id: number; child: ChildProcess; cleanup?: () => void } | null;
+    private playbackState: VoicePlaybackState;
+    private playbackListeners: Set<(state: VoicePlaybackState) => void>;
+    private playbackSequence: number;
+    private finalizedPlaybackIds: Set<number>;
+    private stopReasons: Map<number, string>;
 
     constructor(config?: Partial<VoiceConfig>) {
         this.config = { ...DEFAULT_VOICE_CONFIG, ...config };
         this.platform = this.detectPlatform();
         this.nativeASRAvailable = false;
         this.nativeTTSAvailable = false;
+        this.currentPlayback = null;
+        this.playbackState = {
+            isSpeaking: false,
+            canStop: false,
+        };
+        this.playbackListeners = new Set();
+        this.playbackSequence = 0;
+        this.finalizedPlaybackIds = new Set();
+        this.stopReasons = new Map();
     }
 
     // ========================================================================
@@ -342,34 +375,36 @@ $result.Text
     /**
      * 朗读文本
      */
-    async speak(text: string): Promise<void> {
+    async speak(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         if (!this.config.enabled) {
             console.log('[Voice] TTS disabled, skipping speak');
             return;
         }
 
-        return this.doSpeak(text);
+        return this.doSpeak(text, metadata);
     }
 
     /**
      * 强制朗读文本（绕过 enabled 检查）
      * 当用户通过 voice_speak 工具明确请求朗读时使用
      */
-    async forcedSpeak(text: string): Promise<void> {
-        return this.doSpeak(text);
+    async forcedSpeak(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
+        return this.doSpeak(text, metadata);
     }
 
     /**
      * 内部朗读实现
      */
-    private async doSpeak(text: string): Promise<void> {
+    private async doSpeak(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         console.log(`[Voice] Speaking: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
+
+        await this.stopSpeaking('replaced_by_new_playback');
 
         // Determine effective provider: if native is configured and available, use native
         // Otherwise fallback based on platform
         const provider = this.config.tts.provider;
         if (provider === 'native' || this.nativeTTSAvailable) {
-            return this.nativeTTS(text);
+            return this.nativeTTS(text, metadata);
         }
 
         switch (provider) {
@@ -384,25 +419,144 @@ $result.Text
 
             default:
                 // Fallback: try native TTS anyway
-                return this.nativeTTS(text);
+                return this.nativeTTS(text, metadata);
+        }
+    }
+
+    private buildPreviewText(text: string): string {
+        const normalized = text.replace(/\s+/g, ' ').trim();
+        if (normalized.length <= 120) {
+            return normalized;
+        }
+        return `${normalized.slice(0, 117)}...`;
+    }
+
+    private publishPlaybackState(state: VoicePlaybackState): void {
+        this.playbackState = state;
+        for (const listener of this.playbackListeners) {
+            try {
+                listener({ ...state });
+            } catch (error) {
+                console.error('[Voice] Playback listener error:', error);
+            }
+        }
+    }
+
+    private finalizePlayback(playbackId: number, details: { reason: string; error?: string }): void {
+        if (this.finalizedPlaybackIds.has(playbackId)) {
+            return;
+        }
+        this.finalizedPlaybackIds.add(playbackId);
+
+        const current = this.currentPlayback;
+        if (current?.id === playbackId) {
+            this.currentPlayback = null;
+            current.cleanup?.();
+        }
+
+        this.publishPlaybackState({
+            ...this.playbackState,
+            isSpeaking: false,
+            canStop: false,
+            endedAt: new Date().toISOString(),
+            reason: details.reason,
+            error: details.error,
+        });
+    }
+
+    private async runManagedPlayback(
+        text: string,
+        metadata: VoicePlaybackMetadata | undefined,
+        launcher: () => Promise<{ child: ChildProcess; cleanup?: () => void }>,
+    ): Promise<void> {
+        const playbackId = ++this.playbackSequence;
+
+        const startedAt = new Date().toISOString();
+        const previewText = this.buildPreviewText(text);
+
+        let launched: { child: ChildProcess; cleanup?: () => void } | null = null;
+        try {
+            launched = await launcher();
+            this.currentPlayback = {
+                id: playbackId,
+                child: launched.child,
+                cleanup: launched.cleanup,
+            };
+
+            this.publishPlaybackState({
+                isSpeaking: true,
+                canStop: true,
+                previewText,
+                fullTextLength: text.length,
+                taskId: metadata?.taskId,
+                source: metadata?.source,
+                startedAt,
+            });
+
+            await new Promise<void>((resolve, reject) => {
+                launched!.child.once('error', (error) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this.stopReasons.delete(playbackId);
+                    this.finalizePlayback(playbackId, {
+                        reason: 'process_error',
+                        error: message,
+                    });
+                    reject(new Error(message));
+                });
+
+                launched!.child.once('close', (code, signal) => {
+                    const stopReason = this.stopReasons.get(playbackId);
+                    this.stopReasons.delete(playbackId);
+
+                    if (stopReason) {
+                        this.finalizePlayback(playbackId, { reason: stopReason });
+                        resolve();
+                        return;
+                    }
+
+                    if (code === 0) {
+                        this.finalizePlayback(playbackId, { reason: 'completed' });
+                        resolve();
+                        return;
+                    }
+
+                    const message = `Playback exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}`;
+                    this.finalizePlayback(playbackId, {
+                        reason: 'process_exit',
+                        error: message,
+                    });
+                    reject(new Error(message));
+                });
+            });
+        } catch (error) {
+            if (launched) {
+                launched.cleanup?.();
+            }
+            if (!this.finalizedPlaybackIds.has(playbackId)) {
+                this.finalizePlayback(playbackId, {
+                    reason: 'launch_failed',
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+            throw error;
         }
     }
 
     /**
      * 本机 TTS
      */
-    private async nativeTTS(text: string): Promise<void> {
+    private async nativeTTS(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         console.log('[Voice] Using native TTS');
 
         switch (this.platform) {
             case 'windows':
-                return this.windowsTTS(text);
+                return this.windowsTTS(text, metadata);
 
             case 'darwin':
-                return this.macOSTTS(text);
+                return this.macOSTTS(text, metadata);
 
             case 'linux':
-                return this.linuxTTS(text);
+                return this.linuxTTS(text, metadata);
 
             default:
                 throw new Error('Native TTS not supported on this platform');
@@ -412,7 +566,7 @@ $result.Text
     /**
      * Windows SAPI TTS
      */
-    private async windowsTTS(text: string): Promise<void> {
+    private async windowsTTS(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         const rate = Math.round((this.config.tts.rate - 1) * 10);
         const volume = Math.round(this.config.tts.volume * 100);
 
@@ -434,35 +588,50 @@ $result.Text
             '$synth.Dispose()',
         ].join('\r\n');
 
-        try {
-            // Write the text as UTF-8 with BOM so PowerShell reads it correctly
-            const BOM = '\ufeff';
-            fs.writeFileSync(textPath, BOM + text, 'utf-8');
-            fs.writeFileSync(scriptPath, BOM + scriptContent, 'utf-8');
+        // Write the text as UTF-8 with BOM so PowerShell reads it correctly
+        const BOM = '\ufeff';
+        fs.writeFileSync(textPath, BOM + text, 'utf-8');
+        fs.writeFileSync(scriptPath, BOM + scriptContent, 'utf-8');
 
-            await execAsync(
-                `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`,
-                { timeout: 60_000 }
-            );
+        try {
+            await this.runManagedPlayback(text, metadata, async () => ({
+                child: spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+                    stdio: 'ignore',
+                }),
+                cleanup: () => {
+                    try { fs.unlinkSync(textPath); } catch { /* ignore */ }
+                    try { fs.unlinkSync(scriptPath); } catch { /* ignore */ }
+                },
+            }));
         } catch (error) {
             console.error('[Voice] Windows TTS error:', error);
             throw new Error(`Windows TTS failed: ${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            // Cleanup temp files
-            try { fs.unlinkSync(textPath); } catch { /* ignore */ }
-            try { fs.unlinkSync(scriptPath); } catch { /* ignore */ }
         }
     }
 
     /**
      * macOS 'say' TTS
      */
-    private async macOSTTS(text: string): Promise<void> {
+    private async macOSTTS(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         const rate = Math.round(this.config.tts.rate * 200);  // 默认 200 wpm
-        const voice = this.config.tts.voice === 'default' ? '' : `-v ${this.config.tts.voice}`;
+        const textPath = path.join(os.tmpdir(), `coworkany_tts_text_${Date.now()}.txt`);
+        fs.writeFileSync(textPath, text, 'utf-8');
 
         try {
-            await execAsync(`say ${voice} -r ${rate} "${text.replace(/"/g, '\\"')}"`);
+            await this.runManagedPlayback(text, metadata, async () => {
+                const args = ['-r', String(rate), '-f', textPath];
+                if (this.config.tts.voice !== 'default') {
+                    args.unshift(this.config.tts.voice);
+                    args.unshift('-v');
+                }
+
+                return {
+                    child: spawn('say', args, { stdio: 'ignore' }),
+                    cleanup: () => {
+                        try { fs.unlinkSync(textPath); } catch { /* ignore */ }
+                    },
+                };
+            });
         } catch (error) {
             console.error('[Voice] macOS TTS error:', error);
             throw new Error('macOS TTS failed');
@@ -472,13 +641,31 @@ $result.Text
     /**
      * Linux espeak TTS
      */
-    private async linuxTTS(text: string): Promise<void> {
+    private async linuxTTS(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         const rate = Math.round(this.config.tts.rate * 150);  // espeak 默认 175 wpm
         const volume = Math.round(this.config.tts.volume * 100);
+        const textPath = path.join(os.tmpdir(), `coworkany_tts_text_${Date.now()}.txt`);
+        fs.writeFileSync(textPath, text, 'utf-8');
 
         try {
-            // 尝试 espeak-ng，如果不存在则用 espeak
-            await execAsync(`(espeak-ng || espeak) -s ${rate} -a ${volume} "${text.replace(/"/g, '\\"')}"`);
+            const { stdout } = await execAsync('which espeak-ng || which espeak || which festival');
+            const binary = stdout.trim().split('\n')[0];
+            if (!binary) {
+                throw new Error('No Linux TTS binary found');
+            }
+
+            await this.runManagedPlayback(text, metadata, async () => {
+                const args = binary.includes('festival')
+                    ? ['--tts', textPath]
+                    : ['-s', String(rate), '-a', String(volume), '-f', textPath];
+
+                return {
+                    child: spawn(binary, args, { stdio: 'ignore' }),
+                    cleanup: () => {
+                        try { fs.unlinkSync(textPath); } catch { /* ignore */ }
+                    },
+                };
+            });
         } catch (error) {
             console.error('[Voice] Linux TTS error:', error);
             throw new Error('Linux TTS failed');
@@ -596,6 +783,45 @@ $result.Text
      */
     getConfig(): VoiceConfig {
         return { ...this.config };
+    }
+
+    getPlaybackState(): VoicePlaybackState {
+        return { ...this.playbackState };
+    }
+
+    subscribeToPlaybackState(listener: (state: VoicePlaybackState) => void): () => void {
+        this.playbackListeners.add(listener);
+        listener(this.getPlaybackState());
+        return () => {
+            this.playbackListeners.delete(listener);
+        };
+    }
+
+    async stopSpeaking(reason = 'user_requested'): Promise<boolean> {
+        const current = this.currentPlayback;
+        if (!current && !this.playbackState.isSpeaking) {
+            return false;
+        }
+
+        if (current) {
+            this.stopReasons.set(current.id, reason);
+            this.finalizePlayback(current.id, { reason });
+            try {
+                current.child.kill('SIGTERM');
+            } catch (error) {
+                console.warn('[Voice] Failed to stop playback cleanly:', error);
+            }
+            return true;
+        }
+
+        this.publishPlaybackState({
+            ...this.playbackState,
+            isSpeaking: false,
+            canStop: false,
+            endedAt: new Date().toISOString(),
+            reason,
+        });
+        return true;
     }
 
     /**

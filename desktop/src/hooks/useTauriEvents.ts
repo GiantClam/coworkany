@@ -7,8 +7,14 @@
 
 import { useEffect } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore, type TaskEvent, type IpcResponse, type AuditEvent, hydrateSessions } from '../stores/useTaskEventStore';
 import { isTauri } from '../lib/tauri';
+import {
+    useVoicePlaybackStore,
+    getDefaultVoicePlaybackState,
+    type VoicePlaybackState,
+} from '../stores/useVoicePlaybackStore';
 
 // ============================================================================
 // Event Listener Hook
@@ -23,12 +29,14 @@ export function useTauriEvents() {
     const setSidecarConnected = useTaskEventStore((state) => state.setSidecarConnected);
     const handleIpcResponse = useTaskEventStore((state) => state.handleIpcResponse);
     const addAuditEvent = useTaskEventStore((state) => state.addAuditEvent);
+    const setVoicePlaybackState = useVoicePlaybackStore((state) => state.setState);
 
     useEffect(() => {
         let unlistenTaskEvent: UnlistenFn | undefined;
         let unlistenIpcResponse: UnlistenFn | undefined;
         let unlistenSidecarDisconnected: UnlistenFn | undefined;
         let unlistenAuditEvent: UnlistenFn | undefined;
+        let unlistenVoiceState: UnlistenFn | undefined;
 
         async function setupListeners() {
             if (!isTauri()) {
@@ -57,11 +65,23 @@ export function useTauriEvents() {
                 addAuditEvent(event.payload);
             });
 
+            unlistenVoiceState = await listen<VoicePlaybackState>('voice-state', (event) => {
+                setVoicePlaybackState(event.payload ?? getDefaultVoicePlaybackState());
+            });
+
             // Mark as connected (we assume connected on setup)
             setSidecarConnected(true);
 
             // Hydrate persisted sessions after listeners are ready to avoid startup stalls.
             void hydrateSessions();
+            void invoke<{ success?: boolean; payload?: { success?: boolean; state?: VoicePlaybackState } }>('get_voice_state')
+                .then((result) => {
+                    const nextState = result?.payload?.state;
+                    setVoicePlaybackState(nextState ?? getDefaultVoicePlaybackState());
+                })
+                .catch(() => {
+                    setVoicePlaybackState(getDefaultVoicePlaybackState());
+                });
 
             console.log('[Tauri] Event listeners registered');
         }
@@ -73,9 +93,10 @@ export function useTauriEvents() {
             unlistenIpcResponse?.();
             unlistenSidecarDisconnected?.();
             unlistenAuditEvent?.();
+            unlistenVoiceState?.();
             console.log('[Tauri] Event listeners cleaned up');
         };
-    }, [addEvent, setSidecarConnected, handleIpcResponse, addAuditEvent]);
+    }, [addEvent, setSidecarConnected, handleIpcResponse, addAuditEvent, setVoicePlaybackState]);
 }
 
 // ============================================================================

@@ -1013,6 +1013,48 @@ export const GetTasksResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+const VoicePlaybackStateSchema = z.object({
+    isSpeaking: z.boolean(),
+    canStop: z.boolean(),
+    previewText: z.string().optional(),
+    fullTextLength: z.number().int().nonnegative().optional(),
+    taskId: z.string().optional(),
+    source: z.string().optional(),
+    startedAt: z.string().datetime().optional(),
+    endedAt: z.string().datetime().optional(),
+    reason: z.string().optional(),
+    error: z.string().optional(),
+});
+
+export const GetVoiceStateCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('get_voice_state'),
+    payload: z.object({}),
+});
+
+export const GetVoiceStateResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('get_voice_state_response'),
+    payload: z.object({
+        success: z.boolean(),
+        state: VoicePlaybackStateSchema,
+        error: z.string().optional(),
+    }),
+});
+
+export const StopVoiceCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('stop_voice'),
+    payload: z.object({}),
+});
+
+export const StopVoiceResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('stop_voice_response'),
+    payload: z.object({
+        success: z.boolean(),
+        stopped: z.boolean(),
+        state: VoicePlaybackStateSchema,
+        error: z.string().optional(),
+    }),
+});
+
 // ============================================================================
 // Autonomous Task Commands (OpenClaw-style)
 // ============================================================================
@@ -1108,6 +1150,8 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
 
     ReloadToolsCommandSchema,
     GetTasksCommandSchema,
+    GetVoiceStateCommandSchema,
+    StopVoiceCommandSchema,
 
     // Autonomous Task Commands
     StartAutonomousTaskCommandSchema,
@@ -1159,6 +1203,8 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ReloadToolsCommandSchema,
     ReloadToolsResponseSchema,
     GetTasksResponseSchema,
+    GetVoiceStateResponseSchema,
+    StopVoiceResponseSchema,
 ]);
 
 export type IpcCommand = z.infer<typeof IpcCommandSchema>;
@@ -1237,3 +1283,7 @@ export type InstallFromGitHubCommand = z.infer<typeof InstallFromGitHubCommandSc
 export type InstallFromGitHubResponse = z.infer<typeof InstallFromGitHubResponseSchema>;
 export type GetTasksCommand = z.infer<typeof GetTasksCommandSchema>;
 export type GetTasksResponse = z.infer<typeof GetTasksResponseSchema>;
+export type GetVoiceStateCommand = z.infer<typeof GetVoiceStateCommandSchema>;
+export type GetVoiceStateResponse = z.infer<typeof GetVoiceStateResponseSchema>;
+export type StopVoiceCommand = z.infer<typeof StopVoiceCommandSchema>;
+export type StopVoiceResponse = z.infer<typeof StopVoiceResponseSchema>;

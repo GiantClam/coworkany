@@ -121,8 +121,8 @@ function buildPresentationContract(text: string, ttsEnabled: boolean): Presentat
     return {
         uiFormat: 'chat_message',
         ttsEnabled,
-        ttsMode: 'summary',
-        ttsMaxChars: 500,
+        ttsMode: 'full',
+        ttsMaxChars: 0,
         language: detectLanguage(text),
     };
 }
@@ -267,7 +267,11 @@ export function reduceWorkResult(input: {
 }): PresentationPayload {
     const canonicalResult = cleanScheduledTaskResultText(input.canonicalResult) || input.canonicalResult.trim();
     const uiSummary = canonicalResult;
-    const ttsSummary = normalizeScheduledTaskResultText(canonicalResult).slice(0, input.request.presentation.ttsMaxChars);
+    const normalizedForSpeech = normalizeScheduledTaskResultText(canonicalResult);
+    const ttsSummary =
+        input.request.presentation.ttsMode === 'full' || input.request.presentation.ttsMaxChars <= 0
+            ? normalizedForSpeech
+            : normalizedForSpeech.slice(0, input.request.presentation.ttsMaxChars);
 
     return {
         canonicalResult,

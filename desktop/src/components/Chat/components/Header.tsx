@@ -28,12 +28,15 @@ interface HeaderProps {
     enabledToolpacksCount: number;
     isClearing: boolean;
     isCancelling: boolean;
+    isSpeaking: boolean;
+    isStoppingVoice: boolean;
     onSetActiveProfile: (id: string) => void;
     onShowSettings: () => void;
     onShowSkills: () => void;
     onShowMcp: () => void;
     onClearHistory: () => void;
     onCancel: () => void;
+    onStopVoice: () => void;
 }
 
 const HeaderComponent: React.FC<HeaderProps> = ({
@@ -45,11 +48,14 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     enabledToolpacksCount,
     isClearing,
     isCancelling,
+    isSpeaking,
+    isStoppingVoice,
     onShowSettings,
     onShowSkills,
     onShowMcp,
     onClearHistory,
     onCancel,
+    onStopVoice,
 }) => {
     const { t } = useTranslation();
 
@@ -124,6 +130,18 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                     </button>
                 )}
 
+                {isSpeaking && (
+                    <button
+                        type="button"
+                        className="status-action warning"
+                        onClick={onStopVoice}
+                        disabled={isStoppingVoice}
+                        title={t('chat.stopVoice')}
+                    >
+                        {isStoppingVoice ? t('chat.stoppingVoice') : t('chat.stopVoice')}
+                    </button>
+                )}
+
                 <button
                     type="button"
                     className="status-action"
@@ -147,6 +165,8 @@ const arePropsEqual = (prevProps: HeaderProps, nextProps: HeaderProps): boolean 
         prevProps.enabledToolpacksCount === nextProps.enabledToolpacksCount &&
         prevProps.isClearing === nextProps.isClearing &&
         prevProps.isCancelling === nextProps.isCancelling &&
+        prevProps.isSpeaking === nextProps.isSpeaking &&
+        prevProps.isStoppingVoice === nextProps.isStoppingVoice &&
         prevProps.llmConfig.activeProfileId === nextProps.llmConfig.activeProfileId &&
         JSON.stringify(prevProps.llmConfig.profiles) === JSON.stringify(nextProps.llmConfig.profiles)
     );
