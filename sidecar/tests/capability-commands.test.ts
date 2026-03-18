@@ -1,0 +1,279 @@
+import { afterEach, describe, expect, test } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { handleCapabilityCommand, type CapabilityCommandDeps } from '../src/handlers/capabilities';
+
+const tempPaths: string[] = [];
+
+afterEach(() => {
+    while (tempPaths.length > 0) {
+        const target = tempPaths.pop();
+        if (target) {
+            fs.rmSync(target, { recursive: true, force: true });
+        }
+    }
+});
+
+function makeTempDir(prefix: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempPaths.push(dir);
+    return dir;
+}
+
+function createDeps(overrides: Partial<CapabilityCommandDeps> = {}): CapabilityCommandDeps {
+    return {
+        skillStore: {
+            list: () => [],
+            get: () => undefined,
+            install: () => {},
+            setEnabled: () => true,
+            uninstall: () => true,
+        },
+        toolpackStore: {
+            list: () => [],
+            getById: () => undefined,
+            add: () => {},
+            setEnabledById: () => true,
+            removeById: () => true,
+        },
+        getDirectiveManager: () => ({
+            listDirectives: () => [],
+            upsertDirective: (directive) => directive,
+            removeDirective: () => true,
+        }),
+        importSkillFromDirectory: async () => ({ success: true, skillId: 'demo-skill' }),
+        downloadSkillFromGitHub: async () => ({ success: true, path: '/tmp/skill', filesDownloaded: 1 }),
+        downloadMcpFromGitHub: async () => ({ success: true, path: '/tmp/mcp', filesDownloaded: 1 }),
+        validateSkillUrl: async () => ({ valid: true, sourceType: 'skill' }),
+        validateMcpUrl: async () => ({ valid: true, sourceType: 'mcp' }),
+        scanDefaultRepositories: async () => ({ skills: [], mcpServers: [], errors: [] }),
+        ...overrides,
+    };
+}
+
+describe('capability commands handler', () => {
+    test('forwards import_claude_skill to injected importer with auto-install enabled by default', async () => {
+        const calls: Array<{ inputPath: string; autoInstallDependencies?: boolean }> = [];
+        const deps = createDeps({
+            importSkillFromDirectory: async (inputPath, autoInstallDependencies) => {
+                calls.push({ inputPath, autoInstallDependencies });
+                return { success: true, skillId: 'custom-skill' };
+            },
+        });
+
+        const response = await handleCapabilityCommand({
+            id: 'cmd-1',
+            type: 'import_claude_skill',
+            payload: {
+                source: 'local_folder',
+                path: '/tmp/custom-skill',
+            },
+        } as any, deps);
+
+        expect(calls).toEqual([
+            { inputPath: '/tmp/custom-skill', autoInstallDependencies: true },
+        ]);
+        expect(response?.type).toBe('import_claude_skill_response');
+        expect((response as any).payload).toEqual({ success: true, skillId: 'custom-skill' });
+    });
+
+    test('install_from_github for skill merges download and import failures into response payload', async () => {
+        const deps = createDeps({
+            downloadSkillFromGitHub: async () => ({
+                success: true,
+                path: '/tmp/skill-from-github',
+                filesDownloaded: 4,
+            }),
+            importSkillFromDirectory: async () => ({
+                success: false,
+                error: 'missing_skill_manifest',
+            }),
+        });
+
+        const response = await handleCapabilityCommand({
+            id: 'cmd-2',
+            type: 'install_from_github',
+            payload: {
+                workspacePath: '/tmp/workspace',
+                source: 'owner/repo',
+                targetType: 'skill',
+            },
+        } as any, deps);
+
+        expect(response?.type).toBe('install_from_github_response');
+        expect((response as any).payload).toEqual({
+            success: false,
+            path: '/tmp/skill-from-github',
+            filesDownloaded: 4,
+            importResult: {
+                success: false,
+                error: 'missing_skill_manifest',
+            },
+            error: 'missing_skill_manifest',
+        });
+    });
+
+    test('install_from_github for mcp registers downloaded manifest into toolpack store', async () => {
+        const installedDir = makeTempDir('capability-mcp-');
+        fs.writeFileSync(path.join(installedDir, 'manifest.json'), JSON.stringify({
+            id: 'demo-mcp',
+            name: 'Demo MCP',
+            version: '1.0.0',
+            runtime: 'node',
+            tools: ['demo_tool'],
+        }));
+
+        const added: Array<{ manifest: any; workingDir: string }> = [];
+        const deps = createDeps({
+            downloadMcpFromGitHub: async () => ({
+                success: true,
+                path: installedDir,
+                filesDownloaded: 2,
+            }),
+            toolpackStore: {
+                list: () => [],
+                getById: () => undefined,
+                add: (manifest, workingDir) => {
+                    added.push({ manifest, workingDir });
+                },
+                setEnabledById: () => true,
+                removeById: () => true,
+            },
+        });
+
+        const response = await handleCapabilityCommand({
+            id: 'cmd-3',
+            type: 'install_from_github',
+            payload: {
+                workspacePath: '/tmp/workspace',
+                source: 'owner/mcp-repo',
+                targetType: 'mcp',
+            },
+        } as any, deps);
+
+        expect(response?.type).toBe('install_from_github_response');
+        expect((response as any).payload.success).toBe(true);
+        expect(added).toHaveLength(1);
+        expect(added[0]?.workingDir).toBe(installedDir);
+        expect(added[0]?.manifest.name).toBe('Demo MCP');
+    });
+
+    test('remove_claude_skill deletes installed files unless deleteFiles is false', async () => {
+        const skillDir = makeTempDir('capability-skill-');
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# test');
+
+        const deps = createDeps({
+            skillStore: {
+                list: () => [],
+                get: () => ({
+                    manifest: {
+                        directory: skillDir,
+                    },
+                } as any),
+                install: () => {},
+                setEnabled: () => true,
+                uninstall: () => true,
+            },
+        });
+
+        const response = await handleCapabilityCommand({
+            id: 'cmd-4',
+            type: 'remove_claude_skill',
+            payload: {
+                skillId: 'demo-skill',
+            },
+        } as any, deps);
+
+        expect(response?.type).toBe('remove_claude_skill_response');
+        expect((response as any).payload.success).toBe(true);
+        expect(fs.existsSync(skillDir)).toBe(false);
+    });
+
+    test('directive commands round-trip through directive manager', async () => {
+        const directives = new Map<string, any>();
+        const deps = createDeps({
+            getDirectiveManager: () => ({
+                listDirectives: () => Array.from(directives.values()),
+                upsertDirective: (directive) => {
+                    directives.set(directive.id, directive);
+                    return directive;
+                },
+                removeDirective: (directiveId) => directives.delete(directiveId),
+            }),
+        });
+
+        const upsertResponse = await handleCapabilityCommand({
+            id: 'cmd-5',
+            type: 'upsert_directive',
+            payload: {
+                directive: {
+                    id: 'strict',
+                    name: 'Strict',
+                    content: 'Be precise',
+                    enabled: true,
+                    priority: 2,
+                },
+            },
+        } as any, deps);
+
+        const listResponse = await handleCapabilityCommand({
+            id: 'cmd-6',
+            type: 'list_directives',
+            payload: {},
+        } as any, deps);
+
+        const removeResponse = await handleCapabilityCommand({
+            id: 'cmd-7',
+            type: 'remove_directive',
+            payload: {
+                directiveId: 'strict',
+            },
+        } as any, deps);
+
+        expect(upsertResponse?.type).toBe('upsert_directive_response');
+        expect((listResponse as any).payload.directives).toHaveLength(1);
+        expect(removeResponse?.type).toBe('remove_directive_response');
+        expect((removeResponse as any).payload.success).toBe(true);
+    });
+
+    test('validate_github_url dispatches to the correct validator by target type', async () => {
+        const calls: string[] = [];
+        const deps = createDeps({
+            validateSkillUrl: async (url) => {
+                calls.push(`skill:${url}`);
+                return { valid: true, sourceType: 'skill' };
+            },
+            validateMcpUrl: async (url) => {
+                calls.push(`mcp:${url}`);
+                return { valid: true, sourceType: 'mcp' };
+            },
+        });
+
+        const skillResponse = await handleCapabilityCommand({
+            id: 'cmd-8',
+            type: 'validate_github_url',
+            payload: {
+                url: 'https://github.com/example/skill',
+                type: 'skill',
+            },
+        } as any, deps);
+
+        const mcpResponse = await handleCapabilityCommand({
+            id: 'cmd-9',
+            type: 'validate_github_url',
+            payload: {
+                url: 'https://github.com/example/mcp',
+                type: 'mcp',
+            },
+        } as any, deps);
+
+        expect(calls).toEqual([
+            'skill:https://github.com/example/skill',
+            'mcp:https://github.com/example/mcp',
+        ]);
+        expect(skillResponse?.type).toBe('validate_github_url_response');
+        expect((skillResponse as any).payload.sourceType).toBe('skill');
+        expect((mcpResponse as any).payload.sourceType).toBe('mcp');
+    });
+});

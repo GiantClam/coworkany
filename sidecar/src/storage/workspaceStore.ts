@@ -108,7 +108,7 @@ export class WorkspaceStore {
 
     constructor(appDataDir: string, legacyConfigPath?: string) {
         this.configPath = path.join(appDataDir, 'workspaces.json');
-        this.managedWorkspaceRoot = path.join(appDataDir, 'workspace');
+        this.managedWorkspaceRoot = path.join(appDataDir, 'workspaces');
         this.legacyConfigPath = legacyConfigPath;
         this.load();
     }
@@ -216,6 +216,45 @@ export class WorkspaceStore {
         };
     }
 
+    private recoverManagedWorkspaceDirectories(baseConfig: WorkspaceConfig): boolean {
+        if (!fs.existsSync(this.managedWorkspaceRoot)) {
+            return false;
+        }
+
+        const knownPaths = new Set(
+            baseConfig.workspaces.map((workspace) => path.normalize(workspace.path))
+        );
+        let changed = false;
+
+        for (const entry of fs.readdirSync(this.managedWorkspaceRoot, { withFileTypes: true })) {
+            if (!entry.isDirectory()) {
+                continue;
+            }
+
+            const workspacePath = path.join(this.managedWorkspaceRoot, entry.name);
+            const normalizedPath = path.normalize(workspacePath);
+            if (knownPaths.has(normalizedPath)) {
+                continue;
+            }
+
+            const stats = fs.statSync(workspacePath);
+            baseConfig.workspaces.push(this.normalizeWorkspace({
+                id: randomUUID(),
+                name: 'New workspace',
+                path: normalizedPath,
+                createdAt: stats.birthtime.toISOString(),
+                lastAccessedAt: stats.mtime.toISOString(),
+                autoNamed: true,
+                defaultSkills: [],
+                defaultToolpacks: ['builtin-websearch'],
+            }));
+            knownPaths.add(normalizedPath);
+            changed = true;
+        }
+
+        return changed;
+    }
+
     /**
      * Load workspaces from storage
      */
@@ -257,6 +296,10 @@ export class WorkspaceStore {
                         changed = true;
                     }
                 }
+            }
+
+            if (this.recoverManagedWorkspaceDirectories(baseConfig)) {
+                changed = true;
             }
 
             this.config = baseConfig;

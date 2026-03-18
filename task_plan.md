@@ -1,10 +1,7 @@
 # Task Plan
 
 ## Goal
-修复 CoworkAny 的延时执行链路，让“几分钟后执行任务并语音播报”能够真正被注册、持久化、按时触发、执行并在 UI 中立即反馈。
-
-## Follow-up Goal
-建立 desktop 与 sidecar 的跨平台统一运行时机制，收拢平台路径、sidecar 启动链路、Python/Skillhub 查找和 runtime capability 下发。
+继续推进 sidecar 执行架构重构：在 `TaskEventBus` 基础上继续收掉剩余内联 task/global events，把 `main.ts` 中绝大多数事件对象构造切到统一 bus，仅保留确实需要特殊顺序控制的极少数例外。
 
 ## Phases
 - [completed] 1. 审查当前 sidecar 工具注册、调度器和任务执行入口
@@ -12,7 +9,73 @@
 - [completed] 3. 在 sidecar 启动时接通 `HeartbeatEngine`，到点执行任务并调用 `voice_speak`
 - [completed] 4. desktop 发送后立即回显“已安排在 xx:xx 执行”
 - [completed] 5. 运行验证与日志确认
+- [completed] 6. 抽出 `workRequestRuntime`，收拢 analyze/freeze/plan/presentation/planning-files glue
+- [completed] 7. 抽出 `taskToolResolver`，让 builtin/MCP/runtime tool 装配脱离 `main.ts`
+- [completed] 8. 运行 sidecar typecheck 与关键测试，修复回归
+- [completed] 9. 抽出 `execution/runtime.ts`，统一 fresh task 与 continued task 的执行入口
+- [completed] 10. 将 autonomous fallback、skill prompt 拼装、artifact verification、降级放行与 finish/fail 事件收口到 execution runtime
+- [completed] 11. 补充 execution runtime 边界测试并重新验证
+- [completed] 12. 接通 directives 管理链路与 system prompt 注入
+- [completed] 13. 为 `import_claude_skill` 增加依赖检查与 CLI 自动安装
+- [completed] 14. 补充 desktop/sidecar 测试并验证 CLI 能力边界
+- [completed] 15. 新增 `ExecutionSession`，收口 runtime 需要的任务级运行态
+- [completed] 16. 新增 `ExecutionResultReporter`，收口 finish/fail/status/telemetry 输出
+- [completed] 17. 改造 `execution/runtime.ts` 与 `main.ts` wiring，改用 `session + reporter`
+- [completed] 18. 重新通过 sidecar typecheck 与关键测试
+- [completed] 19. 审查 skill import UI、GitHub/market 安装链与 dependency installer 当前返回结构
+- [completed] 20. 将 OpenClaw 依赖安装元数据扩展到 `winget/choco/download.url`
+- [completed] 21. 将 dependency installer 从字符串白名单扩展为结构化 install plan，并支持受控下载/解压
+- [completed] 22. 统一 `import_claude_skill` 与 `install_from_github(skill)` 的依赖检查和自动安装逻辑
+- [completed] 23. 扩展 sidecar protocol 返回 install plans / attempts / GitHub importResult
+- [completed] 24. 新增 desktop skill import feedback 解析与复用面板
+- [completed] 25. 在 SkillsView、SkillToolpackManager、Repository/Marketplace skill 安装入口展示依赖安装结果和缺失项
+- [completed] 26. 重新通过 sidecar typecheck、desktop typecheck 与 skill-store 相关测试
+- [completed] 27. 审查 `main.ts` 中 task lifecycle 状态的读写边界，确认会话态跨 start/continue/suspend-resume/verification 多处共享
+- [completed] 28. 新增泛型 `TaskSessionStore`，统一托管 conversation/config/historyLimit/resumeQueue/artifact state
+- [completed] 29. 改造 `main.ts`，移除分散的 task state Maps，改由 session store 提供读写
+- [completed] 30. 保持 `ExecutionSession` 与 execution runtime wiring 不变，仅把底层 state source 切到 session store
+- [completed] 31. 新增 `task-session-store` 单测，并重新通过 sidecar typecheck 与关键 runtime 测试
+- [completed] 32. 审查 `taskSequences` 与 task event factory 在 `main.ts` 中的分布与特殊事件类型
+- [completed] 33. 新增 `TaskEventBus`，统一托管 per-task sequence、常用事件工厂与 raw event 发射
+- [completed] 34. 将 `main.ts` 的 handler context、execution reporter、fresh/autonomous task 启停、history clear、send_task_message 主链切到 event bus
+- [completed] 35. 新增 `task-event-bus` 单测，并重新通过 sidecar typecheck 与关键 runtime 测试
+- [completed] 36. 将 autonomous custom events、TOKEN_USAGE、global effect/patch events 切到 `TaskEventBus.emitRaw()`
+- [completed] 37. 将剩余常规 browser/resume `CHAT_MESSAGE` 内联发射切到 event bus
+- [completed] 38. 重新通过 sidecar typecheck 与 task-event/session/runtime 关键测试
+- [completed] 39. 为 `TaskEventBus` 增加显式 `sequence/timestamp` override，支持非常规终止事件而不污染正常递增序列
+- [completed] 40. 将工具循环中最后两组 `sequence: 0` 终止事件切到 event bus，并补覆盖 override 语义的单测
+- [completed] 41. 重新通过 sidecar typecheck、更宽的 sidecar 回归测试集与 `desktop npx tsc --noEmit`
+- [completed] 42. 抽出 capability command handler，收口 skills/toolpacks/directives/GitHub install/scan-default-repos 这组高风险命令
+- [completed] 43. 为 capability handler 增加独立单测，覆盖 skill import 转发、GitHub 安装结果合并、MCP 注册和删除副作用
+- [completed] 44. 重新通过 sidecar typecheck、8 组侧重 capability/runtime 的回归测试以及 `desktop npx tsc --noEmit`
+- [completed] 45. 抽出 workspace command handler，收口 list/create/update/delete workspace 这组命令
+- [completed] 46. 为 workspace handler 增加独立单测，并修复 response payload 持有可变 store 引用的问题
+- [completed] 47. 重新通过 sidecar typecheck、10 组 capability/workspace/runtime 回归测试以及 `desktop npx tsc --noEmit`
+- [completed] 48. 将 `validate_github_url` 并入 capability handler，继续缩小 `main.ts` 的 repository/capability 分发面
+- [completed] 49. 为 `validate_github_url` 增加 capability handler 定向测试，并重新通过 sidecar typecheck
+- [completed] 50. 新增 runtime handler，批量收口 bootstrap/task/effect/autonomous command 与 response 分发
+- [completed] 51. 为 runtime handler 增加独立测试，覆盖 bootstrap、start_task、send_task_message 关键分支、autonomous 启动与 response 映射
+- [completed] 52. 重新通过 sidecar typecheck、11 组关键回归测试与 `desktop npx tsc --noEmit`
+- [completed] 53. 盘点发布前现有验收、故障恢复、观测性与 release workflow 缺口，确定用统一 release-readiness gate 收口
+- [completed] 54. 新增 release-readiness CLI、观测性汇总与 canary checklist，并接入 release workflow
+- [completed] 55. 运行发布前验证命令，产出 readiness 报告并整理剩余风险
+- [in_progress] 56. 提交并推送本轮发布前准备改动
 
 ## Errors Encountered
 - `voiceSpeakTool` 在调度执行分支中被引用但未导入，已补 import 并重新通过 typecheck。
 - Rust `platform_runtime` 抽出后，`ipc.rs` 仍沿用旧的 `Result<bool, _>` 调用方式，已改为直接消费 `bool`。
+- `ExecutionRuntimeDeps` 早期类型过窄，无法直接承接 `main.ts` 里的 provider / telemetry / artifact helpers；已放宽成 runtime 需要的最小契约后重新通过 typecheck。
+- `DirectivesEditor` 原来没有任何真实后端接口；需要同时补 sidecar protocol、desktop tauri IPC 和 settings UI，否则只改其中一层不会真正生效。
+- 现有 hand-rolled YAML parser 无法可靠解析 OpenClaw 的深层 metadata；在继续做 skill dependency install 之前必须先切到 `yaml` 解析，否则 installer 元数据根本拿不到。
+- `ExecutionSession` 如果只在 runtime 内部持有 artifact 集合而不回写 `taskArtifactsCreated`，续聊或后续执行会丢失上一轮产物上下文；已通过 `onArtifactsChanged` 同步回写解决。
+- `install_from_github(skill)` 原先绕过 `import_claude_skill`，只下载并直接注册 manifest，导致 GitHub 安装链不会执行依赖检查或自动安装；现已改为复用同一导入实现。
+- 把 `download.url` 继续编码成 shell 命令会破坏现有白名单边界，也无法稳定回传安装状态；已改为 sidecar 内部直接 `fetch` 下载并在受控路径安装。
+- `SkillRepositoryView` 最初改造时一度重复触发两次 `install_from_github`；已收回为单次 invoke 并直接消费返回 payload。
+- 这组状态不能只抽 `conversation/config/historyLimit` 三张 Map，因为 suspend-resume 队列和 artifact 状态与同一个 task 生命周期强耦合；如果继续留在外面，只会形成新的“双源状态”。
+- `TaskEventBus` 落地后，`main.ts` 里仍有少量特殊 raw event（如 autonomous custom events、token usage）保留内联对象；这些事件类型不适合在同一轮和通用 task lifecycle event 一起硬收，避免一次改动面过大。
+- 工具循环里的两处 `sequence: 0` 终止事件不是普通递增流的一部分，已通过 `TaskEventBus` 的显式 sequence override 能力统一收口；override 仅在显式指定时生效，不会回卷后续正常序列。
+- capability commands 抽离时，`remove_toolpack/remove_claude_skill` 的文件删除语义最容易在重构里被遗漏；已在新 handler 中显式保留，并用单测锁住。
+- workspace commands 抽离时暴露出一个真实问题：`list_workspaces_response` 之前直接暴露 store 内部数组引用，后续 update/delete 会“回写污染”已构造的响应对象；已改为在 handler 层返回快照副本。
+- runtime handler 初版类型定义过于理想化，导致主流程函数与依赖签名不兼容，并触发了 `suspendResumeManager` 的前置引用问题；已改为惰性 `getRuntime*Deps()` 构造，并把 handler 边界放宽到内部编排模块应有的“协作对象”粒度。
+- 当前仓库虽然已有 onboarding clean-machine、database failure recovery、startup metrics 与 artifact telemetry，但缺少统一的发布前入口与可审计报告，导致这些能力很难真正作为 release gate 使用。
+- `release-readiness` 首轮报告显示代码级 gate 已通过，但观测性仍有两项环境依赖告警：未提供真实 `appDataDir`，且当前工作区没有 artifact telemetry 文件；这两项必须在 canary 真实会话中补证据，而不是靠本地静态验证假装通过。

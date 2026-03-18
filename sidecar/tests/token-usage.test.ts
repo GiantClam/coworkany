@@ -50,8 +50,8 @@ describe('Token Usage: Anthropic stream parser', () => {
     });
 
     test('streamAnthropicResponse emits TOKEN_USAGE event', () => {
-        // Verify TOKEN_USAGE event emission pattern for Anthropic
-        const tokenUsageEmitPattern = /type:\s*['"]TOKEN_USAGE['"]/;
+        // The refactored runtime emits via TaskEventBus.emitRaw(taskId, 'TOKEN_USAGE', ...)
+        const tokenUsageEmitPattern = /emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/;
         expect(tokenUsageEmitPattern.test(source)).toBe(true);
     });
 
@@ -79,7 +79,7 @@ describe('Token Usage: OpenAI stream parser', () => {
 
     test('streamOpenAIResponse emits TOKEN_USAGE event', () => {
         // There should be at least two TOKEN_USAGE emissions (Anthropic + OpenAI)
-        const matches = source.match(/type:\s*['"]TOKEN_USAGE['"]/g);
+        const matches = source.match(/emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/g);
         expect(matches).toBeTruthy();
         expect(matches!.length).toBeGreaterThanOrEqual(2);
     });

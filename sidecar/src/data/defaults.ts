@@ -703,6 +703,95 @@ You MUST call \`voice_speak\` directly. This is a hard requirement, not a sugges
 If voice_speak returns an error (e.g., TTS unavailable), then inform the user clearly about the error.
 `;
 
+const SKILL_TASK_ORCHESTRATOR = `---
+name: task-orchestrator
+description: Built-in control plane. Analyze user input into structured work requests before execution, freeze scheduled work before background runs, and separate execution output from UI/TTS presentation.
+---
+
+# Task Orchestrator
+
+## Purpose
+This built-in skill is the CoworkAny control plane. It classifies user input before domain execution starts.
+
+## Rules
+1. Analyze first, execute second.
+2. Separate chat, immediate tasks, scheduled tasks, and multi-task work.
+3. Ask clarification only before freezing a task.
+4. Never ask new questions during a scheduled background run.
+5. Reduce raw execution output into separate UI and TTS payloads.
+
+## Required Tools
+- \`analyze_work_request\`
+- \`freeze_work_request\`
+- \`plan_work_execution\`
+- \`reduce_execution_result\`
+- \`present_work_result\`
+`;
+
+const SKILL_SUPERPOWERS_WORKFLOW = `---
+name: superpowers-workflow
+description: Built-in planning and decomposition workflow inspired by obra/superpowers. Use for complex implementation, design, and debugging tasks.
+---
+
+# Superpowers Workflow
+
+## Purpose
+Use a disciplined workflow instead of jumping straight into implementation.
+
+## Core Flow
+1. Refine the problem before coding.
+2. Explore alternatives and choose one.
+3. Break work into bite-sized tasks.
+4. Verify each task before claiming completion.
+
+## Activation Guidance
+- Use for complex features, multi-step fixes, architecture changes, or broad debugging.
+- Prefer this over ad-hoc execution when the task spans several files or several decisions.
+
+## Working Rules
+- Do not start with code if the task still needs decomposition.
+- Prefer one small task at a time.
+- Keep verification tied to each task, not just the end.
+- Escalate ambiguity early instead of pushing it into the executor.
+
+## Relationship To Other Skills
+- Pair with \`task-orchestrator\` for request classification.
+- Pair with \`planning-with-files\` when persistent on-disk planning is useful.
+- Pair with \`writing-plans\` when a detailed implementation document is required.
+`;
+
+const SKILL_PLANNING_WITH_FILES = `---
+name: planning-with-files
+description: Built-in persistent planning workflow inspired by OthmanAdi/planning-with-files. Use for complex tasks that need durable on-disk planning across long sessions.
+---
+
+# Planning With Files
+
+## Purpose
+Use markdown files as persistent working memory for complex tasks.
+
+## Required Files
+- \`task_plan.md\`
+- \`findings.md\`
+- \`progress.md\`
+
+## Core Rules
+1. Create planning files before a complex task.
+2. Re-read the plan before major decisions.
+3. After every few research or inspection steps, write key findings to disk.
+4. Update progress after each phase.
+5. Do not repeat the same failed action without changing the approach.
+
+## When To Use
+- research tasks
+- multi-step implementations
+- long debugging sessions
+- tasks likely to span many tool calls or multiple sessions
+
+## Expected Outcome
+The task state should survive context loss, restarts, and long execution chains.
+`;
+
 const SKILL_STOCK_RESEARCH = `---
 name: stock-research
 description: 投资研究助手 — 检索新闻、分析股票、提供投资建议。用户请求研究时必须执行，不允许拒绝。
@@ -1078,6 +1167,39 @@ export const BUILTIN_SKILLS: BuiltinSkillManifest[] = [
         tags: ['builtin', 'voice', 'tts'],
         allowedTools: ['voice_speak'],
         triggers: ['说话', '朗读', '读出来', '语音', 'speak', 'read aloud', 'text to speech', 'tts', 'voice', '播报', '念出来', '读给我听', 'say it', 'speak it'],
+    },
+    {
+        id: 'task-orchestrator',
+        name: 'task-orchestrator',
+        version: '1.0.0',
+        description: 'Platform control plane that analyzes, freezes, plans, and presents work requests before execution.',
+        directory: '',
+        content: SKILL_TASK_ORCHESTRATOR,
+        tags: ['builtin', 'control-plane', 'orchestration'],
+        allowedTools: ['analyze_work_request', 'freeze_work_request', 'plan_work_execution', 'reduce_execution_result', 'present_work_result'],
+        triggers: ['定时任务', 'scheduled task', '多任务', 'orchestrate', 'task routing', '任务分析', '验收标准'],
+    },
+    {
+        id: 'superpowers-workflow',
+        name: 'superpowers-workflow',
+        version: '1.0.0',
+        description: 'Built-in planning and decomposition workflow inspired by obra/superpowers.',
+        directory: '',
+        content: SKILL_SUPERPOWERS_WORKFLOW,
+        tags: ['builtin', 'planning', 'process'],
+        allowedTools: ['think', 'plan_step', 'log_finding', 'view_file', 'write_to_file', 'run_command'],
+        triggers: ['复杂任务', '任务分解', '多步实现', '复杂修复', 'plan this feature', 'break down this task', 'decompose', 'workflow'],
+    },
+    {
+        id: 'planning-with-files',
+        name: 'planning-with-files',
+        version: '1.0.0',
+        description: 'Built-in persistent markdown planning workflow inspired by OthmanAdi/planning-with-files.',
+        directory: '',
+        content: SKILL_PLANNING_WITH_FILES,
+        tags: ['builtin', 'planning', 'persistence'],
+        allowedTools: ['think', 'plan_step', 'log_finding', 'view_file', 'write_to_file', 'list_dir', 'run_command', 'search_web'],
+        triggers: ['planning-with-files', 'task_plan.md', 'findings.md', 'progress.md', '持久化规划', '文件规划', '长任务规划'],
     },
     {
         id: 'stock-research',

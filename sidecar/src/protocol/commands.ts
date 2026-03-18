@@ -538,6 +538,15 @@ export const ClaudeSkillManifestSchema = z.object({
     tags: z.array(z.string()).default([]),
 });
 
+export const DirectiveSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    content: z.string(),
+    enabled: z.boolean(),
+    priority: z.number().int(),
+    trigger: z.string().optional(),
+});
+
 export const ClaudeSkillRecordSchema = z.object({
     manifest: ClaudeSkillManifestSchema,
     rootPath: z.string(),
@@ -582,6 +591,7 @@ export const ImportClaudeSkillCommandSchema = BaseCommandSchema.extend({
         path: z.string().optional(),
         url: z.string().optional(),
         overwrite: z.boolean().default(false),
+        autoInstallDependencies: z.boolean().default(true),
     }),
 });
 
@@ -591,6 +601,35 @@ export const ImportClaudeSkillResponseSchema = BaseResponseSchema.extend({
         success: z.boolean(),
         skillId: z.string().optional(),
         error: z.string().optional(),
+        warnings: z.array(z.string()).optional(),
+        dependencyCheck: z.object({
+            platformEligible: z.boolean(),
+            satisfied: z.boolean(),
+            missing: z.array(z.string()),
+            canAutoInstall: z.boolean(),
+            installPlans: z.array(z.object({
+                kind: z.enum(['command', 'download']),
+                label: z.string(),
+                binary: z.string(),
+                runner: z.enum(['brew', 'npm', 'uv', 'pip', 'go', 'winget', 'choco']).optional(),
+                command: z.string().optional(),
+                url: z.string().optional(),
+                extract: z.boolean().optional(),
+            })),
+            installCommands: z.array(z.string()),
+        }).optional(),
+        installResults: z.array(z.object({
+            kind: z.enum(['command', 'download']),
+            label: z.string(),
+            success: z.boolean(),
+            skipped: z.boolean().optional(),
+            error: z.string().optional(),
+            output: z.string().optional(),
+            binary: z.string().optional(),
+            command: z.string().optional(),
+            url: z.string().optional(),
+            targetPath: z.string().optional(),
+        })).optional(),
     }),
 });
 
@@ -624,6 +663,50 @@ export const RemoveClaudeSkillResponseSchema = BaseResponseSchema.extend({
     payload: z.object({
         success: z.boolean(),
         skillId: z.string(),
+        error: z.string().optional(),
+    }),
+});
+
+export const ListDirectivesCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('list_directives'),
+    payload: z.object({}).optional(),
+});
+
+export const ListDirectivesResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('list_directives_response'),
+    payload: z.object({
+        directives: z.array(DirectiveSchema),
+    }),
+});
+
+export const UpsertDirectiveCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('upsert_directive'),
+    payload: z.object({
+        directive: DirectiveSchema,
+    }),
+});
+
+export const UpsertDirectiveResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('upsert_directive_response'),
+    payload: z.object({
+        success: z.boolean(),
+        directive: DirectiveSchema.optional(),
+        error: z.string().optional(),
+    }),
+});
+
+export const RemoveDirectiveCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('remove_directive'),
+    payload: z.object({
+        directiveId: z.string(),
+    }),
+});
+
+export const RemoveDirectiveResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('remove_directive_response'),
+    payload: z.object({
+        success: z.boolean(),
+        directiveId: z.string(),
         error: z.string().optional(),
     }),
 });
@@ -900,6 +983,9 @@ export const InstallFromGitHubResponseSchema = BaseResponseSchema.extend({
     type: z.literal('install_from_github_response'),
     payload: z.object({
         success: z.boolean(),
+        path: z.string().optional(),
+        filesDownloaded: z.number().optional(),
+        importResult: ImportClaudeSkillResponseSchema.shape.payload.optional(),
         error: z.string().optional(),
     }),
 });
@@ -1005,6 +1091,9 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillCommandSchema,
     SetClaudeSkillEnabledCommandSchema,
     RemoveClaudeSkillCommandSchema,
+    ListDirectivesCommandSchema,
+    UpsertDirectiveCommandSchema,
+    RemoveDirectiveCommandSchema,
     RegisterAgentIdentityCommandSchema,
     RecordAgentDelegationCommandSchema,
     ReportMcpGatewayDecisionCommandSchema,
@@ -1053,6 +1142,9 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillResponseSchema,
     SetClaudeSkillEnabledResponseSchema,
     RemoveClaudeSkillResponseSchema,
+    ListDirectivesResponseSchema,
+    UpsertDirectiveResponseSchema,
+    RemoveDirectiveResponseSchema,
     RegisterAgentIdentityResponseSchema,
     RecordAgentDelegationResponseSchema,
     ReportMcpGatewayDecisionResponseSchema,
@@ -1113,6 +1205,13 @@ export type ImportClaudeSkillResponse = z.infer<typeof ImportClaudeSkillResponse
 export type SetClaudeSkillEnabledCommand = z.infer<typeof SetClaudeSkillEnabledCommandSchema>;
 export type SetClaudeSkillEnabledResponse = z.infer<typeof SetClaudeSkillEnabledResponseSchema>;
 export type RemoveClaudeSkillCommand = z.infer<typeof RemoveClaudeSkillCommandSchema>;
+export type Directive = z.infer<typeof DirectiveSchema>;
+export type ListDirectivesCommand = z.infer<typeof ListDirectivesCommandSchema>;
+export type ListDirectivesResponse = z.infer<typeof ListDirectivesResponseSchema>;
+export type UpsertDirectiveCommand = z.infer<typeof UpsertDirectiveCommandSchema>;
+export type UpsertDirectiveResponse = z.infer<typeof UpsertDirectiveResponseSchema>;
+export type RemoveDirectiveCommand = z.infer<typeof RemoveDirectiveCommandSchema>;
+export type RemoveDirectiveResponse = z.infer<typeof RemoveDirectiveResponseSchema>;
 export type RemoveClaudeSkillResponse = z.infer<typeof RemoveClaudeSkillResponseSchema>;
 export type RegisterAgentIdentityCommand = z.infer<typeof RegisterAgentIdentityCommandSchema>;
 export type RegisterAgentIdentityResponse = z.infer<typeof RegisterAgentIdentityResponseSchema>;

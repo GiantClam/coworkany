@@ -7,6 +7,11 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
+import { SkillImportFeedbackPanel } from './Skills/SkillImportFeedbackPanel';
+import {
+    extractSkillImportFeedback,
+    type SkillImportFeedback,
+} from '../lib/skillImport';
 
 type ToolpackRecord = {
     manifest: {
@@ -63,6 +68,7 @@ export function SkillToolpackManager() {
     const [skillPath, setSkillPath] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [lastImportFeedback, setLastImportFeedback] = useState<SkillImportFeedback[] | null>(null);
 
     const refresh = async () => {
         setLoading(true);
@@ -107,9 +113,11 @@ export function SkillToolpackManager() {
         if (!skillPath.trim()) return;
         setLoading(true);
         try {
-            await invoke<IpcResult>('import_claude_skill', {
+            const result = await invoke<IpcResult>('import_claude_skill', {
                 input: { source: 'local_folder', path: skillPath.trim() },
             });
+            const feedback = extractSkillImportFeedback(result.payload);
+            setLastImportFeedback(feedback ? [feedback] : null);
             setSkillPath('');
             await refresh();
         } catch (err) {
@@ -292,6 +300,7 @@ export function SkillToolpackManager() {
                         {t('common.import')}
                     </button>
                 </div>
+                <SkillImportFeedbackPanel feedback={lastImportFeedback} />
                 {skills.map((skill) => (
                     <div
                         key={skill.manifest.id}

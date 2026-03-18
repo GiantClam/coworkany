@@ -156,6 +156,7 @@ export function useMarketplaceSearch() {
         if (payload.success === false || payload.error) {
             throw new Error(String(payload.error ?? 'Install failed'));
         }
+        return payload;
     }, []);
 
     const stats = useMemo(() => ({

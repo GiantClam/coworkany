@@ -25,6 +25,7 @@ export type TaskEventType =
     | 'TASK_FINISHED'
     | 'TASK_FAILED'
     | 'TASK_STATUS'
+    | 'TASK_CLARIFICATION_REQUIRED'
     | 'TASK_HISTORY_CLEARED'
     | 'PLAN_UPDATED'
     | 'CHAT_MESSAGE'
@@ -111,6 +112,7 @@ export interface TaskSession {
     status: TaskStatus;
     title?: string;
     summary?: string;
+    clarificationQuestions?: string[];
     planSummary?: string;
     planSteps: PlanStep[];
     toolCalls: ToolCall[];
@@ -203,6 +205,12 @@ export interface PlanUpdatedPayload {
 export interface ChatMessagePayload {
     role: 'user' | 'assistant' | 'system';
     content: string;
+}
+
+export interface TaskClarificationRequiredPayload {
+    reason?: string;
+    questions: string[];
+    missingFields?: string[];
 }
 
 export interface TextDeltaPayload {

@@ -3,12 +3,16 @@ import { useTranslation } from 'react-i18next';
 import { useMarketplaceSearch, type MarketplaceItem, type MarketplaceItemType } from '../../hooks/useMarketplaceSearch';
 import { useDependencyManager } from '../../hooks/useDependencyManager';
 import { toast } from '../Common/ToastProvider';
+import {
+    extractSkillImportFeedback,
+    type SkillImportFeedback,
+} from '../../lib/skillImport';
 
 interface MarketplaceViewProps {
     defaultSource?: string;
     initialType?: MarketplaceItemType | 'all';
     installedSources?: Set<string>;
-    onInstallComplete?: () => void;
+    onInstallComplete?: (feedback?: SkillImportFeedback) => void | Promise<void>;
 }
 
 type FilterType = MarketplaceItemType | 'all';
@@ -176,8 +180,8 @@ export function MarketplaceView({
         if (installedSources?.has(item.source)) return;
         setInstallingId(item.id);
         try {
-            await installItem(item);
-            onInstallComplete?.();
+            const payload = await installItem(item);
+            await onInstallComplete?.(item.type === 'skill' ? extractSkillImportFeedback(payload) ?? undefined : undefined);
         } catch (err) {
             window.alert(String(err));
         } finally {

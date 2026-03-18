@@ -78,9 +78,38 @@ export class DirectiveManager {
         fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2));
     }
 
+    listDirectives(): Directive[] {
+        return Array.from(this.directives.values()).sort((left, right) => {
+            if (right.priority !== left.priority) {
+                return right.priority - left.priority;
+            }
+            return left.name.localeCompare(right.name);
+        });
+    }
+
     addDirective(directive: Directive) {
         this.directives.set(directive.id, directive);
         this.save();
+    }
+
+    upsertDirective(directive: Directive): Directive {
+        const normalized: Directive = {
+            ...directive,
+            name: directive.name.trim(),
+            content: directive.content.trim(),
+            trigger: directive.trigger?.trim() || undefined,
+        };
+        this.directives.set(normalized.id, normalized);
+        this.save();
+        return normalized;
+    }
+
+    removeDirective(id: string): boolean {
+        const removed = this.directives.delete(id);
+        if (removed) {
+            this.save();
+        }
+        return removed;
     }
 
     getSystemPromptAdditions(query: string): string {

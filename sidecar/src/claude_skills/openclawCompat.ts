@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
+import YAML from 'yaml';
 import { SkillManifest, SkillRequirements } from './types';
 
 // ============================================================================
@@ -38,6 +39,8 @@ export interface OpenClawMetadata {
         node?: string[];
         uv?: string[];
         go?: string[];
+        winget?: string[];
+        choco?: string[];
         download?: {
             url: string;
             extract?: boolean;
@@ -64,8 +67,25 @@ export interface DependencyCheckResult {
     satisfied: boolean;
     missing: string[];
     canAutoInstall: boolean;
+    installPlans?: DependencyInstallPlan[];
     installCommands?: string[];
 }
+
+export type DependencyInstallPlan =
+    | {
+        kind: 'command';
+        label: string;
+        binary: string;
+        runner: 'brew' | 'npm' | 'uv' | 'pip' | 'go' | 'winget' | 'choco';
+        command: string;
+    }
+    | {
+        kind: 'download';
+        label: string;
+        binary: string;
+        url: string;
+        extract?: boolean;
+    };
 
 export interface ClawHubSkillInfo {
     name: string;
@@ -166,84 +186,15 @@ export class OpenClawCompatLayer {
      * Parse YAML frontmatter (simple implementation)
      */
     private parseYamlFrontmatter(yaml: string): OpenClawSkillManifest {
-        const result: any = {};
-        const lines = yaml.split('\n');
-        let currentKey = '';
-        let currentIndent = 0;
-        let inNestedObject = false;
-        let nestedObject: any = {};
-        let nestedKey = '';
-
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-
-            const indent = line.search(/\S/);
-
-            // Handle nested objects
-            if (indent > currentIndent && currentKey) {
-                inNestedObject = true;
-                nestedKey = currentKey;
-                nestedObject = {};
+        try {
+            const parsed = YAML.parse(yaml);
+            if (parsed && typeof parsed === 'object') {
+                return parsed as OpenClawSkillManifest;
             }
-
-            if (inNestedObject && indent <= currentIndent) {
-                result[nestedKey] = nestedObject;
-                inNestedObject = false;
-            }
-
-            // Parse key-value pairs
-            const colonIndex = trimmed.indexOf(':');
-            if (colonIndex > 0) {
-                const key = trimmed.slice(0, colonIndex).trim();
-                let value = trimmed.slice(colonIndex + 1).trim();
-
-                // Handle various value types
-                if (value === '') {
-                    currentKey = key;
-                    currentIndent = indent;
-                } else if (value === 'true') {
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, true, inNestedObject);
-                } else if (value === 'false') {
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, false, inNestedObject);
-                } else if (value.startsWith('[') && value.endsWith(']')) {
-                    // Array value
-                    const arrayContent = value.slice(1, -1);
-                    const arrayValues = arrayContent.split(',').map(v => v.trim().replace(/^['"]|['"]$/g, ''));
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, arrayValues, inNestedObject);
-                } else if (value.startsWith('"') || value.startsWith("'")) {
-                    // Quoted string
-                    value = value.slice(1, -1);
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, value, inNestedObject);
-                } else {
-                    this.setNestedValue(result, inNestedObject ? nestedObject : result, key, value, inNestedObject);
-                }
-            } else if (trimmed.startsWith('-')) {
-                // Array item
-                const item = trimmed.slice(1).trim().replace(/^['"]|['"]$/g, '');
-                if (!result[currentKey]) {
-                    result[currentKey] = [];
-                }
-                if (Array.isArray(result[currentKey])) {
-                    result[currentKey].push(item);
-                }
-            }
+        } catch (error) {
+            console.error('[OpenClawCompat] Failed to parse YAML frontmatter:', error);
         }
-
-        // Handle any remaining nested object
-        if (inNestedObject) {
-            result[nestedKey] = nestedObject;
-        }
-
-        return result as OpenClawSkillManifest;
-    }
-
-    private setNestedValue(root: any, target: any, key: string, value: any, isNested: boolean): void {
-        if (isNested) {
-            target[key] = value;
-        } else {
-            root[key] = value;
-        }
+        return {} as OpenClawSkillManifest;
     }
 
     /**
@@ -297,7 +248,7 @@ export class OpenClawCompatLayer {
      */
     checkDependencies(manifest: SkillManifest): DependencyCheckResult {
         const missing: string[] = [];
-        const installCommands: string[] = [];
+        const installPlans: DependencyInstallPlan[] = [];
         const openclawMeta = manifest.metadata?.openclaw as OpenClawMetadata | undefined;
 
         // Check required binaries
@@ -306,10 +257,9 @@ export class OpenClawCompatLayer {
                 if (!this.checkBinaryExists(bin)) {
                     missing.push(`bin:${bin}`);
 
-                    // Try to find install command
-                    const installCmd = this.getInstallCommand(bin, openclawMeta?.install);
-                    if (installCmd) {
-                        installCommands.push(installCmd);
+                    const installPlan = this.getInstallPlan(bin, openclawMeta?.install);
+                    if (installPlan) {
+                        installPlans.push(installPlan);
                     }
                 }
             }
@@ -337,8 +287,13 @@ export class OpenClawCompatLayer {
         return {
             satisfied: missing.length === 0,
             missing,
-            canAutoInstall: installCommands.length > 0,
-            installCommands: installCommands.length > 0 ? installCommands : undefined,
+            canAutoInstall: installPlans.length > 0,
+            installPlans: installPlans.length > 0 ? installPlans : undefined,
+            installCommands: installPlans.length > 0
+                ? installPlans.map((plan) => plan.kind === 'command'
+                    ? plan.command
+                    : `download ${plan.url} -> ${plan.binary}`)
+                : undefined,
         };
     }
 
@@ -358,18 +313,24 @@ export class OpenClawCompatLayer {
     /**
      * Get install command for a missing binary
      */
-    private getInstallCommand(
+    private getInstallPlan(
         binary: string,
         installers?: OpenClawMetadata['install']
-    ): string | null {
+    ): DependencyInstallPlan | null {
         if (!installers) return null;
 
         // Check if brew is available (macOS)
         if (installers.brew && process.platform === 'darwin') {
             if (this.checkBinaryExists('brew')) {
-                const pkg = installers.brew.find(p => p.includes(binary) || binary.includes(p));
+                const pkg = this.findInstallerPackage(binary, installers.brew);
                 if (pkg) {
-                    return `brew install ${pkg}`;
+                    return {
+                        kind: 'command',
+                        label: `Install ${binary} with Homebrew`,
+                        binary,
+                        runner: 'brew',
+                        command: `brew install ${pkg}`,
+                    };
                 }
             }
         }
@@ -377,9 +338,15 @@ export class OpenClawCompatLayer {
         // Check if npm/node is available
         if (installers.node) {
             if (this.checkBinaryExists('npm')) {
-                const pkg = installers.node.find(p => p.includes(binary) || binary.includes(p));
+                const pkg = this.findInstallerPackage(binary, installers.node);
                 if (pkg) {
-                    return `npm install -g ${pkg}`;
+                    return {
+                        kind: 'command',
+                        label: `Install ${binary} with npm`,
+                        binary,
+                        runner: 'npm',
+                        command: `npm install -g ${pkg}`,
+                    };
                 }
             }
         }
@@ -387,9 +354,16 @@ export class OpenClawCompatLayer {
         // Check if uv (Python) is available
         if (installers.uv) {
             if (this.checkBinaryExists('uv') || this.checkBinaryExists('pip')) {
-                const pkg = installers.uv.find(p => p.includes(binary) || binary.includes(p));
+                const pkg = this.findInstallerPackage(binary, installers.uv);
                 if (pkg) {
-                    return this.checkBinaryExists('uv') ? `uv pip install ${pkg}` : `pip install ${pkg}`;
+                    const useUv = this.checkBinaryExists('uv');
+                    return {
+                        kind: 'command',
+                        label: `Install ${binary} with ${useUv ? 'uv' : 'pip'}`,
+                        binary,
+                        runner: useUv ? 'uv' : 'pip',
+                        command: useUv ? `uv pip install ${pkg}` : `pip install ${pkg}`,
+                    };
                 }
             }
         }
@@ -397,14 +371,66 @@ export class OpenClawCompatLayer {
         // Check if go is available
         if (installers.go) {
             if (this.checkBinaryExists('go')) {
-                const pkg = installers.go.find(p => p.includes(binary) || binary.includes(p));
+                const pkg = this.findInstallerPackage(binary, installers.go);
                 if (pkg) {
-                    return `go install ${pkg}@latest`;
+                    return {
+                        kind: 'command',
+                        label: `Install ${binary} with go install`,
+                        binary,
+                        runner: 'go',
+                        command: `go install ${pkg}@latest`,
+                    };
                 }
             }
         }
 
+        if (process.platform === 'win32') {
+            if (installers.winget && this.checkBinaryExists('winget')) {
+                const pkg = this.findInstallerPackage(binary, installers.winget);
+                if (pkg) {
+                    return {
+                        kind: 'command',
+                        label: `Install ${binary} with winget`,
+                        binary,
+                        runner: 'winget',
+                        command: `winget install --id ${pkg} --accept-package-agreements --accept-source-agreements`,
+                    };
+                }
+            }
+
+            if (installers.choco && this.checkBinaryExists('choco')) {
+                const pkg = this.findInstallerPackage(binary, installers.choco);
+                if (pkg) {
+                    return {
+                        kind: 'command',
+                        label: `Install ${binary} with Chocolatey`,
+                        binary,
+                        runner: 'choco',
+                        command: `choco install -y ${pkg}`,
+                    };
+                }
+            }
+        }
+
+        if (installers.download?.url) {
+            return {
+                kind: 'download',
+                label: `Download ${binary} installer`,
+                binary,
+                url: installers.download.url,
+                extract: installers.download.extract,
+            };
+        }
+
         return null;
+    }
+
+    private findInstallerPackage(binary: string, packages: string[]): string | undefined {
+        return packages.find((pkg) => {
+            const normalizedPackage = pkg.toLowerCase();
+            const normalizedBinary = binary.toLowerCase();
+            return normalizedPackage.includes(normalizedBinary) || normalizedBinary.includes(normalizedPackage);
+        });
     }
 
     // ========================================================================

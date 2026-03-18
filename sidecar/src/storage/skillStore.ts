@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import YAML from 'yaml';
 import { BUILTIN_SKILLS } from '../data/defaults';
 
 // ============================================================================
@@ -48,6 +49,11 @@ export interface ClaudeSkillManifest {
      * Keywords for discovery
      */
     tags?: string[];
+
+    /**
+     * Explicitly allowed tools for this skill.
+     */
+    allowedTools?: string[];
 
     /**
      * Required capabilities (for policy evaluation)
@@ -284,108 +290,18 @@ export class SkillStore {
     }
 
     /**
-     * Parse YAML frontmatter into a key-value object
-     * Supports simple values, arrays (flow and block style), and nested objects
+     * Parse YAML frontmatter into a key-value object.
      */
     private static parseFrontmatter(yaml: string): Record<string, unknown> {
-        const result: Record<string, unknown> = {};
-        const lines = yaml.split('\n');
-        let currentKey: string | null = null;
-        let currentArray: string[] | null = null;
-        let currentObject: Record<string, unknown> | null = null;
-        let objectKey: string | null = null;
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            const trimmed = line.trim();
-
-            // Skip empty lines and comments
-            if (!trimmed || trimmed.startsWith('#')) continue;
-
-            // Check for array item (starts with -)
-            if (trimmed.startsWith('- ') && currentArray !== null) {
-                const value = trimmed.slice(2).trim().replace(/^["']|["']$/g, '');
-                currentArray.push(value);
-                continue;
-            }
-
-            // Check for nested object property (indented key: value)
-            if (line.startsWith('  ') && currentObject !== null && objectKey !== null) {
-                const match = trimmed.match(/^(\w+):\s*(.*)$/);
-                if (match) {
-                    const [, key, value] = match;
-                    if (value.startsWith('[') && value.endsWith(']')) {
-                        // Inline array: [item1, item2]
-                        const items = value.slice(1, -1).split(',').map((s) =>
-                            s.trim().replace(/^["']|["']$/g, '')
-                        ).filter(Boolean);
-                        currentObject[key] = items;
-                    } else {
-                        currentObject[key] = value.replace(/^["']|["']$/g, '');
-                    }
-                }
-                continue;
-            }
-
-            // Close any open array/object when we hit a new top-level key
-            if (!line.startsWith(' ') && currentArray !== null && currentKey !== null) {
-                result[currentKey] = currentArray;
-                currentArray = null;
-                currentKey = null;
-            }
-            if (!line.startsWith(' ') && currentObject !== null && objectKey !== null) {
-                result[objectKey] = currentObject;
-                currentObject = null;
-                objectKey = null;
-            }
-
-            // Parse top-level key: value
-            const match = trimmed.match(/^([\w-]+):\s*(.*)$/);
-            if (match) {
-                const [, key, value] = match;
-
-                if (value === '' || value === '|' || value === '>') {
-                    // Check next line to determine if array or object
-                    const nextLine = lines[i + 1]?.trim() || '';
-                    if (nextLine.startsWith('-')) {
-                        currentKey = key;
-                        currentArray = [];
-                    } else if (nextLine.match(/^\w+:/)) {
-                        objectKey = key;
-                        currentObject = {};
-                    } else {
-                        result[key] = '';
-                    }
-                } else if (value.startsWith('[') && value.endsWith(']')) {
-                    // Inline array: [item1, item2]
-                    const items = value.slice(1, -1).split(',').map((s) =>
-                        s.trim().replace(/^["']|["']$/g, '')
-                    ).filter(Boolean);
-                    result[key] = items;
-                } else if (value === 'true') {
-                    result[key] = true;
-                } else if (value === 'false') {
-                    result[key] = false;
-                } else if (/^\d+$/.test(value)) {
-                    result[key] = parseInt(value, 10);
-                } else if (/^\d+\.\d+$/.test(value)) {
-                    result[key] = parseFloat(value);
-                } else {
-                    // String value (remove quotes if present)
-                    result[key] = value.replace(/^["']|["']$/g, '');
-                }
-            }
+        try {
+            const parsed = YAML.parse(yaml);
+            return parsed && typeof parsed === 'object'
+                ? (parsed as Record<string, unknown>)
+                : {};
+        } catch (error) {
+            console.error('[SkillStore] Failed to parse SKILL.md frontmatter:', error);
+            return {};
         }
-
-        // Close any remaining open array/object
-        if (currentArray !== null && currentKey !== null) {
-            result[currentKey] = currentArray;
-        }
-        if (currentObject !== null && objectKey !== null) {
-            result[objectKey] = currentObject;
-        }
-
-        return result;
     }
 
     /**
@@ -427,6 +343,11 @@ export class SkillStore {
         // Array fields
         if (Array.isArray(parsed.tags)) {
             manifest.tags = parsed.tags as string[];
+        }
+        if (Array.isArray(parsed['allowed-tools'])) {
+            manifest.allowedTools = parsed['allowed-tools'] as string[];
+        } else if (Array.isArray(parsed.allowedTools)) {
+            manifest.allowedTools = parsed.allowedTools as string[];
         }
         if (Array.isArray(parsed.triggers)) {
             manifest.triggers = parsed.triggers as string[];

@@ -69,23 +69,29 @@ import {
     type IpcCommand,
     type IpcResponse,
     type TaskEvent,
-    ToolpackManifestSchema,
 } from './protocol';
 import {
     dispatchCommand,
     AgentIdentityRegistry,
+    handleCapabilityCommand,
+    handleRuntimeCommand,
+    handleRuntimeResponse,
+    handleWorkspaceCommand,
+    type CapabilityCommandDeps,
     type CommandRouterDeps,
     type HandlerContext,
+    type RuntimeCommandDeps,
+    type RuntimeResponseDeps,
+    type WorkspaceCommandDeps,
 } from './handlers';
 import { ToolpackStore, SkillStore, WorkspaceStore } from './storage';
 import { createPostExecutionLearningManager } from './agent/postExecutionLearning';
-import { downloadSkillFromGitHub, downloadMcpFromGitHub } from './utils';
 import {
-    scanForSkills,
-    scanForMcpServers,
     scanDefaultRepositories,
     validateSkillUrl,
     validateMcpUrl,
+    downloadSkillFromGitHub,
+    downloadMcpFromGitHub,
 } from './utils';
 import { detectPackageManager, getPackageManagerCommands } from './utils/packageManagerDetector';
 import { runPostEditHooks, formatHookResults } from './hooks/codeQualityHooks';
@@ -96,6 +102,7 @@ import { MCPGateway } from './mcp/gateway';
 import { setSearchConfig, webSearchTool, type SearchConfig, type SearchProvider } from './tools/websearch';
 import { BUILTIN_TOOLS, readTaskPlanHead, countIncompletePlanSteps } from './tools/builtin';
 import { voiceSpeakTool } from './tools/core/voice';
+import { CONTROL_PLANE_TOOLS } from './tools/controlPlane';
 import { createEnhancedBrowserTools } from './tools/browserEnhanced';
 import { DATABASE_TOOLS } from './tools/database';
 import { xiaohongshuPostTool } from './tools/xiaohongshuPost';
@@ -104,6 +111,28 @@ import { CODE_EXECUTION_TOOLS } from './tools/codeExecution';
 import { KNOWLEDGE_TOOLS } from './agent/knowledgeUpdater';
 import { executeJavaScriptTool, executePythonTool } from './tools/codeExecution';
 import { createPersonalTools } from './tools/personal';
+import { resolveToolsForTask } from './tools/taskToolResolver';
+import {
+    continuePreparedAgentFlow,
+    executePreparedTaskFlow,
+} from './execution/runtime';
+import { ExecutionResultReporter } from './execution/resultReporter';
+import { ExecutionSession } from './execution/session';
+import { TaskSessionStore, type TaskSessionConfig } from './execution/taskSessionStore';
+import {
+    TaskEventBus,
+    type TaskFailedPayload,
+    type TaskFinishedPayload,
+    type TaskResumedPayload,
+    type TaskStartedPayload,
+    type TaskSuspendedPayload,
+    type TextDeltaPayload,
+} from './execution/taskEventBus';
+import { DirectiveManager } from './agent/directives/directiveManager';
+import {
+    autoInstallSkillDependencies,
+    inspectSkillDependencies,
+} from './claude_skills/dependencyInstaller';
 import {
     ScheduledTaskStore,
     detectScheduledIntent,
@@ -112,6 +141,31 @@ import {
     type ScheduledTaskConfig,
     type ScheduledTaskRecord,
 } from './scheduling/scheduledTasks';
+import {
+    buildScheduledTaskCompletionMessage,
+    buildScheduledTaskFailureMessage,
+    buildScheduledTaskSpokenText,
+    cleanScheduledTaskResultText,
+} from './scheduling/scheduledTaskPresentation';
+import {
+    buildExecutionQuery,
+    reduceWorkResult,
+} from './orchestration/workRequestAnalyzer';
+import { WorkRequestStore } from './orchestration/workRequestStore';
+import { type FrozenWorkRequest } from './orchestration/workRequestSchema';
+import {
+    appendPlanningProgressEntry,
+    shouldUsePlanningFiles,
+} from './orchestration/planningFiles';
+import {
+    buildClarificationMessage,
+    createFrozenWorkRequestFromText,
+    getScheduledTaskExecutionQuery,
+    markWorkRequestExecutionCompleted,
+    markWorkRequestExecutionFailed,
+    markWorkRequestExecutionStarted,
+    prepareWorkRequestContext,
+} from './orchestration/workRequestRuntime';
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
 import { AUTONOMOUS_LEARNING_PROTOCOL } from './data/prompts/autonomousLearning';
 import {
@@ -289,25 +343,31 @@ type AnthropicMessage = {
     };
 };
 
-const taskSequences = new Map<string, number>();
-const taskConversations = new Map<string, AnthropicMessage[]>();
-const taskConfigs = new Map<string, {
-    modelId?: string;
-    maxTokens?: number;
-    maxHistoryMessages?: number;
-    enabledClaudeSkills?: string[];
-    enabledToolpacks?: string[];
-    enabledSkills?: string[];
-    workspacePath?: string;
-}>();
-const taskResumeMessages = new Map<string, Array<{ content: string; config?: { modelId?: string; maxTokens?: number; maxHistoryMessages?: number; enabledClaudeSkills?: string[]; enabledToolpacks?: string[]; enabledSkills?: string[] } }>>();
-
 const mcpGateway = new MCPGateway();
 
 const DEFAULT_MAX_HISTORY_MESSAGES = 20;
-const taskHistoryLimits = new Map<string, number>();
-const taskArtifactContracts = new Map<string, ReturnType<typeof buildArtifactContract>>();
-const taskArtifactsCreated = new Map<string, Set<string>>();
+const taskSessionStore = new TaskSessionStore<
+    AnthropicMessage,
+    ReturnType<typeof buildArtifactContract>
+>({
+    getDefaultHistoryLimit,
+});
+const taskEventBus = new TaskEventBus({
+    emit,
+});
+const nextSequence = (taskId: string) => taskEventBus.nextSequence(taskId);
+const createTaskStartedEvent = taskEventBus.started.bind(taskEventBus);
+const createTaskFailedEvent = taskEventBus.failed.bind(taskEventBus);
+const createTaskStatusEvent = taskEventBus.status.bind(taskEventBus);
+const createTaskClarificationRequiredEvent = taskEventBus.clarificationRequired.bind(taskEventBus);
+const createChatMessageEvent = taskEventBus.chatMessage.bind(taskEventBus);
+const createToolCallEvent = taskEventBus.toolCall.bind(taskEventBus);
+const createToolResultEvent = taskEventBus.toolResult.bind(taskEventBus);
+const createTaskFinishedEvent = taskEventBus.finished.bind(taskEventBus);
+const createTextDeltaEvent = taskEventBus.textDelta.bind(taskEventBus);
+const createThinkingDeltaEvent = taskEventBus.thinkingDelta.bind(taskEventBus);
+const createTaskSuspendedEvent = taskEventBus.suspended.bind(taskEventBus);
+const createTaskResumedEvent = taskEventBus.resumed.bind(taskEventBus);
 const artifactTelemetryPath = path.join(process.cwd(), '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl');
 
 // Forward declarations for LLM types (used by AutonomousLlmAdapter)
@@ -733,92 +793,57 @@ function getAutonomousAgent(taskId: string): AutonomousAgentController {
  * Emit autonomous task events to the frontend
  */
 function emitAutonomousEvent(taskId: string, event: AutonomousEvent): void {
-    const baseEvent = {
-        id: randomUUID(),
-        taskId,
-        timestamp: event.timestamp,
-        sequence: nextSequence(taskId),
-    };
-
     switch (event.type) {
         case 'task_decomposed':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_TASK_DECOMPOSED',
-                payload: {
-                    subtaskCount: (event.data as any).subtaskCount || 0,
-                    strategy: (event.data as any).strategy || '',
-                    canRunAutonomously: (event.data as any).canRunAutonomously ?? true,
-                    subtasks: [],
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_TASK_DECOMPOSED', {
+                subtaskCount: (event.data as any).subtaskCount || 0,
+                strategy: (event.data as any).strategy || '',
+                canRunAutonomously: (event.data as any).canRunAutonomously ?? true,
+                subtasks: [],
+            }, { timestamp: event.timestamp });
             break;
 
         case 'subtask_started':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_SUBTASK_STARTED',
-                payload: {
-                    subtaskId: (event.data as any).subtaskId || '',
-                    description: (event.data as any).description || '',
-                    index: 0,
-                    totalSubtasks: 0,
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_SUBTASK_STARTED', {
+                subtaskId: (event.data as any).subtaskId || '',
+                description: (event.data as any).description || '',
+                index: 0,
+                totalSubtasks: 0,
+            }, { timestamp: event.timestamp });
             break;
 
         case 'subtask_completed':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_SUBTASK_COMPLETED',
-                payload: {
-                    subtaskId: (event.data as any).subtaskId || '',
-                    result: (event.data as any).result || '',
-                    toolsUsed: [],
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_SUBTASK_COMPLETED', {
+                subtaskId: (event.data as any).subtaskId || '',
+                result: (event.data as any).result || '',
+                toolsUsed: [],
+            }, { timestamp: event.timestamp });
             break;
 
         case 'subtask_failed':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_SUBTASK_FAILED',
-                payload: {
-                    subtaskId: (event.data as any).subtaskId || '',
-                    error: (event.data as any).error || '',
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_SUBTASK_FAILED', {
+                subtaskId: (event.data as any).subtaskId || '',
+                error: (event.data as any).error || '',
+            }, { timestamp: event.timestamp });
             break;
 
         case 'memory_extracted':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_MEMORY_EXTRACTED',
-                payload: {
-                    factCount: (event.data as any).factCount || 0,
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_MEMORY_EXTRACTED', {
+                factCount: (event.data as any).factCount || 0,
+            }, { timestamp: event.timestamp });
             break;
 
         case 'memory_saved':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_MEMORY_SAVED',
-                payload: {
-                    paths: (event.data as any).paths || [],
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_MEMORY_SAVED', {
+                paths: (event.data as any).paths || [],
+            }, { timestamp: event.timestamp });
             break;
 
         case 'user_input_required':
-            emit({
-                ...baseEvent,
-                type: 'AUTONOMOUS_USER_INPUT_REQUIRED',
-                payload: {
-                    questions: (event.data as any).questions || [],
-                    taskId: event.taskId,
-                },
-            } as any);
+            taskEventBus.emitRaw(taskId, 'AUTONOMOUS_USER_INPUT_REQUIRED', {
+                questions: (event.data as any).questions || [],
+                taskId: event.taskId,
+            }, { timestamp: event.timestamp });
             break;
 
         default:
@@ -1192,183 +1217,6 @@ async function tryDeterministicResearchArtifactFallback(taskId: string, query: s
     return summary;
 }
 
-function nextSequence(taskId: string): number {
-    const current = taskSequences.get(taskId) ?? 0;
-    const next = current + 1;
-    taskSequences.set(taskId, next);
-    return next;
-}
-
-// ============================================================================
-// Event Factory
-// ============================================================================
-
-type TaskStartedPayload = {
-    title: string;
-    description?: string;
-    estimatedSteps?: number;
-    context: {
-        workspacePath?: string;
-        activeFile?: string;
-        userQuery: string;
-        packageManager?: string;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        packageManagerCommands?: any;
-    };
-};
-
-type TaskFailedPayload = {
-    error: string;
-    errorCode?: string;
-    recoverable: boolean;
-    suggestion?: string;
-};
-
-type TaskFinishedPayload = {
-    summary: string;
-    artifactsCreated?: string[];
-    filesModified?: string[];
-    duration: number;
-};
-
-type TextDeltaPayload = {
-    delta: string;
-    role: 'assistant' | 'thinking';
-};
-
-type TaskSuspendedPayload = {
-    reason: string;
-    userMessage: string;
-    canAutoResume: boolean;
-    maxWaitTimeMs?: number;
-};
-
-type TaskResumedPayload = {
-    resumeReason?: string;
-    suspendDurationMs: number;
-};
-
-function createTaskStartedEvent(taskId: string, payload: TaskStartedPayload): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TASK_STARTED',
-        payload,
-    };
-}
-
-function createTaskFailedEvent(taskId: string, payload: TaskFailedPayload): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TASK_FAILED',
-        payload,
-    };
-}
-
-function createTaskStatusEvent(taskId: string, payload: { status: 'running' | 'failed' | 'idle' | 'finished' }): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TASK_STATUS',
-        payload,
-    } as any;
-}
-
-function createChatMessageEvent(taskId: string, payload: { role: 'user' | 'assistant' | 'system'; content: string }): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'CHAT_MESSAGE',
-        payload,
-    } as any;
-}
-
-function createToolCallEvent(taskId: string, payload: { id: string; name: string; input: any }): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TOOL_CALL',
-        payload,
-    } as any;
-}
-
-function createToolResultEvent(taskId: string, payload: { toolUseId: string; name: string; result: any; isError?: boolean }): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TOOL_RESULT',
-        payload,
-    } as any;
-}
-
-function createTaskFinishedEvent(taskId: string, payload: TaskFinishedPayload): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TASK_FINISHED',
-        payload,
-    };
-}
-
-function createTextDeltaEvent(taskId: string, payload: TextDeltaPayload): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TEXT_DELTA',
-        payload,
-    };
-}
-
-function createThinkingDeltaEvent(taskId: string, payload: { delta: string }): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'THINKING_DELTA',
-        payload,
-    };
-}
-
-function createTaskSuspendedEvent(taskId: string, payload: TaskSuspendedPayload): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TASK_SUSPENDED',
-        payload,
-    } as any;
-}
-
-function createTaskResumedEvent(taskId: string, payload: TaskResumedPayload): TaskEvent {
-    return {
-        id: randomUUID(),
-        taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(taskId),
-        type: 'TASK_RESUMED',
-        payload,
-    } as any;
-}
-
 // ============================================================================
 // Handler Context Factory
 // ============================================================================
@@ -1379,7 +1227,7 @@ function createHandlerContext(taskId?: string): HandlerContext {
         taskId: effectiveTaskId,
         now: () => new Date().toISOString(),
         nextEventId: () => randomUUID(),
-        nextSequence: () => nextSequence(effectiveTaskId),
+        nextSequence: () => taskEventBus.nextSequence(effectiveTaskId),
     };
 }
 
@@ -1392,16 +1240,94 @@ const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim() || path.join(workspaceRoot, '.coworkany');
 const toolpackStore = new ToolpackStore(workspaceRoot);
 const skillStore = new SkillStore(workspaceRoot);
-const workspaceStore = new WorkspaceStore(workspaceRoot);
+const workspaceStore = new WorkspaceStore(
+    appDataRoot,
+    path.join(workspaceRoot, 'workspaces.json')
+);
+const workRequestStore = new WorkRequestStore(path.join(appDataRoot, 'work-requests.json'));
 const scheduledTaskStore = new ScheduledTaskStore(path.join(appDataRoot, 'scheduled-tasks.json'));
+const SCHEDULED_TASK_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
+const SCHEDULED_TASK_STALE_RUNNING_TIMEOUT_MS = SCHEDULED_TASK_EXECUTION_TIMEOUT_MS + 60 * 1000;
+let directiveManagerCache: { root: string; manager: DirectiveManager } | null = null;
 
 function getResolvedAppDataRoot(): string {
     return desktopRuntimeContext?.appDataDir?.trim() || appDataRoot;
 }
 
+function getDirectiveManager(): DirectiveManager {
+    const root = getResolvedAppDataRoot();
+    if (!directiveManagerCache || directiveManagerCache.root !== root) {
+        directiveManagerCache = {
+            root,
+            manager: new DirectiveManager(root),
+        };
+    }
+    return directiveManagerCache.manager;
+}
+
 function getResolvedShell(): string {
     return desktopRuntimeContext?.shell || (process.platform === 'win32' ? 'PowerShell/cmd' : process.env.SHELL || '/bin/bash');
 }
+
+function ensureManagedBinOnPath(root: string): void {
+    const managedBinDir = path.join(root, 'bin');
+    const pathParts = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+    if (!pathParts.includes(managedBinDir)) {
+        process.env.PATH = [managedBinDir, ...pathParts].join(path.delimiter);
+    }
+}
+
+type SkillImportResponsePayload = {
+    success: boolean;
+    skillId?: string;
+    error?: string;
+    warnings?: string[];
+    dependencyCheck?: ReturnType<typeof inspectSkillDependencies>;
+    installResults?: Awaited<ReturnType<typeof autoInstallSkillDependencies>>['attempts'];
+};
+
+async function importSkillFromDirectory(
+    inputPath: string,
+    autoInstallDependencies: boolean = true
+): Promise<SkillImportResponsePayload> {
+    const manifest = SkillStore.loadFromDirectory(inputPath);
+    if (!manifest) {
+        return {
+            success: false,
+            error: 'missing_skill_manifest',
+        };
+    }
+
+    const dependencyCheck = inspectSkillDependencies(manifest);
+    const installOutcome = autoInstallDependencies
+        ? await autoInstallSkillDependencies(manifest, {
+            appDataDir: getResolvedAppDataRoot(),
+        })
+        : {
+            before: dependencyCheck,
+            after: dependencyCheck,
+            attempts: [],
+        };
+    const warnings: string[] = [];
+
+    if (!installOutcome.after.platformEligible) {
+        warnings.push(`Skill "${manifest.name}" declares a different target OS and may not run correctly on ${process.platform}.`);
+    }
+    if (!installOutcome.after.satisfied) {
+        warnings.push(`Missing skill dependencies: ${installOutcome.after.missing.join(', ')}`);
+    }
+
+    skillStore.install(manifest);
+    return {
+        success: true,
+        skillId: manifest.name,
+        warnings: warnings.length > 0 ? warnings : undefined,
+        dependencyCheck: installOutcome.after,
+        installResults: installOutcome.attempts.length > 0 ? installOutcome.attempts : undefined,
+    };
+}
+
+ensureManagedBinOnPath(getResolvedAppDataRoot());
 
 // Initialize: Scan and register skills from filesystem on startup
 (() => {
@@ -1432,6 +1358,74 @@ const routerDeps: CommandRouterDeps = {
     skillStore,
     contextFor: createHandlerContext,
 };
+
+const capabilityCommandDeps: CapabilityCommandDeps = {
+    skillStore,
+    toolpackStore,
+    getDirectiveManager,
+    importSkillFromDirectory,
+    downloadSkillFromGitHub,
+    downloadMcpFromGitHub,
+    validateSkillUrl,
+    validateMcpUrl,
+    scanDefaultRepositories,
+};
+
+const workspaceCommandDeps: WorkspaceCommandDeps = {
+    workspaceStore,
+    getResolvedAppDataRoot,
+};
+
+function getRuntimeCommandDeps(): RuntimeCommandDeps {
+    return {
+        emit: emitAny,
+        onBootstrapRuntimeContext: (runtimeContext) => {
+            desktopRuntimeContext = runtimeContext as DesktopRuntimeContext;
+            ensureManagedBinOnPath(getResolvedAppDataRoot());
+            console.error(
+                `[RuntimeContext] Bootstrapped from desktop: platform=${desktopRuntimeContext.platform}, ` +
+                `appDataDir=${desktopRuntimeContext.appDataDir}, sidecarLaunchMode=${desktopRuntimeContext.sidecarLaunchMode || 'unknown'}`
+            );
+        },
+        executeFreshTask,
+        createTaskFailedEvent,
+        createChatMessageEvent,
+        createTaskClarificationRequiredEvent,
+        createTaskStatusEvent,
+        createTaskFinishedEvent,
+        taskSessionStore,
+        taskEventBus,
+        suspendResumeManager,
+        enqueueResumeMessage,
+        getTaskConfig,
+        workspaceRoot,
+        workRequestStore,
+        prepareWorkRequestContext,
+        buildArtifactContract,
+        buildClarificationMessage,
+        pushConversationMessage,
+        shouldUsePlanningFiles,
+        appendPlanningProgressEntry,
+        scheduleTaskInternal,
+        buildScheduledConfirmationMessage,
+        toScheduledTaskConfig,
+        markWorkRequestExecutionStarted,
+        continuePreparedAgentFlow,
+        getExecutionRuntimeDeps,
+        runPostEditHooks,
+        formatHookResults,
+        loadLlmConfig,
+        resolveProviderConfig,
+        autonomousLlmAdapter,
+        getAutonomousAgent,
+    };
+}
+
+function getRuntimeResponseDeps(): RuntimeResponseDeps {
+    return {
+        taskEventBus,
+    };
+}
 
 // Types moved to top
 // AnthropicStreamOptions
@@ -1700,12 +1694,13 @@ function getTriggeredSkillIds(userMessage: string): string[] {
  * Merge explicitly enabled skills with trigger-matched skills
  * Removes duplicates and respects skill priorities
  */
-function mergeSkillIds(
-    explicitIds: string[] | undefined,
-    triggeredIds: string[]
-): string[] {
-    const explicit = explicitIds ?? [];
-    const merged = new Set([...explicit, ...triggeredIds]);
+function mergeSkillIds(...skillGroups: Array<string[] | undefined>): string[] {
+    const merged = new Set<string>();
+    for (const group of skillGroups) {
+        for (const skillId of group ?? []) {
+            merged.add(skillId);
+        }
+    }
     return Array.from(merged);
 }
 
@@ -2129,33 +2124,19 @@ suspendResumeManager.on('task_suspended', (data: any) => {
 
     // Protocol currently supports TASK_STATUS only with idle/running/finished/failed.
     // Emit an informational system message for richer suspended state details.
-    emit({
-        id: randomUUID(),
-        taskId: data.taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(data.taskId),
-        type: 'CHAT_MESSAGE',
-        payload: {
-            role: 'system',
-            content: `[SUSPENDED] reason=${data.reason}; canAutoResume=${String(data.canAutoResume)}; message=${data.userMessage}`,
-        },
-    } as any);
+    taskEventBus.emitChatMessage(data.taskId, {
+        role: 'system',
+        content: `[SUSPENDED] reason=${data.reason}; canAutoResume=${String(data.canAutoResume)}; message=${data.userMessage}`,
+    });
 });
 
 suspendResumeManager.on('task_resumed', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} resumed after ${data.suspendDuration}ms`);
 
-    emit({
-        id: randomUUID(),
-        taskId: data.taskId,
-        timestamp: new Date().toISOString(),
-        sequence: nextSequence(data.taskId),
-        type: 'CHAT_MESSAGE',
-        payload: {
-            role: 'system',
-            content: `[RESUMED] durationMs=${data.suspendDuration}; reason=${data.resumeReason || 'n/a'}`,
-        },
-    } as any);
+    taskEventBus.emitChatMessage(data.taskId, {
+        role: 'system',
+        content: `[RESUMED] durationMs=${data.suspendDuration}; reason=${data.resumeReason || 'n/a'}`,
+    });
 });
 
 suspendResumeManager.on('task_cancelled', (data: any) => {
@@ -2379,14 +2360,22 @@ const selfLearningHandlers: SelfLearningToolHandlers = {
 const SELF_LEARNING_TOOLS = createSelfLearningTools(selfLearningHandlers);
 const PERSONAL_TOOLS = createPersonalTools({
     scheduleTask: async (args, context) => {
+        const frozenWorkRequest = createFrozenWorkRequestFromText({
+            sourceText: args.task_query,
+            workspacePath: context.workspacePath,
+            workRequestStore,
+        });
+        const primaryTask = frozenWorkRequest.tasks[0];
         const record = scheduleTaskInternal({
-            title: args.title?.trim() || args.task_query.trim().slice(0, 60),
-            taskQuery: args.task_query,
+            title: args.title?.trim() || primaryTask?.title || args.task_query.trim().slice(0, 60),
+            taskQuery: primaryTask ? buildExecutionQuery(frozenWorkRequest) : args.task_query,
             executeAt: parseScheduledTimeExpression(args.time),
             workspacePath: context.workspacePath,
             speakResult: args.speak_result ?? false,
             sourceTaskId: context.taskId,
-            config: toScheduledTaskConfig(taskConfigs.get(context.taskId)),
+            config: toScheduledTaskConfig(taskSessionStore.getConfig(context.taskId)),
+            workRequestId: frozenWorkRequest.id,
+            frozenWorkRequest,
         });
 
         return {
@@ -2436,11 +2425,15 @@ function scheduleTaskInternal(input: {
     speakResult: boolean;
     sourceTaskId?: string;
     config?: ScheduledTaskConfig;
+    workRequestId?: string;
+    frozenWorkRequest?: FrozenWorkRequest;
 }): ScheduledTaskRecord {
     const title = input.title.trim() || input.taskQuery.trim().slice(0, 60) || 'Scheduled Task';
     const record = scheduledTaskStore.create({
         title,
         taskQuery: input.taskQuery.trim(),
+        workRequestId: input.workRequestId,
+        frozenWorkRequest: input.frozenWorkRequest,
         workspacePath: input.workspacePath,
         executeAt: input.executeAt,
         speakResult: input.speakResult,
@@ -2457,15 +2450,40 @@ function buildScheduledConfirmationMessage(record: ScheduledTaskRecord): string 
     return `已安排在 ${timeText} 执行：${record.title}${suffix}`;
 }
 
-type FreshTaskConfig = {
-    modelId?: string;
-    maxTokens?: number;
-    maxHistoryMessages?: number;
-    enabledClaudeSkills?: string[];
-    enabledToolpacks?: string[];
-    enabledSkills?: string[];
-    workspacePath?: string;
-};
+function emitScheduledTaskResultToSourceTask(record: ScheduledTaskRecord, resultText: string): void {
+    if (!record.sourceTaskId) {
+        return;
+    }
+
+    const message = buildScheduledTaskCompletionMessage(record.title, resultText);
+    emit(createChatMessageEvent(record.sourceTaskId, {
+        role: 'assistant',
+        content: message,
+    }));
+    emit(createTaskFinishedEvent(record.sourceTaskId, {
+        summary: message,
+        duration: 0,
+    }));
+}
+
+function emitScheduledTaskFailureToSourceTask(record: ScheduledTaskRecord, errorText: string): void {
+    if (!record.sourceTaskId) {
+        return;
+    }
+
+    const message = buildScheduledTaskFailureMessage(record.title, errorText);
+    emit(createChatMessageEvent(record.sourceTaskId, {
+        role: 'system',
+        content: message,
+    }));
+    emit(createTaskFailedEvent(record.sourceTaskId, {
+        error: message,
+        errorCode: 'SCHEDULED_TASK_FAILED',
+        recoverable: true,
+    }));
+}
+
+type FreshTaskConfig = TaskSessionConfig;
 
 type FreshTaskResult = {
     success: boolean;
@@ -2473,6 +2491,35 @@ type FreshTaskResult = {
     error?: string;
     artifactsCreated: string[];
 };
+
+const SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT = `## Scheduled Task Execution
+
+This request is executing automatically because the user scheduled it earlier.
+
+Rules:
+- Do not ask the user for clarification, confirmation, or extra preferences during execution.
+- If some detail is missing, make the narrowest reasonable assumption and continue.
+- Complete the task now using the available tools when needed.
+- Return one cleaned final answer only.
+- Do not include meta commentary, planning notes, or repeated restatements of the user's request.`;
+
+function mergeSystemPrompt(
+    basePrompt: string | { skills: string } | undefined,
+    extraPrompt: string | undefined
+): string | { skills: string } | undefined {
+    if (!extraPrompt) {
+        return basePrompt;
+    }
+
+    const baseContent = typeof basePrompt === 'string'
+        ? basePrompt
+        : basePrompt?.skills;
+
+    return baseContent
+        ? `${baseContent}\n\n${extraPrompt}`
+        : extraPrompt;
+}
+
 
 function emitScheduledConfirmation(taskId: string, confirmationMessage: string, startedAt: number): FreshTaskResult {
     pushConversationMessage(taskId, {
@@ -2503,17 +2550,29 @@ async function executeFreshTask(args: {
     config?: FreshTaskConfig;
     emitStartedEvent: boolean;
     allowAutonomousFallback: boolean;
+    extraSystemPrompt?: string;
 }): Promise<FreshTaskResult> {
     const { taskId, title, userQuery, workspacePath, activeFile, config } = args;
+    const preparedWorkRequest = prepareWorkRequestContext({
+        sourceText: userQuery,
+        workspacePath,
+        workRequestStore,
+    });
+    const {
+        frozenWorkRequest,
+        executionQuery,
+        preferredSkillIds,
+        workRequestExecutionPrompt,
+    } = preparedWorkRequest;
 
-    taskSequences.set(taskId, 0);
-    taskConfigs.set(taskId, {
+    taskEventBus.reset(taskId);
+    taskSessionStore.setConfig(taskId, {
         ...(config ?? {}),
         workspacePath,
     });
 
     const startLimit = config?.maxHistoryMessages;
-    taskHistoryLimits.set(
+    taskSessionStore.setHistoryLimit(
         taskId,
         typeof startLimit === 'number' && startLimit > 0
             ? startLimit
@@ -2543,31 +2602,71 @@ async function executeFreshTask(args: {
         );
     }
 
-    const artifactContract = buildArtifactContract(userQuery);
-    taskArtifactContracts.set(taskId, artifactContract);
-    taskArtifactsCreated.set(taskId, new Set<string>());
+    const artifactContract = buildArtifactContract(executionQuery);
+    taskSessionStore.setArtifactContract(taskId, artifactContract);
+    taskSessionStore.setArtifacts(taskId, []);
 
-    const scheduledIntent = detectScheduledIntent(userQuery);
-    if (scheduledIntent) {
+    if (frozenWorkRequest.clarification.required) {
+        const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
         pushConversationMessage(taskId, {
             role: 'user',
             content: userQuery,
         });
+        pushConversationMessage(taskId, {
+            role: 'assistant',
+            content: clarificationMessage,
+        });
+        emit(createChatMessageEvent(taskId, {
+            role: 'assistant',
+            content: clarificationMessage,
+        }));
+        emit(createTaskClarificationRequiredEvent(taskId, {
+            reason: frozenWorkRequest.clarification.reason,
+            questions: frozenWorkRequest.clarification.questions,
+            missingFields: frozenWorkRequest.clarification.missingFields,
+        }));
+        emit(createTaskStatusEvent(taskId, {
+            status: 'idle',
+        }));
+        if (shouldUsePlanningFiles(frozenWorkRequest)) {
+            appendPlanningProgressEntry(
+                workspacePath,
+                `Clarification requested for work request ${frozenWorkRequest.id}: ${clarificationMessage}`
+            );
+        }
+        return {
+            success: true,
+            summary: clarificationMessage,
+            artifactsCreated: [],
+        };
+    }
+
+    if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
+        pushConversationMessage(taskId, {
+            role: 'user',
+            content: userQuery,
+        });
+        const primaryTask = frozenWorkRequest.tasks[0];
         const record = scheduleTaskInternal({
-            title: scheduledIntent.taskQuery.trim().slice(0, 60) || title,
-            taskQuery: scheduledIntent.taskQuery,
-            executeAt: scheduledIntent.executeAt,
+            title: primaryTask?.title || executionQuery.trim().slice(0, 60) || title,
+            taskQuery: buildExecutionQuery(frozenWorkRequest),
+            executeAt: new Date(frozenWorkRequest.schedule.executeAt),
             workspacePath,
-            speakResult: scheduledIntent.speakResult,
+            speakResult: frozenWorkRequest.presentation.ttsEnabled,
             sourceTaskId: taskId,
             config: toScheduledTaskConfig(config),
+            workRequestId: frozenWorkRequest.id,
+            frozenWorkRequest,
         });
         return emitScheduledConfirmation(taskId, buildScheduledConfirmationMessage(record), startedAt);
     }
 
-    const curatedPptResult = await tryCuratedPptArtifactTask(taskId, userQuery);
+    markWorkRequestExecutionStarted(preparedWorkRequest);
+
+    const curatedPptResult = await tryCuratedPptArtifactTask(taskId, executionQuery);
     if (curatedPptResult) {
-        taskArtifactsCreated.set(taskId, new Set(curatedPptResult.artifactsCreated));
+        taskSessionStore.setArtifacts(taskId, curatedPptResult.artifactsCreated);
+        markWorkRequestExecutionCompleted(preparedWorkRequest, curatedPptResult.summary);
         emit(
             createTaskFinishedEvent(taskId, {
                 summary: curatedPptResult.summary,
@@ -2582,250 +2681,23 @@ async function executeFreshTask(args: {
         };
     }
 
-    const explicitlyEnabledSkillIds =
-        config?.enabledClaudeSkills ??
-        config?.enabledSkills ??
-        [];
-    const hasExplicitSkillSelection =
-        Array.isArray(explicitlyEnabledSkillIds) && explicitlyEnabledSkillIds.length > 0;
-
-    if (!hasExplicitSkillSelection && args.allowAutonomousFallback && shouldRunAutonomously(userQuery)) {
-        console.error(`[Task ${taskId}] Detected autonomous task intent, delegating to AutonomousAgent`);
-
-        const llmConfig = loadLlmConfig(workspaceRoot);
-        const providerConfig = resolveProviderConfig(llmConfig, {
-            modelId: config?.modelId,
-        });
-        autonomousLlmAdapter.setProviderConfig(providerConfig);
-
-        const agent = getAutonomousAgent(taskId);
-
-        try {
-            const task = await agent.startTask(userQuery, {
-                autoSaveMemory: true,
-                notifyOnComplete: true,
-                runInBackground: false,
-            });
-
-            const completedAutonomousSubtasks = task.decomposedTasks.filter(
-                (subtask) => subtask.status === 'completed'
-            ).length;
-            const autonomousGoalMet = task.verificationResult?.goalMet ?? false;
-
-            if (!autonomousGoalMet && completedAutonomousSubtasks === 0) {
-                console.error(
-                    `[Task ${taskId}] AutonomousAgent made no successful progress; falling back to standard agent loop`
-                );
-
-                const deterministicFallbackSummary = await tryDeterministicResearchArtifactFallback(
-                    taskId,
-                    userQuery
-                );
-                if (deterministicFallbackSummary) {
-                    emit(
-                        createTaskFinishedEvent(taskId, {
-                            summary: deterministicFallbackSummary,
-                            duration: Date.now() - new Date(task.createdAt).getTime(),
-                        })
-                    );
-                    return {
-                        success: true,
-                        summary: deterministicFallbackSummary,
-                        artifactsCreated: [],
-                    };
-                }
-            } else {
-                const summary = task.summary || 'Autonomous task completed';
-                emit(
-                    createTaskFinishedEvent(taskId, {
-                        summary,
-                        duration: Date.now() - new Date(task.createdAt).getTime(),
-                    })
-                );
-                return {
-                    success: true,
-                    summary,
-                    artifactsCreated: [],
-                };
-            }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            emit(createTaskFailedEvent(taskId, {
-                error: errorMessage,
-                errorCode: 'AUTONOMOUS_TASK_ERROR',
-                recoverable: false,
-            }));
-            return {
-                success: false,
-                summary: '',
-                error: errorMessage,
-                artifactsCreated: [],
-            };
-        }
-    }
-
     const conversation = pushConversationMessage(taskId, {
         role: 'user',
         content: userQuery,
     });
-
-    const explicitSkillIds =
-        config?.enabledClaudeSkills ??
-        config?.enabledSkills;
-    const triggeredSkillIds = getTriggeredSkillIds(userQuery);
-    const enabledSkillIds = mergeSkillIds(explicitSkillIds, triggeredSkillIds);
-    const pptGeneratorFastPathResult = await tryPptGeneratorSkillFastPath(
+    return executePreparedTaskFlow({
         taskId,
         userQuery,
         workspacePath,
-        enabledSkillIds
-    );
-    if (pptGeneratorFastPathResult) {
-        taskArtifactsCreated.set(taskId, new Set(pptGeneratorFastPathResult.artifactsCreated));
-        emit(
-            createTaskFinishedEvent(taskId, {
-                summary: pptGeneratorFastPathResult.summary,
-                artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
-                duration: Date.now() - startedAt,
-            })
-        );
-        return {
-            success: true,
-            summary: pptGeneratorFastPathResult.summary,
-            artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
-        };
-    }
-    const systemPrompt = buildSkillSystemPrompt(enabledSkillIds);
-
-    try {
-        const options = {
-            modelId: config?.modelId,
-            maxTokens: config?.maxTokens,
-            systemPrompt,
-        };
-
-        if (config?.enabledToolpacks) {
-            for (const toolpackId of config.enabledToolpacks) {
-                const pack = toolpackStore.get(toolpackId);
-                if (pack && pack.manifest.runtime === 'node' && pack.manifest.entry) {
-                    try {
-                        let entryPath = pack.manifest.entry;
-                        if (entryPath.startsWith('.')) {
-                            entryPath = path.resolve(process.cwd(), entryPath);
-                        }
-
-                        const status = await mcpGateway.healthCheck();
-                        if (!status.has(pack.manifest.name)) {
-                            console.log(`[StartTask] Registering MCP server: ${pack.manifest.name}`);
-                            await mcpGateway.registerServer({
-                                ...pack.manifest,
-                                entry: entryPath,
-                            }, process.cwd());
-                        }
-                    } catch (e) {
-                        console.error(`[StartTask] Failed to register MCP ${pack.manifest.name}`, e);
-                    }
-                }
-            }
-        }
-
-        const tools = getToolsForTask(taskId);
-        (options as any).tools = tools;
-
-        const providerConfig = resolveProviderConfig(loadLlmConfig(workspaceRoot), options);
-        const loopResult = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
-        const knownArtifacts = taskArtifactsCreated.get(taskId) || new Set<string>();
-        for (const artifact of loopResult.artifactsCreated) {
-            knownArtifacts.add(artifact);
-        }
-        taskArtifactsCreated.set(taskId, knownArtifacts);
-
-        const mergedArtifacts = Array.from(knownArtifacts);
-        const contractEvidence = {
-            files: mergedArtifacts,
-            toolsUsed: loopResult.toolsUsed,
-            outputText: buildConversationText(taskId),
-        };
-        const artifactEvaluation = evaluateArtifactContract(artifactContract, {
-            files: contractEvidence.files,
-            toolsUsed: contractEvidence.toolsUsed,
-            outputText: contractEvidence.outputText,
-        });
-        const degradedOutput = detectDegradedOutputs(artifactContract, mergedArtifacts);
-        appendArtifactTelemetry(buildArtifactTelemetry(artifactContract, contractEvidence, artifactEvaluation));
-
-        if (!artifactEvaluation.passed) {
-            const unmetMessage = `Artifact contract unmet: ${artifactEvaluation.failed
-                .map(item => `${item.description} (${item.reason})`)
-                .join('; ')}`;
-
-            emit(
-                createTaskFailedEvent(taskId, {
-                    error: unmetMessage,
-                    errorCode: 'ARTIFACT_CONTRACT_UNMET',
-                    recoverable: true,
-                    suggestion: degradedOutput.hasDegradedOutput
-                        ? `Detected degraded output (${degradedOutput.degradedArtifacts.join(', ')}). Please confirm downgrade by sending: "CONFIRM_DEGRADE_TO_MD" or retry PPTX generation.`
-                        : `Expected file types not found. Generated files: ${mergedArtifacts.join(', ') || 'none'}`,
-                })
-            );
-
-            try {
-                const learnResult = await selfLearningController.quickLearnFromError(
-                    `${unmetMessage}. Query: ${userQuery}`,
-                    userQuery,
-                    1
-                );
-                if (learnResult.learned) {
-                    console.log(`[ArtifactGate] Triggered self-learning for unmet contract: ${unmetMessage}`);
-                }
-            } catch (learnErr) {
-                console.error('[ArtifactGate] Self-learning trigger failed:', learnErr);
-            }
-
-            return {
-                success: false,
-                summary: '',
-                error: unmetMessage,
-                artifactsCreated: mergedArtifacts,
-            };
-        }
-
-        emit(
-            createTaskFinishedEvent(taskId, {
-                summary: 'Task completed',
-                artifactsCreated: mergedArtifacts,
-                duration: Date.now() - startedAt,
-            })
-        );
-        return {
-            success: true,
-            summary: 'Task completed',
-            artifactsCreated: mergedArtifacts,
-        };
-    } catch (error) {
-        const errorMessage =
-            error instanceof Error ? error.message : String(error);
-        emit(
-            createTaskFailedEvent(taskId, {
-                error: errorMessage,
-                errorCode: 'MODEL_STREAM_ERROR',
-                recoverable: false,
-                suggestion:
-                    errorMessage === 'missing_api_key'
-                        ? 'Set API key in environment or .coworkany/settings.json'
-                        : errorMessage === 'missing_base_url'
-                            ? 'Set base URL in environment or .coworkany/settings.json'
-                            : undefined,
-            })
-        );
-        return {
-            success: false,
-            summary: '',
-            error: errorMessage,
-            artifactsCreated: [],
-        };
-    }
+        config,
+        preparedWorkRequest,
+        allowAutonomousFallback: args.allowAutonomousFallback,
+        workRequestExecutionPrompt,
+        extraSystemPrompt: args.extraSystemPrompt,
+        conversation,
+        artifactContract,
+        startedAt,
+    }, getExecutionRuntimeDeps(taskId));
 }
 
 async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void> {
@@ -2838,35 +2710,90 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
     scheduledTaskStore.upsert(runningRecord);
 
     const taskId = randomUUID();
+    const executionQuery = getScheduledTaskExecutionQuery({
+        record,
+        workRequestStore,
+    });
+    console.error(
+        `[Scheduler] Starting scheduled task ${record.id} in ${record.workspacePath} as task ${taskId}`
+    );
     try {
-        const result = await executeFreshTask({
-            taskId,
-            title: `[Scheduled] ${record.title}`,
-            userQuery: record.taskQuery,
-            workspacePath: record.workspacePath,
-            config: record.config,
-            activeFile: undefined,
-            emitStartedEvent: false,
-            allowAutonomousFallback: true,
-        });
+        const result = await withOperationTimeout(
+            executeFreshTask({
+                taskId,
+                title: `[Scheduled] ${record.title}`,
+                userQuery: executionQuery,
+                workspacePath: record.workspacePath,
+                config: record.config,
+                activeFile: undefined,
+                emitStartedEvent: false,
+                allowAutonomousFallback: false,
+                extraSystemPrompt: SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT,
+            }),
+            SCHEDULED_TASK_EXECUTION_TIMEOUT_MS,
+            'scheduled_task_execution'
+        );
 
         const finalAssistantText = getLatestAssistantResponseText(taskId) || result.summary || '定时任务已完成。';
+        const resolvedWorkRequest =
+            record.frozenWorkRequest ||
+            (record.workRequestId ? workRequestStore.getById(record.workRequestId) : undefined);
+        const reducedPresentation = resolvedWorkRequest
+            ? reduceWorkResult({
+                canonicalResult: finalAssistantText,
+                request: resolvedWorkRequest,
+                artifacts: result.artifactsCreated,
+            })
+            : {
+                canonicalResult: cleanScheduledTaskResultText(finalAssistantText) || finalAssistantText,
+                uiSummary: cleanScheduledTaskResultText(finalAssistantText) || finalAssistantText,
+                ttsSummary: cleanScheduledTaskResultText(finalAssistantText) || finalAssistantText,
+                artifacts: result.artifactsCreated,
+            };
+        const presentedResultText = reducedPresentation.uiSummary || reducedPresentation.canonicalResult;
+        if (result.success) {
+            emitScheduledTaskResultToSourceTask(record, presentedResultText);
+        } else {
+            emitScheduledTaskFailureToSourceTask(record, result.error || '未知错误');
+        }
 
         scheduledTaskStore.upsert({
             ...runningRecord,
             status: result.success ? 'completed' : 'failed',
             completedAt: new Date().toISOString(),
-            resultSummary: result.success ? finalAssistantText : undefined,
+            resultSummary: result.success ? presentedResultText : undefined,
             error: result.success ? undefined : result.error,
         });
+        console.error(
+            `[Scheduler] Scheduled task ${record.id} finished with status ${result.success ? 'completed' : 'failed'}`
+        );
 
         if (record.speakResult) {
-            const spokenText = result.success
-                ? `定时任务已完成。${finalAssistantText.slice(0, 900)}`
-                : `定时任务执行失败。${(result.error || '未知错误').slice(0, 300)}`;
-            await voiceSpeakTool.handler({ text: spokenText }, { taskId, workspacePath: record.workspacePath });
+            const spokenText = buildScheduledTaskSpokenText({
+                title: record.title,
+                success: result.success,
+                finalAssistantText: reducedPresentation.ttsSummary || presentedResultText,
+                errorText: result.error,
+            });
+            const voiceResult = await voiceSpeakTool.handler({ text: spokenText }, { taskId, workspacePath: record.workspacePath });
+            if (voiceResult?.success) {
+                console.error(`[Scheduler] Voice playback completed for scheduled task ${record.id}`);
+            } else {
+                const voiceError = voiceResult?.error || '未知语音错误';
+                console.error(`[Scheduler] Voice playback failed for scheduled task ${record.id}: ${voiceError}`);
+                if (record.sourceTaskId) {
+                    emit(createChatMessageEvent(record.sourceTaskId, {
+                        role: 'system',
+                        content: `定时任务结果已生成，但语音播报失败：${voiceError}`,
+                    }));
+                }
+            }
         }
     } catch (error) {
+        emitScheduledTaskFailureToSourceTask(
+            record,
+            error instanceof Error ? error.message : String(error)
+        );
         scheduledTaskStore.upsert({
             ...runningRecord,
             status: 'failed',
@@ -2881,6 +2808,16 @@ async function pollDueScheduledTasks(): Promise<void> {
     if (scheduledTaskPollInFlight) return;
     scheduledTaskPollInFlight = true;
     try {
+        const recoveredTasks = scheduledTaskStore.recoverStaleRunning({
+            timeoutMs: SCHEDULED_TASK_STALE_RUNNING_TIMEOUT_MS,
+            errorMessage: `Scheduled task timed out after ${Math.floor(SCHEDULED_TASK_EXECUTION_TIMEOUT_MS / 60000)} minutes or the sidecar stopped before it could finish.`,
+        });
+        for (const task of recoveredTasks) {
+            console.error(
+                `[Scheduler] Recovered stale running task ${task.id}; marked as failed for retry visibility`
+            );
+        }
+
         const dueTasks = scheduledTaskStore.listDue();
         for (const task of dueTasks) {
             await runScheduledTaskRecord(task);
@@ -3321,11 +3258,7 @@ async function executeInternalToolWithEvents(
 }
 
 function ensureConversation(taskId: string): AnthropicMessage[] {
-    const existing = taskConversations.get(taskId);
-    if (existing) return existing;
-    const fresh: AnthropicMessage[] = [];
-    taskConversations.set(taskId, fresh);
-    return fresh;
+    return taskSessionStore.getConversation(taskId);
 }
 
 /**
@@ -3466,7 +3399,7 @@ function pushConversationMessage(
     const conversation = ensureConversation(taskId);
     conversation.push(message);
 
-    const limit = taskHistoryLimits.get(taskId) ?? getDefaultHistoryLimit();
+    const limit = taskSessionStore.getHistoryLimit(taskId);
 
     // ================================================================
     // Smart Context Compaction (replaces simple truncation)
@@ -3523,7 +3456,7 @@ function pushConversationMessage(
         // Replace: [summary] + [recent messages]
         const recentMessages = conversation.slice(removeCount);
         const compacted = [summaryMessage, ...recentMessages];
-        taskConversations.set(taskId, compacted);
+        taskSessionStore.replaceConversation(taskId, compacted);
 
         console.log(`[Compaction] Task ${taskId}: compressed ${removeCount} old messages into summary, keeping ${recentMessages.length} recent`);
         return compacted;
@@ -3531,35 +3464,16 @@ function pushConversationMessage(
 
     return conversation;
 }
-function getTaskConfig(taskId: string): {
-    modelId?: string;
-    maxTokens?: number;
-    maxHistoryMessages?: number;
-    enabledClaudeSkills?: string[];
-    enabledToolpacks?: string[];
-    enabledSkills?: string[];
-    workspacePath?: string;
-} | undefined {
-    return taskConfigs.get(taskId);
+function getTaskConfig(taskId: string): TaskSessionConfig | undefined {
+    return taskSessionStore.getConfig(taskId);
 }
 
-function dequeueQueuedResumeMessages(taskId: string): Array<{ content: string; config?: { modelId?: string; maxTokens?: number; maxHistoryMessages?: number; enabledClaudeSkills?: string[]; enabledToolpacks?: string[]; enabledSkills?: string[] } }> {
-    const queued = taskResumeMessages.get(taskId) || [];
-    taskResumeMessages.delete(taskId);
-    return queued;
+function dequeueQueuedResumeMessages(taskId: string) {
+    return taskSessionStore.dequeueResumeMessages(taskId);
 }
 
-function enqueueResumeMessage(taskId: string, content: string, config?: {
-    modelId?: string;
-    maxTokens?: number;
-    maxHistoryMessages?: number;
-    enabledClaudeSkills?: string[];
-    enabledToolpacks?: string[];
-    enabledSkills?: string[];
-}): void {
-    const current = taskResumeMessages.get(taskId) || [];
-    current.push({ content, config });
-    taskResumeMessages.set(taskId, current);
+function enqueueResumeMessage(taskId: string, content: string, config?: TaskSessionConfig): void {
+    taskSessionStore.enqueueResumeMessage(taskId, { content, config });
 }
 
 function loadLlmConfig(workspaceRootPath: string): LlmConfig {
@@ -3904,16 +3818,9 @@ async function streamAnthropicResponse(
                         if (delta.type === 'text_delta' && block.type === 'text') {
                             block.text += delta.text;
                             if (!options.silent) {
-                                emit({
-                                    id: randomUUID(),
-                                    taskId,
-                                    timestamp: new Date().toISOString(),
-                                    sequence: nextSequence(taskId),
-                                    type: 'TEXT_DELTA',
-                                    payload: {
-                                        delta: delta.text,
-                                        role: 'assistant',
-                                    },
+                                taskEventBus.emitTextDelta(taskId, {
+                                    delta: delta.text,
+                                    role: 'assistant',
                                 });
                             }
                         } else if (delta.type === 'thinking_delta' && block.type === 'thinking') {
@@ -3952,21 +3859,14 @@ async function streamAnthropicResponse(
 
     // Emit TOKEN_USAGE event if we have usage data
     if (!options.silent && (totalInputTokens > 0 || totalOutputTokens > 0)) {
-        emit({
-            id: randomUUID(),
-            taskId,
-            timestamp: new Date().toISOString(),
-            sequence: nextSequence(taskId),
-            type: 'TOKEN_USAGE',
-            payload: {
-                inputTokens: totalInputTokens,
-                outputTokens: totalOutputTokens,
-                cacheCreationInputTokens,
-                cacheReadInputTokens,
-                modelId: config.modelId,
-                provider: config.provider,
-            },
-        } as any);
+        taskEventBus.emitRaw(taskId, 'TOKEN_USAGE', {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            cacheCreationInputTokens,
+            cacheReadInputTokens,
+            modelId: config.modelId,
+            provider: config.provider,
+        });
     }
 
     return {
@@ -4282,19 +4182,12 @@ async function streamOpenAIResponse(
 
     // Emit TOKEN_USAGE event for OpenAI-format responses
     if (!options.silent && (openaiInputTokens > 0 || openaiOutputTokens > 0)) {
-        emit({
-            id: randomUUID(),
-            taskId,
-            timestamp: new Date().toISOString(),
-            sequence: nextSequence(taskId),
-            type: 'TOKEN_USAGE',
-            payload: {
-                inputTokens: openaiInputTokens,
-                outputTokens: openaiOutputTokens,
-                modelId: config.modelId,
-                provider: config.provider,
-            },
-        } as any);
+        taskEventBus.emitRaw(taskId, 'TOKEN_USAGE', {
+            inputTokens: openaiInputTokens,
+            outputTokens: openaiOutputTokens,
+            modelId: config.modelId,
+            provider: config.provider,
+        });
     }
 
     return {
@@ -4561,24 +4454,14 @@ async function runAgentLoop(
                             content: `[SYSTEM] Task completed successfully. The AUTOPILOT has already finished the following workflows: ${workflowNames}. Please tell the user the task was successful.`,
                         });
 
-                        emit({
-                            id: randomUUID(),
-                            taskId,
-                            timestamp: new Date().toISOString(),
+                        taskEventBus.emitTextDelta(taskId, {
+                            delta: `\n\n任务已成功完成！AUTOPILOT 自动完成了以下工作流程: ${workflowNames}。`,
+                            role: 'assistant',
+                        }, {
                             sequence: 0,
-                            type: 'TEXT_DELTA',
-                            payload: {
-                                delta: `\n\n任务已成功完成！AUTOPILOT 自动完成了以下工作流程: ${workflowNames}。`,
-                                role: 'assistant',
-                            },
                         });
-                        emit({
-                            id: randomUUID(),
-                            taskId,
-                            timestamp: new Date().toISOString(),
+                        taskEventBus.emitStatus(taskId, { status: 'finished' }, {
                             sequence: 0,
-                            type: 'TASK_STATUS',
-                            payload: { status: 'finished' },
                         });
                         break;
                     }
@@ -4622,26 +4505,16 @@ async function runAgentLoop(
                     });
 
                     // Emit a final text response from the agent explaining the failure
-                    emit({
-                        id: randomUUID(),
-                        taskId,
-                        timestamp: new Date().toISOString(),
+                    taskEventBus.emitTextDelta(taskId, {
+                        delta: `\n\n抱歉，我无法完成这个任务。浏览器自动化反复失败并进入保护性终止。` +
+                            `更可能的原因是浏览器后端连接状态不一致（例如一个后端已连接，另一个后端未连接），` +
+                            `而不一定是 Chrome 没有启动。请重试 browser_connect，若仍失败请检查后端连接状态日志。`,
+                        role: 'assistant',
+                    }, {
                         sequence: 0,
-                        type: 'TEXT_DELTA',
-                        payload: {
-                            delta: `\n\n抱歉，我无法完成这个任务。浏览器自动化反复失败并进入保护性终止。` +
-                                `更可能的原因是浏览器后端连接状态不一致（例如一个后端已连接，另一个后端未连接），` +
-                                `而不一定是 Chrome 没有启动。请重试 browser_connect，若仍失败请检查后端连接状态日志。`,
-                            role: 'assistant',
-                        },
                     });
-                    emit({
-                        id: randomUUID(),
-                        taskId,
-                        timestamp: new Date().toISOString(),
+                    taskEventBus.emitStatus(taskId, { status: 'finished' }, {
                         sequence: 0,
-                        type: 'TASK_STATUS',
-                        payload: { status: 'finished' },
                     });
                     return { artifactsCreated: [], toolsUsed: Array.from(toolsUsed) };
                 }
@@ -5439,17 +5312,10 @@ async function runAgentLoop(
                                 ? '当前为持久化自动化会话（非系统Chrome登录态）。如需复用你已登录账号，请先启动 Chrome 的远程调试端口(9222)并重试 browser_connect。否则请在当前自动化窗口完成登录。'
                                 : '当前已连接到系统Chrome登录态，可直接执行需要登录的网站操作。';
 
-                            emit({
-                                id: randomUUID(),
-                                taskId,
-                                timestamp: new Date().toISOString(),
-                                sequence: nextSequence(taskId),
-                                type: 'CHAT_MESSAGE',
-                                payload: {
-                                    role: 'system',
-                                    content: `[BROWSER_CONNECTION] mode=${connInfo.mode}; isUserProfile=${String(connInfo.isUserProfile)}; ${userHint}`,
-                                },
-                            } as any);
+                            taskEventBus.emitChatMessage(taskId, {
+                                role: 'system',
+                                content: `[BROWSER_CONNECTION] mode=${connInfo.mode}; isUserProfile=${String(connInfo.isUserProfile)}; ${userHint}`,
+                            });
 
                             const navTool = tools.find(t => t.name === 'browser_navigate');
                             const contentTool = tools.find(t => t.name === 'browser_get_content');
@@ -5695,24 +5561,17 @@ async function runAgentLoop(
                                 typeof queued.config.maxHistoryMessages === 'number' &&
                                 queued.config.maxHistoryMessages > 0
                             ) {
-                                taskHistoryLimits.set(taskId, queued.config.maxHistoryMessages);
+                                taskSessionStore.setHistoryLimit(taskId, queued.config.maxHistoryMessages);
                             }
-                            taskConfigs.set(taskId, {
+                            taskSessionStore.setConfig(taskId, {
                                 ...taskConfig,
                                 ...queued.config,
                             });
                         }
 
-                        emit({
-                            id: randomUUID(),
-                            taskId,
-                            timestamp: new Date().toISOString(),
-                            sequence: nextSequence(taskId),
-                            type: 'CHAT_MESSAGE',
-                            payload: {
-                                role: 'user',
-                                content: queued.content,
-                            },
+                        taskEventBus.emitChatMessage(taskId, {
+                            role: 'user',
+                            content: queued.content,
                         });
 
                         pushConversationMessage(taskId, {
@@ -5802,55 +5661,8 @@ async function withOperationTimeout<T>(
     });
 }
 
-function safeStat(targetPath: string): fs.Stats | null {
-    try {
-        return fs.statSync(targetPath);
-    } catch {
-        return null;
-    }
-}
-
-function ensureToolpackId(manifest: Record<string, unknown>): Record<string, unknown> {
-    if (!manifest.id && typeof manifest.name === 'string') {
-        return { ...manifest, id: manifest.name };
-    }
-    return manifest;
-}
-
-function toToolpackRecord(stored: {
-    manifest: {
-        id: string;
-        name: string;
-        version: string;
-        description?: string;
-        author?: string;
-        entry?: string;
-        runtime?: string;
-        tools?: string[];
-        effects?: string[];
-        tags?: string[];
-        homepage?: string;
-        repository?: string;
-        signature?: string;
-    };
-    enabled: boolean;
-    installedAt: string;
-    lastUsedAt?: string;
-    workingDir: string;
-}) {
-    return {
-        manifest: stored.manifest,
-        source: 'local_folder',
-        rootPath: stored.workingDir,
-        installedAt: stored.installedAt,
-        enabled: stored.enabled,
-        lastUsedAt: stored.lastUsedAt,
-        status: 'stopped',
-    };
-}
-
 function buildConversationText(taskId: string): string {
-    const conversation = taskConversations.get(taskId) || [];
+    const conversation = taskSessionStore.getConversation(taskId);
     return conversation
         .map(msg => {
             if (typeof msg.content === 'string') return msg.content;
@@ -5867,7 +5679,7 @@ function buildConversationText(taskId: string): string {
 }
 
 function getLatestAssistantResponseText(taskId: string): string {
-    const conversation = taskConversations.get(taskId) || [];
+    const conversation = taskSessionStore.getConversation(taskId);
 
     for (let index = conversation.length - 1; index >= 0; index -= 1) {
         const message = conversation[index];
@@ -5905,89 +5717,121 @@ function appendArtifactTelemetry(entry: unknown): void {
     }
 }
 
-function toSkillRecord(stored: {
-    manifest: {
-        name: string;
-        version: string;
-        description: string;
-        directory: string;
-        tags?: string[];
-        requiredCapabilities?: string[];
-    };
-    enabled: boolean;
-    installedAt: string;
-    lastUsedAt?: string;
-}) {
-    return {
-        manifest: {
-            id: stored.manifest.name,
-            name: stored.manifest.name,
-            version: stored.manifest.version,
-            description: stored.manifest.description,
-            allowedTools: [],
-            tags: stored.manifest.tags ?? [],
+function createExecutionSession(taskId: string): ExecutionSession {
+    return new ExecutionSession({
+        taskId,
+        initialArtifacts: taskSessionStore.getArtifacts(taskId),
+        conversationReader: {
+            buildConversationText,
+            getLatestAssistantResponseText,
         },
-        rootPath: stored.manifest.directory,
-        source: 'local_folder',
-        installedAt: stored.installedAt,
-        enabled: stored.enabled,
-        lastUsedAt: stored.lastUsedAt,
-    };
+        onArtifactsChanged: (artifacts) => {
+            taskSessionStore.setArtifacts(taskId, artifacts);
+        },
+    });
+}
+
+function createExecutionResultReporter(taskId: string): ExecutionResultReporter {
+    return new ExecutionResultReporter({
+        onFinished: (payload) => {
+            taskEventBus.emitFinished(taskId, {
+                summary: payload.summary,
+                artifactsCreated: payload.artifactsCreated,
+                duration: payload.duration ?? 0,
+            });
+        },
+        onFailed: (payload) => {
+            taskEventBus.emitFailed(taskId, payload);
+        },
+        onStatus: (payload) => {
+            taskEventBus.emitStatus(taskId, payload);
+        },
+        onArtifactTelemetry: appendArtifactTelemetry,
+    });
 }
 
 // Helper to gather tools for a task
 function getToolsForTask(taskId: string): ToolDefinition[] {
-    const config = taskConfigs.get(taskId);
+    const config = taskSessionStore.getConfig(taskId);
+    return resolveToolsForTask({
+        config,
+        standardTools: STANDARD_TOOLS,
+        builtinTools: [webSearchTool, ...BUILTIN_TOOLS],
+        controlPlaneTools: CONTROL_PLANE_TOOLS,
+        knowledgeTools: KNOWLEDGE_TOOLS,
+        personalTools: PERSONAL_TOOLS,
+        databaseTools: DATABASE_TOOLS,
+        enhancedBrowserTools: ENHANCED_BROWSER_TOOLS,
+        selfLearningTools: SELF_LEARNING_TOOLS,
+        extraBuiltinTools: [xiaohongshuPostTool],
+        mcpGateway,
+    });
+}
 
-    // Include ALL builtin tools by default for out-of-box experience
-    // Users don't need to install any MCP servers - everything works immediately
-    const tools: ToolDefinition[] = [
-        ...STANDARD_TOOLS,      // File operations: list_dir, view_file, write_to_file, etc.
-        webSearchTool,          // Web search: search_web (SearXNG/Tavily/Brave)
-        ...BUILTIN_TOOLS,       // Memory, GitHub, WebCrawl, Docs, Sequential Thinking
-        ...KNOWLEDGE_TOOLS,     // Knowledge updates, learning search, self-teaching
-        ...PERSONAL_TOOLS,      // Weather, notes, reminders, schedule_task
-        ...DATABASE_TOOLS,      // Database operations
-        ...ENHANCED_BROWSER_TOOLS,  // Enhanced browser automation with adaptive retry, login detection, and suspend/resume
-        xiaohongshuPostTool,    // Compound tool: post to Xiaohongshu in one call
-        ...SELF_LEARNING_TOOLS, // Self-learning and autonomous capability acquisition
-    ];
-
-    if (!config) return tools;
-
-    const enabledToolpacks = config.enabledToolpacks || [];
-
-    // Add tools from running MCP servers (if user has custom MCPs)
-    // MCP tools take priority over builtin tools with same name
-    const availableMcpTools = mcpGateway.getAvailableTools();
-    for (const { server, tool } of availableMcpTools) {
-        const isEnabled = enabledToolpacks.some(id => id.includes(server) || id === server);
-
-        if (isEnabled) {
-            // Remove builtin version if MCP version is available
-            const existingIndex = tools.findIndex(t => t.name === tool.name);
-            if (existingIndex >= 0) {
-                tools.splice(existingIndex, 1);
-            }
-
-            tools.push({
-                name: tool.name,
-                description: tool.description || '',
-                input_schema: tool.inputSchema as Record<string, unknown>,
-                effects: ['network:outbound'],
-                handler: async (args, context) => {
-                    return await mcpGateway.callTool({
-                        sessionId: context.taskId,
-                        toolName: tool.name,
-                        serverName: server,
-                        arguments: args,
-                    });
-                }
-            });
-        }
+async function ensureToolpacksRegistered(enabledToolpacks?: string[]): Promise<void> {
+    if (!enabledToolpacks || enabledToolpacks.length === 0) {
+        return;
     }
 
-    return tools;
+    for (const toolpackId of enabledToolpacks) {
+        const pack = toolpackStore.get(toolpackId);
+        if (pack && pack.manifest.runtime === 'node' && pack.manifest.entry) {
+            try {
+                let entryPath = pack.manifest.entry;
+                if (entryPath.startsWith('.')) {
+                    entryPath = path.resolve(process.cwd(), entryPath);
+                }
+
+                const status = await mcpGateway.healthCheck();
+                if (!status.has(pack.manifest.name)) {
+                    console.log(`[StartTask] Registering MCP server: ${pack.manifest.name}`);
+                    await mcpGateway.registerServer({
+                        ...pack.manifest,
+                        entry: entryPath,
+                    }, process.cwd());
+                }
+            } catch (e) {
+                console.error(`[StartTask] Failed to register MCP ${pack.manifest.name}`, e);
+            }
+        }
+    }
+}
+
+function getExecutionRuntimeDeps(taskId: string) {
+    return {
+        shouldRunAutonomously,
+        prepareAutonomousProvider: (config?: { modelId?: string }) => {
+            const llmConfig = loadLlmConfig(workspaceRoot);
+            const providerConfig = resolveProviderConfig(llmConfig, {
+                modelId: config?.modelId,
+            });
+            autonomousLlmAdapter.setProviderConfig(providerConfig);
+        },
+        getAutonomousAgent,
+        tryDeterministicResearchArtifactFallback,
+        tryPptGeneratorSkillFastPath,
+        getTriggeredSkillIds,
+        mergeSkillIds,
+        buildSkillSystemPrompt,
+        getDirectivePromptAdditions: (query: string) =>
+            getDirectiveManager().getSystemPromptAdditions(query),
+        mergeSystemPrompt,
+        ensureToolpacksRegistered,
+        getToolsForTask,
+        buildProviderConfig: (options: { modelId?: string; maxTokens?: number; systemPrompt?: string | { skills: string } }) =>
+            resolveProviderConfig(loadLlmConfig(workspaceRoot), options as AnthropicStreamOptions),
+        runAgentLoop,
+        session: createExecutionSession(taskId),
+        reporter: createExecutionResultReporter(taskId),
+        evaluateArtifactContract,
+        detectDegradedOutputs,
+        buildArtifactTelemetry,
+        reduceWorkResult,
+        markWorkRequestExecutionCompleted,
+        markWorkRequestExecutionFailed,
+        quickLearnFromError: (error: string, query: string, severity: number) =>
+            selfLearningController.quickLearnFromError(error, query, severity),
+    };
 }
 
 async function handleCommand(command: IpcCommand): Promise<void> {
@@ -6008,1109 +5852,25 @@ async function handleCommand(command: IpcCommand): Promise<void> {
             return;
         }
 
+        const capabilityResponse = await handleCapabilityCommand(command, capabilityCommandDeps);
+        if (capabilityResponse) {
+            emitAny(capabilityResponse);
+            return;
+        }
+
+        const workspaceResponse = await handleWorkspaceCommand(command, workspaceCommandDeps);
+        if (workspaceResponse) {
+            emitAny(workspaceResponse);
+            return;
+        }
+
+        if (await handleRuntimeCommand(command, getRuntimeCommandDeps())) {
+            return;
+        }
+
         // Route commands that aren't handled yet
         // These would be forwarded to Rust Policy Gate in production
         switch (command.type) {
-            case 'bootstrap_runtime_context': {
-                desktopRuntimeContext = (command.payload as { runtimeContext: DesktopRuntimeContext }).runtimeContext;
-                console.error(
-                    `[RuntimeContext] Bootstrapped from desktop: platform=${desktopRuntimeContext.platform}, ` +
-                    `appDataDir=${desktopRuntimeContext.appDataDir}, sidecarLaunchMode=${desktopRuntimeContext.sidecarLaunchMode || 'unknown'}`
-                );
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'bootstrap_runtime_context_response',
-                    payload: {
-                        success: true,
-                    },
-                });
-                break;
-            }
-
-            case 'start_task': {
-                const taskId = command.payload.taskId;
-
-                // Respond with success
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'start_task_response',
-                    payload: {
-                        success: true,
-                        taskId,
-                    },
-                });
-
-                await executeFreshTask({
-                    taskId,
-                    title: command.payload.title,
-                    userQuery: command.payload.userQuery,
-                    workspacePath: command.payload.context.workspacePath,
-                    activeFile: command.payload.context.activeFile,
-                    config: command.payload.config,
-                    emitStartedEvent: true,
-                    allowAutonomousFallback: true,
-                });
-                break;
-            }
-
-            case 'cancel_task': {
-                const taskId = command.payload.taskId;
-
-                emit(
-                    createTaskFailedEvent(taskId, {
-                        error: 'Task cancelled by user',
-                        errorCode: 'CANCELLED',
-                        recoverable: false,
-                        suggestion: command.payload.reason,
-                    })
-                );
-
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'cancel_task_response',
-                    payload: {
-                        success: true,
-                        taskId,
-                    },
-                });
-                break;
-            }
-
-            case 'clear_task_history': {
-                const taskId = command.payload.taskId;
-                taskConversations.set(taskId, []);
-                taskHistoryLimits.set(taskId, taskHistoryLimits.get(taskId) ?? getDefaultHistoryLimit());
-
-                emit({
-                    id: randomUUID(),
-                    taskId,
-                    timestamp: new Date().toISOString(),
-                    sequence: nextSequence(taskId),
-                    type: 'TASK_HISTORY_CLEARED',
-                    payload: {
-                        reason: 'user_requested',
-                    },
-                });
-
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'clear_task_history_response',
-                    payload: {
-                        success: true,
-                        taskId,
-                    },
-                });
-                break;
-            }
-
-            case 'send_task_message': {
-                const taskId = command.payload.taskId;
-                const content = command.payload.content;
-
-                // If task is currently suspended, treat incoming user message as collaboration signal.
-                // Queue this message so it is processed immediately after resume.
-                if (suspendResumeManager.isSuspended(taskId)) {
-                    enqueueResumeMessage(taskId, content, command.payload.config);
-
-                    const resume = await suspendResumeManager.resume(taskId, 'User provided follow-up input');
-
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'send_task_message_response',
-                        payload: {
-                            success: resume.success,
-                            taskId,
-                            error: resume.success ? undefined : 'resume_failed',
-                        },
-                    });
-
-                    // Do not start a second parallel loop here. The suspended loop will continue.
-                    break;
-                }
-
-                emit({
-                    id: randomUUID(),
-                    taskId,
-                    timestamp: new Date().toISOString(),
-                    sequence: nextSequence(taskId),
-                    type: 'CHAT_MESSAGE',
-                    payload: {
-                        role: 'user',
-                        content,
-                    },
-                });
-
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'send_task_message_response',
-                    payload: {
-                        success: true,
-                        taskId,
-                    },
-                });
-
-                emit({
-                    id: randomUUID(),
-                    taskId,
-                    timestamp: new Date().toISOString(),
-                    sequence: nextSequence(taskId),
-                    type: 'TASK_STATUS',
-                    payload: { status: 'running' },
-                });
-
-                const artifactContract = taskArtifactContracts.get(taskId) || buildArtifactContract(content);
-                taskArtifactContracts.set(taskId, artifactContract);
-
-                const taskConfig = getTaskConfig(taskId);
-                let effectiveTaskConfig = taskConfig;
-                if (command.payload.config) {
-                    if (
-                        typeof command.payload.config.maxHistoryMessages === 'number' &&
-                        command.payload.config.maxHistoryMessages > 0
-                    ) {
-                        taskHistoryLimits.set(
-                            taskId,
-                            command.payload.config.maxHistoryMessages
-                        );
-                    }
-                    taskConfigs.set(taskId, {
-                        ...taskConfig,
-                        ...command.payload.config,
-                    });
-                    effectiveTaskConfig = getTaskConfig(taskId);
-                }
-
-                const scheduledIntent = detectScheduledIntent(content);
-                if (scheduledIntent) {
-                    pushConversationMessage(taskId, { role: 'user', content });
-                    const workspacePath =
-                        effectiveTaskConfig?.workspacePath ||
-                        taskConfig?.workspacePath ||
-                        workspaceRoot;
-                    const record = scheduleTaskInternal({
-                        title: scheduledIntent.taskQuery.trim().slice(0, 60) || 'Scheduled Task',
-                        taskQuery: scheduledIntent.taskQuery,
-                        executeAt: scheduledIntent.executeAt,
-                        workspacePath,
-                        speakResult: scheduledIntent.speakResult,
-                        sourceTaskId: taskId,
-                        config: toScheduledTaskConfig(effectiveTaskConfig),
-                    });
-                    const confirmation = buildScheduledConfirmationMessage(record);
-                    pushConversationMessage(taskId, {
-                        role: 'assistant',
-                        content: confirmation,
-                    });
-                    emit(createChatMessageEvent(taskId, {
-                        role: 'assistant',
-                        content: confirmation,
-                    }));
-                    emit(createTaskFinishedEvent(taskId, {
-                        summary: confirmation,
-                        duration: 0,
-                    }));
-                    break;
-                }
-
-                // Get explicitly enabled skills from config
-                const explicitSkillIds =
-                    effectiveTaskConfig?.enabledClaudeSkills ??
-                    effectiveTaskConfig?.enabledSkills ??
-                    command.payload.config?.enabledClaudeSkills ??
-                    command.payload.config?.enabledSkills;
-
-                // Find skills triggered by user message (OpenClaw compatible)
-                const triggeredSkillIds = getTriggeredSkillIds(content);
-
-                // Merge explicit and triggered skills
-                const enabledSkillIds = mergeSkillIds(explicitSkillIds, triggeredSkillIds);
-
-                const systemPrompt = buildSkillSystemPrompt(enabledSkillIds);
-                // Add user message
-                const conversation = pushConversationMessage(taskId, { role: 'user', content });
-
-                try {
-                    const options: AnthropicStreamOptions = {
-                        modelId: command.payload.config?.modelId,
-                        maxTokens: command.payload.config?.maxTokens,
-                        systemPrompt,
-                    };
-
-                    // Add tools
-                    const tools = getToolsForTask(taskId);
-                    (options as any).tools = tools;
-
-                    const providerConfig = resolveProviderConfig(loadLlmConfig(workspaceRoot), options);
-
-                    // RUN AGENT LOOP
-                    const loopResult = await runAgentLoop(taskId, conversation, options, providerConfig, tools);
-                    const knownArtifacts = taskArtifactsCreated.get(taskId) || new Set<string>();
-                    for (const artifact of loopResult.artifactsCreated) {
-                        knownArtifacts.add(artifact);
-                    }
-                    taskArtifactsCreated.set(taskId, knownArtifacts);
-
-                    const mergedArtifacts = Array.from(knownArtifacts);
-                    const contractEvidence = {
-                        files: mergedArtifacts,
-                        toolsUsed: loopResult.toolsUsed,
-                        outputText: buildConversationText(taskId),
-                    };
-                    const artifactEvaluation = evaluateArtifactContract(artifactContract, {
-                        files: contractEvidence.files,
-                        toolsUsed: contractEvidence.toolsUsed,
-                        outputText: contractEvidence.outputText,
-                    });
-                    const degradedOutput = detectDegradedOutputs(artifactContract, mergedArtifacts);
-                    appendArtifactTelemetry(buildArtifactTelemetry(artifactContract, contractEvidence, artifactEvaluation));
-
-                    if (!artifactEvaluation.passed) {
-                        const userConfirmedDegrade = /CONFIRM_DEGRADE_TO_MD/i.test(content);
-                        if (userConfirmedDegrade && degradedOutput.hasDegradedOutput) {
-                            emit(
-                                createTaskFinishedEvent(taskId, {
-                                    summary: `Task completed with user-approved degraded output: ${degradedOutput.degradedArtifacts.join(', ')}`,
-                                    artifactsCreated: mergedArtifacts,
-                                    duration: 0,
-                                })
-                            );
-                        } else {
-                            emit(
-                                createTaskFailedEvent(taskId, {
-                                    error: `Artifact contract unmet: ${artifactEvaluation.failed
-                                        .map(item => `${item.description} (${item.reason})`)
-                                        .join('; ')}`,
-                                    errorCode: 'ARTIFACT_CONTRACT_UNMET',
-                                    recoverable: true,
-                                    suggestion: degradedOutput.hasDegradedOutput
-                                        ? `Detected degraded output (${degradedOutput.degradedArtifacts.join(', ')}). Ask user for explicit confirmation token CONFIRM_DEGRADE_TO_MD.`
-                                        : `Expected file types not found. Generated files: ${mergedArtifacts.join(', ') || 'none'}`,
-                                })
-                            );
-                        }
-                    } else {
-                        emit(
-                            createTaskStatusEvent(taskId, {
-                                status: 'finished',
-                            })
-                        );
-                    }
-                } catch (error) {
-                    const errorMessage =
-                        error instanceof Error ? error.message : String(error);
-                    emit(
-                        createTaskFailedEvent(taskId, {
-                            error: errorMessage,
-                            errorCode: 'MODEL_STREAM_ERROR',
-                            recoverable: false,
-                            suggestion:
-                                errorMessage === 'missing_api_key'
-                                    ? 'Set API key in environment or .coworkany/settings.json'
-                                    : errorMessage === 'missing_base_url'
-                                        ? 'Set base URL in environment or .coworkany/settings.json'
-                                        : undefined,
-                        })
-                    );
-                }
-
-                break;
-            }
-
-            // Effect request with code quality hooks
-            case 'request_effect': {
-                const effectPayload = command.payload as any;
-                let hookWarnings: string | undefined;
-
-                // Run post-edit hooks for Edit/Write tools
-                if (effectPayload.tool === 'Edit' || effectPayload.tool === 'Write') {
-                    const filePath = effectPayload.parameters?.file_path || effectPayload.parameters?.path;
-                    const content = effectPayload.parameters?.new_string || effectPayload.parameters?.content;
-
-                    if (filePath) {
-                        // Get workspace path from active task
-                        const taskId: string = (command as any).taskId || ((command.payload as any).taskId) || '';
-                        const taskContext = taskConfigs.get(taskId);
-                        const workspacePath = taskContext?.workspacePath || process.cwd();
-
-                        const hookResults = runPostEditHooks(workspacePath, filePath, content);
-                        if (hookResults.length > 0) {
-                            hookWarnings = formatHookResults(hookResults);
-                        }
-                    }
-                }
-
-                // Emit effect request to frontend for confirmation
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'request_effect_response',
-                    payload: {
-                        // hookWarnings, // Not in schema
-                        response: {
-                            approved: false, // Wait for frontend approval or policy
-                            requestId: command.id,
-                        } as any,
-                    } as any,
-                });
-                break;
-            }
-
-            case 'apply_patch':
-            case 'read_file':
-            case 'list_dir':
-            case 'exec_shell':
-            case 'capture_screen':
-            case 'get_policy_config':
-                // TODO: Forward to Rust Policy Gate via Tauri IPC
-                console.error(
-                    `[STUB] Command type "${command.type}" should be forwarded to Rust Policy Gate`
-                );
-                break;
-            case 'list_toolpacks': {
-                const includeDisabled = command.payload?.includeDisabled ?? true;
-                const toolpacks = toolpackStore
-                    .list()
-                    .filter((tp) => includeDisabled || tp.enabled)
-                    .map((tp) => toToolpackRecord(tp));
-
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'list_toolpacks_response',
-                    payload: { toolpacks: toolpacks as any },
-                });
-                break;
-            }
-            case 'get_toolpack': {
-                const toolpackId = command.payload.toolpackId as string;
-                const stored = toolpackStore.getById(toolpackId);
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'get_toolpack_response',
-                    payload: {
-                        toolpack: (stored ? toToolpackRecord(stored) : undefined) as any,
-                    },
-                });
-                break;
-            }
-            case 'install_toolpack': {
-                const { source, path: inputPath, allowUnsigned } = command.payload as {
-                    source: string;
-                    path?: string;
-                    allowUnsigned?: boolean;
-                };
-
-                if (source !== 'local_folder') {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'install_toolpack_response',
-                        payload: {
-                            success: false,
-                            error: 'unsupported_source',
-                        },
-                    });
-                    break;
-                }
-
-                if (!inputPath) {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'install_toolpack_response',
-                        payload: {
-                            success: false,
-                            error: 'missing_path',
-                        },
-                    });
-                    break;
-                }
-
-                const stat = safeStat(inputPath);
-                if (!stat) {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'install_toolpack_response',
-                        payload: {
-                            success: false,
-                            error: 'path_not_found',
-                        },
-                    });
-                    break;
-                }
-
-                let manifestPath = inputPath;
-                let workingDir = inputPath;
-                if (stat.isDirectory()) {
-                    const candidates = [
-                        path.join(inputPath, 'toolpack.json'),
-                        path.join(inputPath, 'mcp.json'),
-                    ];
-                    const found = candidates.find((candidate) => fs.existsSync(candidate));
-                    if (!found) {
-                        emit({
-                            commandId: command.id,
-                            timestamp: new Date().toISOString(),
-                            type: 'install_toolpack_response',
-                            payload: {
-                                success: false,
-                                error: 'missing_toolpack_manifest',
-                            },
-                        });
-                        break;
-                    }
-                    manifestPath = found;
-                } else {
-                    workingDir = path.dirname(inputPath);
-                }
-
-                try {
-                    const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<
-                        string,
-                        unknown
-                    >;
-                    const normalized = ensureToolpackId(raw);
-                    const parsed = ToolpackManifestSchema.safeParse(normalized);
-                    if (!parsed.success) {
-                        emit({
-                            commandId: command.id,
-                            timestamp: new Date().toISOString(),
-                            type: 'install_toolpack_response',
-                            payload: {
-                                success: false,
-                                error: 'invalid_manifest',
-                            },
-                        });
-                        break;
-                    }
-
-                    if (!parsed.data.signature && !allowUnsigned) {
-                        emit({
-                            commandId: command.id,
-                            timestamp: new Date().toISOString(),
-                            type: 'install_toolpack_response',
-                            payload: {
-                                success: false,
-                                error: 'unsigned_toolpack',
-                            },
-                        });
-                        break;
-                    }
-
-                    toolpackStore.add(parsed.data, workingDir);
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'install_toolpack_response',
-                        payload: {
-                            success: true,
-                            toolpackId: parsed.data.id,
-                        },
-                    });
-                } catch (error) {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'install_toolpack_response',
-                        payload: {
-                            success: false,
-                            error: error instanceof Error ? error.message : 'install_failed',
-                        },
-                    });
-                }
-
-                break;
-            }
-            case 'set_toolpack_enabled': {
-                const { toolpackId, enabled } = command.payload as {
-                    toolpackId: string;
-                    enabled: boolean;
-                };
-                const success = toolpackStore.setEnabledById(toolpackId, enabled);
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'set_toolpack_enabled_response',
-                    payload: {
-                        success,
-                        toolpackId,
-                        error: success ? undefined : 'toolpack_not_found',
-                    },
-                });
-                break;
-            }
-            case 'remove_toolpack': {
-                const { toolpackId, deleteFiles } = command.payload as {
-                    toolpackId: string;
-                    deleteFiles?: boolean;
-                };
-                const record = toolpackStore.getById(toolpackId);
-                const success = toolpackStore.removeById(toolpackId);
-                if (success && deleteFiles !== false && record?.workingDir) {
-                    try {
-                        fs.rmSync(record.workingDir, { recursive: true, force: true });
-                    } catch (error) {
-                        console.error('[ToolpackStore] Failed to delete files:', error);
-                    }
-                }
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'remove_toolpack_response',
-                    payload: {
-                        success,
-                        toolpackId,
-                        error: success ? undefined : 'toolpack_not_found',
-                    },
-                });
-                break;
-            }
-            case 'list_claude_skills': {
-                const includeDisabled = command.payload?.includeDisabled ?? true;
-                const skills = skillStore
-                    .list()
-                    .filter((skill) => includeDisabled || skill.enabled)
-                    .map((skill) => toSkillRecord(skill));
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'list_claude_skills_response',
-                    payload: { skills: skills as any },
-                });
-                break;
-            }
-            case 'get_claude_skill': {
-                const skillId = command.payload.skillId as string;
-                const stored = skillStore.get(skillId);
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'get_claude_skill_response',
-                    payload: {
-                        skill: (stored ? toSkillRecord(stored) : undefined) as any,
-                    },
-                });
-                break;
-            }
-            case 'import_claude_skill': {
-                const { source, path: inputPath } = command.payload as {
-                    source: string;
-                    path?: string;
-                };
-
-                if (source !== 'local_folder') {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'import_claude_skill_response',
-                        payload: {
-                            success: false,
-                            error: 'unsupported_source',
-                        },
-                    });
-                    break;
-                }
-
-                if (!inputPath) {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'import_claude_skill_response',
-                        payload: {
-                            success: false,
-                            error: 'missing_path',
-                        },
-                    });
-                    break;
-                }
-
-                const manifest = SkillStore.loadFromDirectory(inputPath);
-                if (!manifest) {
-                    emit({
-                        commandId: command.id,
-                        timestamp: new Date().toISOString(),
-                        type: 'import_claude_skill_response',
-                        payload: {
-                            success: false,
-                            error: 'missing_skill_manifest',
-                        },
-                    });
-                    break;
-                }
-
-                skillStore.install(manifest);
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'import_claude_skill_response',
-                    payload: {
-                        success: true,
-                        skillId: manifest.name,
-                    },
-                });
-                break;
-            }
-            case 'set_claude_skill_enabled': {
-                const { skillId, enabled } = command.payload as {
-                    skillId: string;
-                    enabled: boolean;
-                };
-                const success = skillStore.setEnabled(skillId, enabled);
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'set_claude_skill_enabled_response',
-                    payload: {
-                        success,
-                        skillId,
-                        error: success ? undefined : 'skill_not_found',
-                    },
-                });
-                break;
-            }
-            case 'remove_claude_skill': {
-                const { skillId, deleteFiles } = command.payload as {
-                    skillId: string;
-                    deleteFiles?: boolean;
-                };
-                const record = skillStore.get(skillId);
-                const success = skillStore.uninstall(skillId);
-                if (success && deleteFiles !== false && record?.manifest.directory) {
-                    try {
-                        fs.rmSync(record.manifest.directory, { recursive: true, force: true });
-                    } catch (error) {
-                        console.error('[SkillStore] Failed to delete files:', error);
-                    }
-                }
-                emit({
-                    commandId: command.id,
-                    timestamp: new Date().toISOString(),
-                    type: 'remove_claude_skill_response',
-                    payload: {
-                        success,
-                        skillId,
-                        error: success ? undefined : 'skill_not_found',
-                    },
-                });
-                break;
-            }
-
-            // ================================================================
-            // Workspace Commands
-            // ================================================================
-
-            case 'list_workspaces': {
-                const workspaces = workspaceStore.list();
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'list_workspaces_response',
-                    payload: { workspaces },
-                });
-                break;
-            }
-
-            case 'create_workspace': {
-                const { name, path: requestedPath } = (command as { payload: { name: string; path: string } }).payload;
-
-                console.log('[create_workspace] Received request - name:', name, 'requestedPath:', requestedPath);
-                console.log('[create_workspace] process.cwd():', process.cwd());
-
-                try {
-                    let finalPath = requestedPath;
-                    if (!finalPath || finalPath === 'default') {
-                        const appDataDir = getResolvedAppDataRoot();
-                        const workspacesDir = appDataDir
-                            ? path.join(appDataDir, 'workspaces')
-                            : path.join(process.cwd(), 'workspaces');
-                        fs.mkdirSync(workspacesDir, { recursive: true });
-
-                        const safeName = (name.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'workspace');
-                        finalPath = path.join(workspacesDir, safeName);
-
-                        if (fs.existsSync(finalPath)) {
-                            finalPath = path.join(workspacesDir, `${safeName}_${Date.now()}`);
-                        }
-                    }
-
-                    console.log('[create_workspace] finalPath:', finalPath);
-                    const workspace = workspaceStore.create(name, finalPath);
-                    console.log('[create_workspace] Created workspace:', JSON.stringify(workspace, null, 2));
-
-                    const response = {
-                        commandId: (command as { id: string }).id,
-                        timestamp: new Date().toISOString(),
-                        type: 'create_workspace_response',
-                        payload: { workspace, success: true },
-                    };
-                    console.log('[create_workspace] Sending response:', JSON.stringify(response, null, 2));
-                    emitAny(response);
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    console.error('[create_workspace] Failed to create workspace:', message);
-                    emitAny({
-                        commandId: (command as { id: string }).id,
-                        timestamp: new Date().toISOString(),
-                        type: 'create_workspace_response',
-                        payload: { success: false, error: message },
-                    });
-                }
-                break;
-            }
-
-            case 'update_workspace': {
-                const { id, updates } = (command as { payload: { id: string; updates: Partial<any> } }).payload;
-                const workspace = workspaceStore.update(id, updates);
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'update_workspace_response',
-                    payload: {
-                        success: !!workspace,
-                        workspace
-                    },
-                });
-                break;
-            }
-
-            case 'delete_workspace': {
-                const { id } = (command as { payload: { id: string } }).payload;
-                const success = workspaceStore.delete(id);
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'delete_workspace_response',
-                    payload: { success },
-                });
-                break;
-            }
-
-            case 'install_from_github': {
-                const { workspacePath, source, targetType } = (command as {
-                    payload: { workspacePath: string; source: string; targetType: 'skill' | 'mcp' };
-                }).payload;
-
-                let result;
-                if (targetType === 'skill') {
-                    result = await downloadSkillFromGitHub(source, workspacePath);
-                    if (result.success) {
-                        // Scan and register the downloaded skill
-                        const skillsDir = path.join(workspacePath, '.coworkany', 'skills');
-                        const manifests = SkillStore.scanDirectory(skillsDir);
-                        for (const manifest of manifests) {
-                            skillStore.install(manifest);
-                        }
-                    }
-                } else {
-                    result = await downloadMcpFromGitHub(source, workspacePath);
-                    if (result.success) {
-                        // Try to register the downloaded MCP
-                        const manifestPath = path.join(result.path, 'manifest.json');
-                        if (fs.existsSync(manifestPath)) {
-                            try {
-                                const content = fs.readFileSync(manifestPath, 'utf-8');
-                                const manifest = ToolpackManifestSchema.parse(JSON.parse(content));
-                                toolpackStore.add(manifest, result.path);
-                            } catch (e) {
-                                console.error('[install_from_github] Failed to register MCP:', e);
-                            }
-                        }
-                    }
-                }
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'install_from_github_response',
-                    payload: {
-                        success: result.success,
-                        path: result.path,
-                        filesDownloaded: result.filesDownloaded,
-                        error: result.error,
-                    },
-                });
-                break;
-            }
-
-            // ================================================================
-            // Repository Scanning Commands
-            // ================================================================
-
-            case 'scan_default_repos': {
-                const result = await scanDefaultRepositories();
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'scan_default_repos_response',
-                    payload: {
-                        skills: result.skills,
-                        mcpServers: result.mcpServers,
-                        errors: result.errors,
-                    },
-                });
-                break;
-            }
-
-            /*
-                        case 'scan_skills': {
-                            const { source } = (command as { payload: { source: string } }).payload;
-                            const skills = await scanForSkills(source, 3);
-                            emitAny({
-                                commandId: (command as { id: string }).id,
-                                timestamp: new Date().toISOString(),
-                                type: 'scan_skills_response',
-                                payload: { skills },
-                            });
-                            break;
-                        }
-            
-                        case 'scan_mcp_servers': {
-                            const { source } = (command as { payload: { source: string } }).payload;
-                            const servers = await scanForMcpServers(source, 3);
-                            emitAny({
-                                commandId: (command as { id: string }).id,
-                                timestamp: new Date().toISOString(),
-                                type: 'scan_mcp_servers_response',
-                                payload: { servers },
-                            });
-                            break;
-                        }
-            
-                        case 'validate_skill': {
-                            const { source } = (command as { payload: { source: string } }).payload;
-                            const result = await validateSkillUrl(source);
-                            emitAny({
-                                commandId: (command as { id: string }).id,
-                                timestamp: new Date().toISOString(),
-                                type: 'validate_skill_response',
-                                payload: result,
-                            });
-                            break;
-                        }
-            
-                        case 'validate_mcp': {
-                            const { source } = (command as { payload: { source: string } }).payload;
-                            const result = await validateMcpUrl(source);
-                            emitAny({
-                                commandId: (command as { id: string }).id,
-                                timestamp: new Date().toISOString(),
-                                type: 'validate_mcp_response',
-                                payload: result,
-                            });
-                            break;
-                        }
-            */
-
-            case 'validate_github_url': {
-                const { url, type } = (command as { payload: { url: string; type: string } }).payload;
-                const result = type === 'skill'
-                    ? await validateSkillUrl(url)
-                    : await validateMcpUrl(url);
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'validate_github_url_response',
-                    payload: result,
-                });
-                break;
-            }
-
-            // ================================================================
-            // Autonomous Task Commands (OpenClaw-style)
-            // ================================================================
-
-            case 'start_autonomous_task': {
-                const { taskId, query, runInBackground, autoSaveMemory } = (command as {
-                    payload: {
-                        taskId: string;
-                        query: string;
-                        runInBackground?: boolean;
-                        autoSaveMemory?: boolean;
-                    };
-                }).payload;
-
-                taskSequences.set(taskId, 0);
-
-                // Initialize provider config for autonomous agent
-                const llmConfig = loadLlmConfig(workspaceRoot);
-                const providerConfig = resolveProviderConfig(llmConfig, {});
-                autonomousLlmAdapter.setProviderConfig(providerConfig);
-
-                // Get the autonomous agent controller
-                const agent = getAutonomousAgent(taskId);
-
-                emit({
-                    id: randomUUID(),
-                    taskId,
-                    timestamp: new Date().toISOString(),
-                    sequence: nextSequence(taskId),
-                    type: 'TASK_STARTED',
-                    payload: {
-                        title: 'Autonomous Task',
-                        description: query,
-                        context: {
-                            workspacePath: workspaceRoot,
-                            userQuery: query,
-                        },
-                    },
-                });
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'start_autonomous_task_response',
-                    payload: {
-                        success: true,
-                        taskId,
-                        message: 'Autonomous task started',
-                    },
-                });
-
-                // Start the autonomous task
-                try {
-                    const task = await agent.startTask(query, {
-                        autoSaveMemory: autoSaveMemory ?? true,
-                        notifyOnComplete: true,
-                        runInBackground: runInBackground ?? false,
-                    });
-
-                    // Emit completion event
-                    emit({
-                        id: randomUUID(),
-                        taskId,
-                        timestamp: new Date().toISOString(),
-                        sequence: nextSequence(taskId),
-                        type: 'TASK_FINISHED',
-                        payload: {
-                            summary: task.summary || 'Task completed',
-                            duration: Date.now() - new Date(task.createdAt).getTime(),
-                        },
-                    });
-                } catch (error) {
-                    emit(createTaskFailedEvent(taskId, {
-                        error: error instanceof Error ? error.message : String(error),
-                        errorCode: 'AUTONOMOUS_TASK_ERROR',
-                        recoverable: false,
-                    }));
-                }
-                break;
-            }
-
-            case 'get_autonomous_task_status': {
-                const { taskId } = (command as { payload: { taskId: string } }).payload;
-                const agent = getAutonomousAgent(taskId);
-                const task = agent.getTask(taskId);
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'get_autonomous_task_status_response',
-                    payload: {
-                        success: true,
-                        task: task ? {
-                            id: task.id,
-                            status: task.status,
-                            subtaskCount: task.decomposedTasks.length,
-                            completedSubtasks: task.decomposedTasks.filter(s => s.status === 'completed').length,
-                            summary: task.summary,
-                            memoryExtracted: task.memoryExtracted,
-                        } : null,
-                    },
-                });
-                break;
-            }
-
-            case 'pause_autonomous_task': {
-                const { taskId } = (command as { payload: { taskId: string } }).payload;
-                const agent = getAutonomousAgent(taskId);
-                const success = agent.pauseTask(taskId);
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'pause_autonomous_task_response',
-                    payload: { success, taskId },
-                });
-                break;
-            }
-
-            case 'resume_autonomous_task': {
-                const { taskId, userInput } = (command as {
-                    payload: { taskId: string; userInput?: Record<string, string> };
-                }).payload;
-                const agent = getAutonomousAgent(taskId);
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'resume_autonomous_task_response',
-                    payload: { success: true, taskId },
-                });
-
-                // Resume in background
-                agent.resumeTask(taskId, userInput).catch(error => {
-                    emit(createTaskFailedEvent(taskId, {
-                        error: error instanceof Error ? error.message : String(error),
-                        errorCode: 'AUTONOMOUS_RESUME_ERROR',
-                        recoverable: false,
-                    }));
-                });
-                break;
-            }
-
-            case 'cancel_autonomous_task': {
-                const { taskId } = (command as { payload: { taskId: string } }).payload;
-                const agent = getAutonomousAgent(taskId);
-                const success = agent.cancelTask(taskId);
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'cancel_autonomous_task_response',
-                    payload: { success, taskId },
-                });
-
-                if (success) {
-                    emit(createTaskFailedEvent(taskId, {
-                        error: 'Task cancelled by user',
-                        errorCode: 'CANCELLED',
-                        recoverable: false,
-                    }));
-                }
-                break;
-            }
-
-            case 'list_autonomous_tasks': {
-                const agent = getAutonomousAgent('global');
-                const tasks = agent.getAllTasks();
-
-                emitAny({
-                    commandId: (command as { id: string }).id,
-                    timestamp: new Date().toISOString(),
-                    type: 'list_autonomous_tasks_response',
-                    payload: {
-                        tasks: tasks.map(t => ({
-                            id: t.id,
-                            query: t.originalQuery,
-                            status: t.status,
-                            subtaskCount: t.decomposedTasks.length,
-                            completedSubtasks: t.decomposedTasks.filter(s => s.status === 'completed').length,
-                            createdAt: t.createdAt,
-                            completedAt: t.completedAt,
-                        })),
-                    },
-                });
-                break;
-            }
-
             default:
                 console.error(`[WARN] Unhandled command type: ${(command as IpcCommand).type}`);
         }
@@ -7206,69 +5966,8 @@ async function processLine(line: string): Promise<void> {
 // ========================================================================
 
 async function handleResponse(response: IpcResponse): Promise<void> {
-    switch (response.type) {
-        case 'request_effect_response': {
-            const approved = response.payload.response.approved;
-            if (approved) {
-                emit({
-                    id: randomUUID(),
-                    taskId: 'global',
-                    timestamp: new Date().toISOString(),
-                    sequence: nextSequence('global'),
-                    type: 'EFFECT_APPROVED',
-                    payload: {
-                        response: response.payload.response,
-                        approvedBy: 'policy',
-                    },
-                });
-            } else {
-                emit({
-                    id: randomUUID(),
-                    taskId: 'global',
-                    timestamp: new Date().toISOString(),
-                    sequence: nextSequence('global'),
-                    type: 'EFFECT_DENIED',
-                    payload: {
-                        response: response.payload.response,
-                        deniedBy: 'policy',
-                    },
-                });
-            }
-            break;
-        }
-        case 'apply_patch_response': {
-            const success = response.payload.success;
-            const eventType = success ? 'PATCH_APPLIED' : 'PATCH_REJECTED';
-            const filePath =
-                'filePath' in response.payload
-                    ? (response.payload as { filePath?: string }).filePath ?? ''
-                    : '';
-            const eventPayload =
-                eventType === 'PATCH_APPLIED'
-                    ? {
-                        patchId: response.payload.patchId,
-                        filePath,
-                        hunksApplied: 0,
-                        backupPath: response.payload.backupPath,
-                    }
-                    : {
-                        patchId: response.payload.patchId,
-                        reason: response.payload.error,
-                    };
-
-            emit({
-                id: randomUUID(),
-                taskId: 'global',
-                timestamp: new Date().toISOString(),
-                sequence: nextSequence('global'),
-                type: eventType,
-                payload: eventPayload,
-            } as TaskEvent);
-            break;
-        }
-        default:
-            // Other responses can be handled when the agent loop is wired.
-            break;
+    if (await handleRuntimeResponse(response, getRuntimeResponseDeps())) {
+        return;
     }
 }
 

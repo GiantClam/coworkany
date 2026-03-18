@@ -126,6 +126,9 @@ fn main() {
             ipc::list_claude_skills,
             ipc::get_claude_skill,
             ipc::import_claude_skill,
+            ipc::list_directives,
+            ipc::upsert_directive,
+            ipc::remove_directive,
             ipc::set_claude_skill_enabled,
             ipc::remove_claude_skill,
             // Workspace commands

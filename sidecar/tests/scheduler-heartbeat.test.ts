@@ -18,6 +18,8 @@
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { ScheduledTaskStore } from '../src/scheduling/scheduledTasks';
 
 const SRC_ROOT = path.join(process.cwd(), 'src');
 
@@ -169,5 +171,85 @@ describe('SCH-05: Daemon 循环', () => {
 
         expect(hasStart).toBe(true);
         expect(hasStop).toBe(true);
+    });
+});
+
+// ============================================================================
+// SCH-06: Scheduled Task Recovery
+// ============================================================================
+
+describe('SCH-06: Scheduled Task Recovery', () => {
+    test('recoverStaleRunning 将超时 running 任务标记为 failed', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-scheduled-task-'));
+        const store = new ScheduledTaskStore(path.join(tempDir, 'scheduled-tasks.json'));
+        const now = new Date('2026-03-17T16:00:00.000Z');
+
+        const freshTask = store.create({
+            title: 'fresh',
+            taskQuery: 'fresh task',
+            workspacePath: tempDir,
+            executeAt: new Date('2026-03-17T15:55:00.000Z'),
+            speakResult: false,
+        });
+        store.upsert({
+            ...freshTask,
+            status: 'running',
+            startedAt: new Date('2026-03-17T15:59:30.000Z').toISOString(),
+        });
+
+        const staleTask = store.create({
+            title: 'stale',
+            taskQuery: 'stale task',
+            workspacePath: tempDir,
+            executeAt: new Date('2026-03-17T15:30:00.000Z'),
+            speakResult: false,
+        });
+        store.upsert({
+            ...staleTask,
+            status: 'running',
+            startedAt: new Date('2026-03-17T15:40:00.000Z').toISOString(),
+        });
+
+        const recovered = store.recoverStaleRunning({
+            now,
+            timeoutMs: 15 * 60 * 1000,
+            errorMessage: 'timed out',
+        });
+
+        expect(recovered.map((task) => task.id)).toEqual([staleTask.id]);
+
+        const tasks = store.read();
+        expect(tasks.find((task) => task.id === staleTask.id)?.status).toBe('failed');
+        expect(tasks.find((task) => task.id === staleTask.id)?.error).toBe('timed out');
+        expect(tasks.find((task) => task.id === staleTask.id)?.completedAt).toBe(now.toISOString());
+        expect(tasks.find((task) => task.id === freshTask.id)?.status).toBe('running');
+    });
+
+    test('recoverStaleRunning 会处理缺少 startedAt 的脏 running 任务', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-scheduled-task-'));
+        const store = new ScheduledTaskStore(path.join(tempDir, 'scheduled-tasks.json'));
+        const now = new Date('2026-03-17T16:00:00.000Z');
+
+        const staleTask = store.create({
+            title: 'stale-without-startedAt',
+            taskQuery: 'task',
+            workspacePath: tempDir,
+            executeAt: new Date('2026-03-17T15:30:00.000Z'),
+            speakResult: false,
+        });
+        store.upsert({
+            ...staleTask,
+            status: 'running',
+            startedAt: undefined,
+        });
+
+        const recovered = store.recoverStaleRunning({
+            now,
+            timeoutMs: 10 * 60 * 1000,
+        });
+
+        expect(recovered).toHaveLength(1);
+        expect(recovered[0]?.id).toBe(staleTask.id);
+        expect(store.read()[0]?.status).toBe('failed');
     });
 });

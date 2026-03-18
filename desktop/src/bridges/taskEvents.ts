@@ -11,6 +11,7 @@ export type TaskUiState = {
     status: 'idle' | 'running' | 'finished' | 'failed';
     title?: string;
     summary?: string;
+    clarificationQuestions?: string[];
     planSummary?: string;
     planSteps: Array<{ id: string; description: string; status: string }>;
     toolCalls: Array<{ toolName: string; toolId: string; source: string }>;
@@ -48,6 +49,7 @@ export function applyTaskEvent(state: TaskUiState, event: TaskEvent): TaskUiStat
                 ...next,
                 status: 'running',
                 title: event.payload.title,
+                clarificationQuestions: undefined,
             };
         case 'PLAN_UPDATED':
             return {
@@ -60,12 +62,21 @@ export function applyTaskEvent(state: TaskUiState, event: TaskEvent): TaskUiStat
                 ...next,
                 status: 'finished',
                 summary: event.payload.summary,
+                clarificationQuestions: undefined,
             };
         case 'TASK_FAILED':
             return {
                 ...next,
                 status: 'failed',
                 summary: event.payload.error,
+                clarificationQuestions: undefined,
+            };
+        case 'TASK_CLARIFICATION_REQUIRED':
+            return {
+                ...next,
+                status: 'idle',
+                summary: event.payload.reason,
+                clarificationQuestions: event.payload.questions,
             };
         case 'TOOL_CALLED':
             return {

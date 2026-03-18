@@ -6,6 +6,11 @@ import { useGitHubValidation } from '../../hooks/useGitHubValidation';
 import { SkillRepositoryView } from './SkillRepositoryView';
 import { RuntimeBadge } from '../Common/RuntimeBadge';
 import { MarketplaceView } from '../Marketplace/MarketplaceView';
+import { SkillImportFeedbackPanel } from './SkillImportFeedbackPanel';
+import {
+    extractSkillImportFeedback,
+    type SkillImportFeedback,
+} from '../../lib/skillImport';
 
 type SkillRecord = {
     manifest: {
@@ -44,6 +49,7 @@ export function SkillsView() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<'install' | 'browse' | 'market'>('install');
+    const [lastImportFeedback, setLastImportFeedback] = useState<SkillImportFeedback[] | null>(null);
 
     // GitHub URL validation
     const { validating, result: validationResult } = useGitHubValidation(importPath, 'skill');
@@ -76,11 +82,13 @@ export function SkillsView() {
     const importSkill = async () => {
         if (!importPath.trim()) return;
         setLoading(true);
+        setError(null);
         try {
-            // Assume local folder for skills usually
-            await invoke<IpcResult>('import_claude_skill', {
+            const result = await invoke<IpcResult>('import_claude_skill', {
                 input: { source: 'local_folder', path: importPath.trim() },
             });
+            const feedback = extractSkillImportFeedback(result.payload);
+            setLastImportFeedback(feedback ? [feedback] : null);
             setImportPath('');
             await refresh();
         } catch (err) { setError(err instanceof Error ? err.message : 'Import failed'); }
@@ -230,17 +238,24 @@ export function SkillsView() {
                 )}
             </div>
             {error && <div style={{ color: 'var(--status-error)', fontSize: '14px' }}>{error}</div>}
+            <SkillImportFeedbackPanel feedback={lastImportFeedback} />
 
             {/* Tab Content */}
             {activeTab === 'market' ? (
                 <MarketplaceView
                     initialType="skill"
                     installedSources={new Set(skills.map(s => s.source))}
-                    onInstallComplete={refresh}
+                    onInstallComplete={async (feedback) => {
+                        setLastImportFeedback(feedback ? [feedback] : null);
+                        await refresh();
+                    }}
                 />
             ) : activeTab === 'browse' ? (
                 <SkillRepositoryView
-                    onInstallComplete={refresh}
+                    onInstallComplete={async (feedback) => {
+                        setLastImportFeedback(feedback ?? null);
+                        await refresh();
+                    }}
                     installedSkillIds={new Set(skills.map(s => s.source))}
                 />
             ) : (

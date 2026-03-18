@@ -30,6 +30,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'running',
                 title: payload.title as string,
+                clarificationQuestions: undefined,
                 workspacePath: (payload.context as Record<string, unknown>)?.workspacePath as string,
                 messages: [
                     ...session.messages,
@@ -57,6 +58,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'finished',
                 summary: payload.summary as string,
+                clarificationQuestions: undefined,
                 assistantDraft: undefined,
             };
 
@@ -65,6 +67,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'failed',
                 summary: payload.error as string,
+                clarificationQuestions: undefined,
                 assistantDraft: undefined,
             }, event, [
                 `Task failed: ${(payload.error as string) ?? 'Unknown error'}`,
@@ -81,6 +84,15 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 assistantDraft: status === 'running' ? session.assistantDraft : undefined,
             };
         }
+
+        case 'TASK_CLARIFICATION_REQUIRED':
+            return {
+                ...session,
+                status: 'idle',
+                summary: (payload.reason as string | undefined) ?? session.summary,
+                clarificationQuestions: ((payload.questions as string[] | undefined) ?? []).filter(Boolean),
+                assistantDraft: undefined,
+            };
 
         case 'TASK_HISTORY_CLEARED': {
             return {

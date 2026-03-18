@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import styles from './SettingsView.module.css';
 
@@ -8,7 +9,30 @@ interface Directive {
     content: string;
     enabled: boolean;
     priority: number;
+    trigger?: string;
 }
+
+type IpcResult = {
+    success: boolean;
+    payload?: {
+        payload?: Record<string, unknown>;
+    };
+};
+
+function extractPayload(result: IpcResult): Record<string, unknown> {
+    const payload = result.payload?.payload;
+    return payload && typeof payload === 'object'
+        ? payload
+        : {};
+}
+
+const emptyDirectiveDraft = {
+    name: '',
+    content: '',
+    enabled: true,
+    priority: 0,
+    trigger: '',
+};
 
 const PlusIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -20,22 +44,93 @@ const PlusIcon = () => (
 export const DirectivesEditor: React.FC = () => {
     const { t } = useTranslation();
     const [directives, setDirectives] = useState<Directive[]>([]);
+    const [draft, setDraft] = useState(emptyDirectiveDraft);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        loadDirectives();
+        void loadDirectives();
     }, []);
 
     const loadDirectives = async () => {
-        setDirectives([
-            { id: '1', name: 'No Any', content: 'Do not use "any"', enabled: true, priority: 1 },
-            { id: '2', name: 'Concise', content: 'Be concise', enabled: false, priority: 0 },
-        ]);
+        setLoading(true);
+        setError(null);
+        try {
+            const result = await invoke<IpcResult>('list_directives');
+            const payload = extractPayload(result);
+            setDirectives(Array.isArray(payload.directives) ? (payload.directives as Directive[]) : []);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to load directives');
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const toggleDirective = (id: string) => {
+    const updateLocalDirective = (id: string, updates: Partial<Directive>) => {
         setDirectives((prev) => prev.map((directive) =>
-            directive.id === id ? { ...directive, enabled: !directive.enabled } : directive
+            directive.id === id ? { ...directive, ...updates } : directive
         ));
+    };
+
+    const saveDirective = async (directive: Directive) => {
+        setLoading(true);
+        setError(null);
+        try {
+            await invoke<IpcResult>('upsert_directive', {
+                input: {
+                    directive: {
+                        ...directive,
+                        trigger: directive.trigger?.trim() || undefined,
+                    },
+                },
+            });
+            await loadDirectives();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to save directive');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const toggleDirective = async (directive: Directive) => {
+        updateLocalDirective(directive.id, { enabled: !directive.enabled });
+        await saveDirective({
+            ...directive,
+            enabled: !directive.enabled,
+        });
+    };
+
+    const removeDirective = async (id: string) => {
+        setLoading(true);
+        setError(null);
+        try {
+            await invoke<IpcResult>('remove_directive', {
+                input: {
+                    directiveId: id,
+                },
+            });
+            await loadDirectives();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to remove directive');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const addDirective = async () => {
+        if (!draft.name.trim() || !draft.content.trim()) {
+            return;
+        }
+
+        await saveDirective({
+            id: crypto.randomUUID(),
+            name: draft.name.trim(),
+            content: draft.content.trim(),
+            enabled: draft.enabled,
+            priority: draft.priority,
+            trigger: draft.trigger.trim() || undefined,
+        });
+        setDraft(emptyDirectiveDraft);
     };
 
     return (
@@ -50,32 +145,108 @@ export const DirectivesEditor: React.FC = () => {
             <div className={styles.stack}>
                 {directives.map((directive) => (
                     <div key={directive.id} className={styles.directiveCard}>
-                        <div className={styles.directiveInfo}>
+                        <div className={styles.directiveInfo} style={{ alignItems: 'stretch', flex: 1 }}>
                             <span className={styles.priorityBadge}>P{directive.priority}</span>
-                            <div className={styles.directiveCopy}>
-                                <span className={styles.directiveName}>{directive.name}</span>
-                                <span className={styles.directiveContent}>{directive.content}</span>
+                            <div className={styles.directiveCopy} style={{ gap: 8 }}>
+                                <input
+                                    className="input-field"
+                                    value={directive.name}
+                                    onChange={(event) => updateLocalDirective(directive.id, { name: event.target.value })}
+                                    disabled={loading}
+                                />
+                                <textarea
+                                    className="input-field"
+                                    value={directive.content}
+                                    onChange={(event) => updateLocalDirective(directive.id, { content: event.target.value })}
+                                    disabled={loading}
+                                    rows={3}
+                                    style={{ resize: 'vertical' }}
+                                />
+                                <input
+                                    className="input-field"
+                                    value={directive.trigger ?? ''}
+                                    onChange={(event) => updateLocalDirective(directive.id, { trigger: event.target.value })}
+                                    disabled={loading}
+                                    placeholder="Trigger regex (optional)"
+                                />
                             </div>
                         </div>
 
-                        <div className={styles.directiveActions}>
+                        <div className={styles.directiveActions} style={{ alignItems: 'stretch' }}>
                             <button
                                 type="button"
                                 className={`${styles.toggleInline} ${directive.enabled ? styles.toggleInlineActive : ''}`}
                                 aria-pressed={directive.enabled}
-                                onClick={() => toggleDirective(directive.id)}
+                                onClick={() => void toggleDirective(directive)}
+                                disabled={loading}
                             >
                                 {directive.enabled ? t('common.on') : t('common.off')}
+                            </button>
+                            <button
+                                type="button"
+                                className={styles.verifyButton}
+                                onClick={() => void saveDirective(directive)}
+                                disabled={loading}
+                            >
+                                {t('common.save')}
+                            </button>
+                            <button
+                                type="button"
+                                className={styles.verifyButton}
+                                onClick={() => void removeDirective(directive.id)}
+                                disabled={loading}
+                            >
+                                {t('common.remove')}
                             </button>
                         </div>
                     </div>
                 ))}
             </div>
 
-            <button type="button" className={`${styles.verifyButton} ${styles.sectionCta}`}>
-                <PlusIcon />
-                <span>{t('settings.addNewDirective')}</span>
-            </button>
+            <div className={styles.directiveCard} style={{ marginTop: 12 }}>
+                <div className={styles.directiveInfo} style={{ alignItems: 'stretch', flex: 1 }}>
+                    <span className={styles.priorityBadge}>P{draft.priority}</span>
+                    <div className={styles.directiveCopy} style={{ gap: 8 }}>
+                        <input
+                            className="input-field"
+                            value={draft.name}
+                            onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
+                            disabled={loading}
+                            placeholder="Directive name"
+                        />
+                        <textarea
+                            className="input-field"
+                            value={draft.content}
+                            onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
+                            disabled={loading}
+                            rows={3}
+                            placeholder="Directive content"
+                            style={{ resize: 'vertical' }}
+                        />
+                        <input
+                            className="input-field"
+                            value={draft.trigger}
+                            onChange={(event) => setDraft((prev) => ({ ...prev, trigger: event.target.value }))}
+                            disabled={loading}
+                            placeholder="Trigger regex (optional)"
+                        />
+                    </div>
+                </div>
+
+                <button
+                    type="button"
+                    className={`${styles.verifyButton} ${styles.sectionCta}`}
+                    onClick={() => void addDirective()}
+                    disabled={loading || !draft.name.trim() || !draft.content.trim()}
+                >
+                    <PlusIcon />
+                    <span>{t('settings.addNewDirective')}</span>
+                </button>
+            </div>
+
+            {error && (
+                <p style={{ color: 'var(--status-error)', marginTop: 12 }}>{error}</p>
+            )}
         </div>
     );
 };

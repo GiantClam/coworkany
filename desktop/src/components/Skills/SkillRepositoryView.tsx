@@ -9,19 +9,27 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { RepositoryBrowser, type RepositoryItem } from '../Repository/RepositoryBrowser';
 import { useRepositoryScan } from '../../hooks/useRepositoryScan';
+import {
+    extractSkillImportFeedback,
+    type SkillImportFeedback,
+} from '../../lib/skillImport';
 
 // ============================================================================
 // Types
 // ============================================================================
 
 interface SkillRepositoryViewProps {
-    onInstallComplete?: () => void;
+    onInstallComplete?: (feedback?: SkillImportFeedback[]) => void | Promise<void>;
     installedSkillIds?: Set<string>;
 }
 
 interface IpcResult {
     success: boolean;
     payload?: unknown;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
 // ============================================================================
@@ -50,16 +58,21 @@ export const SkillRepositoryView: React.FC<SkillRepositoryViewProps> = ({
                     const workspacePath = await invoke<string>('get_workspace_root');
 
                     // Install from GitHub
-                    await invoke<IpcResult>('install_from_github', {
+                    const result = await invoke<IpcResult>('install_from_github', {
                         input: {
                             workspacePath,
                             source: item.source,
                             targetType: 'skill',
                         },
                     });
+                    const payload = asRecord(result.payload);
+                    if (payload?.success === false || payload?.error) {
+                        throw new Error(String(payload.error ?? 'Install failed'));
+                    }
 
                     console.log('[SkillRepositoryView] Installed:', item.name);
-                    return { success: true, name: item.name };
+                    const installFeedback = extractSkillImportFeedback(result.payload);
+                    return { success: true, name: item.name, feedback: installFeedback };
                 } catch (err) {
                     console.error('[SkillRepositoryView] Failed to install:', item.name, err);
                     throw new Error(`Failed to install ${item.name}: ${err}`);
@@ -86,7 +99,12 @@ export const SkillRepositoryView: React.FC<SkillRepositoryViewProps> = ({
 
         // Notify parent to refresh skill list
         if (onInstallComplete) {
-            onInstallComplete();
+            await onInstallComplete(
+                results
+                    .filter((result): result is PromiseFulfilledResult<{ success: true; name: string; feedback: SkillImportFeedback | null }> => result.status === 'fulfilled')
+                    .map((result) => result.value.feedback)
+                    .filter((feedback): feedback is SkillImportFeedback => Boolean(feedback))
+            );
         }
     };
 

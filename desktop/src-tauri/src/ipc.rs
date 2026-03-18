@@ -152,6 +152,8 @@ pub struct ImportClaudeSkillInput {
     pub path: Option<String>,
     pub url: Option<String>,
     pub overwrite: Option<bool>,
+    #[serde(rename = "autoInstallDependencies")]
+    pub auto_install_dependencies: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -167,6 +169,27 @@ pub struct RemoveClaudeSkillInput {
     pub skill_id: String,
     #[serde(rename = "deleteFiles")]
     pub delete_files: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DirectivePayload {
+    pub id: String,
+    pub name: String,
+    pub content: String,
+    pub enabled: bool,
+    pub priority: i32,
+    pub trigger: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpsertDirectiveInput {
+    pub directive: DirectivePayload,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoveDirectiveInput {
+    #[serde(rename = "directiveId")]
+    pub directive_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1325,6 +1348,7 @@ pub async fn import_claude_skill(
         "path": input.path,
         "url": input.url,
         "overwrite": input.overwrite.unwrap_or(false),
+        "autoInstallDependencies": input.auto_install_dependencies.unwrap_or(true),
     });
     let command = build_command("import_claude_skill", payload);
     let response = send_command_and_wait(&state, command, 5000).await?;
@@ -1336,6 +1360,56 @@ pub async fn import_claude_skill(
     {
         let _ = app_handle.emit("skills-updated", ());
     }
+    Ok(GenericIpcResult {
+        success: true,
+        payload: response,
+    })
+}
+
+#[tauri::command]
+pub async fn list_directives(
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let command = build_command("list_directives", json!({}));
+    let response = send_command_and_wait(&state, command, 3000).await?;
+    Ok(GenericIpcResult {
+        success: true,
+        payload: response,
+    })
+}
+
+#[tauri::command]
+pub async fn upsert_directive(
+    input: UpsertDirectiveInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let payload = json!({
+        "directive": input.directive,
+    });
+    let command = build_command("upsert_directive", payload);
+    let response = send_command_and_wait(&state, command, 3000).await?;
+    Ok(GenericIpcResult {
+        success: true,
+        payload: response,
+    })
+}
+
+#[tauri::command]
+pub async fn remove_directive(
+    input: RemoveDirectiveInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let payload = json!({
+        "directiveId": input.directive_id,
+    });
+    let command = build_command("remove_directive", payload);
+    let response = send_command_and_wait(&state, command, 3000).await?;
     Ok(GenericIpcResult {
         success: true,
         payload: response,

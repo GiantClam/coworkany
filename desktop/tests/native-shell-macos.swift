@@ -39,6 +39,7 @@ struct CliOptions {
     let bundleId: String
     let processName: String?
     let inputProbe: String
+    let submitText: String?
     let promptAccessibility: Bool
     let noLaunch: Bool
 }
@@ -48,6 +49,7 @@ func parseArgs() -> CliOptions {
     var bundleId = "com.coworkany.desktop"
     var processName: String?
     var inputProbe = "sk-native-shell-test"
+    var submitText: String?
     var promptAccessibility = false
     var noLaunch = false
 
@@ -62,6 +64,8 @@ func parseArgs() -> CliOptions {
             if let value = iterator.next() { processName = value }
         case "--input":
             if let value = iterator.next() { inputProbe = value }
+        case "--submit-text":
+            if let value = iterator.next() { submitText = value }
         case "--prompt-accessibility":
             promptAccessibility = true
         case "--no-launch":
@@ -76,6 +80,7 @@ func parseArgs() -> CliOptions {
         bundleId: bundleId,
         processName: processName,
         inputProbe: inputProbe,
+        submitText: submitText,
         promptAccessibility: promptAccessibility,
         noLaunch: noLaunch
     )
@@ -429,14 +434,20 @@ func main() throws {
 
     pressGetStartedIfPresent(in: window)
     let field = try findEditableField(in: window)
-    try writeValue(options.inputProbe, into: field)
-    print("Input passed: wrote \(options.inputProbe.count) chars")
-
     let role = readStringAttribute(field, kAXRoleAttribute as CFString) ?? ""
+    let textToSend = options.submitText ?? "hi"
+
+    if options.submitText == nil {
+        try writeValue(options.inputProbe, into: field)
+        print("Input passed: wrote \(options.inputProbe.count) chars")
+    } else {
+        print("Input passed: prepared submit text (\(textToSend.count) chars)")
+    }
+
     if role != "AXSecureTextField" {
         _ = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, "" as CFTypeRef)
         Thread.sleep(forTimeInterval: 0.1)
-        typeText("hi", into: field)
+        typeText(textToSend, into: field)
         Thread.sleep(forTimeInterval: 0.2)
         pressReturnKey()
         guard waitForClearedValue(on: field) else {

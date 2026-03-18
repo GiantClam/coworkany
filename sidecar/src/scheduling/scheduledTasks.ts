@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { type FrozenWorkRequest } from '../orchestration/workRequestSchema';
 
 export interface ScheduledTaskConfig {
     modelId?: string;
@@ -17,6 +18,8 @@ export interface ScheduledTaskRecord {
     id: string;
     title: string;
     taskQuery: string;
+    workRequestId?: string;
+    frozenWorkRequest?: FrozenWorkRequest;
     workspacePath: string;
     createdAt: string;
     executeAt: string;
@@ -33,6 +36,8 @@ export interface ScheduledTaskRecord {
 export interface ScheduledTaskInput {
     title: string;
     taskQuery: string;
+    workRequestId?: string;
+    frozenWorkRequest?: FrozenWorkRequest;
     workspacePath: string;
     executeAt: Date;
     speakResult: boolean;
@@ -45,6 +50,12 @@ export interface ParsedScheduledIntent {
     taskQuery: string;
     speakResult: boolean;
     originalTimeExpression: string;
+}
+
+export interface RecoverStaleRunningOptions {
+    now?: Date;
+    timeoutMs: number;
+    errorMessage?: string;
 }
 
 function normalizeRecords(raw: unknown): ScheduledTaskRecord[] {
@@ -69,6 +80,10 @@ function normalizeRecords(raw: unknown): ScheduledTaskRecord[] {
         })
         .map((entry) => ({
             ...entry,
+            workRequestId: typeof entry.workRequestId === 'string' ? entry.workRequestId : undefined,
+            frozenWorkRequest: entry.frozenWorkRequest && typeof entry.frozenWorkRequest === 'object'
+                ? entry.frozenWorkRequest
+                : undefined,
             config: entry.config ? { ...entry.config } : undefined,
         }));
 }
@@ -158,28 +173,48 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
     return null;
 }
 
+function stripDanglingSpeechTail(input: string): string {
+    return input
+        .replace(/[，,、\s]*(?:并|然后|再)\s*(?:将|把)?\s*结果?$/iu, '')
+        .replace(/[，,、\s]+$/u, '')
+        .trim();
+}
+
+function cleanupSpeechDirectiveRemoval(input: string): string {
+    return input
+        .replace(/[，,、]\s*(?=[。.!！；;])/gu, '')
+        .replace(/[。.!！；;]{2,}/gu, '。')
+        .replace(/[，,、]{2,}/gu, '，')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
 function stripSpeechDirective(input: string): { taskQuery: string; speakResult: boolean } {
     const patterns = [
-        /(?:,|，|\s)*(?:并|然后|再)?(?:用)?语音播报给我[。.!！\s]*$/iu,
-        /(?:,|，|\s)*(?:并|然后|再)?(?:用)?语音播报[。.!！\s]*$/iu,
-        /(?:,|，|\s)*(?:并|然后|再)?朗读给我听[。.!！\s]*$/iu,
-        /(?:,|，|\s)*(?:并|然后|再)?读给我听[。.!！\s]*$/iu,
-        /(?:,|，|\s)*(?:并|然后|再)?说给我听[。.!！\s]*$/iu,
-        /(?:,|，|\s)*(?:and then |and )?(?:speak|read)(?: it)?(?: aloud)?(?: to me)?[.!\s]*$/i,
+        /(?:,|，|\s)*(?:并|然后|再)?(?:将|把)?结果?(?:用)?语音播报给我(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?(?:将|把)?结果?(?:用)?语音播报(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?(?:将|把)?结果?(?:朗读|读|念|说)给我听(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?(?:用)?语音播报给我(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?(?:用)?语音播报(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?朗读给我听(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?读给我听(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:并|然后|再)?说给我听(?=[。.!！；;，,、\s]|$)/giu,
+        /(?:,|，|\s)*(?:and then |and )?(?:speak|read)(?: the result| it)?(?: aloud)?(?: to me)?(?=[.!,;\s]|$)/giu,
     ];
 
+    let stripped = input;
+    let speakResult = false;
     for (const pattern of patterns) {
-        if (pattern.test(input)) {
-            return {
-                taskQuery: input.replace(pattern, '').trim(),
-                speakResult: true,
-            };
+        const next = stripped.replace(pattern, '');
+        if (next !== stripped) {
+            stripped = next;
+            speakResult = true;
         }
     }
 
     return {
-        taskQuery: input.trim(),
-        speakResult: /(语音|朗读|读出来|说给我听|播报|read aloud|speak)/iu.test(input),
+        taskQuery: stripDanglingSpeechTail(cleanupSpeechDirectiveRemoval(stripped)),
+        speakResult: speakResult || /(语音|朗读|读出来|说给我听|播报|read aloud|speak)/iu.test(input),
     };
 }
 
@@ -263,6 +298,8 @@ export class ScheduledTaskStore {
             id: randomUUID(),
             title: input.title,
             taskQuery: input.taskQuery,
+            workRequestId: input.workRequestId,
+            frozenWorkRequest: input.frozenWorkRequest,
             workspacePath: input.workspacePath,
             createdAt: new Date().toISOString(),
             executeAt: input.executeAt.toISOString(),
@@ -289,5 +326,46 @@ export class ScheduledTaskStore {
 
     listDue(now: Date = new Date()): ScheduledTaskRecord[] {
         return this.read().filter((task) => task.status === 'scheduled' && new Date(task.executeAt).getTime() <= now.getTime());
+    }
+
+    recoverStaleRunning(options: RecoverStaleRunningOptions): ScheduledTaskRecord[] {
+        const now = options.now ?? new Date();
+        const nowMs = now.getTime();
+        const recoveredAt = now.toISOString();
+        const errorMessage =
+            options.errorMessage ??
+            'Scheduled task exceeded the allowed running time and was auto-marked as failed.';
+
+        const tasks = this.read();
+        const recovered: ScheduledTaskRecord[] = [];
+        let changed = false;
+
+        const nextTasks = tasks.map((task) => {
+            if (task.status !== 'running') {
+                return task;
+            }
+
+            const referenceIso = task.startedAt ?? task.executeAt ?? task.createdAt;
+            const referenceMs = new Date(referenceIso).getTime();
+            if (!Number.isFinite(referenceMs) || nowMs - referenceMs < options.timeoutMs) {
+                return task;
+            }
+
+            changed = true;
+            const recoveredTask: ScheduledTaskRecord = {
+                ...task,
+                status: 'failed',
+                completedAt: recoveredAt,
+                error: errorMessage,
+            };
+            recovered.push(recoveredTask);
+            return recoveredTask;
+        });
+
+        if (changed) {
+            this.write(nextTasks);
+        }
+
+        return recovered;
     }
 }

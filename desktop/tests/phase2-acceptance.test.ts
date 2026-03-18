@@ -203,7 +203,7 @@ describe('P2-3: Token Usage Panel', () => {
 
     test('Sidecar emits TOKEN_USAGE for both Anthropic and OpenAI', () => {
         const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
-        const matches = mainTs.match(/type:\s*['"]TOKEN_USAGE['"]/g);
+        const matches = mainTs.match(/emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/g);
         expect(matches).toBeTruthy();
         expect(matches!.length).toBeGreaterThanOrEqual(2);
     });

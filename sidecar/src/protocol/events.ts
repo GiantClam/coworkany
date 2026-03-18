@@ -102,6 +102,18 @@ export const TaskStatusEventSchema = BaseEventSchema.extend({
 });
 
 /**
+ * Task requires additional user input before execution can continue.
+ */
+export const TaskClarificationRequiredEventSchema = BaseEventSchema.extend({
+    type: z.literal('TASK_CLARIFICATION_REQUIRED'),
+    payload: z.object({
+        reason: z.string().optional(),
+        questions: z.array(z.string()),
+        missingFields: z.array(z.string()).optional(),
+    }),
+});
+
+/**
  * Task history was cleared.
  */
 export const TaskHistoryClearedEventSchema = BaseEventSchema.extend({
@@ -432,6 +444,7 @@ export const TaskEventSchema = z.discriminatedUnion('type', [
     TaskFinishedEventSchema,
     TaskFailedEventSchema,
     TaskStatusEventSchema,
+    TaskClarificationRequiredEventSchema,
     TaskHistoryClearedEventSchema,
     ChatMessageEventSchema,
     ToolCalledEventSchema,
@@ -469,6 +482,7 @@ export type PlanUpdatedEvent = z.infer<typeof PlanUpdatedEventSchema>;
 export type TaskFinishedEvent = z.infer<typeof TaskFinishedEventSchema>;
 export type TaskFailedEvent = z.infer<typeof TaskFailedEventSchema>;
 export type TaskStatusEvent = z.infer<typeof TaskStatusEventSchema>;
+export type TaskClarificationRequiredEvent = z.infer<typeof TaskClarificationRequiredEventSchema>;
 export type TaskHistoryClearedEvent = z.infer<typeof TaskHistoryClearedEventSchema>;
 export type ChatMessageEvent = z.infer<typeof ChatMessageEventSchema>;
 export type ToolCalledEvent = z.infer<typeof ToolCalledEventSchema>;
