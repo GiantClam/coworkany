@@ -1,0 +1,113 @@
+{
+  "generatedAt": "2026-03-18T05:17:33.107Z",
+  "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
+  "requestedOptions": {
+    "buildDesktop": true,
+    "realE2E": false
+  },
+  "stages": [
+    {
+      "id": "sidecar-typecheck",
+      "label": "Sidecar typecheck",
+      "command": "npm run typecheck",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "durationMs": 20846,
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "id": "sidecar-stable",
+      "label": "Sidecar stable regression suite",
+      "command": "npm run test:stable",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "durationMs": 4728,
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "id": "sidecar-release-gates",
+      "label": "Sidecar release gate tests",
+      "command": "bun test tests/runtime-commands.test.ts tests/capability-commands.test.ts tests/workspace-commands.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/planning-files.test.ts tests/release-readiness.test.ts",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "durationMs": 214,
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "id": "desktop-typecheck",
+      "label": "Desktop typecheck",
+      "command": "npx tsc --noEmit",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
+      "durationMs": 6109,
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "id": "desktop-acceptance",
+      "label": "Desktop acceptance suite",
+      "command": "npm test",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
+      "durationMs": 673,
+      "status": "passed",
+      "exitCode": 0
+    },
+    {
+      "id": "desktop-build",
+      "label": "Desktop production build",
+      "command": "npm run build",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
+      "durationMs": 10434,
+      "status": "passed",
+      "exitCode": 0
+    }
+  ],
+  "observability": {
+    "startupMetrics": {
+      "inspected": false,
+      "files": [],
+      "warnings": [
+        "No appDataDir provided; startup metrics inspection skipped."
+      ]
+    },
+    "artifactTelemetry": {
+      "path": "/Users/beihuang/Documents/github/coworkany/.coworkany/self-learning/artifact-contract-telemetry.jsonl",
+      "exists": false,
+      "entries": 0,
+      "warnings": [
+        "Artifact telemetry file not found: /Users/beihuang/Documents/github/coworkany/.coworkany/self-learning/artifact-contract-telemetry.jsonl"
+      ]
+    }
+  },
+  "checklist": [
+    {
+      "area": "Audience",
+      "item": "Restrict initial rollout to named internal testers or a small external beta cohort.",
+      "requiredEvidence": "Tester list, install channel, and rollback contact owner documented."
+    },
+    {
+      "area": "Rollback",
+      "item": "Keep the previous signed/notarized bundle and matching tag available for immediate rollback.",
+      "requiredEvidence": "Previous release asset URLs or archived artifacts attached to the release issue."
+    },
+    {
+      "area": "Observability",
+      "item": "Collect startup metrics and artifact telemetry from at least one canary session before widening the rollout.",
+      "requiredEvidence": "Startup metrics JSONL path and artifact telemetry JSONL excerpt linked in release notes or issue."
+    },
+    {
+      "area": "Fault Injection",
+      "item": "Run the database failure recovery scenario and verify logs show the expected recovery path.",
+      "requiredEvidence": "Playwright report or captured logs from the failure-injection run."
+    },
+    {
+      "area": "Health",
+      "item": "Check sidecar and managed service health after install and after the first task execution.",
+      "requiredEvidence": "Health check output or screenshots from the dependency/service status UI."
+    },
+    {
+      "area": "Decision Gate",
+      "item": "Hold rollout expansion until no blocker regression remains in readiness report warnings or failed stages.",
+      "requiredEvidence": "Final go/no-go comment referencing the readiness report artifact."
+    }
+  ]
+}
