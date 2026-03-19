@@ -10,7 +10,7 @@ import './ChatInterface.css';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useStartTask, useCancelTask } from '../../hooks/useStartTask';
-import { useActiveSession } from '../../stores/useTaskEventStore';
+import { useActiveSession, useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
 import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
@@ -79,6 +79,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
     const activeSession = useActiveSession();
+    const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
@@ -180,10 +181,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [activeSession, pendingTaskStatus, t]);
 
     const handleClearHistory = useCallback(async () => {
-        if (!activeSession?.taskId) return;
+        if (!activeSession?.taskId || activeSession.isDraft) return;
         if (!window.confirm(t('chat.clearConfirm'))) return;
         await clearHistory({ taskId: activeSession.taskId });
-    }, [activeSession?.taskId, clearHistory]);
+    }, [activeSession, clearHistory, t]);
 
     const handleSelectFiles = useCallback(async (files: FileList | null) => {
         if (!files || files.length === 0) return;
@@ -213,7 +214,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const enabledSkillsForRequest = enabledSkills;
         const enabledToolpacksForRequest = enabledToolpacks;
 
-        if (activeSession?.taskId) {
+        if (activeSession?.taskId && !activeSession.isDraft) {
             const result = await sendMessage({
                 taskId: activeSession.taskId,
                 content: requestContent,
@@ -229,6 +230,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
             return;
         }
+
+        const draftTaskId = activeSession?.isDraft ? activeSession.taskId : undefined;
 
         // Auto-create workspace if none selected or path is invalid
         let currentWorkspace = activeWorkspace;
@@ -290,12 +293,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 enabledToolpacks: enabledToolpacksForRequest,
                 enabledSkills: enabledSkillsForRequest,
             },
-        });
+        }, draftTaskId ? { draftTaskId } : undefined);
         if (result?.success) {
             setQuery('');
             clearAttachments();
         }
-    }, [query, attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession?.taskId, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask, syncWorkspace]);
+    }, [query, attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask, syncWorkspace]);
 
     const handleCancel = useCallback(async () => {
         if (activeSession?.taskId) {
@@ -336,9 +339,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleCloseMcp = useCallback(() => setShowMcpDialog(false), []);
     const focusComposer = useCallback(() => {
         window.requestAnimationFrame(() => {
-            document.querySelector<HTMLInputElement>('.chat-input')?.focus();
+            document
+                .querySelector<HTMLInputElement | HTMLTextAreaElement>('.chat-input')
+                ?.focus();
         });
     }, []);
+
+    const handleCreateSession = useCallback(() => {
+        createDraftSession({
+            title: t('chat.newSessionTitle'),
+            workspacePath: activeWorkspace?.path,
+        });
+        setWorkspaceError(null);
+        setQuery('');
+        clearAttachments();
+        focusComposer();
+    }, [activeWorkspace?.path, clearAttachments, createDraftSession, focusComposer, t]);
 
     if (!activeSession) {
         return (
@@ -376,7 +392,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return (
         <div className="chat-interface">
             <Header
-                title={activeSession?.title || t('chat.currentTask')}
+                title={activeSession?.title || t('chat.newSessionTitle')}
                 status={activeSession.status}
                 statusLabel={statusLabel}
                 llmConfig={llmConfig}
@@ -386,13 +402,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 isCancelling={isCancelling}
                 isSpeaking={voiceState.isSpeaking}
                 isStoppingVoice={isStoppingVoice}
-                onSetActiveProfile={setActiveProfile}
                 onShowSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowMcp={handleShowMcp}
+                onCreateSession={handleCreateSession}
                 onClearHistory={handleClearHistory}
                 onCancel={handleCancel}
                 onStopVoice={handleStopVoice}
+                canClearHistory={!activeSession.isDraft}
             />
 
             {(workspaceError || startError || cancelError || sendError || clearError || stopVoiceError) && (

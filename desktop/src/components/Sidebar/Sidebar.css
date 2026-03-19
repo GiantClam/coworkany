@@ -9,8 +9,8 @@
     position: relative;
     box-sizing: border-box;
     background:
-        radial-gradient(420px 240px at 100% 0%, rgba(45, 212, 191, 0.08), transparent 60%),
-        linear-gradient(180deg, rgba(5, 24, 23, 0.98), rgba(3, 17, 16, 0.98));
+        radial-gradient(420px 240px at 100% 0%, rgba(59, 130, 246, 0.08), transparent 60%),
+        linear-gradient(180deg, rgba(5, 14, 31, 0.98), rgba(3, 10, 25, 0.98));
 }
 
 .sidebar-header-collapsed {
@@ -27,9 +27,9 @@
     width: 100%;
     padding: 10px 12px;
     border-radius: 18px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(7, 24, 26, 0.66);
-    box-shadow: inset 0 1px 0 rgba(239, 255, 252, 0.04);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(7, 17, 36, 0.66);
+    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.04);
 }
 
 .sidebar-logo {
@@ -65,7 +65,7 @@
     flex-direction: column;
     gap: 6px;
     padding: 10px 0 12px;
-    border-bottom: 1px solid rgba(138, 232, 219, 0.08);
+    border-bottom: 1px solid rgba(96, 165, 250, 0.08);
 }
 
 .sidebar-nav-caption {
@@ -102,26 +102,26 @@
 }
 
 .nav-item-collapsed:hover {
-    background: rgba(11, 40, 39, 0.72);
-    border-color: rgba(138, 232, 219, 0.12);
+    background: rgba(11, 22, 45, 0.72);
+    border-color: rgba(96, 165, 250, 0.12);
     color: var(--text-primary);
     transform: translateY(-1px);
 }
 
 .nav-item-collapsed.active {
     background:
-        linear-gradient(135deg, rgba(20, 184, 166, 0.14), rgba(45, 212, 191, 0.08));
-    border-color: rgba(138, 232, 219, 0.18);
+        linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(59, 130, 246, 0.08));
+    border-color: rgba(96, 165, 250, 0.18);
     color: var(--text-primary);
-    box-shadow: inset 0 1px 0 rgba(239, 255, 252, 0.04);
+    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.04);
 }
 
 .nav-tooltip {
     position: absolute;
     left: calc(100% + 8px);
     padding: 8px 12px;
-    background: rgba(7, 24, 26, 0.92);
-    border: 1px solid rgba(138, 232, 219, 0.14);
+    background: rgba(7, 17, 36, 0.92);
+    border: 1px solid rgba(96, 165, 250, 0.14);
     border-radius: 12px;
     font-size: 12px;
     white-space: nowrap;
@@ -176,8 +176,8 @@
     min-height: 32px;
     padding: 0;
     border-radius: 12px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
-    background: rgba(7, 24, 26, 0.58);
+    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: rgba(7, 17, 36, 0.58);
     color: var(--text-secondary);
     cursor: pointer;
     transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
@@ -186,8 +186,8 @@
 .workspace-add-btn:hover,
 .sidebar-hide-btn:hover {
     transform: translateY(-1px);
-    background: rgba(12, 42, 39, 0.78);
-    border-color: rgba(138, 232, 219, 0.2);
+    background: rgba(12, 24, 49, 0.78);
+    border-color: rgba(96, 165, 250, 0.2);
     color: var(--text-primary);
 }
 
@@ -196,16 +196,16 @@
     flex-direction: column;
     gap: 8px;
     padding: 12px;
-    background: rgba(7, 24, 26, 0.72);
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(7, 17, 36, 0.72);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 18px;
 }
 
 .workspace-input {
     min-height: 40px;
     padding: 10px 12px;
-    background: rgba(4, 18, 17, 0.84);
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(4, 12, 29, 0.84);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 12px;
     color: var(--text-primary);
     font-size: 12px;
@@ -214,8 +214,8 @@
 }
 
 .workspace-input:focus {
-    border-color: rgba(45, 212, 191, 0.28);
-    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.08);
+    border-color: rgba(59, 130, 246, 0.28);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
 }
 
 .workspace-input::placeholder {
@@ -284,17 +284,17 @@
 }
 
 .workspace-item:hover {
-    background: rgba(11, 40, 39, 0.72);
-    border-color: rgba(138, 232, 219, 0.1);
+    background: rgba(11, 22, 45, 0.72);
+    border-color: rgba(96, 165, 250, 0.1);
     color: var(--text-primary);
     transform: translateY(-1px);
 }
 
 .workspace-item.active {
-    background: linear-gradient(135deg, rgba(20, 184, 166, 0.14), rgba(45, 212, 191, 0.08));
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(59, 130, 246, 0.08));
     color: var(--text-primary);
-    border-color: rgba(138, 232, 219, 0.18);
-    box-shadow: inset 0 1px 0 rgba(239, 255, 252, 0.04);
+    border-color: rgba(96, 165, 250, 0.18);
+    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.04);
 }
 
 .workspace-loading-list {
@@ -347,7 +347,7 @@
     height: 24px;
     padding: 0 8px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     background: rgba(6, 22, 22, 0.56);
     font-family: var(--font-code);
     font-size: 10px;
@@ -396,25 +396,25 @@
 }
 
 .session-item:hover {
-    background: rgba(11, 40, 39, 0.68);
-    border-color: rgba(138, 232, 219, 0.08);
+    background: rgba(11, 22, 45, 0.68);
+    border-color: rgba(96, 165, 250, 0.08);
     color: var(--text-primary);
     transform: translateY(-1px);
 }
 
 .session-item.active {
     background: rgba(19, 82, 76, 0.42);
-    border-color: rgba(138, 232, 219, 0.14);
+    border-color: rgba(96, 165, 250, 0.14);
     color: var(--text-primary);
 }
 
 .session-item.running {
-    color: #95fff3;
+    color: #bfdbfe;
 }
 
 .sidebar-footer-collapsed {
     padding-top: 12px;
-    border-top: 1px solid rgba(138, 232, 219, 0.08);
+    border-top: 1px solid rgba(96, 165, 250, 0.08);
     display: flex;
     flex-shrink: 0;
 }
@@ -436,8 +436,8 @@
     gap: 10px;
     padding: 11px 12px;
     border-radius: 16px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(7, 24, 26, 0.68);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(7, 17, 36, 0.68);
     color: var(--text-secondary);
     box-sizing: border-box;
 }
@@ -449,9 +449,9 @@
 
 .sidebar-settings-btn:hover {
     transform: translateY(-1px);
-    background: rgba(11, 40, 39, 0.78);
+    background: rgba(11, 22, 45, 0.78);
     color: var(--text-primary);
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
 }
 
 .connection-status {

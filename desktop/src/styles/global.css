@@ -7,10 +7,10 @@ body {
     font-size: 12px;
     font-family: var(--font-body);
     background:
-        radial-gradient(980px 620px at 8% -12%, rgba(45, 212, 191, 0.18), transparent 58%),
+        radial-gradient(980px 620px at 8% -12%, rgba(59, 130, 246, 0.18), transparent 58%),
         radial-gradient(780px 480px at 88% 10%, rgba(249, 115, 22, 0.1), transparent 54%),
-        radial-gradient(1120px 700px at 50% 118%, rgba(20, 184, 166, 0.14), transparent 60%),
-        linear-gradient(145deg, #031211 0%, #051917 44%, #082220 100%);
+        radial-gradient(1120px 700px at 50% 118%, rgba(37, 99, 235, 0.14), transparent 60%),
+        linear-gradient(145deg, #030916 0%, #061022 44%, #0a1833 100%);
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -151,7 +151,7 @@ option,
     height: 320px;
     top: -70px;
     left: -80px;
-    background: radial-gradient(circle at 35% 35%, rgba(45, 212, 191, 0.74), rgba(45, 212, 191, 0.02));
+    background: radial-gradient(circle at 35% 35%, rgba(59, 130, 246, 0.74), rgba(59, 130, 246, 0.02));
 }
 
 .app-aurora-two {
@@ -167,7 +167,7 @@ option,
     height: 420px;
     left: 24%;
     bottom: -220px;
-    background: radial-gradient(circle at 50% 50%, rgba(20, 184, 166, 0.44), rgba(20, 184, 166, 0.02));
+    background: radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.44), rgba(37, 99, 235, 0.02));
 }
 
 .app-noise-overlay {
@@ -193,9 +193,9 @@ option,
     display: flex;
     flex-direction: column;
     background:
-        radial-gradient(920px 520px at 0% 0%, rgba(45, 212, 191, 0.06), transparent 58%),
+        radial-gradient(920px 520px at 0% 0%, rgba(59, 130, 246, 0.06), transparent 58%),
         radial-gradient(680px 460px at 100% 12%, rgba(249, 115, 22, 0.05), transparent 56%),
-        linear-gradient(180deg, rgba(4, 18, 17, 0.98), rgba(3, 16, 15, 1));
+        linear-gradient(180deg, rgba(4, 12, 29, 0.98), rgba(3, 16, 15, 1));
     -webkit-app-region: no-drag;
     app-region: no-drag;
 }

@@ -190,6 +190,8 @@
     "startTaskHint": "Start a task by typing below.",
     "placeholderBuild": "Build a React component...",
     "currentTask": "Current Task",
+    "newSessionTitle": "New Session",
+    "createNewSession": "Create new session",
     "taskInProgress": "Task in progress...",
     "newInstructions": "New instructions...",
     "manageSkills": "Manage Skills",
@@ -517,9 +519,13 @@
     "stopRecording": "Stop recording",
     "listening": "Listening...",
     "processing": "Processing...",
+    "processingTranscription": "Transcribing audio...",
     "speechNotSupported": "Speech recognition is not supported in this browser",
-    "microphoneError": "Microphone access denied",
-    "noSpeechDetected": "No speech detected"
+    "microphoneError": "Microphone access denied. Allow CoworkAny in System Settings -> Privacy & Security -> Microphone, then try again.",
+    "noSpeechDetected": "No speech detected",
+    "transcriptionUnavailable": "No voice transcription profile is configured",
+    "transcriptionFailed": "Voice transcription failed",
+    "recordingError": "Failed to start recording"
   },
 
   "multimodal": {

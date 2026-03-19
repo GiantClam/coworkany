@@ -25,6 +25,8 @@ export type TaskEventType =
     | 'TASK_FINISHED'
     | 'TASK_FAILED'
     | 'TASK_STATUS'
+    | 'TASK_SUSPENDED'
+    | 'TASK_RESUMED'
     | 'TASK_CLARIFICATION_REQUIRED'
     | 'TASK_HISTORY_CLEARED'
     | 'PLAN_UPDATED'
@@ -110,8 +112,15 @@ export interface SkillRecommendation {
 export interface TaskSession {
     taskId: string;
     status: TaskStatus;
+    isDraft?: boolean;
     title?: string;
     summary?: string;
+    suspension?: {
+        reason: string;
+        userMessage: string;
+        canAutoResume: boolean;
+        maxWaitTimeMs?: number;
+    };
     clarificationQuestions?: string[];
     planSummary?: string;
     planSteps: PlanStep[];

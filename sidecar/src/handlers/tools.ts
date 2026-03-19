@@ -19,6 +19,7 @@ export function handleReloadTools(
     ctx: HandlerContext,
     deps: {
         skillStore: SkillStore;
+        appManagementTools?: ToolDefinition[];
         enhancedBrowserTools?: ToolDefinition[];
         selfLearningTools?: ToolDefinition[];
         databaseTools?: ToolDefinition[];
@@ -52,6 +53,7 @@ export function handleReloadTools(
         globalToolRegistry.register('builtin', STANDARD_TOOLS);
         globalToolRegistry.register('builtin', [webSearchTool]);
         globalToolRegistry.register('builtin', BUILTIN_TOOLS);
+        globalToolRegistry.register('builtin', deps.appManagementTools || []);
         globalToolRegistry.register('builtin', CODE_EXECUTION_TOOLS);
         globalToolRegistry.register('builtin', KNOWLEDGE_TOOLS);
         globalToolRegistry.register('builtin', deps.databaseTools || []);

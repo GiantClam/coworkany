@@ -65,6 +65,8 @@ describe('TTS 内容处理', () => {
 
             // 验证文本没有被截断到 500 字以内
             expect(spoken.length).toBeGreaterThan(500);
+            expect(spoken).not.toContain('定时任务已完成');
+            expect(spoken).not.toContain('整理 Reddit');
             
             // 验证所有 10 篇文章都被包含（内容保留，只是数字编号被过滤）
             expect(spoken).toContain('标题：如何在 AI 时代');
@@ -85,6 +87,8 @@ describe('TTS 内容处理', () => {
 
             // 应该保留大部分内容
             expect(spoken.length).toBeGreaterThan(1800);
+            expect(spoken).not.toContain('定时任务已完成');
+            expect(spoken).not.toContain('测试任务');
         });
     });
 
@@ -281,6 +285,8 @@ function hello() {
             expect(spoken).not.toContain('**');
             expect(spoken).not.toContain('[');
             expect(spoken).not.toContain('http');
+            expect(spoken).not.toContain('定时任务已完成');
+            expect(spoken).not.toContain('整理 Reddit');
         });
     });
 });

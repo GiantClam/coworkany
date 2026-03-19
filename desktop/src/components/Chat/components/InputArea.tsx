@@ -11,6 +11,7 @@ import { useVoiceInput } from '../../../hooks/useVoiceInput';
 import type { FileAttachment } from '../../../hooks/useFileAttachment';
 import { getCurrentLanguage } from '../../../i18n';
 import { AttachmentPreview } from './AttachmentPreview';
+import { isImeConfirmingEnter, shouldSubmitOnEnter } from './inputComposition';
 
 interface LlmProfile {
     id: string;
@@ -54,6 +55,8 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     const { t } = useTranslation();
     const voiceInput = useVoiceInput(getCurrentLanguage());
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const textAreaRef = useRef<HTMLTextAreaElement>(null);
+    const isComposingRef = useRef(false);
 
     // Track the previous transcript so we only append new text
     const prevTranscriptRef = useRef('');
@@ -68,8 +71,48 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
         }
     }, [voiceInput.transcript, onQueryChange, query]);
 
-    const voiceLabel = voiceInput.isListening ? t('voice.stopRecording') : t('voice.startRecording');
+    useEffect(() => {
+        const textArea = textAreaRef.current;
+        if (!textArea) return;
+
+        textArea.style.height = '0px';
+        const nextHeight = Math.min(textArea.scrollHeight, 220);
+        textArea.style.height = `${Math.max(nextHeight, 40)}px`;
+    }, [query]);
+
+    const voiceLabel = voiceInput.isProcessing
+        ? t('voice.processingTranscription')
+        : voiceInput.isListening
+            ? t('voice.stopRecording')
+            : t('voice.startRecording');
     const canSubmit = query.trim().length > 0 || attachments.length > 0;
+    const voiceStatusText = voiceInput.isProcessing
+        ? t('voice.processingTranscription')
+        : voiceInput.isListening
+            ? voiceInput.interimTranscript || t('voice.listening')
+            : '';
+    const voiceErrorText = useMemo(() => {
+        if (!voiceInput.error) return '';
+        if (voiceInput.error === 'microphone_denied') {
+            return t('voice.microphoneError');
+        }
+        if (voiceInput.error === 'no_speech' || voiceInput.error === 'empty_audio') {
+            return t('voice.noSpeechDetected');
+        }
+        if (voiceInput.error === 'transcription_unavailable') {
+            return t('voice.transcriptionUnavailable');
+        }
+        if (voiceInput.error === 'transcription_failed') {
+            return t('voice.transcriptionFailed');
+        }
+        if (voiceInput.error === 'recording_failed') {
+            return t('voice.recordingError');
+        }
+        if (voiceInput.error === 'speech_not_supported') {
+            return t('voice.speechNotSupported');
+        }
+        return voiceInput.error;
+    }, [t, voiceInput.error]);
 
     const attachmentErrorText = useMemo(() => {
         if (!attachmentError) return '';
@@ -118,10 +161,13 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
 
     return (
         <div className="input-area" onPaste={handlePasteEvent}>
-            {voiceInput.isListening && voiceInput.interimTranscript && (
+            {voiceStatusText && (
                 <div className="voice-interim">
-                    {voiceInput.interimTranscript}
+                    {voiceStatusText}
                 </div>
+            )}
+            {voiceErrorText && (
+                <div className="voice-error">{voiceErrorText}</div>
             )}
             {attachmentErrorText && (
                 <div className="attachment-error">{attachmentErrorText}</div>
@@ -151,14 +197,26 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                     aria-hidden="true"
                     tabIndex={-1}
                 />
-                <input
-                    type="text"
+                <textarea
+                    ref={textAreaRef}
                     className="chat-input"
                     placeholder={placeholder}
                     value={query}
+                    rows={1}
                     onChange={(e) => onQueryChange(e.target.value)}
+                    onCompositionStart={() => {
+                        isComposingRef.current = true;
+                    }}
+                    onCompositionEnd={() => {
+                        isComposingRef.current = false;
+                    }}
                     onKeyDown={(event) => {
-                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                        if (isImeConfirmingEnter(event, isComposingRef.current)) {
+                            event.preventDefault();
+                            return;
+                        }
+
+                        if (shouldSubmitOnEnter(event, isComposingRef.current)) {
                             event.preventDefault();
                             submit();
                         }
@@ -182,9 +240,9 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                 {voiceInput.isSupported && (
                     <button
                         type="button"
-                        className={`voice-button ${voiceInput.isListening ? 'listening' : ''}`}
+                        className={`voice-button ${voiceInput.isListening ? 'listening' : ''} ${voiceInput.isProcessing ? 'processing' : ''}`}
                         onClick={voiceInput.toggleListening}
-                        disabled={disabled}
+                        disabled={disabled || voiceInput.isProcessing}
                         title={voiceLabel}
                         aria-label={voiceLabel}
                         aria-pressed={voiceInput.isListening}

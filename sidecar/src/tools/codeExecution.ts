@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { spawn, SpawnOptions } from 'child_process';
+import { spawn, type ChildProcess, SpawnOptions } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { ToolDefinition, ToolContext, ToolEffect } from './standard';
 
@@ -28,6 +28,7 @@ export interface CodeExecutionRequest {
     sandbox_id?: string;
     working_dir?: string;
     env?: Record<string, string>;
+    onCancel?: (waiter: (reason: string) => void) => (() => void);
 }
 
 export interface ErrorAnalysis {
@@ -87,6 +88,39 @@ const MODULE_TO_PACKAGE: Record<string, string> = {
     bs4: 'beautifulsoup4',
     dotenv: 'python-dotenv',
 };
+
+function terminateChildProcessTree(child: ChildProcess): void {
+    if (!child.pid) {
+        return;
+    }
+
+    if (process.platform === 'win32') {
+        try {
+            const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+                stdio: 'ignore',
+                windowsHide: true,
+            });
+            killer.unref();
+        } catch {
+            try {
+                child.kill('SIGKILL');
+            } catch {
+                // Ignore cleanup failures during cancellation.
+            }
+        }
+        return;
+    }
+
+    try {
+        process.kill(-child.pid, 'SIGKILL');
+    } catch {
+        try {
+            child.kill('SIGKILL');
+        } catch {
+            // Ignore cleanup failures during cancellation.
+        }
+    }
+}
 
 // ============================================================================
 // Sandbox Manager
@@ -160,30 +194,48 @@ export class SandboxManager {
     /**
      * Create Python virtual environment
      */
-    async createPythonVenv(): Promise<{ success: boolean; error?: string }> {
+    async createPythonVenv(
+        onCancel?: (waiter: (reason: string) => void) => (() => void)
+    ): Promise<{ success: boolean; error?: string }> {
         const venvPath = this.getPythonVenvPath();
 
         return new Promise((resolve) => {
             const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
             const child = spawn(pythonCmd, ['-m', 'venv', venvPath], {
                 shell: true,
+                detached: process.platform !== 'win32',
             });
 
             let stderr = '';
+            let settled = false;
+            const finalize = (result: { success: boolean; error?: string }) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                disposeCancellation?.();
+                resolve(result);
+            };
+
+            const disposeCancellation = onCancel?.((reason) => {
+                terminateChildProcessTree(child);
+                finalize({ success: false, error: reason || 'Task cancelled by user' });
+            });
+
             child.stderr?.on('data', (data) => {
                 stderr += data.toString();
             });
 
             child.on('close', (code) => {
                 if (code === 0) {
-                    resolve({ success: true });
+                    finalize({ success: true });
                 } else {
-                    resolve({ success: false, error: stderr || 'Failed to create venv' });
+                    finalize({ success: false, error: stderr || 'Failed to create venv' });
                 }
             });
 
             child.on('error', (err) => {
-                resolve({ success: false, error: err.message });
+                finalize({ success: false, error: err.message });
             });
         });
     }
@@ -400,14 +452,17 @@ export class CodeExecutor {
     /**
      * Install Python packages
      */
-    async installPythonPackages(packages: string[]): Promise<{ success: boolean; error?: string }> {
+    async installPythonPackages(
+        packages: string[],
+        onCancel?: (waiter: (reason: string) => void) => (() => void)
+    ): Promise<{ success: boolean; error?: string }> {
         if (packages.length === 0) return { success: true };
 
         await this.sandboxManager.ensureSandboxDirs();
 
         // Ensure venv exists
         if (!(await this.sandboxManager.hasPythonVenv())) {
-            const venvResult = await this.sandboxManager.createPythonVenv();
+            const venvResult = await this.sandboxManager.createPythonVenv(onCancel);
             if (!venvResult.success) {
                 return { success: false, error: `Failed to create venv: ${venvResult.error}` };
             }
@@ -419,23 +474,39 @@ export class CodeExecutor {
             const child = spawn(pip, ['install', ...packages], {
                 shell: true,
                 timeout: 120000, // 2 minutes for installation
+                detached: process.platform !== 'win32',
             });
 
             let stderr = '';
+            let settled = false;
+            const finalize = (result: { success: boolean; error?: string }) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                disposeCancellation?.();
+                resolve(result);
+            };
+
+            const disposeCancellation = onCancel?.((reason) => {
+                terminateChildProcessTree(child);
+                finalize({ success: false, error: reason || 'Task cancelled by user' });
+            });
+
             child.stderr?.on('data', (data) => {
                 stderr += data.toString();
             });
 
             child.on('close', (code) => {
                 if (code === 0) {
-                    resolve({ success: true });
+                    finalize({ success: true });
                 } else {
-                    resolve({ success: false, error: stderr || 'pip install failed' });
+                    finalize({ success: false, error: stderr || 'pip install failed' });
                 }
             });
 
             child.on('error', (err) => {
-                resolve({ success: false, error: err.message });
+                finalize({ success: false, error: err.message });
             });
         });
     }
@@ -452,7 +523,7 @@ export class CodeExecutor {
 
         // Install dependencies if specified
         if (request.dependencies && request.dependencies.length > 0) {
-            const installResult = await this.installPythonPackages(request.dependencies);
+            const installResult = await this.installPythonPackages(request.dependencies, request.onCancel);
             if (installResult.success) {
                 installedDeps.push(...request.dependencies);
             } else {
@@ -491,11 +562,52 @@ export class CodeExecutor {
                 cwd: workDir,
                 env: { ...process.env, ...request.env },
                 shell: true,
+                detached: process.platform !== 'win32',
+            });
+
+            let settled = false;
+            const finalize = async (result: CodeExecutionResult) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timer);
+                disposeCancellation?.();
+
+                try {
+                    await fs.promises.unlink(scriptPath);
+                } catch {
+                    // Ignore cleanup errors
+                }
+
+                resolve(result);
+            };
+
+            const disposeCancellation = request.onCancel?.((reason) => {
+                void (async () => {
+                    terminateChildProcessTree(child);
+                    await finalize({
+                        success: false,
+                        stdout: stdout.trim(),
+                        stderr: stderr.trim() || (reason || 'Task cancelled by user'),
+                        exit_code: -1,
+                        duration_ms: Date.now() - startTime,
+                        sandbox_id: sandboxId,
+                        installed_deps: installedDeps.length > 0 ? installedDeps : undefined,
+                        error_analysis: {
+                            errorType: 'unknown',
+                            originalError: reason || 'Task cancelled by user',
+                            suggestedFix: 'Retry the execution when you are ready to continue.',
+                            confidence: 1.0,
+                            canAutoRetry: true,
+                        },
+                    });
+                })();
             });
 
             const timer = setTimeout(() => {
                 timedOut = true;
-                child.kill('SIGKILL');
+                terminateChildProcessTree(child);
             }, timeout);
 
             child.stdout?.on('data', (data) => {
@@ -507,13 +619,8 @@ export class CodeExecutor {
             });
 
             child.on('close', async (code) => {
-                clearTimeout(timer);
-
-                // Clean up script file
-                try {
-                    await fs.promises.unlink(scriptPath);
-                } catch {
-                    // Ignore cleanup errors
+                if (settled) {
+                    return;
                 }
 
                 const duration = Date.now() - startTime;
@@ -533,7 +640,7 @@ export class CodeExecutor {
                     };
                 }
 
-                resolve({
+                await finalize({
                     success,
                     stdout: stdout.trim(),
                     stderr: stderr.trim(),
@@ -546,8 +653,7 @@ export class CodeExecutor {
             });
 
             child.on('error', (err) => {
-                clearTimeout(timer);
-                resolve({
+                void finalize({
                     success: false,
                     stdout: '',
                     stderr: err.message,
@@ -594,11 +700,51 @@ export class CodeExecutor {
                 cwd: workDir,
                 env: { ...process.env, ...request.env },
                 shell: true,
+                detached: process.platform !== 'win32',
+            });
+
+            let settled = false;
+            const finalize = async (result: CodeExecutionResult) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timer);
+                disposeCancellation?.();
+
+                try {
+                    await fs.promises.unlink(scriptPath);
+                } catch {
+                    // Ignore cleanup errors
+                }
+
+                resolve(result);
+            };
+
+            const disposeCancellation = request.onCancel?.((reason) => {
+                void (async () => {
+                    terminateChildProcessTree(child);
+                    await finalize({
+                        success: false,
+                        stdout: stdout.trim(),
+                        stderr: stderr.trim() || (reason || 'Task cancelled by user'),
+                        exit_code: -1,
+                        duration_ms: Date.now() - startTime,
+                        sandbox_id: sandboxId,
+                        error_analysis: {
+                            errorType: 'unknown',
+                            originalError: reason || 'Task cancelled by user',
+                            suggestedFix: 'Retry the execution when you are ready to continue.',
+                            confidence: 1.0,
+                            canAutoRetry: true,
+                        },
+                    });
+                })();
             });
 
             const timer = setTimeout(() => {
                 timedOut = true;
-                child.kill('SIGKILL');
+                terminateChildProcessTree(child);
             }, timeout);
 
             child.stdout?.on('data', (data) => {
@@ -610,13 +756,8 @@ export class CodeExecutor {
             });
 
             child.on('close', async (code) => {
-                clearTimeout(timer);
-
-                // Clean up script file
-                try {
-                    await fs.promises.unlink(scriptPath);
-                } catch {
-                    // Ignore cleanup errors
+                if (settled) {
+                    return;
                 }
 
                 const duration = Date.now() - startTime;
@@ -636,7 +777,7 @@ export class CodeExecutor {
                     };
                 }
 
-                resolve({
+                await finalize({
                     success,
                     stdout: stdout.trim(),
                     stderr: stderr.trim(),
@@ -648,8 +789,7 @@ export class CodeExecutor {
             });
 
             child.on('error', (err) => {
-                clearTimeout(timer);
-                resolve({
+                void finalize({
                     success: false,
                     stdout: '',
                     stderr: err.message,
@@ -738,6 +878,7 @@ export const executePythonTool: ToolDefinition = {
             code: args.code,
             dependencies: args.dependencies,
             timeout_ms: args.timeout_ms,
+            onCancel: context.onCancel,
         });
 
         // Format result for AI consumption
@@ -797,6 +938,7 @@ export const executeJavaScriptTool: ToolDefinition = {
             language: 'javascript',
             code: args.code,
             timeout_ms: args.timeout_ms,
+            onCancel: context.onCancel,
         });
 
         // Format result for AI consumption
@@ -841,7 +983,7 @@ export const installPackagesTool: ToolDefinition = {
     },
     handler: async (args: { packages: string[] }, context: ToolContext) => {
         const executor = new CodeExecutor(context.workspacePath);
-        const result = await executor.installPythonPackages(args.packages);
+        const result = await executor.installPythonPackages(args.packages, context.onCancel);
 
         if (result.success) {
             return `Successfully installed packages: ${args.packages.join(', ')}`;

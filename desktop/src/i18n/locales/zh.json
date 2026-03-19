@@ -188,6 +188,8 @@
     "startTaskHint": "在下方输入开始一个任务。",
     "placeholderBuild": "构建一个 React 组件...",
     "currentTask": "当前任务",
+    "newSessionTitle": "新会话",
+    "createNewSession": "创建新会话",
     "taskInProgress": "任务进行中...",
     "newInstructions": "新指令...",
     "manageSkills": "管理技能",
@@ -515,9 +517,13 @@
     "stopRecording": "停止录音",
     "listening": "正在听...",
     "processing": "处理中...",
+    "processingTranscription": "正在转写语音...",
     "speechNotSupported": "此浏览器不支持语音识别",
-    "microphoneError": "麦克风访问被拒绝",
-    "noSpeechDetected": "未检测到语音"
+    "microphoneError": "麦克风访问被拒绝。请在“系统设置 -> 隐私与安全性 -> 麦克风”中允许 CoworkAny 访问后重试。",
+    "noSpeechDetected": "未检测到语音",
+    "transcriptionUnavailable": "未找到可用的语音转写配置",
+    "transcriptionFailed": "语音转写失败",
+    "recordingError": "启动录音失败"
   },
 
   "multimodal": {

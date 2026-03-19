@@ -81,6 +81,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
     const sessions = useTaskEventStore((state) => state.sessions);
     const activeSession = useActiveSession();
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
+    const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
     const activeSessionRef = useRef<HTMLDivElement | null>(null);
 
     const {
@@ -114,6 +115,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
     const handleCreateWorkspace = async () => {
         const result = await createWorkspace(newWorkspaceName.trim());
         if (result) {
+            selectWorkspace(result);
+            createDraftSession({
+                title: t('chat.newSessionTitle'),
+                workspacePath: result.path,
+            });
+            setExpandedWorkspaces((prev) => {
+                const next = new Set(prev);
+                next.add(result.id);
+                return next;
+            });
+            onTabChange('chat');
             setNewWorkspaceName('');
             setShowCreateForm(false);
         }

@@ -13,7 +13,9 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from '../Timeline.module.css';
 import type { TimelineItemType } from '../../../../types';
 import { processMessageContent } from '../../../../lib/text/messageProcessor';
+import { parseInlineAttachments } from '../../../../lib/text/inlineAttachments';
 import { parseMessageContent } from '../../../../lib/parsers/qualityParser';
+import { isExternalHref } from '../../../../lib/externalLinks';
 import { VerificationStatus, CodeQualityReport } from '../../../index';
 
 interface MessageBubbleProps {
@@ -25,10 +27,12 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
     const { t } = useTranslation();
     const [showCopy, setShowCopy] = useState(false);
     const [copied, setCopied] = useState(false);
+    const userContent = isUser ? parseInlineAttachments(item.content) : null;
+    const copyableContent = isUser ? (userContent?.text || item.content) : item.content;
 
     const handleCopy = async () => {
         try {
-            await navigator.clipboard.writeText(item.content);
+            await navigator.clipboard.writeText(copyableContent);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch { /* ignore */ }
@@ -59,6 +63,20 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
                             {children}
                         </code>
                     );
+                },
+                a(props) {
+                    const { href, children, ...rest } = props;
+                    const isExternal = isExternalHref(href);
+                    return (
+                        <a
+                            {...rest}
+                            href={href}
+                            target={isExternal ? '_blank' : undefined}
+                            rel={isExternal ? 'noopener noreferrer' : undefined}
+                        >
+                            {children}
+                        </a>
+                    );
                 }
             }}
         >
@@ -83,7 +101,23 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
             )}
             <div className={`${styles.contentBubble} ${!isUser ? styles.markdownBody : ''}`}>
                 {isUser ? (
-                    <div className={styles.userText}>{item.content}</div>
+                    <div className={styles.userMessageBody}>
+                        {userContent?.text ? (
+                            <div className={styles.userText}>{userContent.text}</div>
+                        ) : null}
+                        {userContent?.images?.length ? (
+                            <div className={styles.userImageList}>
+                                {userContent.images.map((image, index) => (
+                                    <img
+                                        key={`${item.id}-image-${index}`}
+                                        src={image.dataUrl}
+                                        alt={image.name}
+                                        className={styles.userImage}
+                                    />
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
                 ) : parsed && (parsed.verification || parsed.quality) ? (
                     // Enhanced rendering with quality/verification components
                     <div className="space-y-3">

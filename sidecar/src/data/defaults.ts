@@ -728,6 +728,36 @@ This built-in skill is the CoworkAny control plane. It classifies user input bef
 - \`present_work_result\`
 `;
 
+const SKILL_COWORKANY_SELF_MANAGEMENT = `---
+name: coworkany-self-management
+description: Use when the user asks CoworkAny to inspect or change its own configuration, workspaces, directories, or installed skills.
+---
+
+# CoworkAny Self-Management
+
+## Purpose
+When the user is asking about CoworkAny itself, do not guess and do not say you cannot inspect your own configuration. Use the dedicated CoworkAny self-management tools first.
+
+## When This Applies
+- The user asks for CoworkAny's own config or API keys, such as \`serper key\`, \`serper api key\`, \`llm-config.json\`, search provider, or browser mode.
+- The user asks where CoworkAny stores app data, config files, workspaces, or skill directories.
+- The user asks CoworkAny to install, enable, disable, inspect, or remove its own skills.
+- The user asks CoworkAny to list, create, rename, or delete its managed workspaces.
+
+## Required Tool Priority
+1. Use \`get_coworkany_config\` for reading effective config values.
+2. Use \`update_coworkany_config\` for changing config values.
+3. Use \`get_coworkany_paths\` for app data, config, and directory locations.
+4. Use \`list_coworkany_workspaces\`, \`create_coworkany_workspace\`, \`update_coworkany_workspace\`, \`delete_coworkany_workspace\` for workspaces.
+5. Use \`list_coworkany_skills\`, \`get_coworkany_skill\`, \`install_coworkany_skill\`, \`set_coworkany_skill_enabled\`, \`remove_coworkany_skill\` for skills.
+
+## Important Rules
+- Prefer these tools over \`view_file\` when the user asks about CoworkAny's runtime settings.
+- If the user explicitly asks for the actual secret value, you may set \`reveal_secret=true\`.
+- If the user only asks whether a key exists or what provider is configured, keep secrets redacted.
+- Distinguish CoworkAny self-management from repository editing. If the user wants to change app settings, use the self-management tools instead of editing source code.
+`;
+
 const SKILL_SUPERPOWERS_WORKFLOW = `---
 name: superpowers-workflow
 description: Built-in planning and decomposition workflow inspired by obra/superpowers. Use for complex implementation, design, and debugging tasks.
@@ -1178,6 +1208,45 @@ export const BUILTIN_SKILLS: BuiltinSkillManifest[] = [
         tags: ['builtin', 'control-plane', 'orchestration'],
         allowedTools: ['analyze_work_request', 'freeze_work_request', 'plan_work_execution', 'reduce_execution_result', 'present_work_result'],
         triggers: ['定时任务', 'scheduled task', '多任务', 'orchestrate', 'task routing', '任务分析', '验收标准'],
+    },
+    {
+        id: 'coworkany-self-management',
+        name: 'coworkany-self-management',
+        version: '1.0.0',
+        description: 'Use the CoworkAny self-management tools when the user asks CoworkAny to inspect or change its own config, directories, workspaces, or installed skills.',
+        directory: '',
+        content: SKILL_COWORKANY_SELF_MANAGEMENT,
+        tags: ['builtin', 'control-plane', 'self-management'],
+        allowedTools: [
+            'get_coworkany_paths',
+            'get_coworkany_config',
+            'update_coworkany_config',
+            'list_coworkany_workspaces',
+            'create_coworkany_workspace',
+            'update_coworkany_workspace',
+            'delete_coworkany_workspace',
+            'list_coworkany_skills',
+            'get_coworkany_skill',
+            'install_coworkany_skill',
+            'set_coworkany_skill_enabled',
+            'remove_coworkany_skill',
+        ],
+        triggers: [
+            'coworkany 中的 serper key',
+            'coworkany serper key',
+            'serper api key',
+            'serper key',
+            'coworkany 配置',
+            'coworkany 的配置',
+            'coworkany 自配置',
+            'coworkany 目录',
+            'coworkany app data',
+            'coworkany 工作区',
+            'coworkany skills',
+            'coworkany skill',
+            '修改 coworkany 配置',
+            '配置 coworkany',
+        ],
     },
     {
         id: 'superpowers-workflow',

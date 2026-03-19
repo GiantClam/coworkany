@@ -4,6 +4,7 @@ import { type ToolDefinition } from '../tools/standard';
 import { type ExecutionResultReporter } from './resultReporter';
 import { type ExecutionSession } from './session';
 import type { LocalTaskPlanHint } from '../orchestration/localTaskIntent';
+import { TaskCancelledError } from './taskCancellationRegistry';
 
 export type ExecutionTaskConfig = {
     modelId?: string;
@@ -482,12 +483,15 @@ async function runPreparedAgentExecution(input: {
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         deps.markWorkRequestExecutionFailed(preparedWorkRequest, errorMessage);
+        const isCancelled = error instanceof TaskCancelledError || errorMessage === 'task_cancelled';
         deps.reporter.failed({
             error: errorMessage,
-            errorCode: input.modelErrorCode,
+            errorCode: isCancelled ? 'CANCELLED' : input.modelErrorCode,
             recoverable: false,
             suggestion:
-                errorMessage === 'missing_api_key'
+                isCancelled
+                    ? undefined
+                    : errorMessage === 'missing_api_key'
                     ? 'Set API key in environment or .coworkany/settings.json'
                     : errorMessage === 'missing_base_url'
                         ? 'Set base URL in environment or .coworkany/settings.json'

@@ -42,6 +42,18 @@ function buildReasoning(toolName: string, targetPath: string | undefined, worksp
         return 'Builtin shell execution requires policy approval before the command runs.';
     }
 
+    if (
+        toolName === 'delete_path'
+        || toolName === 'batch_delete_paths'
+        || toolName === 'write_to_file'
+        || toolName === 'replace_file_content'
+        || toolName === 'create_directory'
+        || toolName === 'move_file'
+        || toolName === 'batch_move_files'
+    ) {
+        return `Builtin tool ${toolName} modifies local files and requires policy approval before execution.`;
+    }
+
     return `Builtin tool ${toolName} requires policy evaluation before execution.`;
 }
 
@@ -78,7 +90,10 @@ export function buildBuiltinEffectRequest(input: {
     const isOutsideWorkspace = primaryTargetPath
         ? !isPathInsideWorkspace(primaryTargetPath, context.workspacePath)
         : false;
-    const needsApproval = isOutsideWorkspace || effectType === 'shell:write';
+    const needsApproval =
+        isOutsideWorkspace
+        || effectType === 'shell:write'
+        || effectType === 'filesystem:write';
 
     if (!needsApproval) {
         return null;

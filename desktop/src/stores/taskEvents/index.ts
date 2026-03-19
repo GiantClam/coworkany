@@ -60,6 +60,13 @@ interface TaskEventStoreState {
     addAuditEvent: (event: AuditEvent) => void;
     getSession: (taskId: string) => TaskSession | undefined;
     setActiveTask: (taskId: string | null) => void;
+    createDraftSession: (seed?: Pick<TaskSession, 'title' | 'workspacePath'>) => string;
+    ensureSession: (taskId: string, seed?: Partial<TaskSession>, makeActive?: boolean) => void;
+    promoteDraftSession: (
+        draftTaskId: string,
+        nextTaskId: string,
+        seed?: Pick<TaskSession, 'title' | 'workspacePath' | 'status'>
+    ) => void;
     setSidecarConnected: (connected: boolean) => void;
     handleIpcResponse: (response: IpcResponse) => void;
     reset: () => void;
@@ -84,6 +91,13 @@ function createEmptySession(taskId: string): TaskSession {
         createdAt: now,
         updatedAt: now,
     };
+}
+
+function persistStateSnapshot(sessions: Map<string, TaskSession>, activeTaskId: string | null): void {
+    schedulePersist({
+        sessions: Array.from(sessions.values()),
+        activeTaskId,
+    });
 }
 
 // ============================================================================
@@ -197,13 +211,86 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
 
         setActiveTask: (taskId: string | null) => {
             set((state) => {
-                const next = { activeTaskId: taskId };
-                const snapshot: SessionsSnapshot = {
-                    sessions: Array.from(state.sessions.values()),
+                persistStateSnapshot(state.sessions, taskId);
+                return { activeTaskId: taskId };
+            });
+        },
+
+        createDraftSession: (seed) => {
+            const taskId = `draft-${crypto.randomUUID()}`;
+            const now = new Date().toISOString();
+            set((state) => {
+                const sessions = new Map(state.sessions);
+                sessions.set(taskId, {
+                    ...createEmptySession(taskId),
+                    isDraft: true,
+                    title: seed?.title,
+                    workspacePath: seed?.workspacePath,
+                    createdAt: now,
+                    updatedAt: now,
+                });
+                persistStateSnapshot(sessions, taskId);
+                return {
+                    sessions,
                     activeTaskId: taskId,
                 };
-                schedulePersist(snapshot);
-                return next;
+            });
+            return taskId;
+        },
+
+        ensureSession: (taskId, seed, makeActive = false) => {
+            set((state) => {
+                const existing = state.sessions.get(taskId);
+                const now = new Date().toISOString();
+                const session: TaskSession = existing
+                    ? {
+                        ...existing,
+                        ...seed,
+                        taskId,
+                        isDraft: seed?.isDraft ?? existing.isDraft,
+                        updatedAt: seed?.updatedAt ?? now,
+                    }
+                    : {
+                        ...createEmptySession(taskId),
+                        ...seed,
+                        taskId,
+                        updatedAt: seed?.updatedAt ?? now,
+                        createdAt: seed?.createdAt ?? now,
+                    };
+
+                const sessions = new Map(state.sessions);
+                sessions.set(taskId, session);
+                const activeTaskId = makeActive ? taskId : state.activeTaskId;
+                persistStateSnapshot(sessions, activeTaskId);
+                return { sessions, activeTaskId };
+            });
+        },
+
+        promoteDraftSession: (draftTaskId, nextTaskId, seed) => {
+            set((state) => {
+                const sessions = new Map(state.sessions);
+                const draft = sessions.get(draftTaskId);
+                const now = new Date().toISOString();
+                const promoted: TaskSession = {
+                    ...(draft ?? createEmptySession(nextTaskId)),
+                    taskId: nextTaskId,
+                    isDraft: false,
+                    status: seed?.status ?? 'running',
+                    title: seed?.title ?? draft?.title,
+                    workspacePath: seed?.workspacePath ?? draft?.workspacePath,
+                    updatedAt: now,
+                    createdAt: draft?.createdAt ?? now,
+                };
+
+                if (draftTaskId !== nextTaskId) {
+                    sessions.delete(draftTaskId);
+                }
+                sessions.set(nextTaskId, promoted);
+                persistStateSnapshot(sessions, nextTaskId);
+                return {
+                    sessions,
+                    activeTaskId: nextTaskId,
+                };
             });
         },
 
@@ -281,7 +368,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
             for (const session of snapshot.sessions) {
                 // Fix stale 'running' status from previous sessions
                 // When app restarts, any 'running' task is actually interrupted/failed
-                const cleanedSession = session.status === 'running'
+                const cleanedSession = session.status === 'running' && !session.suspension
                     ? { ...session, status: 'failed' as TaskStatus, summary: 'Task interrupted by app restart' }
                     : session;
                 map.set(cleanedSession.taskId, cleanedSession);

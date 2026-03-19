@@ -1,4 +1,5 @@
 import type { ConfirmationPolicy, IpcCommand, IpcResponse } from '../protocol';
+import { parseInlineAttachmentContent } from '../llm/attachmentContent';
 
 function respond(commandId: string, type: string, payload: Record<string, unknown>): IpcResponse {
     return {
@@ -12,7 +13,14 @@ function respond(commandId: string, type: string, payload: Record<string, unknow
 export type RuntimeCommandDeps = {
     emit: (message: Record<string, unknown>) => void;
     onBootstrapRuntimeContext: (runtimeContext: unknown) => void;
+    restorePersistedTasks: () => void;
     executeFreshTask: (args: any) => Promise<unknown>;
+    ensureTaskRuntimePersistence: (input: {
+        taskId: string;
+        title: string;
+        workspacePath: string;
+    }) => void;
+    cancelTaskExecution: (taskId: string, reason?: string) => Promise<{ success: boolean }>;
     createTaskFailedEvent: (taskId: string, payload: {
         error: string;
         errorCode?: string;
@@ -65,7 +73,7 @@ export type RuntimeCommandDeps = {
     prepareWorkRequestContext: (input: any) => any;
     buildArtifactContract: (query: string) => unknown;
     buildClarificationMessage: (frozenWorkRequest: any) => string;
-    pushConversationMessage: (taskId: string, message: { role: 'user' | 'assistant'; content: string }) => any;
+    pushConversationMessage: (taskId: string, message: { role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }) => any;
     shouldUsePlanningFiles: (frozenWorkRequest: any) => boolean;
     appendPlanningProgressEntry: (workspacePath: string, entry: string) => void;
     scheduleTaskInternal: (input: any) => any;
@@ -95,6 +103,18 @@ export type RuntimeCommandDeps = {
     };
     stopVoicePlayback: (reason?: string) => Promise<boolean>;
     getVoicePlaybackState: () => unknown;
+    getVoiceProviderStatus: () => unknown;
+    transcribeWithCustomAsr: (input: {
+        audioBase64: string;
+        mimeType?: string;
+        language?: string;
+    }) => Promise<{
+        success: boolean;
+        text?: string;
+        providerId?: string;
+        providerName?: string;
+        error?: string;
+    }>;
 };
 
 function buildExecutionQueryFromFrozenWorkRequest(request: {
@@ -123,6 +143,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
     switch (command.type) {
         case 'bootstrap_runtime_context': {
             deps.onBootstrapRuntimeContext((command.payload as { runtimeContext: unknown }).runtimeContext);
+            deps.restorePersistedTasks();
             deps.emit(respond(command.id, 'bootstrap_runtime_context_response', {
                 success: true,
             }));
@@ -151,12 +172,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
 
         case 'cancel_task': {
             const payload = command.payload as any;
-            deps.emit(deps.createTaskFailedEvent(payload.taskId, {
-                error: 'Task cancelled by user',
-                errorCode: 'CANCELLED',
-                recoverable: false,
-                suggestion: payload.reason,
-            }));
+            await deps.cancelTaskExecution(payload.taskId, payload.reason);
             deps.emit(respond(command.id, 'cancel_task_response', {
                 success: true,
                 taskId: payload.taskId,
@@ -182,6 +198,9 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const payload = command.payload as any;
             const taskId = payload.taskId as string;
             const content = payload.content as string;
+            const parsedUserInput = parseInlineAttachmentContent(content);
+            const promptText = parsedUserInput.promptText || content;
+            const conversationContent = parsedUserInput.conversationContent;
 
             if (deps.suspendResumeManager.isSuspended(taskId)) {
                 deps.enqueueResumeMessage(taskId, content, payload.config);
@@ -222,21 +241,27 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
 
+            deps.ensureTaskRuntimePersistence({
+                taskId,
+                title: content.trim().slice(0, 80) || 'Follow-up task',
+                workspacePath,
+            });
+
             const preparedWorkRequest = deps.prepareWorkRequestContext({
-                sourceText: content,
+                sourceText: promptText,
                 workspacePath,
                 workRequestStore: deps.workRequestStore,
             });
             const { frozenWorkRequest } = preparedWorkRequest;
             const artifactContract =
                 deps.taskSessionStore.getArtifactContract(taskId) ||
-                deps.buildArtifactContract(preparedWorkRequest.executionQuery || content);
+                deps.buildArtifactContract(preparedWorkRequest.executionQuery || promptText);
 
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
 
             if (frozenWorkRequest.clarification.required) {
                 const clarificationMessage = deps.buildClarificationMessage(frozenWorkRequest);
-                deps.pushConversationMessage(taskId, { role: 'user', content });
+                deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
                 deps.pushConversationMessage(taskId, { role: 'assistant', content: clarificationMessage });
                 deps.emit(deps.createChatMessageEvent(taskId, {
                     role: 'assistant',
@@ -260,8 +285,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
                 const primaryTask = frozenWorkRequest.tasks?.[0];
                 const record = deps.scheduleTaskInternal({
-                    title: primaryTask?.title || content.trim().slice(0, 60) || 'Scheduled Task',
-                    taskQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || content,
+                    title: primaryTask?.title || promptText.trim().slice(0, 60) || 'Scheduled Task',
+                    taskQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || promptText,
                     executeAt: new Date(frozenWorkRequest.schedule.executeAt),
                     workspacePath,
                     speakResult: frozenWorkRequest.presentation?.ttsEnabled ?? false,
@@ -289,11 +314,11 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (effectiveTaskConfig?.enabledSkills as string[] | undefined) ??
                 (payload.config?.enabledClaudeSkills as string[] | undefined) ??
                 (payload.config?.enabledSkills as string[] | undefined);
-            const conversation = deps.pushConversationMessage(taskId, { role: 'user', content });
+            const conversation = deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
 
             await deps.continuePreparedAgentFlow({
                 taskId,
-                userMessage: content,
+                userMessage: promptText,
                 workspacePath,
                 config: effectiveTaskConfig,
                 preparedWorkRequest,
@@ -415,6 +440,25 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 stopped,
                 state: deps.getVoicePlaybackState(),
             }));
+            return true;
+        }
+
+        case 'get_voice_provider_status': {
+            deps.emit(respond(command.id, 'get_voice_provider_status_response', {
+                success: true,
+                ...(deps.getVoiceProviderStatus() as Record<string, unknown>),
+            }));
+            return true;
+        }
+
+        case 'transcribe_voice': {
+            const payload = command.payload as {
+                audioBase64: string;
+                mimeType?: string;
+                language?: string;
+            };
+            const result = await deps.transcribeWithCustomAsr(payload);
+            deps.emit(respond(command.id, 'transcribe_voice_response', result as Record<string, unknown>));
             return true;
         }
 

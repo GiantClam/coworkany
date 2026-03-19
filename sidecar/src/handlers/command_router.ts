@@ -19,6 +19,7 @@ export type CommandRouterDeps = {
     registry: AgentIdentityRegistry;
     skillStore: SkillStore;
     contextFor: (taskId?: string) => HandlerContext;
+    appManagementTools?: ToolDefinition[];
     enhancedBrowserTools?: ToolDefinition[];
     selfLearningTools?: ToolDefinition[];
     databaseTools?: ToolDefinition[];
@@ -42,6 +43,7 @@ export function dispatchCommand(command: IpcCommand, deps: CommandRouterDeps): C
         case 'reload_tools':
             return handleReloadTools(command, ctx, {
                 skillStore: deps.skillStore,
+                appManagementTools: deps.appManagementTools,
                 enhancedBrowserTools: deps.enhancedBrowserTools,
                 selfLearningTools: deps.selfLearningTools,
                 databaseTools: deps.databaseTools,

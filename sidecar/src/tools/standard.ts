@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import { getAlternativeCommands, extractBaseCommand } from '../utils/commandAlternatives';
 import { checkCommand } from './commandSandbox';
@@ -37,13 +37,14 @@ export type ToolDefinition = {
 export type ToolContext = {
     workspacePath: string;
     taskId: string;
+    onCancel?: (waiter: (reason: string) => void) => (() => void);
 };
 
 // ============================================================================
 // Error Analysis Helper
 // ============================================================================
 
-type CommandErrorType = 'syntax' | 'runtime' | 'dependency' | 'permission' | 'timeout' | 'not_found' | 'unknown';
+type CommandErrorType = 'syntax' | 'runtime' | 'dependency' | 'permission' | 'timeout' | 'cancelled' | 'not_found' | 'unknown';
 
 interface CommandErrorAnalysis {
     type: CommandErrorType;
@@ -53,6 +54,39 @@ interface CommandErrorAnalysis {
 
 function resolveContextPath(workspacePath: string, candidate: string): string {
     return path.resolve(workspacePath, candidate);
+}
+
+function terminateChildProcessTree(child: ChildProcess): void {
+    if (!child.pid) {
+        return;
+    }
+
+    if (process.platform === 'win32') {
+        try {
+            const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+                stdio: 'ignore',
+                windowsHide: true,
+            });
+            killer.unref();
+        } catch {
+            try {
+                child.kill('SIGKILL');
+            } catch {
+                // Ignore cleanup failures during cancellation.
+            }
+        }
+        return;
+    }
+
+    try {
+        process.kill(-child.pid, 'SIGKILL');
+    } catch {
+        try {
+            child.kill('SIGKILL');
+        } catch {
+            // Ignore cleanup failures during cancellation.
+        }
+    }
 }
 
 async function movePath(sourcePath: string, destinationPath: string): Promise<void> {
@@ -726,20 +760,45 @@ const runCommand: ToolDefinition = {
                 shell: true,
                 cwd,
                 stdio: ['ignore', 'pipe', 'pipe'],
+                detached: process.platform !== 'win32',
             });
 
             let stdout = '';
             let stderr = '';
-            let timedOut = false;
+            let settled = false;
+
+            const finalize = (result: Record<string, unknown>) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timer);
+                disposeCancellation?.();
+                resolve(result);
+            };
+
+            const disposeCancellation = context.onCancel?.((reason) => {
+                terminateChildProcessTree(child);
+                finalize({
+                    command: args.command,
+                    error: reason || 'Task cancelled by user',
+                    stdout: stdout.trim(),
+                    stderr: stderr.trim(),
+                    exit_code: -1,
+                    execution_time_ms: Date.now() - startTime,
+                    error_type: 'cancelled' as const,
+                    cancelled: true,
+                    safety_warning: safetyWarning || undefined,
+                });
+            });
 
             const timer = setTimeout(() => {
-                timedOut = true;
-                child.kill();
-                resolve({
+                terminateChildProcessTree(child);
+                finalize({
                     command: args.command,
                     error: 'Command timed out',
-                    stdout,
-                    stderr,
+                    stdout: stdout.trim(),
+                    stderr: stderr.trim(),
                     exit_code: -1,
                     execution_time_ms: Date.now() - startTime,
                     error_type: 'timeout' as const,
@@ -751,9 +810,8 @@ const runCommand: ToolDefinition = {
             child.stdout.on('data', (data) => { stdout += data.toString(); });
             child.stderr.on('data', (data) => { stderr += data.toString(); });
 
-            child.on('close', (code) => {
-                if (timedOut) return;
-                clearTimeout(timer);
+            child.on('close', (code, signal) => {
+                if (settled) return;
 
                 const executionTime = Date.now() - startTime;
                 const result: Record<string, unknown> = {
@@ -761,8 +819,12 @@ const runCommand: ToolDefinition = {
                     exit_code: code,
                     stdout: stdout.trim(),
                     stderr: stderr.trim(),
-                    execution_time_ms: executionTime
+                    execution_time_ms: executionTime,
                 };
+
+                if (signal) {
+                    result.signal = signal;
+                }
 
                 // Add error analysis if command failed
                 // Note: Also check exit_code even if stderr is empty (e.g., Windows 9009)
@@ -782,15 +844,12 @@ const runCommand: ToolDefinition = {
                     result.safety_warning = safetyWarning;
                 }
 
-                resolve(result);
+                finalize(result);
             });
 
             child.on('error', (err) => {
-                if (timedOut) return;
-                clearTimeout(timer);
-
                 const errorAnalysis = analyzeCommandError(err.message, -1, args.command);
-                resolve({
+                finalize({
                     command: args.command,
                     error: err.message,
                     exit_code: -1,

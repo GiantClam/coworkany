@@ -112,4 +112,11 @@ metadata:
             },
         ]);
     });
+
+    test('builtin coworkany self-management skill triggers on self-config questions', () => {
+        const store = new SkillStore('/tmp/nonexistent-workspace');
+        const matches = store.findByTrigger('coworkany 中的 serper key 是什么');
+
+        expect(matches.some((skill) => skill.manifest.name === 'coworkany-self-management')).toBe(true);
+    });
 });

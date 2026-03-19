@@ -70,6 +70,8 @@ import {
     type IpcResponse,
     type TaskEvent,
 } from './protocol';
+import { parseInlineAttachmentContent } from './llm/attachmentContent';
+import { toOpenAIUserContent } from './llm/openaiMessageContent';
 import {
     dispatchCommand,
     AgentIdentityRegistry,
@@ -109,10 +111,16 @@ import {
     stopVoicePlayback,
     getVoicePlaybackState,
     setVoicePlaybackReporter,
+    configureVoiceProviders,
 } from './tools/core/voice';
+import {
+    getSpeechProviderStatus,
+    invokeCustomAsrProvider,
+} from './tools/core/speechProviders';
 import { CONTROL_PLANE_TOOLS } from './tools/controlPlane';
 import { createEnhancedBrowserTools } from './tools/browserEnhanced';
 import { DATABASE_TOOLS } from './tools/database';
+import { createAppManagementTools } from './tools/appManagement';
 import { xiaohongshuPostTool } from './tools/xiaohongshuPost';
 import { BrowserService } from './services/browserService';
 import { CODE_EXECUTION_TOOLS } from './tools/codeExecution';
@@ -126,7 +134,18 @@ import {
 } from './execution/runtime';
 import { ExecutionResultReporter } from './execution/resultReporter';
 import { ExecutionSession } from './execution/session';
+import {
+    TaskCancellationRegistry,
+    TaskCancelledError,
+} from './execution/taskCancellationRegistry';
 import { TaskSessionStore, type TaskSessionConfig } from './execution/taskSessionStore';
+import {
+    TaskRuntimeStore,
+    type PersistedTaskRuntimeRecord,
+    type PersistedTaskRuntimeStatus,
+    type PersistedTaskSuspension,
+} from './execution/taskRuntimeStore';
+import { planTaskRuntimeRecovery } from './execution/taskRuntimeRecovery';
 import {
     TaskEventBus,
     type TaskFailedPayload,
@@ -414,6 +433,15 @@ const taskSessionStore = new TaskSessionStore<
 >({
     getDefaultHistoryLimit,
 });
+const taskCancellationRegistry = new TaskCancellationRegistry();
+type TaskRuntimeMeta = {
+    title: string;
+    workspacePath: string;
+    createdAt: string;
+    status: PersistedTaskRuntimeStatus;
+    suspension?: PersistedTaskSuspension;
+};
+const taskRuntimeMeta = new Map<string, TaskRuntimeMeta>();
 const taskEventBus = new TaskEventBus({
     emit,
 });
@@ -1309,6 +1337,7 @@ const SCHEDULED_TASK_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const SCHEDULED_TASK_STALE_RUNNING_TIMEOUT_MS = SCHEDULED_TASK_EXECUTION_TIMEOUT_MS + 60 * 1000;
 let directiveManagerCache: { root: string; manager: DirectiveManager } | null = null;
 let hostAccessGrantManagerCache: { root: string; manager: HostAccessGrantManager } | null = null;
+let taskRuntimeStoreCache: { root: string; store: TaskRuntimeStore } | null = null;
 
 function getResolvedAppDataRoot(): string {
     return desktopRuntimeContext?.appDataDir?.trim() || appDataRoot;
@@ -1334,6 +1363,17 @@ function getHostAccessGrantManager(): HostAccessGrantManager {
         };
     }
     return hostAccessGrantManagerCache.manager;
+}
+
+function getTaskRuntimeStore(): TaskRuntimeStore {
+    const root = getResolvedAppDataRoot();
+    if (!taskRuntimeStoreCache || taskRuntimeStoreCache.root !== root) {
+        taskRuntimeStoreCache = {
+            root,
+            store: new TaskRuntimeStore(path.join(root, 'task-runtime.json')),
+        };
+    }
+    return taskRuntimeStoreCache.store;
 }
 
 function getResolvedShell(): string {
@@ -1424,10 +1464,23 @@ ensureManagedBinOnPath(getResolvedAppDataRoot());
     }
 })();
 
+const APP_MANAGEMENT_TOOLS = createAppManagementTools({
+    workspaceRoot,
+    getResolvedAppDataRoot,
+    skillStore,
+    workspaceStore,
+    importSkillFromDirectory,
+});
+
+configureVoiceProviders({
+    listEnabledSkills: () => skillStore.listEnabled(),
+});
+
 const routerDeps: CommandRouterDeps = {
     registry,
     skillStore,
     contextFor: createHandlerContext,
+    appManagementTools: APP_MANAGEMENT_TOOLS,
 };
 
 const capabilityCommandDeps: CapabilityCommandDeps = {
@@ -1458,7 +1511,10 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
                 `appDataDir=${desktopRuntimeContext.appDataDir}, sidecarLaunchMode=${desktopRuntimeContext.sidecarLaunchMode || 'unknown'}`
             );
         },
+        restorePersistedTasks,
         executeFreshTask,
+        ensureTaskRuntimePersistence,
+        cancelTaskExecution,
         createTaskFailedEvent,
         createChatMessageEvent,
         createTaskClarificationRequiredEvent,
@@ -1491,6 +1547,19 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         getAutonomousAgent,
         stopVoicePlayback,
         getVoicePlaybackState,
+        getVoiceProviderStatus: () => getSpeechProviderStatus(
+            skillStore.listEnabled(),
+            (toolName) => globalToolRegistry.getTool(toolName),
+        ),
+        transcribeWithCustomAsr: (input) => invokeCustomAsrProvider(
+            skillStore.listEnabled(),
+            (toolName) => globalToolRegistry.getTool(toolName),
+            input,
+            {
+                workspacePath: workspaceRoot,
+                taskId: 'voice-transcription',
+            },
+        ),
     };
 }
 
@@ -1678,6 +1747,13 @@ You have access to various tools to help complete tasks. Important guidelines:
 11. **Requested File Formats**: When the user asks for a specific artifact format, you MUST honor it exactly.
    - If the request implies Word/docx/document/report output, prefer creating a \`.docx\` artifact rather than silently downgrading to Markdown
    - If the exact format is temporarily impossible, explain the blocker and ask for downgrade confirmation instead of pretending a Markdown file satisfies the request
+
+12. **CoworkAny Self-Management**: When the user asks about CoworkAny's own config, keys, directories, workspaces, or installed skills, prefer the dedicated CoworkAny self-management tools first.
+   - Read values with \`get_coworkany_config\` or \`get_coworkany_paths\`
+   - Change settings with \`update_coworkany_config\`
+   - Manage workspaces with \`list_coworkany_workspaces\`, \`create_coworkany_workspace\`, \`update_coworkany_workspace\`, \`delete_coworkany_workspace\`
+   - Manage skills with \`list_coworkany_skills\`, \`get_coworkany_skill\`, \`install_coworkany_skill\`, \`set_coworkany_skill_enabled\`, \`remove_coworkany_skill\`
+   - Do NOT claim you cannot inspect CoworkAny's own configuration when these tools are available
 
 **CRITICAL: Action over Explanation.** When the user asks you to perform an action (speak, open browser, search, etc.), you MUST call the corresponding tool FIRST. Do NOT read source code or explain how the tool works instead of calling it. Demonstrate by doing, not by explaining.
 
@@ -2195,6 +2271,15 @@ suspendResumeManager.on('task_suspended', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} suspended: ${data.reason}`);
     console.log(`[SuspendResume] User message: ${data.userMessage}`);
     console.log(`[SuspendResume] Can auto-resume: ${data.canAutoResume}`);
+    markTaskRuntimeSuspended(data.taskId, {
+        reason: data.reason,
+        userMessage: data.userMessage,
+        canAutoResume: Boolean(data.canAutoResume),
+        maxWaitTimeMs:
+            typeof data.maxWaitTimeMs === 'number'
+                ? data.maxWaitTimeMs
+                : undefined,
+    });
 
     // Protocol currently supports TASK_STATUS only with idle/running/finished/failed.
     // Emit an informational system message for richer suspended state details.
@@ -2206,6 +2291,7 @@ suspendResumeManager.on('task_suspended', (data: any) => {
 
 suspendResumeManager.on('task_resumed', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} resumed after ${data.suspendDuration}ms`);
+    markTaskRuntimeRunning(data.taskId);
 
     taskEventBus.emitChatMessage(data.taskId, {
         role: 'system',
@@ -2637,8 +2723,11 @@ async function executeFreshTask(args: {
     extraSystemPrompt?: string;
 }): Promise<FreshTaskResult> {
     const { taskId, title, userQuery, workspacePath, activeFile, config } = args;
+    const parsedUserInput = parseInlineAttachmentContent(userQuery);
+    const promptUserQuery = parsedUserInput.promptText || userQuery;
+    const conversationUserContent = parsedUserInput.conversationContent;
     const preparedWorkRequest = prepareWorkRequestContext({
-        sourceText: userQuery,
+        sourceText: promptUserQuery,
         workspacePath,
         workRequestStore,
     });
@@ -2674,7 +2763,7 @@ async function executeFreshTask(args: {
         emit(
             createTaskStartedEvent(taskId, {
                 title,
-                description: userQuery,
+                description: promptUserQuery,
                 context: {
                     workspacePath,
                     activeFile,
@@ -2694,7 +2783,7 @@ async function executeFreshTask(args: {
         const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
         pushConversationMessage(taskId, {
             role: 'user',
-            content: userQuery,
+            content: conversationUserContent,
         });
         pushConversationMessage(taskId, {
             role: 'assistant',
@@ -2728,7 +2817,7 @@ async function executeFreshTask(args: {
     if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
         pushConversationMessage(taskId, {
             role: 'user',
-            content: userQuery,
+            content: conversationUserContent,
         });
         const primaryTask = frozenWorkRequest.tasks[0];
         const record = scheduleTaskInternal({
@@ -2765,13 +2854,18 @@ async function executeFreshTask(args: {
         };
     }
 
+    ensureTaskRuntimePersistence({
+        taskId,
+        title,
+        workspacePath,
+    });
     const conversation = pushConversationMessage(taskId, {
         role: 'user',
-        content: userQuery,
+        content: conversationUserContent,
     });
     return executePreparedTaskFlow({
         taskId,
-        userQuery,
+        userQuery: promptUserQuery,
         workspacePath,
         config,
         preparedWorkRequest,
@@ -3190,6 +3284,7 @@ async function tryPptGeneratorSkillFastPath(
 globalToolRegistry.register('builtin', STANDARD_TOOLS);
 globalToolRegistry.register('builtin', [webSearchTool]);  // Web search with multi-provider support
 globalToolRegistry.register('builtin', BUILTIN_TOOLS);    // Memory, GitHub, WebCrawl, Docs, Thinking tools
+globalToolRegistry.register('builtin', APP_MANAGEMENT_TOOLS); // CoworkAny self-management tools
 globalToolRegistry.register('builtin', CODE_EXECUTION_TOOLS);  // OpenClaw-style sandboxed code execution
 globalToolRegistry.register('builtin', KNOWLEDGE_TOOLS);       // Active knowledge management tools
 globalToolRegistry.register('builtin', PERSONAL_TOOLS);        // Personal assistant tools + scheduler
@@ -3582,11 +3677,13 @@ function pushConversationMessage(
         const recentMessages = conversation.slice(removeCount);
         const compacted = [summaryMessage, ...recentMessages];
         taskSessionStore.replaceConversation(taskId, compacted);
+        syncTaskRuntimeRecord(taskId);
 
         console.log(`[Compaction] Task ${taskId}: compressed ${removeCount} old messages into summary, keeping ${recentMessages.length} recent`);
         return compacted;
     }
 
+    syncTaskRuntimeRecord(taskId);
     return conversation;
 }
 function getTaskConfig(taskId: string): TaskSessionConfig | undefined {
@@ -3599,6 +3696,159 @@ function dequeueQueuedResumeMessages(taskId: string) {
 
 function enqueueResumeMessage(taskId: string, content: string, config?: TaskSessionConfig): void {
     taskSessionStore.enqueueResumeMessage(taskId, { content, config });
+}
+
+function ensureTaskRuntimeMeta(
+    taskId: string,
+    input: {
+        title: string;
+        workspacePath: string;
+        status?: PersistedTaskRuntimeStatus;
+    }
+): TaskRuntimeMeta {
+    const existing = taskRuntimeMeta.get(taskId);
+    const next: TaskRuntimeMeta = {
+        title: input.title || existing?.title || taskId,
+        workspacePath: input.workspacePath || existing?.workspacePath || workspaceRoot,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        status: input.status || existing?.status || 'running',
+        suspension: existing?.suspension,
+    };
+    taskRuntimeMeta.set(taskId, next);
+    return next;
+}
+
+function syncTaskRuntimeRecord(taskId: string): void {
+    const meta = taskRuntimeMeta.get(taskId);
+    if (!meta) {
+        return;
+    }
+
+    const record: PersistedTaskRuntimeRecord = {
+        taskId,
+        title: meta.title,
+        workspacePath: meta.workspacePath,
+        createdAt: meta.createdAt,
+        updatedAt: new Date().toISOString(),
+        status: meta.status,
+        conversation: taskSessionStore.getConversation(taskId),
+        config: taskSessionStore.getConfig(taskId),
+        historyLimit: taskSessionStore.getHistoryLimit(taskId),
+        artifactContract: taskSessionStore.getArtifactContract(taskId),
+        artifactsCreated: Array.from(taskSessionStore.getArtifacts(taskId)),
+        suspension: meta.suspension ? { ...meta.suspension } : undefined,
+    };
+    getTaskRuntimeStore().upsert(record);
+}
+
+function ensureTaskRuntimePersistence(input: {
+    taskId: string;
+    title: string;
+    workspacePath: string;
+}): void {
+    ensureTaskRuntimeMeta(input.taskId, {
+        title: input.title,
+        workspacePath: input.workspacePath,
+        status: 'running',
+    });
+    syncTaskRuntimeRecord(input.taskId);
+}
+
+function markTaskRuntimeSuspended(taskId: string, payload: PersistedTaskSuspension): void {
+    const meta = taskRuntimeMeta.get(taskId);
+    if (!meta) {
+        return;
+    }
+    taskRuntimeMeta.set(taskId, {
+        ...meta,
+        status: 'suspended',
+        suspension: { ...payload },
+    });
+    syncTaskRuntimeRecord(taskId);
+}
+
+function markTaskRuntimeRunning(taskId: string): void {
+    const meta = taskRuntimeMeta.get(taskId);
+    if (!meta) {
+        return;
+    }
+    taskRuntimeMeta.set(taskId, {
+        ...meta,
+        status: 'running',
+        suspension: undefined,
+    });
+    syncTaskRuntimeRecord(taskId);
+}
+
+function clearTaskRuntimePersistence(taskId: string): void {
+    taskRuntimeMeta.delete(taskId);
+    taskCancellationRegistry.clear(taskId);
+    getTaskRuntimeStore().delete(taskId);
+}
+
+function restorePersistedTasks(): void {
+    const runtimeStore = getTaskRuntimeStore();
+    const records = runtimeStore.list();
+
+    for (const record of records) {
+        taskSessionStore.replaceConversation(record.taskId, record.conversation as AnthropicMessage[]);
+        taskSessionStore.setHistoryLimit(record.taskId, record.historyLimit);
+        taskSessionStore.setArtifacts(record.taskId, record.artifactsCreated);
+        if (record.config) {
+            taskSessionStore.setConfig(record.taskId, record.config);
+        }
+        if (record.artifactContract) {
+            taskSessionStore.setArtifactContract(
+                record.taskId,
+                record.artifactContract as ReturnType<typeof buildArtifactContract>
+            );
+        }
+
+        taskEventBus.reset(record.taskId);
+        const recovery = planTaskRuntimeRecovery(record);
+
+        if (recovery.type === 'restore_suspended') {
+            taskRuntimeMeta.set(record.taskId, {
+                title: record.title,
+                workspacePath: record.workspacePath,
+                createdAt: record.createdAt,
+                status: 'suspended',
+                suspension: { ...recovery.suspension },
+            });
+            suspendResumeManager.restoreManual(
+                record.taskId,
+                recovery.suspension.reason,
+                recovery.suspension.userMessage,
+                { restoredFromPersistence: true }
+            );
+            syncTaskRuntimeRecord(record.taskId);
+            emit(createTaskSuspendedEvent(record.taskId, {
+                reason: recovery.suspension.reason,
+                userMessage: recovery.suspension.userMessage,
+                canAutoResume: recovery.suspension.canAutoResume,
+                maxWaitTimeMs: recovery.suspension.maxWaitTimeMs,
+            }));
+            continue;
+        }
+
+        emit(createTaskFailedEvent(record.taskId, recovery.failure));
+        clearTaskRuntimePersistence(record.taskId);
+    }
+}
+
+async function cancelTaskExecution(taskId: string, reason?: string): Promise<{ success: boolean }> {
+    const hasActiveRuntime = taskRuntimeMeta.has(taskId);
+    const isSuspended = suspendResumeManager.isSuspended(taskId);
+    if (!hasActiveRuntime && !isSuspended) {
+        taskCancellationRegistry.clear(taskId);
+        return { success: false };
+    }
+
+    taskCancellationRegistry.request(taskId, reason);
+    if (isSuspended) {
+        await suspendResumeManager.cancel(taskId, reason || 'Task cancelled by user');
+    }
+    return { success: true };
 }
 
 function loadLlmConfig(workspaceRootPath: string): LlmConfig {
@@ -3906,6 +4156,7 @@ async function streamAnthropicResponse(
 
     try {
         while (true) {
+            throwIfTaskCancelled(taskId);
             const { done, value } = await readStreamChunkWithTimeout(reader, 60000, 'anthropic_stream');
             if (done) break;
 
@@ -3913,6 +4164,7 @@ async function streamAnthropicResponse(
             const lines = chunk.split('\n');
 
             for (const line of lines) {
+                throwIfTaskCancelled(taskId);
                 if (!line.startsWith('data: ')) continue;
                 const data = line.slice(6);
                 if (data === '[DONE]') continue;
@@ -4069,10 +4321,10 @@ async function streamOpenAIResponse(
                         });
                     }
                 } else {
-                    // Regular user message with content blocks
+                    const userContent = toOpenAIUserContent(message.content);
                     openaiMessages.push({
                         role: 'user',
-                        content: JSON.stringify(message.content),
+                        content: userContent.length > 0 ? userContent : '',
                     });
                 }
             }
@@ -4135,6 +4387,7 @@ async function streamOpenAIResponse(
 
     try {
         while (true) {
+            throwIfTaskCancelled(taskId);
             const { done, value } = await readStreamChunkWithTimeout(reader, 60000, 'openai_stream');
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
@@ -4143,6 +4396,7 @@ async function streamOpenAIResponse(
             buffer = lines.pop() ?? '';
 
             for (const line of lines) {
+                throwIfTaskCancelled(taskId);
                 const trimmed = line.trim();
                 if (!trimmed.startsWith('data:')) {
                     continue;
@@ -4327,6 +4581,35 @@ async function streamOpenAIResponse(
     };
 }
 
+function throwIfTaskCancelled(taskId: string): void {
+    taskCancellationRegistry.throwIfCancelled(taskId);
+}
+
+async function withTaskControl<T>(
+    taskId: string,
+    operation: Promise<T>,
+    timeoutMs: number,
+    timeoutLabel: string
+): Promise<T> {
+    throwIfTaskCancelled(taskId);
+
+    let unsubscribe = () => {};
+    const cancellationPromise = new Promise<T>((_, reject) => {
+        unsubscribe = taskCancellationRegistry.onCancellation(taskId, (reason) => {
+            reject(new TaskCancelledError(taskId, reason));
+        });
+    });
+
+    try {
+        return await Promise.race([
+            withOperationTimeout(operation, timeoutMs, timeoutLabel),
+            cancellationPromise,
+        ]);
+    } finally {
+        unsubscribe();
+    }
+}
+
 async function runAgentLoop(
     taskId: string,
     messages: AnthropicMessage[],
@@ -4383,6 +4666,7 @@ async function runAgentLoop(
     ];
 
     while (steps < MAX_STEPS) {
+        throwIfTaskCancelled(taskId);
         steps++;
 
         // Capture user's original query for self-learning context
@@ -4425,7 +4709,12 @@ async function runAgentLoop(
             }
         }
 
-        let response = await streamLlmResponse(taskId, messages, options, config);
+        let response = await withTaskControl(
+            taskId,
+            streamLlmResponse(taskId, messages, options, config),
+            120000,
+            'llm_response'
+        );
 
         // Add assistant response to history
         messages = pushConversationMessage(taskId, response);
@@ -4509,7 +4798,12 @@ async function runAgentLoop(
                         content: [{ type: 'text', text: gateWarnings.join('\n\n') }],
                     });
                     // Give the LLM one more chance to address the gates
-                    const retryResponse = await streamLlmResponse(taskId, messages, options, config);
+                    const retryResponse = await withTaskControl(
+                        taskId,
+                        streamLlmResponse(taskId, messages, options, config),
+                        120000,
+                        'llm_retry_response'
+                    );
                     messages = pushConversationMessage(taskId, retryResponse);
                     const retryToolUses: any[] = [];
                     if (Array.isArray(retryResponse.content)) {
@@ -4534,6 +4828,7 @@ async function runAgentLoop(
         // Execute tools
         const toolResults: any[] = [];
         for (const toolUse of toolUses) {
+            throwIfTaskCancelled(taskId);
             toolsUsed.add(toolUse.name);
             emit(createToolCallEvent(taskId, {
                 id: toolUse.id,
@@ -5336,12 +5631,18 @@ async function runAgentLoop(
                                 toolName: toolUse.name,
                                 args: toolUse.input || {},
                             };
-                            const adaptiveResult = await withOperationTimeout(
+                            const adaptiveResult = await withTaskControl(
+                                taskId,
                                 adaptiveExecutor.executeWithRetry(
                                 executionStep,
                                 async (_name: string, args: Record<string, unknown>) => {
-                                    return await withOperationTimeout(
-                                        tool.handler(args, { taskId, workspacePath: workspaceRoot }),
+                                    return await withTaskControl(
+                                        taskId,
+                                        tool.handler(args, {
+                                            taskId,
+                                            workspacePath: workspaceRoot,
+                                            onCancel: (waiter) => taskCancellationRegistry.onCancellation(taskId, waiter),
+                                        }),
                                         TOOL_EXECUTION_TIMEOUT_MS,
                                         `tool_${toolUse.name}`
                                     );
@@ -5357,17 +5658,28 @@ async function runAgentLoop(
                                 result = adaptiveResult.error || adaptiveResult.output || 'Tool execution failed after retries';
                             }
                         } catch (e) {
+                            if (e instanceof TaskCancelledError) {
+                                throw e;
+                            }
                             result = `Error: ${e instanceof Error ? e.message : String(e)}`;
                             isError = true;
                         }
                     } else {
                         try {
-                            result = await withOperationTimeout(
-                                tool.handler(toolUse.input, { taskId, workspacePath: workspaceRoot }),
+                            result = await withTaskControl(
+                                taskId,
+                                tool.handler(toolUse.input, {
+                                    taskId,
+                                    workspacePath: workspaceRoot,
+                                    onCancel: (waiter) => taskCancellationRegistry.onCancellation(taskId, waiter),
+                                }),
                                 TOOL_EXECUTION_TIMEOUT_MS,
                                 `tool_${toolUse.name}`
                             );
                         } catch (e) {
+                            if (e instanceof TaskCancelledError) {
+                                throw e;
+                            }
                             result = `Error: ${e instanceof Error ? e.message : String(e)}`;
                             isError = true;
                         }
@@ -5680,6 +5992,7 @@ async function runAgentLoop(
                     // Replay user collaboration messages received during suspension.
                     const queuedMessages = dequeueQueuedResumeMessages(taskId);
                     for (const queued of queuedMessages) {
+                        const parsedQueuedMessage = parseInlineAttachmentContent(queued.content);
                         if (queued.config) {
                             const taskConfig = getTaskConfig(taskId);
                             if (
@@ -5701,15 +6014,14 @@ async function runAgentLoop(
 
                         messages = pushConversationMessage(taskId, {
                             role: 'user',
-                            content: queued.content,
+                            content: parsedQueuedMessage.conversationContent,
                         });
                     }
 
                     // Continue the loop - LLM will get the resume context and proceed
                 } else {
                     console.log(`[AgentLoop] Task ${taskId} cancelled during suspension: ${resumeResult.reason}`);
-                    // Break out of the loop - task was cancelled
-                    break;
+                    throw new TaskCancelledError(taskId, resumeResult.reason);
                 }
             }
         }
@@ -5852,6 +6164,7 @@ function createExecutionSession(taskId: string): ExecutionSession {
         },
         onArtifactsChanged: (artifacts) => {
             taskSessionStore.setArtifacts(taskId, artifacts);
+            syncTaskRuntimeRecord(taskId);
         },
     });
 }
@@ -5859,6 +6172,7 @@ function createExecutionSession(taskId: string): ExecutionSession {
 function createExecutionResultReporter(taskId: string): ExecutionResultReporter {
     return new ExecutionResultReporter({
         onFinished: (payload) => {
+            clearTaskRuntimePersistence(taskId);
             taskEventBus.emitFinished(taskId, {
                 summary: payload.summary,
                 artifactsCreated: payload.artifactsCreated,
@@ -5866,6 +6180,7 @@ function createExecutionResultReporter(taskId: string): ExecutionResultReporter 
             });
         },
         onFailed: (payload) => {
+            clearTaskRuntimePersistence(taskId);
             taskEventBus.emitFailed(taskId, payload);
         },
         onStatus: (payload) => {
@@ -5881,7 +6196,7 @@ function getToolsForTask(taskId: string): ToolDefinition[] {
     return resolveToolsForTask({
         config,
         standardTools: STANDARD_TOOLS,
-        builtinTools: [webSearchTool, ...BUILTIN_TOOLS],
+        builtinTools: [webSearchTool, ...BUILTIN_TOOLS, ...APP_MANAGEMENT_TOOLS],
         controlPlaneTools: CONTROL_PLANE_TOOLS,
         knowledgeTools: KNOWLEDGE_TOOLS,
         personalTools: PERSONAL_TOOLS,

@@ -110,9 +110,8 @@ export function normalizeScheduledTaskResultText(text: string): string {
         .trim();
 }
 
-export function buildScheduledTaskCompletionMessage(title: string, resultText: string): string {
-    const normalized = cleanScheduledTaskResultText(resultText) || '定时任务已完成。';
-    return `定时任务“${title}”已完成：\n\n${normalized}`;
+export function buildScheduledTaskCompletionMessage(_title: string, resultText: string): string {
+    return cleanScheduledTaskResultText(resultText) || '定时任务已完成。';
 }
 
 export function buildScheduledTaskFailureMessage(title: string, errorText: string): string {
@@ -130,7 +129,5 @@ export function buildScheduledTaskSpokenText(args: {
     }
 
     const normalized = normalizeScheduledTaskResultText(args.finalAssistantText);
-    return normalized
-        ? `定时任务已完成。${args.title}。${normalized}`
-        : `定时任务已完成。${args.title}。`;
+    return normalized || '定时任务已完成。';
 }

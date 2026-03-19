@@ -6,8 +6,8 @@
     flex-direction: column;
     gap: 24px;
     background:
-        radial-gradient(720px 240px at 100% 0%, rgba(45, 212, 191, 0.04), transparent 58%),
-        linear-gradient(180deg, rgba(4, 18, 17, 0.76), rgba(3, 14, 14, 0.92));
+        radial-gradient(720px 240px at 100% 0%, rgba(59, 130, 246, 0.04), transparent 58%),
+        linear-gradient(180deg, rgba(4, 12, 29, 0.76), rgba(3, 9, 23, 0.92));
 }
 
 .heroPanel {
@@ -15,11 +15,11 @@
     gap: 20px;
     padding: 22px;
     border-radius: 24px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     background:
-        radial-gradient(840px 280px at 100% 0%, rgba(45, 212, 191, 0.08), transparent 58%),
-        rgba(7, 24, 26, 0.76);
-    box-shadow: inset 0 1px 0 rgba(239, 255, 252, 0.04);
+        radial-gradient(840px 280px at 100% 0%, rgba(59, 130, 246, 0.08), transparent 58%),
+        rgba(7, 17, 36, 0.76);
+    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.04);
 }
 
 .header {
@@ -44,8 +44,8 @@
     width: fit-content;
     padding: 0 10px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
-    background: rgba(4, 18, 17, 0.54);
+    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: rgba(4, 12, 29, 0.54);
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.1em;
@@ -78,8 +78,8 @@
     gap: 8px;
     min-height: 44px;
     padding: 0 16px;
-    background: rgba(4, 18, 17, 0.62);
-    border: 1px solid rgba(138, 232, 219, 0.12);
+    background: rgba(4, 12, 29, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.12);
     border-radius: 16px;
     font-family: var(--font-body);
     font-size: 13px;
@@ -91,8 +91,8 @@
 
 .refreshBtn:hover:not(:disabled) {
     transform: translateY(-1px);
-    background: rgba(8, 30, 31, 0.82);
-    border-color: rgba(138, 232, 219, 0.2);
+    background: rgba(8, 18, 40, 0.82);
+    border-color: rgba(96, 165, 250, 0.2);
 }
 
 .refreshBtn:disabled {
@@ -122,12 +122,12 @@
 
 .section {
     background:
-        radial-gradient(520px 180px at 100% 0%, rgba(45, 212, 191, 0.03), transparent 58%),
-        rgba(7, 24, 26, 0.7);
+        radial-gradient(520px 180px at 100% 0%, rgba(59, 130, 246, 0.03), transparent 58%),
+        rgba(7, 17, 36, 0.7);
     padding: 16px;
     border-radius: 18px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    box-shadow: inset 0 1px 0 rgba(239, 255, 252, 0.03);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.03);
     min-width: 0;
     overflow: hidden;
 }
@@ -175,10 +175,10 @@
     min-height: auto;
     padding: 15px 16px;
     border-radius: 18px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     background:
-        radial-gradient(240px 120px at 100% 0%, rgba(45, 212, 191, 0.06), transparent 60%),
-        rgba(7, 24, 26, 0.72);
+        radial-gradient(240px 120px at 100% 0%, rgba(59, 130, 246, 0.06), transparent 60%),
+        rgba(7, 17, 36, 0.72);
 }
 
 .summaryEyebrow {
@@ -188,8 +188,8 @@
     width: fit-content;
     padding: 0 10px;
     border-radius: 999px;
-    background: rgba(4, 18, 17, 0.62);
-    border: 1px solid rgba(138, 232, 219, 0.12);
+    background: rgba(4, 12, 29, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.12);
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -301,7 +301,7 @@
 
 .toggleBtn[aria-pressed="true"],
 .toggleBtn.active {
-    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.12);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
 }
 
 .validationMessage {
@@ -348,8 +348,8 @@
 .inputField {
     min-height: 44px;
     padding: 0 14px;
-    background: rgba(4, 18, 17, 0.82);
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(4, 12, 29, 0.82);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 14px;
     font-family: var(--font-body);
     font-size: 13px;
@@ -358,13 +358,13 @@
 }
 
 .inputField:hover:not(:disabled) {
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
 }
 
 .inputField:focus {
     outline: none;
-    border-color: rgba(45, 212, 191, 0.28);
-    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.08);
+    border-color: rgba(59, 130, 246, 0.28);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
 }
 
 .inputField:disabled {
@@ -396,9 +396,9 @@
 
 .profileCard {
     padding: 15px 16px;
-    background: rgba(4, 18, 17, 0.6);
+    background: rgba(4, 12, 29, 0.6);
     border-radius: 18px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     display: grid;
     gap: 12px;
     cursor: pointer;
@@ -407,14 +407,14 @@
 
 .profileCard:hover {
     transform: translateY(-1px);
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
     background: rgba(7, 29, 30, 0.78);
 }
 
 .profileCard.active {
-    border-color: rgba(45, 212, 191, 0.24);
+    border-color: rgba(59, 130, 246, 0.24);
     background: rgba(8, 44, 42, 0.5);
-    box-shadow: inset 0 1px 0 rgba(239, 255, 252, 0.03);
+    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.03);
 }
 
 .profileCardContent {
@@ -480,8 +480,8 @@
 
 .profileMeta {
     color: var(--text-muted);
-    background: rgba(4, 18, 17, 0.45);
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(4, 12, 29, 0.45);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
@@ -503,11 +503,11 @@
 
 .activeBadge {
     font-size: 10px;
-    background: rgba(20, 184, 166, 0.2);
+    background: rgba(37, 99, 235, 0.2);
     color: var(--text-primary);
     padding: 5px 8px;
     border-radius: 999px;
-    border: 1px solid rgba(45, 212, 191, 0.18);
+    border: 1px solid rgba(59, 130, 246, 0.18);
     font-family: var(--font-code);
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -520,7 +520,7 @@
     width: 32px;
     height: 32px;
     background: transparent;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 12px;
     cursor: pointer;
     color: var(--text-muted);
@@ -542,9 +542,9 @@
     min-height: 132px;
     padding: 24px 22px;
     color: var(--text-muted);
-    border: 1px dashed rgba(138, 232, 219, 0.12);
+    border: 1px dashed rgba(96, 165, 250, 0.12);
     border-radius: 18px;
-    background: rgba(4, 18, 17, 0.36);
+    background: rgba(4, 12, 29, 0.36);
 }
 
 .emptyStateTitle {
@@ -611,8 +611,8 @@
 .infoBox {
     margin-top: 14px;
     padding: 12px 14px;
-    background: rgba(4, 18, 17, 0.52);
-    border: 1px solid rgba(138, 232, 219, 0.08);
+    background: rgba(4, 12, 29, 0.52);
+    border: 1px solid rgba(96, 165, 250, 0.08);
     border-radius: 16px;
     font-size: 12px;
     line-height: 1.6;
@@ -636,9 +636,9 @@
     min-width: 132px;
     min-height: 46px;
     padding: 10px 14px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 16px;
-    background: rgba(4, 18, 17, 0.62);
+    background: rgba(4, 12, 29, 0.62);
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-body);
@@ -653,14 +653,14 @@
 
 .optionBtn[aria-pressed="true"],
 .optionBtn.selected {
-    border-color: rgba(45, 212, 191, 0.24);
+    border-color: rgba(59, 130, 246, 0.24);
     background: rgba(8, 44, 42, 0.5);
     font-weight: 600;
 }
 
 .optionBtn:hover:not([aria-pressed="true"]):not(.selected) {
     transform: translateY(-1px);
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
     background: rgba(7, 29, 30, 0.78);
 }
 
@@ -681,7 +681,7 @@
 .subsection {
     margin-top: 18px;
     padding-top: 18px;
-    border-top: 1px solid rgba(138, 232, 219, 0.08);
+    border-top: 1px solid rgba(96, 165, 250, 0.08);
 }
 
 .stack {
@@ -695,8 +695,8 @@
     gap: 14px;
     padding: 14px 16px;
     border-radius: 18px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(4, 18, 17, 0.6);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(4, 12, 29, 0.6);
 }
 
 .shortcutInfo,
@@ -772,8 +772,8 @@
     min-height: 24px;
     padding: 0 8px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(4, 18, 17, 0.5);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(4, 12, 29, 0.5);
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.06em;
@@ -783,8 +783,8 @@
 }
 
 .scopeBadgeGlobal {
-    border-color: rgba(45, 212, 191, 0.18);
-    background: rgba(20, 184, 166, 0.12);
+    border-color: rgba(59, 130, 246, 0.18);
+    background: rgba(37, 99, 235, 0.12);
     color: var(--text-primary);
 }
 
@@ -806,9 +806,9 @@
     min-height: 36px;
     min-width: 116px;
     padding: 0 12px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 12px;
-    background: rgba(4, 18, 17, 0.62);
+    background: rgba(4, 12, 29, 0.62);
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-code);
@@ -820,14 +820,14 @@
 
 .shortcutCapture:hover {
     transform: translateY(-1px);
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
     background: rgba(7, 29, 30, 0.78);
 }
 
 .shortcutCaptureRecording {
-    border-color: rgba(45, 212, 191, 0.24);
+    border-color: rgba(59, 130, 246, 0.24);
     background: rgba(8, 44, 42, 0.5);
-    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.08);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
 }
 
 .iconButton {
@@ -836,7 +836,7 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 12px;
     background: transparent;
     color: var(--text-muted);
@@ -845,7 +845,7 @@
 }
 
 .iconButton:hover {
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
     background: rgba(7, 29, 30, 0.54);
     color: var(--text-primary);
 }
@@ -859,9 +859,9 @@
 .toggleInline {
     min-height: 32px;
     padding: 0 10px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 999px;
-    background: rgba(4, 18, 17, 0.62);
+    background: rgba(4, 12, 29, 0.62);
     color: var(--text-secondary);
     cursor: pointer;
     font-family: var(--font-code);
@@ -873,13 +873,13 @@
 }
 
 .toggleInline:hover {
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
     background: rgba(7, 29, 30, 0.72);
     color: var(--text-primary);
 }
 
 .toggleInlineActive {
-    border-color: rgba(45, 212, 191, 0.24);
+    border-color: rgba(59, 130, 246, 0.24);
     background: rgba(8, 44, 42, 0.5);
     color: var(--text-primary);
 }
@@ -914,9 +914,9 @@
 .secondaryAction {
     min-height: 40px;
     padding: 0 14px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     border-radius: 14px;
-    background: rgba(4, 18, 17, 0.62);
+    background: rgba(4, 12, 29, 0.62);
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-body);
@@ -927,7 +927,7 @@
 
 .secondaryAction:hover:not(:disabled) {
     transform: translateY(-1px);
-    border-color: rgba(138, 232, 219, 0.18);
+    border-color: rgba(96, 165, 250, 0.18);
     background: rgba(7, 29, 30, 0.78);
 }
 
@@ -941,10 +941,10 @@
     gap: 14px;
     padding: 16px;
     border-radius: 18px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     background:
-        radial-gradient(360px 140px at 100% 0%, rgba(45, 212, 191, 0.05), transparent 60%),
-        rgba(7, 24, 26, 0.72);
+        radial-gradient(360px 140px at 100% 0%, rgba(59, 130, 246, 0.05), transparent 60%),
+        rgba(7, 17, 36, 0.72);
     flex-shrink: 0;
 }
 
@@ -955,8 +955,8 @@
     gap: 20px;
     padding: 18px;
     border-radius: 20px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(4, 18, 17, 0.56);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(4, 12, 29, 0.56);
 }
 
 .runtimeSectionHeader {
@@ -1063,8 +1063,8 @@
 
 .runtimeChipMuted {
     color: var(--text-muted);
-    background: rgba(4, 18, 17, 0.62);
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    background: rgba(4, 12, 29, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.1);
 }
 
 .runtimeChipInfo {
@@ -1077,12 +1077,12 @@
     color: var(--text-muted);
     font-size: 12px;
     line-height: 1.6;
-    border-top: 1px solid rgba(138, 232, 219, 0.08);
+    border-top: 1px solid rgba(96, 165, 250, 0.08);
     padding: 18px 4px 0;
 }
 
 .footer code {
-    background: rgba(4, 18, 17, 0.56);
+    background: rgba(4, 12, 29, 0.56);
     padding: 2px 6px;
     border-radius: 8px;
     font-family: var(--font-code);

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -381,6 +382,24 @@ pub struct StartupMetricInput {
     pub window_label: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribeAudioInput {
+    pub audio_base64: String,
+    pub mime_type: Option<String>,
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptionProvider {
+    provider: String,
+    request_url: String,
+    models_url: String,
+    api_key: String,
+    fallback_model: String,
+    allow_insecure_tls: bool,
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -527,6 +546,227 @@ fn legacy_llm_config_path() -> Result<PathBuf, String> {
     Ok(cwd.join("..").join("sidecar").join("llm-config.json"))
 }
 
+fn normalize_openai_compatible_url(raw: &str, endpoint: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.ends_with(endpoint) {
+        return trimmed.to_string();
+    }
+    format!("{trimmed}{endpoint}")
+}
+
+fn preferred_transcription_model_ids() -> &'static [&'static str] {
+    &[
+        "gpt-4o-mini-transcribe",
+        "openai/gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
+        "openai/gpt-4o-transcribe",
+        "whisper-1",
+        "openai/whisper-1",
+    ]
+}
+
+fn default_transcription_model(provider: &str) -> String {
+    match provider {
+        "openai" => "gpt-4o-mini-transcribe".to_string(),
+        _ => "whisper-1".to_string(),
+    }
+}
+
+fn select_transcription_model_from_catalog(model_ids: &[String]) -> Option<String> {
+    preferred_transcription_model_ids().iter().find_map(|candidate| {
+        model_ids
+            .iter()
+            .find(|model_id| model_id.as_str() == *candidate)
+            .cloned()
+    })
+}
+
+fn openai_compatible_default(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("https://api.openai.com/v1"),
+        "aiberm" => Some("https://aiberm.com/v1"),
+        "nvidia" => Some("https://integrate.api.nvidia.com/v1"),
+        "siliconflow" => Some("https://api.siliconflow.cn/v1"),
+        "gemini" => Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+        "qwen" => Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        "minimax" => Some("https://api.minimax.chat/v1"),
+        "kimi" => Some("https://api.moonshot.cn/v1"),
+        _ => None,
+    }
+}
+
+fn build_transcription_provider_from_profile(profile: &LlmProfile) -> Option<TranscriptionProvider> {
+    let default_model = default_transcription_model(&profile.provider);
+
+    match profile.provider.as_str() {
+        "custom" => {
+            let settings = profile.custom.as_ref()?;
+            if settings.api_format.as_deref() == Some("anthropic") {
+                return None;
+            }
+            let api_key = settings.api_key.as_ref()?.trim();
+            let base_url = settings.base_url.as_ref()?.trim();
+            if api_key.is_empty() || base_url.is_empty() {
+                return None;
+            }
+            Some(TranscriptionProvider {
+                provider: profile.provider.clone(),
+                request_url: normalize_openai_compatible_url(base_url, "/audio/transcriptions"),
+                models_url: normalize_openai_compatible_url(base_url, "/models"),
+                api_key: api_key.to_string(),
+                fallback_model: default_model,
+                allow_insecure_tls: settings.allow_insecure_tls.unwrap_or(false),
+            })
+        }
+        provider => {
+            let settings = profile.openai.as_ref()?;
+            let api_key = settings.api_key.as_ref()?.trim();
+            if api_key.is_empty() {
+                return None;
+            }
+            let base_url = settings
+                .base_url
+                .as_deref()
+                .or_else(|| openai_compatible_default(provider))?;
+            Some(TranscriptionProvider {
+                provider: profile.provider.clone(),
+                request_url: normalize_openai_compatible_url(base_url, "/audio/transcriptions"),
+                models_url: normalize_openai_compatible_url(base_url, "/models"),
+                api_key: api_key.to_string(),
+                fallback_model: default_model,
+                allow_insecure_tls: settings.allow_insecure_tls.unwrap_or(false),
+            })
+        }
+    }
+}
+
+fn build_transcription_provider_from_legacy_config(config: &LlmConfig) -> Option<TranscriptionProvider> {
+    let provider = config.provider.as_deref()?.to_string();
+    let default_model = default_transcription_model(&provider);
+
+    match provider.as_str() {
+        "custom" => {
+            let settings = config.custom.as_ref()?;
+            if settings.api_format.as_deref() == Some("anthropic") {
+                return None;
+            }
+            let api_key = settings.api_key.as_ref()?.trim();
+            let base_url = settings.base_url.as_ref()?.trim();
+            if api_key.is_empty() || base_url.is_empty() {
+                return None;
+            }
+            Some(TranscriptionProvider {
+                provider,
+                request_url: normalize_openai_compatible_url(base_url, "/audio/transcriptions"),
+                models_url: normalize_openai_compatible_url(base_url, "/models"),
+                api_key: api_key.to_string(),
+                fallback_model: default_model,
+                allow_insecure_tls: settings.allow_insecure_tls.unwrap_or(false),
+            })
+        }
+        other => {
+            let settings = config.openai.as_ref()?;
+            let api_key = settings.api_key.as_ref()?.trim();
+            if api_key.is_empty() {
+                return None;
+            }
+            let base_url = settings
+                .base_url
+                .as_deref()
+                .or_else(|| openai_compatible_default(other))?;
+            Some(TranscriptionProvider {
+                provider,
+                request_url: normalize_openai_compatible_url(base_url, "/audio/transcriptions"),
+                models_url: normalize_openai_compatible_url(base_url, "/models"),
+                api_key: api_key.to_string(),
+                fallback_model: default_model,
+                allow_insecure_tls: settings.allow_insecure_tls.unwrap_or(false),
+            })
+        }
+    }
+}
+
+fn resolve_transcription_provider(config: &LlmConfig) -> Option<TranscriptionProvider> {
+    if let Some(profiles) = &config.profiles {
+        if let Some(active_profile_id) = &config.active_profile_id {
+            if let Some(active) = profiles.iter().find(|profile| &profile.id == active_profile_id) {
+                if let Some(provider) = build_transcription_provider_from_profile(active) {
+                    return Some(provider);
+                }
+            }
+        }
+
+        for profile in profiles {
+            if Some(&profile.id) == config.active_profile_id.as_ref() {
+                continue;
+            }
+            if let Some(provider) = build_transcription_provider_from_profile(profile) {
+                return Some(provider);
+            }
+        }
+    }
+
+    build_transcription_provider_from_legacy_config(config)
+}
+
+async fn discover_transcription_model(
+    provider: &TranscriptionProvider,
+    proxy_settings: Option<&ProxySettings>,
+) -> Result<Option<String>, String> {
+    let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+    if provider.allow_insecure_tls {
+        client_builder = client_builder.danger_accept_invalid_certs(true);
+    }
+    client_builder = apply_proxy_to_client_builder(client_builder, proxy_settings)?;
+    let client = client_builder.build().map_err(|e| e.to_string())?;
+
+    let response = client
+        .get(&provider.models_url)
+        .bearer_auth(&provider.api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("model discovery failed with status {}", response.status()));
+    }
+
+    let payload = response.json::<Value>().await.map_err(|e| e.to_string())?;
+    let model_ids = payload
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect::<Vec<_>>();
+
+    Ok(select_transcription_model_from_catalog(&model_ids))
+}
+
+fn apply_proxy_to_client_builder(
+    builder: reqwest::ClientBuilder,
+    proxy_settings: Option<&ProxySettings>,
+) -> Result<reqwest::ClientBuilder, String> {
+    let Some(proxy) = proxy_settings else {
+        return Ok(builder);
+    };
+
+    if proxy.enabled != Some(true) {
+        return Ok(builder);
+    }
+
+    let Some(url) = proxy.url.as_ref() else {
+        return Ok(builder);
+    };
+
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Ok(builder);
+    }
+
+    Ok(builder.proxy(reqwest::Proxy::all(trimmed).map_err(|e| e.to_string())?))
+}
+
 fn sessions_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
     app_data_dir(app_handle).map(|dir| dir.join("sessions.json"))
 }
@@ -552,6 +792,26 @@ fn startup_measurement_enabled() -> bool {
     )
 }
 
+fn summarize_attachment_content_for_log(content: &str) -> String {
+    let image_count = content.matches("<image_base64").count();
+    let file_count = content.matches("<attached_file").count();
+    let text_preview = content
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .chars()
+        .take(120)
+        .collect::<String>();
+
+    format!(
+        "len={}, image_tags={}, file_tags={}, preview=\"{}{}\"",
+        content.len(),
+        image_count,
+        file_count,
+        text_preview,
+        if content.chars().count() > 120 { "…" } else { "" }
+    )
+}
+
 // ============================================================================
 // Tauri Commands
 // ============================================================================
@@ -563,7 +823,13 @@ pub async fn start_task(
     state: State<'_, SidecarState>,
     app_handle: AppHandle,
 ) -> Result<StartTaskResult, String> {
-    info!("start_task command received: {:?}", input);
+    info!(
+        "start_task command received: title={:?}, workspace_path={:?}, active_file={:?}, user_query={}",
+        input.title,
+        input.workspace_path,
+        input.active_file,
+        summarize_attachment_content_for_log(&input.user_query)
+    );
 
     // Generate new task ID
     let task_id = Uuid::new_v4().to_string();
@@ -731,6 +997,23 @@ pub async fn get_voice_state(
     })
 }
 
+/// Get current voice provider preference from sidecar
+#[tauri::command]
+pub async fn get_voice_provider_status(
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let command = build_command("get_voice_provider_status", json!({}));
+    let response = send_command_and_wait(&state, command, 3000).await?;
+    let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: inner_payload,
+    })
+}
+
 /// Stop current voice playback in sidecar
 #[tauri::command]
 pub async fn stop_voice(
@@ -748,6 +1031,207 @@ pub async fn stop_voice(
     })
 }
 
+/// Transcribe recorded voice input using a configured OpenAI-compatible endpoint.
+#[tauri::command]
+pub async fn transcribe_audio(
+    input: TranscribeAudioInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let custom_command = build_command("transcribe_voice", json!({
+        "audioBase64": input.audio_base64,
+        "mimeType": input.mime_type,
+        "language": input.language,
+    }));
+    let custom_response = send_command_and_wait(&state, custom_command, 30000).await?;
+    let custom_payload = custom_response.get("payload").cloned().unwrap_or(json!({}));
+    if custom_payload.get("success").and_then(Value::as_bool) == Some(true) {
+        return Ok(GenericIpcResult {
+            success: true,
+            payload: json!({
+                "text": custom_payload.get("text").and_then(Value::as_str).unwrap_or_default(),
+                "provider": custom_payload.get("providerName").cloned().unwrap_or_else(|| json!("custom")),
+            }),
+        });
+    }
+    if custom_payload.get("error").and_then(Value::as_str) != Some("transcription_unavailable") {
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": custom_payload.get("error").and_then(Value::as_str).unwrap_or("transcription_failed"),
+                "provider": custom_payload.get("providerName").cloned().unwrap_or_else(|| json!("custom")),
+            }),
+        });
+    }
+
+    let config = get_llm_settings(app_handle.clone()).await?.payload;
+    let Some(provider) = resolve_transcription_provider(&config) else {
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": "transcription_unavailable",
+            }),
+        });
+    };
+    let selected_model = match discover_transcription_model(&provider, config.proxy.as_ref()).await {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            return Ok(GenericIpcResult {
+                success: false,
+                payload: json!({
+                    "error": "transcription_unavailable",
+                    "provider": provider.provider,
+                }),
+            });
+        }
+        Err(err) => {
+            debug!(
+                "transcribe_audio: model discovery failed for provider {}: {}. Falling back to {}",
+                provider.provider,
+                err,
+                provider.fallback_model
+            );
+            provider.fallback_model.clone()
+        }
+    };
+
+    let audio_bytes = match BASE64_STANDARD.decode(input.audio_base64.as_bytes()) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        Ok(_) => {
+            return Ok(GenericIpcResult {
+                success: false,
+                payload: json!({
+                    "error": "empty_audio",
+                }),
+            });
+        }
+        Err(err) => {
+            error!("transcribe_audio: failed to decode base64 audio: {}", err);
+            return Ok(GenericIpcResult {
+                success: false,
+                payload: json!({
+                    "error": "invalid_audio",
+                }),
+            });
+        }
+    };
+
+    let mime_type = input
+        .mime_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("audio/webm");
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", selected_model.clone())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(audio_bytes)
+                .file_name("voice-input.webm")
+                .mime_str(mime_type)
+                .map_err(|e| e.to_string())?,
+        );
+
+    if let Some(language) = input.language.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        form = form.text("language", language.to_string());
+    }
+
+    let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(120));
+    if provider.allow_insecure_tls {
+        client_builder = client_builder.danger_accept_invalid_certs(true);
+    }
+    client_builder = apply_proxy_to_client_builder(client_builder, config.proxy.as_ref())?;
+    let client = client_builder.build().map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(&provider.request_url)
+        .bearer_auth(&provider.api_key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body = response.text().await.unwrap_or_default();
+        let error_code = if error_body.contains("\"model_not_found\"") {
+            "transcription_unavailable"
+        } else {
+            "transcription_failed"
+        };
+        error!(
+            "transcribe_audio: provider={} model={} status={} body={}",
+            provider.provider,
+            selected_model,
+            status,
+            error_body
+        );
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": error_code,
+                "details": format!("{} {}", status, error_body),
+                "provider": provider.provider,
+            }),
+        });
+    }
+
+    let payload = response.json::<Value>().await.map_err(|e| e.to_string())?;
+    let text = payload
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+
+    if text.is_empty() {
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": "no_speech",
+                "provider": provider.provider,
+            }),
+        });
+    }
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: json!({
+            "text": text,
+            "provider": provider.provider,
+        }),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_transcription_model_from_catalog;
+
+    #[test]
+    fn prefers_openai_realtime_transcription_models_over_whisper() {
+        let models = vec![
+            "whisper-1".to_string(),
+            "gpt-4o-mini-transcribe".to_string(),
+        ];
+
+        assert_eq!(
+            select_transcription_model_from_catalog(&models),
+            Some("gpt-4o-mini-transcribe".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_when_provider_catalog_has_no_supported_transcription_model() {
+        let models = vec![
+            "gpt-5.3-codex".to_string(),
+            "text-embedding-3-small".to_string(),
+        ];
+
+        assert_eq!(select_transcription_model_from_catalog(&models), None);
+    }
+}
+
 /// Send a message to an existing task
 #[tauri::command]
 pub async fn send_task_message(
@@ -755,7 +1239,11 @@ pub async fn send_task_message(
     state: State<'_, SidecarState>,
     app_handle: AppHandle,
 ) -> Result<SendTaskMessageResult, String> {
-    info!("send_task_message command received: {:?}", input);
+    info!(
+        "send_task_message command received: task_id={}, content={}",
+        input.task_id,
+        summarize_attachment_content_for_log(&input.content)
+    );
 
     ensure_sidecar_running(&state, &app_handle).await?;
 

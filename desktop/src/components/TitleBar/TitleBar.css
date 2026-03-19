@@ -1,7 +1,7 @@
 .titlebar {
     height: var(--titlebar-height, 44px);
     background:
-        linear-gradient(180deg, rgba(6, 28, 27, 0.86), rgba(4, 21, 20, 0.9));
+        linear-gradient(180deg, rgba(6, 16, 37, 0.86), rgba(4, 13, 31, 0.9));
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -9,7 +9,7 @@
     z-index: 20;
     user-select: none;
     font-family: var(--font-heading);
-    border-bottom: 1px solid rgba(138, 232, 219, 0.12);
+    border-bottom: 1px solid rgba(96, 165, 250, 0.12);
     backdrop-filter: blur(14px) saturate(135%);
     -webkit-backdrop-filter: blur(14px) saturate(135%);
     color: var(--text-primary);
@@ -46,7 +46,7 @@
     height: 10px;
     border-radius: 999px;
     background: linear-gradient(135deg, var(--brand-400), var(--brand-600));
-    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.12), 0 0 18px rgba(45, 212, 191, 0.3);
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12), 0 0 18px rgba(59, 130, 246, 0.3);
 }
 
 .titlebar-brand-wordmark {
@@ -61,8 +61,8 @@
     align-items: center;
     padding: 4px 8px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.14);
-    background: rgba(14, 53, 49, 0.58);
+    border: 1px solid rgba(96, 165, 250, 0.14);
+    background: rgba(14, 31, 66, 0.58);
     color: var(--text-tertiary);
     font-size: 9px;
     letter-spacing: 0.08em;
@@ -75,8 +75,8 @@
     margin-right: 8px;
     padding: 4px;
     border-radius: 999px;
-    background: rgba(9, 33, 31, 0.58);
-    border: 1px solid rgba(138, 232, 219, 0.12);
+    background: rgba(9, 18, 38, 0.58);
+    border: 1px solid rgba(96, 165, 250, 0.12);
     -webkit-app-region: no-drag;
     app-region: no-drag;
     cursor: default;
@@ -106,7 +106,7 @@
 }
 
 .titlebar-button:hover {
-    background: rgba(19, 76, 71, 0.68);
+    background: rgba(19, 53, 116, 0.68);
     color: var(--text-primary);
     transform: translateY(-1px);
 }

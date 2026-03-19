@@ -15,10 +15,10 @@
     animation: fadeInUp 0.35s ease-out;
     padding: 34px;
     border-radius: 28px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.12);
     background:
-        radial-gradient(520px 220px at 100% 0%, rgba(45, 212, 191, 0.08), transparent 56%),
-        linear-gradient(160deg, rgba(8, 30, 31, 0.72), rgba(4, 18, 17, 0.62));
+        radial-gradient(520px 220px at 100% 0%, rgba(59, 130, 246, 0.08), transparent 56%),
+        linear-gradient(160deg, rgba(8, 18, 40, 0.72), rgba(4, 12, 29, 0.62));
     box-shadow:
         var(--shadow-lg),
         inset 0 1px 0 rgba(223, 255, 248, 0.06);
@@ -32,8 +32,8 @@
     min-height: 32px;
     padding: 0 12px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
-    background: rgba(7, 24, 26, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: rgba(7, 17, 36, 0.62);
     font-family: var(--font-code);
     font-size: 11px;
     letter-spacing: 0.1em;
@@ -49,7 +49,7 @@
     color: var(--text-primary);
     margin: 18px 0 12px;
     letter-spacing: 0.03em;
-    text-shadow: 0 0 24px rgba(45, 212, 191, 0.12);
+    text-shadow: 0 0 24px rgba(59, 130, 246, 0.12);
 }
 
 .welcome-hint {
@@ -75,8 +75,8 @@
     min-height: 92px;
     padding: 16px 18px;
     border-radius: 22px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(7, 24, 26, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(7, 17, 36, 0.62);
     color: var(--text-primary);
     cursor: pointer;
     text-align: left;
@@ -85,16 +85,16 @@
 
 .welcome-action-card:hover {
     transform: translateY(-2px);
-    border-color: rgba(138, 232, 219, 0.2);
-    background: rgba(10, 37, 38, 0.8);
+    border-color: rgba(96, 165, 250, 0.2);
+    background: rgba(10, 22, 48, 0.8);
     box-shadow: 0 16px 28px rgba(1, 15, 14, 0.24);
 }
 
 .welcome-action-card.primary {
     border-color: rgba(249, 115, 22, 0.16);
     background:
-        linear-gradient(135deg, rgba(249, 115, 22, 0.12), rgba(45, 212, 191, 0.08)),
-        rgba(7, 24, 26, 0.68);
+        linear-gradient(135deg, rgba(249, 115, 22, 0.12), rgba(59, 130, 246, 0.08)),
+        rgba(7, 17, 36, 0.68);
 }
 
 .welcome-action-card.primary:hover {
@@ -127,7 +127,7 @@
     width: 40px;
     height: 40px;
     border-radius: 14px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.12);
     background: rgba(5, 18, 18, 0.56);
     color: var(--text-secondary);
     flex-shrink: 0;
@@ -146,7 +146,7 @@
     min-height: 34px;
     padding: 0 12px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.1);
     background: rgba(5, 18, 18, 0.42);
     color: var(--text-muted);
     font-family: var(--font-code);

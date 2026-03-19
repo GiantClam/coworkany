@@ -1,11 +1,35 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
     continuePreparedAgentFlow,
     executePreparedTaskFlow,
     type ExecutionRuntimeDeps,
 } from '../src/execution/runtime';
+import { TaskCancelledError } from '../src/execution/taskCancellationRegistry';
 import { ExecutionResultReporter } from '../src/execution/resultReporter';
 import { ExecutionSession } from '../src/execution/session';
+import { SkillStore } from '../src/storage/skillStore';
+import { WorkspaceStore } from '../src/storage/workspaceStore';
+import { createAppManagementTools } from '../src/tools/appManagement';
+
+const tempPaths: string[] = [];
+
+afterEach(() => {
+    while (tempPaths.length > 0) {
+        const target = tempPaths.pop();
+        if (target) {
+            fs.rmSync(target, { recursive: true, force: true });
+        }
+    }
+});
+
+function makeTempDir(prefix: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempPaths.push(dir);
+    return dir;
+}
 
 function makePreparedWorkRequest() {
     return {
@@ -207,6 +231,39 @@ function makeExplicitPathPreparedWorkRequest(input: {
 }
 
 describe('execution runtime', () => {
+    test('executePreparedTaskFlow reports cancelled tasks with CANCELLED error code', async () => {
+        const failures: Array<{ error: string; errorCode: string }> = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-cancelled',
+            userQuery: 'cancel me',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makePreparedWorkRequest(),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                throw new TaskCancelledError('task-cancelled', 'Task cancelled by user');
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => failures.push({
+                    error: payload.error,
+                    errorCode: payload.errorCode,
+                }),
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(failures[0]?.errorCode).toBe('CANCELLED');
+        expect(failures[0]?.error).toBe('Task cancelled by user');
+    });
+
     test('executePreparedTaskFlow chooses autonomous execution when allowed and no explicit skills are selected', async () => {
         let autonomousConfigured = false;
         let agentLoopCalled = false;
@@ -411,6 +468,61 @@ describe('execution runtime', () => {
             : capturedSystemPrompt?.skills;
         expect(promptText).toContain('## User Directives');
         expect(promptText).toContain('Do not use any.');
+    });
+
+    test('continuePreparedAgentFlow auto-injects coworkany self-management skill and tools for self-config questions', async () => {
+        const workspaceRoot = makeTempDir('coworkany-runtime-workspace-');
+        const appDataRoot = makeTempDir('coworkany-runtime-appdata-');
+        const skillStore = new SkillStore(workspaceRoot);
+        const workspaceStore = new WorkspaceStore(appDataRoot);
+        const appManagementTools = createAppManagementTools({
+            workspaceRoot,
+            getResolvedAppDataRoot: () => appDataRoot,
+            skillStore,
+            workspaceStore,
+        });
+
+        let capturedSkillIds: string[] = [];
+        let capturedSystemPrompt: string | { skills: string } | undefined;
+        let capturedToolNames: string[] = [];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-self-config',
+            userMessage: 'coworkany 中的 serper key 是什么',
+            workspacePath: workspaceRoot,
+            preparedWorkRequest: makePreparedWorkRequest(),
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            getTriggeredSkillIds: (userMessage) =>
+                skillStore.findByTrigger(userMessage).map((skill) => skill.manifest.name),
+            buildSkillSystemPrompt: (skillIds) => {
+                capturedSkillIds = [...(skillIds ?? [])];
+                return { skills: `skills:${(skillIds ?? []).join(',')}` };
+            },
+            getToolsForTask: () => appManagementTools,
+            runAgentLoop: async (_taskId, _conversation, options, _providerConfig, tools) => {
+                capturedSystemPrompt = options.systemPrompt;
+                capturedToolNames = tools.map((tool) => tool.name);
+                return {
+                    artifactsCreated: [],
+                    toolsUsed: ['get_coworkany_config'],
+                };
+            },
+        }));
+
+        const promptText = typeof capturedSystemPrompt === 'string'
+            ? capturedSystemPrompt
+            : capturedSystemPrompt?.skills;
+
+        expect(result.success).toBe(true);
+        expect(capturedSkillIds).toContain('coworkany-self-management');
+        expect(capturedSkillIds).toContain('task-orchestrator');
+        expect(promptText).toContain('coworkany-self-management');
+        expect(capturedToolNames).toContain('get_coworkany_config');
+        expect(capturedToolNames).toContain('update_coworkany_config');
+        expect(capturedToolNames).toContain('list_coworkany_skills');
     });
 
     test('executePreparedTaskFlow uses deterministic local workflow for downloads image inspection', async () => {

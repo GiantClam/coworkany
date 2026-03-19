@@ -32,7 +32,10 @@
             "deb",
             "app",
             "dmg"
-        ]
+        ],
+        "macOS": {
+            "infoPlist": "./Info.plist"
+        }
     },
     "app": {
         "withGlobalTauri": true,

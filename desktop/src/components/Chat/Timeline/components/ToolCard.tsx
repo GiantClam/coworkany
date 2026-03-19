@@ -12,6 +12,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from '../Timeline.module.css';
 import type { ToolCallItem } from '../../../../types';
+import { isExternalHref } from '../../../../lib/externalLinks';
 
 interface ToolCardProps {
     item: ToolCallItem;
@@ -95,6 +96,20 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item }) => {
                                                         <code {...props} className={className}>
                                                             {children}
                                                         </code>
+                                                    );
+                                                },
+                                                a(props) {
+                                                    const { href, children, ...rest } = props;
+                                                    const isExternal = isExternalHref(href);
+                                                    return (
+                                                        <a
+                                                            {...rest}
+                                                            href={href}
+                                                            target={isExternal ? '_blank' : undefined}
+                                                            rel={isExternal ? 'noopener noreferrer' : undefined}
+                                                        >
+                                                            {children}
+                                                        </a>
                                                     );
                                                 }
                                             }}

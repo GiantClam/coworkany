@@ -5,13 +5,13 @@
     min-height: 0;
     border-radius: 28px;
     background:
-        radial-gradient(760px 260px at 100% 0%, rgba(45, 212, 191, 0.06), transparent 58%),
-        linear-gradient(165deg, rgba(7, 28, 27, 0.92), rgba(3, 14, 14, 0.96));
-    border: 1px solid rgba(138, 232, 219, 0.12);
+        radial-gradient(760px 260px at 100% 0%, rgba(59, 130, 246, 0.06), transparent 58%),
+        linear-gradient(165deg, rgba(7, 16, 36, 0.92), rgba(3, 9, 23, 0.96));
+    border: 1px solid rgba(96, 165, 250, 0.12);
     overflow: hidden;
     box-shadow:
         0 18px 44px rgba(2, 10, 12, 0.28),
-        inset 0 1px 0 rgba(239, 255, 252, 0.04);
+        inset 0 1px 0 rgba(239, 246, 255, 0.04);
 }
 
 .task-list-header {
@@ -20,8 +20,8 @@
     justify-content: space-between;
     gap: 16px;
     padding: 20px 22px;
-    border-bottom: 1px solid rgba(138, 232, 219, 0.08);
-    background: rgba(7, 24, 26, 0.58);
+    border-bottom: 1px solid rgba(96, 165, 250, 0.08);
+    background: rgba(7, 17, 36, 0.58);
 }
 
 .task-list-header-copy {
@@ -44,8 +44,8 @@
     width: fit-content;
     padding: 0 10px;
     border-radius: 999px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
-    background: rgba(4, 18, 17, 0.54);
+    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: rgba(4, 12, 29, 0.54);
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.1em;
@@ -152,8 +152,8 @@
     justify-content: center;
     min-height: 44px;
     border-radius: 16px;
-    border: 1px solid rgba(138, 232, 219, 0.12);
-    background: rgba(4, 18, 17, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: rgba(4, 12, 29, 0.62);
     color: var(--text-primary);
     cursor: pointer;
     transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
@@ -174,8 +174,8 @@
 .task-list-refresh-icon:hover,
 .task-list-refresh-button:hover {
     transform: translateY(-1px);
-    background: rgba(8, 30, 31, 0.82);
-    border-color: rgba(138, 232, 219, 0.2);
+    background: rgba(8, 18, 40, 0.82);
+    border-color: rgba(96, 165, 250, 0.2);
 }
 
 .task-list-scroll {
@@ -222,16 +222,16 @@
     height: 28px;
     padding: 0 10px;
     border-radius: 999px;
-    border: 1px solid rgba(45, 212, 191, 0.18);
-    background: rgba(20, 184, 166, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.18);
+    background: rgba(37, 99, 235, 0.12);
     font-family: var(--font-code);
     font-size: 11px;
     color: var(--text-primary);
 }
 
 .task-list-count-pill.subdued {
-    border-color: rgba(138, 232, 219, 0.1);
-    background: rgba(4, 18, 17, 0.42);
+    border-color: rgba(96, 165, 250, 0.1);
+    background: rgba(4, 12, 29, 0.42);
     color: var(--text-secondary);
 }
 
@@ -255,8 +255,8 @@
     min-height: 160px;
     padding: 20px;
     border-radius: 24px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(7, 24, 26, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(7, 17, 36, 0.62);
     color: var(--text-secondary);
     text-align: center;
 }
@@ -285,7 +285,7 @@
     width: 34px;
     height: 34px;
     border-radius: 999px;
-    border: 3px solid rgba(138, 232, 219, 0.12);
+    border: 3px solid rgba(96, 165, 250, 0.12);
     border-top-color: var(--accent-primary);
     animation: task-list-spin 0.9s linear infinite;
 }
@@ -323,8 +323,8 @@
     width: 100%;
     padding: 16px;
     border-radius: 20px;
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(7, 24, 26, 0.62);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(7, 17, 36, 0.62);
     text-align: left;
     cursor: pointer;
     appearance: none;
@@ -333,8 +333,8 @@
 
 .task-card:hover {
     transform: translateY(-1px);
-    border-color: rgba(138, 232, 219, 0.18);
-    background: rgba(10, 37, 38, 0.78);
+    border-color: rgba(96, 165, 250, 0.18);
+    background: rgba(10, 22, 48, 0.78);
 }
 
 .task-card.completed {
@@ -383,7 +383,7 @@
 
 .task-status-dot.running {
     background: var(--accent-primary);
-    box-shadow: 0 0 12px rgba(45, 212, 191, 0.36);
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.36);
 }
 
 .task-status-dot.blocked {
@@ -421,14 +421,14 @@
 }
 
 .task-priority-pill {
-    border: 1px solid rgba(138, 232, 219, 0.1);
-    background: rgba(4, 18, 17, 0.5);
+    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: rgba(4, 12, 29, 0.5);
     color: var(--text-secondary);
 }
 
 .task-priority-pill.running {
-    border-color: rgba(45, 212, 191, 0.18);
-    background: rgba(20, 184, 166, 0.12);
+    border-color: rgba(59, 130, 246, 0.18);
+    background: rgba(37, 99, 235, 0.12);
     color: var(--text-primary);
 }
 
@@ -456,7 +456,7 @@
 .task-card-result {
     margin-top: 14px;
     padding-top: 14px;
-    border-top: 1px solid rgba(138, 232, 219, 0.08);
+    border-top: 1px solid rgba(96, 165, 250, 0.08);
 }
 
 .task-card-result-label {
@@ -477,8 +477,8 @@
 }
 
 .task-tag-pill {
-    border: 1px solid rgba(138, 232, 219, 0.08);
-    background: rgba(4, 18, 17, 0.38);
+    border: 1px solid rgba(96, 165, 250, 0.08);
+    background: rgba(4, 12, 29, 0.38);
     color: var(--text-muted);
 }
 

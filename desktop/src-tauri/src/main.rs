@@ -107,7 +107,9 @@ fn main() {
             ipc::clear_task_history,
             ipc::get_tasks, // Previously added
             ipc::get_voice_state,
+            ipc::get_voice_provider_status,
             ipc::stop_voice,
+            ipc::transcribe_audio,
             ipc::get_sidecar_status,
             ipc::get_llm_settings,
             ipc::save_llm_settings,

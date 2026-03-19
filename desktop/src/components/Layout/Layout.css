@@ -47,7 +47,7 @@
     background:
         radial-gradient(920px 340px at 50% -18%, rgba(94, 234, 212, 0.08), transparent 62%),
         radial-gradient(640px 220px at 100% 0%, rgba(249, 115, 22, 0.05), transparent 58%),
-        linear-gradient(180deg, rgba(8, 35, 33, 0.84), rgba(5, 22, 21, 0.92));
+        linear-gradient(180deg, rgba(8, 35, 33, 0.84), rgba(5, 13, 31, 0.92));
     border: 1px solid rgba(155, 239, 228, 0.14);
     border-radius: 28px;
     box-shadow: var(--shadow-float), inset 0 1px 0 rgba(236, 255, 251, 0.05);

@@ -68,6 +68,16 @@ describe('#16: Voice Input (STT)', () => {
         expect(content).toContain('voice.startRecording');
     });
 
+    test('useVoiceInput includes desktop recording fallback', () => {
+        const content = readFile(path.join(DESKTOP_SRC, 'hooks', 'useVoiceInput.ts'));
+        expect(content).toContain('MediaRecorder');
+        expect(content).toContain('transcribe_audio');
+        expect(content).toContain('get_voice_provider_status');
+        expect(content).toContain('getUserMedia');
+        expect(content).toContain('requestMicrophoneAccess');
+        expect(content).toContain('service-not-allowed');
+    });
+
     test('i18n has voice input translations', () => {
         const en = JSON.parse(
             readFile(path.join(DESKTOP_SRC, 'i18n', 'locales', 'en.json'))
@@ -76,6 +86,7 @@ describe('#16: Voice Input (STT)', () => {
         expect(en.voice.startRecording).toBeDefined();
         expect(en.voice.stopRecording).toBeDefined();
         expect(en.voice.listening).toBeDefined();
+        expect(en.voice.processingTranscription).toBeDefined();
     });
 });
 

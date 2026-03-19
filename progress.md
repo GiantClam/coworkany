@@ -1,76 +1,9 @@
 # Progress
 
-- 2026-03-19: 为本地 host-folder workflow 新增结构化 `compute_file_hash` builtin，并将其纳入 `STANDARD_TOOLS` 与 builtin policy effect 推导。
-- 2026-03-19: 收窄本地文件类任务的 `preferredTools`，对已支持的 inspect/organize/deduplicate 场景默认不再偏向 `run_command`。
-- 2026-03-19: `execution/runtime.ts` 已新增 `deduplicate-downloads-images` 确定性执行器：先 `list_dir`，再对顶层图片计算 hash，最后把重复项隔离到 `Duplicates/<hash-prefix>/`。
-- 2026-03-19: desktop `confirm_effect` 现在会对 host-folder 文件访问在 `remember=true` 时回传 `approvalType=permanent`，shell 等高风险动作仍保留 session 级记忆。
-- 2026-03-19: sidecar `PolicyBridge` / runtime handler / `HostAccessGrantManager` 已改为保留真实 `approvalType`，并把 `permanent` grant 落盘后跨 manager 实例复用。
-- 2026-03-19: 新增结构化删除 builtin：`delete_path`、`batch_delete_paths`；`delete_files` 的 preferred tools 已从 `run_command` 收敛到这些结构化工具。
-- 2026-03-19: builtin policy 与 host grant 现在能识别 `payload.operation=delete`，控制面对 “删除 Downloads 文件夹下的图片文件” 会生成 `delete-host-folder-files` workflow。
-- 2026-03-19: `execution/runtime.ts` 已新增 `delete-host-folder-files` 的确定性执行器；当前对图片删除采用保守策略，只删除目标目录下的顶层图片文件，并在删除后复查剩余图片。
-- 2026-03-19: `wellKnownFolders` 现支持显式绝对路径解析，控制面对 `整理 /Users/tester/Pictures/Inbox 里的图片文件` 这类输入会生成 `explicit_path` resolved target 和 generic host-folder workflow。
-- 2026-03-19: `execution/runtime.ts` 的图片类 deterministic executor 已改为按 `intent + fileKinds` 路由，不再只靠 `workflowId` 精确匹配；generic host-folder image organize 现在可直接复用同一执行路径。
-- 2026-03-19: deterministic executor 已进一步抽成 file-kind aware 版本，`images/videos/documents` 共用 inspect/organize/deduplicate/delete 逻辑；显式路径文档整理已通过回归测试。
-- 2026-03-19: `localTaskIntent` 已新增 `traversalScope`，可识别“递归/所有子文件夹/entire folder/subfolders”等信号；`workRequestExecutionPrompt` 会显式写出 `Traversal scope`。
-- 2026-03-19: `list_dir` 已支持 `recursive + max_depth`，并在返回项中携带相对 `path`；deterministic executor 现可在递归模式下保留子目录相对路径执行 organize/deduplicate/delete。
-- 2026-03-19: 新增并通过 `structured-file-tools`、`builtin-policy`、`work-request-control-plane`、`work-request-runtime`、`execution-runtime` 的定向测试；`bun run typecheck` 通过。
-
-- 2026-03-17: 建立计划文件，开始梳理 sidecar 的工具注册、调度器启动和延时执行能力缺口。
-- 2026-03-17: 新增 `schedule_task` 与 `ScheduledTaskStore`，并把 `PERSONAL_TOOLS`、`KNOWLEDGE_TOOLS` 接入 sidecar 运行时工具清单。
-- 2026-03-17: 在 sidecar 启动时实际启动 `HeartbeatEngine`，注册 `scheduled-task-runner` interval trigger，轮询并执行到期任务。
-- 2026-03-17: 为 `start_task` / `send_task_message` 增加延时意图的确定性短路，消息发送后立即回显“已安排在 xx:xx 执行”。
-- 2026-03-17: 运行 smoke test，确认即时确认、到点执行、任务完成和 `voice_speak` 播报全链路成立。
-- 2026-03-17: 新建 Rust `platform_runtime` 模块，统一收拢 app dir/app data dir、sidecar entry、Python 和 Skillhub 查找、托管服务 runtime 就绪探测。
-- 2026-03-17: desktop sidecar 启动后会发送 `bootstrap_runtime_context`，sidecar 已能记录 desktop 下发的 `platform/appDataDir/sidecarLaunchMode` 并用于配置路径解析。
-- 2026-03-17: `platform_runtime` 进一步收口出统一 `RuntimeSnapshot`，`ipc::get_dependency_statuses` 不再手写拼装 JSON，而是统一从 snapshot 输出。
-- 2026-03-17: 前端 `useDependencyManager` 已接入 `runtimeContext`，Settings/Marketplace 开始读取同一份平台快照。
-- 2026-03-18: 第一阶段架构重构已开始，新增 `sidecar/src/orchestration/workRequestRuntime.ts`，把 work request 的冻结、计划文件接线、clarification 文案和 scheduled query 解析从 `main.ts` 抽离。
-- 2026-03-18: 新增 `sidecar/src/tools/taskToolResolver.ts`，把 builtin/MCP/runtime tool 的任务级装配逻辑从 `main.ts` 抽离成独立解析器。
-- 2026-03-18: 运行 `npm run typecheck` 与 7 组 sidecar 控制面/调度相关测试，全部通过。
-- 2026-03-18: 新增 `sidecar/src/execution/runtime.ts`，把 `executeFreshTask` 与 `send_task_message` 共享的执行编排抽成统一 execution runtime。
-- 2026-03-18: `main.ts` 现仅保留 execution runtime 的依赖装配与事件发射，autonomous fallback、skill prompt 合并、toolpack 注册、artifact verification、结果 reduction 已从主流程体中移除。
-- 2026-03-18: 为 execution runtime 补充“自主执行无进展回退到 agent loop”和“用户确认降级产物后放行”测试；重新通过 `npm run typecheck` 与 8 组 sidecar 关键测试。
-- 2026-03-18: `DirectiveManager` 已通过 sidecar/desktop IPC 真正接入，`DirectivesEditor` 不再使用假数据，用户自定义 directives 会被注入主任务执行链的 system prompt。
-- 2026-03-18: `SkillStore` 与 `OpenClawCompat` 已切换到真实 YAML 解析，`allowed-tools`、嵌套 `metadata.openclaw.install` 等字段现在能被正确读取。
-- 2026-03-18: `import_claude_skill` 现在会执行依赖检查，并对可推导的 CLI 依赖尝试自动安装；返回值会带上 dependencyCheck / installResults / warnings。
-- 2026-03-18: 运行 `sidecar npm run typecheck`、10 组 sidecar 测试、`desktop npx tsc --noEmit` 与 `desktop/src-tauri cargo check`；全部通过，Rust 端仅保留既有 dead_code warning。
-- 2026-03-18: 新增 `sidecar/src/execution/session.ts`，把 execution runtime 需要的任务级 artifacts/conversation 访问收成显式 `ExecutionSession`。
-- 2026-03-18: 新增 `sidecar/src/execution/resultReporter.ts`，把 task finished/failed/status 与 artifact telemetry 输出收成独立 reporter。
-- 2026-03-18: `execution/runtime.ts` 现改为依赖 `session + reporter`，`getExecutionRuntimeDeps()` 不再暴露零散的 artifacts/conversation/event lambda。
-- 2026-03-18: 重新通过 `sidecar npm run typecheck` 与 10 组关键测试，确认 session 回写 artifact 状态后续聊场景不回归。
-- 2026-03-18: `OpenClawCompat` 现支持结构化 install plan，覆盖 `brew/npm/uv/go/winget/choco/download.url`，并把 plan 同步暴露给 dependency inspection。
-- 2026-03-18: `dependencyInstaller` 现支持两类受控安装动作：白名单包管理器命令，以及下载到 `appDataDir/bin` 后可选解压/落地的 `download.url` 安装器。
-- 2026-03-18: sidecar 启动和 desktop runtime bootstrap 时都会把受管 `bin` 目录前置到 PATH，确保下载安装的 CLI 在后续依赖检查与工具执行中可见。
-- 2026-03-18: `import_claude_skill` 与 `install_from_github(skill)` 已统一走同一条 `importSkillFromDirectory()` 逻辑，GitHub 安装不再绕过依赖检查与自动安装。
-- 2026-03-18: 新增 desktop `skillImport` 解析器与 `SkillImportFeedbackPanel`，本地导入、仓库安装、market 安装、SkillToolpackManager 现在都能展示依赖安装结果、缺失项和可用安装计划。
-- 2026-03-18: 重新通过 `sidecar npm run typecheck`、`sidecar bun test tests/skill-store.test.ts` 与 `desktop npx tsc --noEmit`。
-- 2026-03-18: 新增 `sidecar/src/execution/taskSessionStore.ts`，把 task conversation/config/historyLimit/resume queue/artifact state 收成统一 `TaskSessionStore`。
-- 2026-03-18: `main.ts` 已移除分散的 task lifecycle Maps，`executeFreshTask`、`send_task_message`、history clear、suspend-resume replay、post-edit hook workspace 解析、execution session wiring 现统一经由 session store。
-- 2026-03-18: 新增 `sidecar/tests/task-session-store.test.ts`，并重新通过 `sidecar npm run typecheck`、`bun test tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts`。
-- 2026-03-18: 新增 `sidecar/src/execution/taskEventBus.ts`，把 per-task sequence、常用 task event factory 和 raw event emit 收成统一 `TaskEventBus`。
-- 2026-03-18: `main.ts` 的 handler context、execution result reporter、suspend/resume 系统消息、history clear、send_task_message 主链、autonomous task 启停已切到 `TaskEventBus`；`taskSequences` 全局 Map 已移除。
-- 2026-03-18: 新增 `sidecar/tests/task-event-bus.test.ts`，并重新通过 `sidecar npm run typecheck`、`bun test tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts`。
-- 2026-03-18: `TaskEventBus` 新增 `emitRaw(..., { timestamp })` 能力；autonomous 自定义事件现在保留原始时间戳但不再在 `main.ts` 手写 sequence/id/timestamp。
-- 2026-03-18: 两条流式响应链里的 `TOKEN_USAGE` 事件、全局 `EFFECT_APPROVED/DENIED` 与 `PATCH_APPLIED/REJECTED`、以及 browser/resume 的剩余内联 `CHAT_MESSAGE` 已切到 event bus。
-- 2026-03-18: `TaskEventBus` 已新增显式 `sequence/timestamp` override，允许极少数异常终止事件继续保留特殊顺序语义，同时不回卷后续正常序列。
-- 2026-03-18: 工具循环中最后两组 `sequence: 0` 的 `TEXT_DELTA/TASK_STATUS` 强制终止事件已切到 `TaskEventBus`，`main.ts` 不再手写这些 task event 对象。
-- 2026-03-18: 新增 `task-event-bus` override 单测，并重新通过 `sidecar npm run typecheck`、7 组更宽的 sidecar 回归测试以及 `desktop npx tsc --noEmit`。
-- 2026-03-18: 新增 `sidecar/src/handlers/capabilities.ts`，把 skills/toolpacks/directives/GitHub install/scan-default-repos 这组 capability commands 从 `main.ts` 抽成独立异步 handler。
-- 2026-03-18: `handleCommand()` 现在在主 switch 前先尝试 capability routing；`main.ts` 已移除对应的 capability case 和局部辅助函数，职责进一步收口。
-- 2026-03-18: 新增 `sidecar/tests/capability-commands.test.ts`，覆盖 skill import 转发、GitHub skill 安装结果合并、GitHub MCP manifest 注册、directive round-trip 和 skill 删除文件副作用。
-- 2026-03-18: 重新通过 `sidecar npm run typecheck`、`bun test tests/capability-commands.test.ts tests/skill-store.test.ts tests/directive-manager.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/scheduler-heartbeat.test.ts` 以及 `desktop npx tsc --noEmit`。
-- 2026-03-18: 新增 `sidecar/src/handlers/workspaces.ts`，把 list/create/update/delete workspace 这组命令从 `main.ts` 抽成独立 handler，并在主 switch 前接入 workspace routing。
-- 2026-03-18: 新增 `sidecar/tests/workspace-commands.test.ts`，覆盖默认托管路径分配、workspace CRUD round-trip 和非 workspace 命令旁路。
-- 2026-03-18: workspace handler 抽离过程中修复了一个响应语义问题：`list_workspaces_response/create_workspace_response/update_workspace_response` 现在返回快照副本，不再持有 store 可变引用。
-- 2026-03-18: 重新通过 `sidecar npm run typecheck`、`bun test tests/workspace-commands.test.ts tests/workspace-store.test.ts tests/capability-commands.test.ts tests/skill-store.test.ts tests/directive-manager.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/scheduler-heartbeat.test.ts` 以及 `desktop npx tsc --noEmit`。
-- 2026-03-18: `validate_github_url` 已并入 `sidecar/src/handlers/capabilities.ts`，repository/capability 供给链命令进一步从 `main.ts` 收口出去。
-- 2026-03-18: `sidecar/tests/capability-commands.test.ts` 已增加 `validate_github_url` 分支测试，并重新通过 `sidecar npm run typecheck` 与定向回归测试。
-- 2026-03-18: 新增 `sidecar/src/handlers/runtime.ts`，把 `bootstrap_runtime_context`、task commands、effect/policy-stub commands、autonomous commands，以及 `request_effect_response/apply_patch_response` 映射统一收进 runtime handler。
-- 2026-03-18: `main.ts` 现通过 `handleCapabilityCommand -> handleWorkspaceCommand -> handleRuntimeCommand` 的前置路由分发命令，命令层 switch 已不再承载业务分支；`handleResponse()` 也已委托到 `handleRuntimeResponse()`。
-- 2026-03-18: 新增 `sidecar/tests/runtime-commands.test.ts`，覆盖 bootstrap、start_task、send_task_message 的挂起/clarification 分支、autonomous 启动完成，以及 response -> raw task events 映射。
-- 2026-03-18: 重新通过 `sidecar npm run typecheck`、`bun test tests/runtime-commands.test.ts tests/workspace-commands.test.ts tests/workspace-store.test.ts tests/capability-commands.test.ts tests/skill-store.test.ts tests/directive-manager.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/scheduler-heartbeat.test.ts`，以及 `desktop npx tsc --noEmit`。
-- 2026-03-18: 开始发布前准备阶段，确认已有真实 E2E、故障恢复、startup metrics、artifact telemetry，但缺少统一可执行 gate。
-- 2026-03-18: 新增 `sidecar/src/release/readiness.ts` 与 `sidecar/scripts/release-readiness.ts`，统一收口 sidecar/desktop 回归、可选真实 E2E、观测性摘要和 canary checklist 报告生成。
-- 2026-03-18: 新增 `sidecar/tests/release-readiness.test.ts`，并更新 `release.yml` 与 `docs/releases/*`，让 release workflow 在打包前先执行 readiness gate。
-- 2026-03-18: 首次运行 readiness gate 时发现 `TOKEN_USAGE` 相关源码形态断言已经过时；已将 `sidecar/tests/token-usage.test.ts` 与 `desktop/tests/phase2-acceptance.test.ts` 改为匹配 `taskEventBus.emitRaw(taskId, 'TOKEN_USAGE', ...)`。
-- 2026-03-18: 重新通过 `bun run scripts/release-readiness.ts --build-desktop`，生成 `artifacts/release-readiness/report.json` 与 `artifacts/release-readiness/report.md`；报告中的剩余 warning 为真实 canary 观测数据尚未采集。
+- 2026-03-19: Started voice provider architecture change.
+- Inspected current voice TTS and ASR implementations.
+- Identified missing provider registry abstraction for custom skill/tool overrides.
+- Added `sidecar/src/tools/core/speechProviders.ts` and sidecar tests for provider selection.
+- Wired sidecar runtime commands for provider status and custom ASR transcription.
+- Wired desktop/Tauri to prefer custom ASR when installed, otherwise keep the built-in system path.
+- Verification completed with sidecar typecheck, sidecar tests, desktop tests, desktop build, and Rust Tauri tests.

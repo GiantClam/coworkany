@@ -5,7 +5,10 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
     return {
         emit: () => {},
         onBootstrapRuntimeContext: () => {},
+        restorePersistedTasks: () => {},
         executeFreshTask: async () => {},
+        ensureTaskRuntimePersistence: () => {},
+        cancelTaskExecution: async () => ({ success: true }),
         createTaskFailedEvent: (taskId, payload) => ({ type: 'TASK_FAILED', taskId, payload }),
         createChatMessageEvent: (taskId, payload) => ({ type: 'CHAT_MESSAGE', taskId, payload }),
         createTaskClarificationRequiredEvent: (taskId, payload) => ({ type: 'TASK_CLARIFICATION_REQUIRED', taskId, payload }),
@@ -87,9 +90,13 @@ describe('runtime commands handler', () => {
     test('handles bootstrap_runtime_context and emits success response', async () => {
         const emitted: any[] = [];
         const bootstrapped: any[] = [];
+        let restored = false;
         const deps = createRuntimeCommandDeps({
             emit: (message) => emitted.push(message),
             onBootstrapRuntimeContext: (runtimeContext) => bootstrapped.push(runtimeContext),
+            restorePersistedTasks: () => {
+                restored = true;
+            },
         });
 
         const handled = await handleRuntimeCommand({
@@ -105,7 +112,33 @@ describe('runtime commands handler', () => {
 
         expect(handled).toBe(true);
         expect(bootstrapped).toHaveLength(1);
+        expect(restored).toBe(true);
         expect(emitted[0]?.type).toBe('bootstrap_runtime_context_response');
+    });
+
+    test('handles cancel_task by delegating to cancelTaskExecution and emitting response', async () => {
+        const emitted: any[] = [];
+        const cancelled: Array<{ taskId: string; reason?: string }> = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            cancelTaskExecution: async (taskId, reason) => {
+                cancelled.push({ taskId, reason });
+                return { success: true };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-cancel',
+            type: 'cancel_task',
+            payload: {
+                taskId: 'task-cancel',
+                reason: 'User cancelled',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(cancelled).toEqual([{ taskId: 'task-cancel', reason: 'User cancelled' }]);
+        expect(emitted[0]?.type).toBe('cancel_task_response');
     });
 
     test('handles start_task by emitting response and delegating to executeFreshTask', async () => {

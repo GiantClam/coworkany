@@ -86,4 +86,20 @@ describe('builtin tool policy bridge integration', () => {
         expect(request?.payload.path).toBe('/Users/tester/Downloads/a.png');
         expect(request?.payload.operation).toBe('delete');
     });
+
+    test('requests policy evaluation for workspace writes too', () => {
+        const request = buildBuiltinEffectRequest({
+            tool: makeTool('write_to_file'),
+            args: { path: './notes/todo.txt' },
+            context: {
+                workspacePath: '/tmp/workspace',
+                taskId: 'task-6',
+            },
+        });
+
+        expect(request).toBeTruthy();
+        expect(request?.effectType).toBe('filesystem:write');
+        expect(request?.payload.path).toBe('/tmp/workspace/notes/todo.txt');
+        expect(request?.payload.operation).toBe('write');
+    });
 });

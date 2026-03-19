@@ -6,7 +6,6 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { WorkspaceSelector } from '../../Workspace/WorkspaceSelector';
 
 interface LlmProfile {
     id: string;
@@ -30,13 +29,29 @@ interface HeaderProps {
     isCancelling: boolean;
     isSpeaking: boolean;
     isStoppingVoice: boolean;
-    onSetActiveProfile: (id: string) => void;
     onShowSettings: () => void;
     onShowSkills: () => void;
     onShowMcp: () => void;
+    onCreateSession: () => void;
     onClearHistory: () => void;
     onCancel: () => void;
     onStopVoice: () => void;
+    canClearHistory: boolean;
+}
+
+const PlusIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+);
+
+function abbreviateTitle(title: string): string {
+    if (title.length <= 20) {
+        return title;
+    }
+
+    return `${title.slice(0, 10)}...${title.slice(-7)}`;
 }
 
 const HeaderComponent: React.FC<HeaderProps> = ({
@@ -53,14 +68,24 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     onShowSettings,
     onShowSkills,
     onShowMcp,
+    onCreateSession,
     onClearHistory,
     onCancel,
     onStopVoice,
+    canClearHistory,
 }) => {
     const { t } = useTranslation();
 
     const activeProfile = llmConfig.profiles?.find((profile) => profile.id === llmConfig.activeProfileId);
     const modelName = activeProfile ? activeProfile.name : t('chat.noProfiles');
+    const displayTitle = abbreviateTitle(title);
+    const isStatusActionDisabled = !isSpeaking && status !== 'running';
+    const statusActionHint = isSpeaking
+        ? (isStoppingVoice ? t('chat.stoppingVoice') : t('chat.stopVoice'))
+        : status === 'running'
+            ? t('common.cancel')
+            : null;
+    const statusActionClassName = `chat-header-chip chat-status-chip ${status} ${isSpeaking ? 'warning' : ''}`.trim();
 
     return (
         <header className="chat-header">
@@ -68,24 +93,35 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                 <div className="chat-header-title-block">
                     <div className={`chat-status-dot ${status}`} aria-hidden="true" />
                     <div className="chat-header-copy">
-                        <h2 className="chat-title" title={title}>{title}</h2>
-                        <div className="chat-subtitle-row">
-                            <span className={`status-badge ${status}`}>{statusLabel}</span>
-                            <span className="chat-capability-pill" title={t('chat.manageSkills')}>
-                                {enabledSkillsCount} SK
-                            </span>
-                            <span className="chat-capability-pill" title={t('chat.manageMcpServers')}>
-                                {enabledToolpacksCount} MCP
-                            </span>
-                        </div>
+                        <h2 className="chat-title" title={title}>{displayTitle}</h2>
                     </div>
-                </div>
-                <div className="chat-header-workspace">
-                    <WorkspaceSelector />
                 </div>
             </div>
 
             <div className="chat-header-actions">
+                <button
+                    type="button"
+                    className={statusActionClassName}
+                    onClick={() => {
+                        if (isSpeaking) {
+                            onStopVoice();
+                            return;
+                        }
+                        if (status === 'running') {
+                            onCancel();
+                        }
+                    }}
+                    disabled={isStatusActionDisabled || isCancelling || isStoppingVoice}
+                    title={statusLabel}
+                    aria-label={statusLabel}
+                >
+                    <span className="chat-header-chip-label">STATUS</span>
+                    <span className="chat-header-chip-value">{statusLabel}</span>
+                    {statusActionHint ? (
+                        <span className="chat-header-chip-meta">{statusActionHint}</span>
+                    ) : null}
+                </button>
+
                 <button
                     type="button"
                     className="chat-header-chip"
@@ -119,34 +155,22 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                     <span className="chat-header-icon-button-count">{enabledToolpacksCount}</span>
                 </button>
 
-                {status === 'running' && (
-                    <button
-                        type="button"
-                        className="status-action accent"
-                        onClick={onCancel}
-                        disabled={isCancelling}
-                    >
-                        {t('chat.cancel') || 'Stop'}
-                    </button>
-                )}
-
-                {isSpeaking && (
-                    <button
-                        type="button"
-                        className="status-action warning"
-                        onClick={onStopVoice}
-                        disabled={isStoppingVoice}
-                        title={t('chat.stopVoice')}
-                    >
-                        {isStoppingVoice ? t('chat.stoppingVoice') : t('chat.stopVoice')}
-                    </button>
-                )}
+                <button
+                    type="button"
+                    className="chat-header-icon-button"
+                    onClick={onCreateSession}
+                    title={t('chat.createNewSession')}
+                    aria-label={t('chat.createNewSession')}
+                >
+                    <PlusIcon />
+                    <span className="chat-header-icon-button-text">NEW</span>
+                </button>
 
                 <button
                     type="button"
                     className="status-action"
                     onClick={onClearHistory}
-                    disabled={isClearing}
+                    disabled={isClearing || !canClearHistory}
                     title={t('chat.clearHistory')}
                 >
                     {t('chat.clear')}

@@ -58,6 +58,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'finished',
                 summary: payload.summary as string,
+                suspension: undefined,
                 clarificationQuestions: undefined,
                 assistantDraft: undefined,
             };
@@ -67,6 +68,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'failed',
                 summary: payload.error as string,
+                suspension: undefined,
                 clarificationQuestions: undefined,
                 assistantDraft: undefined,
             }, event, [
@@ -90,9 +92,52 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'idle',
                 summary: (payload.reason as string | undefined) ?? session.summary,
+                suspension: undefined,
                 clarificationQuestions: ((payload.questions as string[] | undefined) ?? []).filter(Boolean),
                 assistantDraft: undefined,
             };
+
+        case 'TASK_SUSPENDED':
+        {
+            const nextSuspension = {
+                reason: String(payload.reason ?? ''),
+                userMessage: String(payload.userMessage ?? ''),
+                canAutoResume: Boolean(payload.canAutoResume),
+                maxWaitTimeMs:
+                    typeof payload.maxWaitTimeMs === 'number'
+                        ? payload.maxWaitTimeMs
+                        : undefined,
+            };
+            const isDuplicateSuspension =
+                session.suspension?.reason === nextSuspension.reason &&
+                session.suspension?.userMessage === nextSuspension.userMessage &&
+                session.suspension?.canAutoResume === nextSuspension.canAutoResume &&
+                session.suspension?.maxWaitTimeMs === nextSuspension.maxWaitTimeMs;
+
+            const nextSession: TaskSession = {
+                ...session,
+                status: 'idle',
+                suspension: nextSuspension,
+                assistantDraft: undefined,
+            };
+
+            if (isDuplicateSuspension) {
+                return nextSession;
+            }
+
+            return appendSystemMessage(
+                nextSession,
+                event,
+                nextSuspension.userMessage || 'Task suspended'
+            );
+        }
+
+        case 'TASK_RESUMED':
+            return appendSystemMessage({
+                ...session,
+                status: 'running',
+                suspension: undefined,
+            }, event, 'Task resumed');
 
         case 'TASK_HISTORY_CLEARED': {
             return {

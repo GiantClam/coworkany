@@ -18,6 +18,18 @@ import * as path from 'path';
 import * as os from 'os';
 
 const execAsync = promisify(exec);
+const MACOS_PREFERRED_CJK_VOICES = ['Tingting', 'Sinji', 'Meijia'];
+
+function containsCjk(text: string): boolean {
+    return /[\u3400-\u9FFF\uF900-\uFAFF]/u.test(text);
+}
+
+export function normalizeMacOSTextForSpeech(text: string): string {
+    return text
+        .replace(/\r\n/g, '\n')
+        // Default macOS voices can prematurely stop on mixed CJK + English contractions.
+        .replace(/([A-Za-z])[’']([A-Za-z])/g, '$1$2');
+}
 
 // ============================================================================
 // Types
@@ -615,13 +627,15 @@ $result.Text
     private async macOSTTS(text: string, metadata?: VoicePlaybackMetadata): Promise<void> {
         const rate = Math.round(this.config.tts.rate * 200);  // 默认 200 wpm
         const textPath = path.join(os.tmpdir(), `coworkany_tts_text_${Date.now()}.txt`);
-        fs.writeFileSync(textPath, text, 'utf-8');
+        const textToSpeak = normalizeMacOSTextForSpeech(text);
+        const resolvedVoice = await this.resolveMacOSVoice(textToSpeak);
+        fs.writeFileSync(textPath, textToSpeak, 'utf-8');
 
         try {
             await this.runManagedPlayback(text, metadata, async () => {
                 const args = ['-r', String(rate), '-f', textPath];
-                if (this.config.tts.voice !== 'default') {
-                    args.unshift(this.config.tts.voice);
+                if (resolvedVoice) {
+                    args.unshift(resolvedVoice);
                     args.unshift('-v');
                 }
 
@@ -636,6 +650,34 @@ $result.Text
             console.error('[Voice] macOS TTS error:', error);
             throw new Error('macOS TTS failed');
         }
+    }
+
+    private async resolveMacOSVoice(text: string): Promise<string | null> {
+        if (this.config.tts.voice !== 'default') {
+            return this.config.tts.voice;
+        }
+
+        if (!containsCjk(text)) {
+            return null;
+        }
+
+        try {
+            const { stdout } = await execAsync("say -v '?'");
+            const availableVoices = stdout
+                .split('\n')
+                .map((line) => line.trim().split(/\s+/)[0])
+                .filter(Boolean);
+
+            for (const voice of MACOS_PREFERRED_CJK_VOICES) {
+                if (availableVoices.includes(voice)) {
+                    return voice;
+                }
+            }
+        } catch (error) {
+            console.warn('[Voice] Failed to resolve preferred macOS voice:', error);
+        }
+
+        return null;
     }
 
     /**

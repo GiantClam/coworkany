@@ -27,6 +27,7 @@ import { startAllServices, startAllServicesBackground } from './hooks/useService
 import { IS_STARTUP_BASELINE } from './lib/startupProfile';
 import { recordStartupMetric } from './lib/startupMetrics';
 import { isTauri } from './lib/tauri';
+import { isExternalHref, openExternalUrl } from './lib/externalLinks';
 import { TaskListView } from './components/jarvis/TaskListView';
 
 const SkillsViewLazy = lazy(async () => {
@@ -84,6 +85,32 @@ function App() {
 
         return () => {
             cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        const handleDocumentClick = (event: MouseEvent) => {
+            if (event.defaultPrevented) return;
+
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+
+            const anchor = target.closest('a[href]');
+            if (!(anchor instanceof HTMLAnchorElement)) return;
+
+            const href = anchor.getAttribute('href');
+            if (!isExternalHref(href)) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            void openExternalUrl(href ?? '').catch((error) => {
+                console.error('[external-link] Failed to open link:', href, error);
+            });
+        };
+
+        document.addEventListener('click', handleDocumentClick, true);
+        return () => {
+            document.removeEventListener('click', handleDocumentClick, true);
         };
     }, []);
 

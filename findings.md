@@ -1,68 +1,8 @@
 # Findings
 
-- 本地系统目录任务要稳定执行，关键不在 prompt 放权，而在控制面先把 `Downloads/Desktop/Documents` 解析成结构化目标，再决定 workflow、审批和工具。
-- 对“整理/查看/去重 Downloads 图片”这类高频任务，structured builtin 已经比 `run_command` 更合适；当前可直接用 `list_dir/create_directory/batch_move_files/compute_file_hash` 闭环。
-- `deduplicate-downloads-images` 如果只按文件名去重会有错误语义，因此这轮补了 `compute_file_hash`，改为按内容 hash 分组，保留 1 份，其余移动到 `Duplicates/<hash-prefix>/`。
-- builtin policy 现在应把 `compute_file_hash` 视为 `filesystem:read`；只要目标在 workspace 外，就和 `list_dir/view_file` 一样需要先过 host-folder grant。
-- `remember` 之前在审批链上会被 sidecar 压扁成 `session`，即使 desktop 想表达 `permanent` 也会丢失；现在 `approvalType` 已沿 `desktop confirm_effect -> request_effect_response -> PolicyBridge -> HostAccessGrantManager` 原样传递。
-- 当前“工作区外首次读取必须弹确认框”已由 desktop policy engine 兜底；host-folder remember 也已可持久复用，但仍未接平台原生 bookmark/known-folder 授权。
-- `delete_files` 之前仍要依赖 `run_command`；现在已补 `delete_path` / `batch_delete_paths`，并让 builtin policy 把它们标成 `payload.operation=delete`。
-- host-folder grant 之前对所有 `filesystem:write` 都只记成 `write`；现在如果 effect payload 明确是 `delete`，grant access 会正确记录为 `delete`，避免误把删除权限和普通写权限混为一类。
-- 对 delete 做确定性执行时，默认边界必须比 organize 更保守；当前实现只删除目标目录下的顶层图片文件，不递归进入子目录，也不会默认删除非图片文件。
-- 如果控制面只能识别 well-known folder，generic host-folder workflow 就很难被自然语言真正命中；这轮补了显式绝对路径解析后，`/Users/...` 这类输入才会真正走到 generic host-folder workflow。
-- runtime 之前靠 `workflowId === ...` 分支做 deterministic 执行，扩展性差；现在图片类本地任务已改为按 `intent + fileKinds` 路由，generic host-folder workflow 可以直接复用同一执行器。
-- 要把 deterministic executor 真正做通用，关键不是继续复制 `execute*ImagesWorkflow`，而是先把扩展名集合、目标根目录名和 summary 文案抽成 file-kind 映射；这轮已经按这个方向改成 `images/videos/documents` 共享执行逻辑。
-- 递归能力最好挂在现有 `list_dir` 上，而不是再造一个平行工具；这样 policy、tool selection、prompt guidance 和 runtime wiring 都能复用同一条链路。
-- 对 deterministic executor 来说，递归模式下最关键的数据不是 `name`，而是相对路径；否则 organize/deduplicate/delete 一进入子目录就会丢源路径上下文并产生同名冲突。
-
-- `PERSONAL_TOOLS` 已定义，但当前未注册进 sidecar，也未加入 `getToolsForTask()`。
-- `HeartbeatEngine` 有完整实现，但当前 sidecar 主流程没有真正启动它。
-- 现有 `set_reminder` 只会创建一条普通 task，不会在未来自动执行复杂任务。
-- 当前 desktop 日志中没有任何 `set_reminder`、`[Heartbeat]` 或 trigger fired 证据。
-- 新实现的 `schedule_task` 现在会把延时任务持久化到 `scheduled-tasks.json`，并保存执行配置（如 `modelId`）。
-- 真实 smoke test 中，sidecar 立即回显“已安排在 xx:xx 执行”，随后 `scheduled-task-runner` 在到点后触发执行，并调用 `voice_speak` 完成播报。
-- `triggers.json` 中已可见 `scheduled-task-runner` interval trigger，`scheduled-tasks.json` 中任务状态已从 `scheduled` 变为 `completed`。
-- Windows 上多数问题之所以不明显，是因为平台路径、CLI 查找和桌面壳行为此前是分散在多个文件里“碰巧能跑”；mac 迁移时这些隐式假设会同时失效。
-- 现在已建立显式 `bootstrap_runtime_context` 握手，desktop 负责发现 `platform/appDataDir/python/skillhub/managedServices`，sidecar 不再只能靠本地环境变量和零散探测。
-- `get_dependency_statuses` 之前在 `ipc.rs` 里临时拼装 dependency JSON；现在已收口到 `platform_runtime::build_runtime_snapshot()`，避免 UI 和后端各自维护一份依赖状态模型。
-- `main.ts` 当前最大的复杂度不是单一算法，而是 orchestration glue：控制面冻结、planning file 更新、scheduled query 重建、tool assembly 都堆在同一文件。
-- 第一阶段可安全抽离的边界是两块：`workRequestRuntime` 负责控制面生命周期，`taskToolResolver` 负责任务级工具装配；这两块都可以通过依赖注入保持行为不变。
-- `workRequestExecutionPrompt` 不是所有任务都会生成，只有冻结后的结构化执行要求与原始用户文本不等价时才需要额外 prompt，这一点要靠测试固化，不能靠直觉。
-- 第二阶段可安全抽离的边界是 execution runtime：`executeFreshTask` 与 `send_task_message` 共享的大部分逻辑其实是同一条“准备后执行”流水线，只是 fresh / continue 在 autonomous fallback、PPT fast path、degrade confirmation 上策略不同。
-- 当前 execution runtime 已把 ReAct / Autonomous 选择、skill prompt 合成、toolpack 装配、artifact verification 与结果事件集中到一个模块；`main.ts` 剩余主要是依赖注入和 IPC wiring。
-- 这次抽离后最大的剩余耦合点不再是执行循环本身，而是 runtime deps 仍直接绑定到全局单例和事件函数；下一步如果继续重构，目标应是把 execution session state 和 event bus 再做一层显式封装。
-- `DirectivesEditor` 之前完全是前端假数据，sidecar 里的 `DirectiveManager` 没有任何 IPC 或 prompt 注入接线；现在这条链路已经打通，用户 directives 会进入 execution runtime 的 system prompt merge。
-- `SkillStore.parseSkillMd()` 之前使用手写 frontmatter parser，无法稳定解析 `allowed-tools` 和深层 `metadata.openclaw.install`；这会直接导致自建 skill 的 tool policy 和依赖安装元数据丢失。
-- skill 安装链原先只注册 manifest，不处理依赖；现在 `import_claude_skill` 至少能对结构化声明出来的 CLI 依赖执行安全白名单内的自动安装，但能力边界仍有限。
-- 当前 CLI 自动安装支持的是结构化、可推导的 host package manager 命令：`brew install`、`npm install -g`、`uv pip install` / `pip install`、`go install`。未支持任意 shell 安装脚本、`download.url` 安装器、或 Windows `winget/choco` 自动装配。
-- `getExecutionRuntimeDeps()` 之前同时承担了三种职责：提供 provider/tool/skill 依赖、暴露任务级运行态、以及桥接事件与 telemetry 输出。这导致 runtime 的依赖面看起来像“函数拼盘”。
-- 这轮把其中最适合抽离的两块收口成独立对象：`ExecutionSession` 管任务级运行态，`ExecutionResultReporter` 管结果与 telemetry 输出；剩下的 deps 现在更接近真正的业务依赖。
-- `ExecutionSession` 不能只是 runtime 内部临时对象，因为 task 的多轮执行需要共享 artifacts 状态；因此 session 必须带有回写钩子，把最新 artifacts 同步回主任务状态存储。
-- `SkillsView` 和 `SkillToolpackManager` 虽然都调用了 `import_claude_skill`，但此前完全丢弃了 sidecar 返回的 `warnings/dependencyCheck/installResults`，用户无法判断依赖是否真的装好。
-- `install_from_github(skill)` 之前没有走 `import_claude_skill` 主链，而是下载后扫描整个 skills 目录并直接注册 manifest；这让 GitHub 安装和本地导入的依赖处理逻辑分叉。
-- 现有 OpenClaw 依赖安装元数据里其实已经有 `download.url` 字段，但老实现只认命令字符串，不认结构化下载计划，所以这条能力名义上存在、运行时不可用。
-- `download.url` 安装如果只把文件落在临时目录，后续 `which/where` 仍然找不到；需要把二进制落到受控 `appDataDir/bin` 并在 sidecar 进程 PATH 中补前缀。
-- 把 install plan 结构化之后，UI 和安装执行链都能统一处理 `command` 与 `download` 两类安装器，且不会再把 `winget/choco` 混成“任意 shell”。
-- `taskConversations / taskConfigs / taskHistoryLimits` 看起来是三张独立 Map，但真实上它们和 `taskResumeMessages / taskArtifactContracts / taskArtifactsCreated` 共享同一生命周期边界，继续分开只会让 execution runtime 的依赖源越来越分裂。
-- 这轮适合抽的是“session store”而不是“conversation store”，因为 conversation compaction、suspend resume、artifact verification 都依赖同一个 task scope。
-- `taskSequences` 目前仍应保持独立：它服务的是事件顺序号，不是任务业务态；把它提前塞进 session store 会扩大职责边界而没有实际收益。
-- `taskSequences` 虽然不该进 `TaskSessionStore`，但也不该继续散落在 `main.ts`；它更适合和 task event factory 一起进入 `TaskEventBus`，因为两者共享“为某个 task 生成有序事件”这一职责。
-- 通用 task lifecycle 事件和特殊 raw event 要分层处理：前者适合用 `TaskEventBus` 固化方法，后者先保留 `emitRaw()` 或内联对象更稳，避免一轮里把所有事件类型都抽象过头。
-- 现在 `AUTONOMOUS_*`、`TOKEN_USAGE`、`EFFECT_*`、`PATCH_*` 已经都能通过 `TaskEventBus.emitRaw()` 走统一 sequence 分配；这说明 event bus 的边界已经足够覆盖绝大多数非协议主线事件。
-- 工具循环里的 `sequence: 0` 强制终止信号已经证明：event bus 不只要能“递增发号”，还要能承载少量异常排序语义；把 override 做成显式 meta 比继续留内联对象更安全，也更利于后续审计。
-- `TaskEventBus` 的 sequence override 不能简单重置内部计数器，否则会让后续正常事件产生重复序号；更稳的策略是“仅当 override 大于当前值时推进游标，否则只按指定值发射当前事件”。
-- 到这一轮为止，`main.ts` 里常见 task 事件对象构造已经基本清空，剩余大多数 `emit({ ... })` 都是 command/IPC response，而不是 task telemetry；这说明事件面已经从主编排文件真正抽离出来了。
-- `main.ts` 里另一块适合按同样方法抽离的是 capability commands：它们共享“校验 payload -> 触发 store/下载/持久化副作用 -> 构造 IPC response”的模式，非常适合独立 handler 化和单测注入。
-- capability commands 真正高风险的不是列表查询，而是三类副作用命令：`import_claude_skill`、`install_from_github`、`remove_*`。如果这三类有独立测试，发布前改动的信心会比只靠 GUI 手测高很多。
-- `install_from_github(mcp)` 的隐性风险在于“下载成功但 manifest 注册失败”；把这段逻辑移进 handler 后，可以直接对下载目录里的 `manifest.json` 做单测，不必再通过 `main.ts` 大开关验证。
-- `workspace` 命令组和 capability 命令组一样，适合前置成独立 handler：它们基本不依赖任务运行态，只依赖 store 和少量路径决策逻辑，继续留在 `main.ts` 只会扩大开关文件。
-- 抽离 workspace handler 时发现 response payload 以前直接引用了 `WorkspaceStore.list()` 的内部数组；这意味着同一测试或同一 IPC 处理周期里后续 `update/delete` 会修改“已经发出的”响应对象。对 IPC 来说这是错误语义，必须返回快照。
-- 在 handler 层做 JSON clone 虽然朴素，但对于 IPC response 这种纯数据对象是合适的防线；比让调用方记得处处 clone 更可靠，也更接近发布前稳定性需求。
-- `validate_github_url` 虽然看起来只是一个小 case，但它和 `install_from_github/scan_default_repos` 共享同一“仓库供给链”边界；把它继续留在 `main.ts` 会让 capability/repository 这条线的职责收口不完整。
-- 当 `main.ts` 只剩路由层时，真正该留在里面的就只有“把哪个命令交给哪个 handler”以及执行主流程 wiring；`bootstrap/task/effect/autonomous/response` 这些 IPC 开关如果还留在主文件，后续任何协议调整都会继续放大回归面。
-- runtime handler 这类内部编排模块不适合追求过度精确的 deps 类型。这里的依赖本质是“同进程协作对象”，不是稳定公共 API；把类型边界适当放宽，反而能减少无意义的适配胶水。
-- 到这一轮后，`main.ts` 里搜索到的 `case` 基本只剩 autonomous event 映射，不再有 command/response switch 的业务分支；从命令分发维度看，这轮重构已经完成主要目标。
-- 发布前“另一阶段”所需的四块基础其实已分散存在：真实 E2E（`onboarding-clean-machine-e2e`）、故障注入（`database-failure-recovery-e2e`）、startup metrics、artifact telemetry；问题是没有统一 gate、报告和 canary checklist。
-- 最稳的落地方式不是再造一套新测试，而是把现有可靠套件编排成 `release-readiness` CLI，并让 `release.yml` 在发版前强制经过这道门。
-- 在把 `release-readiness` 真跑起来后，额外暴露出两个陈旧断言：`sidecar/tests/token-usage.test.ts` 与 `desktop/tests/phase2-acceptance.test.ts` 仍假设 `TOKEN_USAGE` 通过内联事件对象发射；当前实现已改为 `taskEventBus.emitRaw(taskId, 'TOKEN_USAGE', ...)`，应修测试而不是回退实现。
-- 最新 `artifacts/release-readiness/report.md` 已确认 sidecar typecheck、stable suite、release gate tests、desktop typecheck、desktop acceptance、desktop build 全部通过；剩余 warning 仅是未提供真实 startup metrics / artifact telemetry 采样路径。
+- Current TTS is sidecar built-in via `voice_speak` in `sidecar/src/tools/core/voice.ts`.
+- Current ASR entrypoint is desktop hook `desktop/src/hooks/useVoiceInput.ts`, with fallback to Tauri command `transcribe_audio`.
+- Installed skills declare `allowedTools`, but there is no existing extension point for registering ASR/TTS providers.
+- Implemented a minimal speech provider contract through `skill.manifest.metadata.voice.asr|tts`.
+- Custom providers are only considered when the backing tool actually exists in the runtime tool registry.
+- Desktop now asks sidecar for voice provider status before choosing between system-native recognition and recorded-audio transcription.

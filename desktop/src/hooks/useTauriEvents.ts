@@ -35,8 +35,21 @@ export function useTauriEvents() {
         let unlistenTaskEvent: UnlistenFn | undefined;
         let unlistenIpcResponse: UnlistenFn | undefined;
         let unlistenSidecarDisconnected: UnlistenFn | undefined;
+        let unlistenSidecarReconnected: UnlistenFn | undefined;
         let unlistenAuditEvent: UnlistenFn | undefined;
         let unlistenVoiceState: UnlistenFn | undefined;
+
+        async function syncRuntimeState() {
+            void hydrateSessions();
+            void invoke<{ success?: boolean; payload?: { success?: boolean; state?: VoicePlaybackState } }>('get_voice_state')
+                .then((result) => {
+                    const nextState = result?.payload?.state;
+                    setVoicePlaybackState(nextState ?? getDefaultVoicePlaybackState());
+                })
+                .catch(() => {
+                    setVoicePlaybackState(getDefaultVoicePlaybackState());
+                });
+        }
 
         async function setupListeners() {
             if (!isTauri()) {
@@ -60,6 +73,12 @@ export function useTauriEvents() {
                 setSidecarConnected(false);
             });
 
+            unlistenSidecarReconnected = await listen('sidecar-reconnected', () => {
+                console.log('[Tauri] Sidecar reconnected');
+                setSidecarConnected(true);
+                void syncRuntimeState();
+            });
+
             // Listen for audit events from Rust
             unlistenAuditEvent = await listen<AuditEvent>('audit-event', (event) => {
                 addAuditEvent(event.payload);
@@ -73,15 +92,7 @@ export function useTauriEvents() {
             setSidecarConnected(true);
 
             // Hydrate persisted sessions after listeners are ready to avoid startup stalls.
-            void hydrateSessions();
-            void invoke<{ success?: boolean; payload?: { success?: boolean; state?: VoicePlaybackState } }>('get_voice_state')
-                .then((result) => {
-                    const nextState = result?.payload?.state;
-                    setVoicePlaybackState(nextState ?? getDefaultVoicePlaybackState());
-                })
-                .catch(() => {
-                    setVoicePlaybackState(getDefaultVoicePlaybackState());
-                });
+            void syncRuntimeState();
 
             console.log('[Tauri] Event listeners registered');
         }
@@ -92,6 +103,7 @@ export function useTauriEvents() {
             unlistenTaskEvent?.();
             unlistenIpcResponse?.();
             unlistenSidecarDisconnected?.();
+            unlistenSidecarReconnected?.();
             unlistenAuditEvent?.();
             unlistenVoiceState?.();
             console.log('[Tauri] Event listeners cleaned up');

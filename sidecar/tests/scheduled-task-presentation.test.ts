@@ -15,8 +15,7 @@ describe('scheduledTaskPresentation', () => {
 
     test('builds completion message for the original task session', () => {
         const message = buildScheduledTaskCompletionMessage('整理 Reddit', '这里是最终结果');
-        expect(message).toContain('定时任务“整理 Reddit”已完成');
-        expect(message).toContain('这里是最终结果');
+        expect(message).toBe('这里是最终结果');
     });
 
     test('drops clarification-heavy boilerplate from scheduled task results', () => {
@@ -69,7 +68,8 @@ describe('scheduledTaskPresentation', () => {
             success: true,
             finalAssistantText: `当然可以！\n\n1. **帖子**: [OpenClaw](https://example.com)\n2. 经验总结\n\n如果你愿意，你只要回一句：按默认开始。`,
         });
-        expect(spoken).toContain('定时任务已完成。整理 Reddit。');
+        expect(spoken).not.toContain('定时任务已完成');
+        expect(spoken).not.toContain('整理 Reddit');
         expect(spoken).not.toContain('https://');
         expect(spoken).toContain('OpenClaw');
         expect(spoken).not.toContain('按默认开始');

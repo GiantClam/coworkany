@@ -78,6 +78,7 @@ export class SuspendResumeManager extends EventEmitter {
             reason,
             userMessage,
             canAutoResume: resumeCondition.type === 'auto_detect',
+            maxWaitTimeMs: resumeCondition.maxWaitTime,
         });
 
         // Start heartbeat if auto_detect
@@ -162,6 +163,22 @@ export class SuspendResumeManager extends EventEmitter {
      */
     getAllSuspended(): SuspendedTask[] {
         return Array.from(this.suspendedTasks.values());
+    }
+
+    restoreManual(
+        taskId: string,
+        reason: string,
+        userMessage: string,
+        context?: any
+    ): void {
+        this.suspendedTasks.set(taskId, {
+            taskId,
+            suspendedAt: new Date().toISOString(),
+            reason,
+            userMessage,
+            resumeCondition: { type: 'manual' },
+            context: context || {},
+        });
     }
 
     /**

@@ -1055,6 +1055,57 @@ export const StopVoiceResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+export const GetVoiceProviderStatusCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('get_voice_provider_status'),
+    payload: z.object({}),
+});
+
+export const SpeechProviderRegistrationSchema = z.object({
+    id: z.string(),
+    kind: z.enum(['asr', 'tts']),
+    toolName: z.string(),
+    stopToolName: z.string().optional(),
+    priority: z.number(),
+    sourceSkill: z.string(),
+    displayName: z.string(),
+});
+
+export const GetVoiceProviderStatusResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('get_voice_provider_status_response'),
+    payload: z.object({
+        success: z.boolean(),
+        preferredAsr: z.enum(['custom', 'system']),
+        preferredTts: z.enum(['custom', 'system']),
+        hasCustomAsr: z.boolean(),
+        hasCustomTts: z.boolean(),
+        providers: z.object({
+            asr: z.array(SpeechProviderRegistrationSchema),
+            tts: z.array(SpeechProviderRegistrationSchema),
+        }),
+        error: z.string().optional(),
+    }),
+});
+
+export const TranscribeVoiceCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('transcribe_voice'),
+    payload: z.object({
+        audioBase64: z.string(),
+        mimeType: z.string().optional(),
+        language: z.string().optional(),
+    }),
+});
+
+export const TranscribeVoiceResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('transcribe_voice_response'),
+    payload: z.object({
+        success: z.boolean(),
+        text: z.string().optional(),
+        providerId: z.string().optional(),
+        providerName: z.string().optional(),
+        error: z.string().optional(),
+    }),
+});
+
 // ============================================================================
 // Autonomous Task Commands (OpenClaw-style)
 // ============================================================================
@@ -1152,6 +1203,8 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     GetTasksCommandSchema,
     GetVoiceStateCommandSchema,
     StopVoiceCommandSchema,
+    GetVoiceProviderStatusCommandSchema,
+    TranscribeVoiceCommandSchema,
 
     // Autonomous Task Commands
     StartAutonomousTaskCommandSchema,
@@ -1205,6 +1258,8 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     GetTasksResponseSchema,
     GetVoiceStateResponseSchema,
     StopVoiceResponseSchema,
+    GetVoiceProviderStatusResponseSchema,
+    TranscribeVoiceResponseSchema,
 ]);
 
 export type IpcCommand = z.infer<typeof IpcCommandSchema>;
@@ -1287,3 +1342,7 @@ export type GetVoiceStateCommand = z.infer<typeof GetVoiceStateCommandSchema>;
 export type GetVoiceStateResponse = z.infer<typeof GetVoiceStateResponseSchema>;
 export type StopVoiceCommand = z.infer<typeof StopVoiceCommandSchema>;
 export type StopVoiceResponse = z.infer<typeof StopVoiceResponseSchema>;
+export type GetVoiceProviderStatusCommand = z.infer<typeof GetVoiceProviderStatusCommandSchema>;
+export type GetVoiceProviderStatusResponse = z.infer<typeof GetVoiceProviderStatusResponseSchema>;
+export type TranscribeVoiceCommand = z.infer<typeof TranscribeVoiceCommandSchema>;
+export type TranscribeVoiceResponse = z.infer<typeof TranscribeVoiceResponseSchema>;

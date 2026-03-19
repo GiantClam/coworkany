@@ -37,6 +37,10 @@ export interface StartTaskResult {
     error?: string;
 }
 
+interface StartTaskLocalOptions {
+    draftTaskId?: string;
+}
+
 export interface CancelTaskInput {
     taskId: string;
     reason?: string;
@@ -55,11 +59,12 @@ export interface CancelTaskResult {
 export function useStartTask() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
+    const ensureSession = useTaskEventStore((state) => state.ensureSession);
+    const promoteDraftSession = useTaskEventStore((state) => state.promoteDraftSession);
     const syncWorkspace = useWorkspaceStore((state) => state.syncWorkspace);
 
     const startTask = useCallback(
-        async (input: StartTaskInput): Promise<StartTaskResult | null> => {
+        async (input: StartTaskInput, options?: StartTaskLocalOptions): Promise<StartTaskResult | null> => {
             setIsLoading(true);
             setError(null);
 
@@ -67,7 +72,20 @@ export function useStartTask() {
                 const result = await invoke<StartTaskResult>('start_task', { input });
 
                 if (result.success) {
-                    setActiveTask(result.taskId);
+                    if (options?.draftTaskId) {
+                        promoteDraftSession(options.draftTaskId, result.taskId, {
+                            title: input.title,
+                            workspacePath: input.workspacePath,
+                            status: 'running',
+                        });
+                    } else {
+                        ensureSession(result.taskId, {
+                            title: input.title,
+                            workspacePath: input.workspacePath,
+                            status: 'running',
+                            isDraft: false,
+                        }, true);
+                    }
                     if (result.workspace) {
                         syncWorkspace(result.workspace);
                     }
@@ -85,7 +103,7 @@ export function useStartTask() {
                 setIsLoading(false);
             }
         },
-        [setActiveTask, syncWorkspace]
+        [ensureSession, promoteDraftSession, syncWorkspace]
     );
 
     return {
