@@ -1,7 +1,9 @@
+import * as path from 'path';
 import { type PreparedWorkRequestContext } from '../orchestration/workRequestRuntime';
 import { type ToolDefinition } from '../tools/standard';
 import { type ExecutionResultReporter } from './resultReporter';
 import { type ExecutionSession } from './session';
+import type { LocalTaskPlanHint } from '../orchestration/localTaskIntent';
 
 export type ExecutionTaskConfig = {
     modelId?: string;
@@ -84,6 +86,12 @@ export type ExecutionRuntimeDeps = {
     ) => string | { skills: string } | undefined;
     ensureToolpacksRegistered: (toolpackIds?: string[]) => Promise<void>;
     getToolsForTask: (taskId: string) => ToolDefinition[];
+    executeTool: (
+        taskId: string,
+        toolName: string,
+        args: Record<string, unknown>,
+        context: { workspacePath: string }
+    ) => Promise<any>;
     buildProviderConfig: (options: ExecutionStreamOptions) => unknown;
     runAgentLoop: (
         taskId: string,
@@ -327,6 +335,17 @@ async function runPreparedAgentExecution(input: {
     const triggeredSkillIds = deps.getTriggeredSkillIds(userMessage);
     const enabledSkillIds = deps.mergeSkillIds(explicitSkillIds, triggeredSkillIds, preferredSkillIds);
 
+    const deterministicLocalWorkflowResult = await tryExecuteDeterministicLocalWorkflow({
+        taskId,
+        workspacePath,
+        preparedWorkRequest,
+        startedAt,
+        emitFinishedStatus: input.emitFinishedStatus,
+    }, deps);
+    if (deterministicLocalWorkflowResult) {
+        return deterministicLocalWorkflowResult;
+    }
+
     if (input.allowPptFastPath) {
         const pptGeneratorFastPathResult = await deps.tryPptGeneratorSkillFastPath(
             taskId,
@@ -481,4 +500,509 @@ async function runPreparedAgentExecution(input: {
             artifactsCreated: [],
         };
     }
+}
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'svg']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']);
+const DOCUMENT_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md']);
+
+type SupportedFileKind = 'images' | 'videos' | 'documents';
+
+type DirectoryEntry = {
+    name: string;
+    path?: string;
+    isDir: boolean;
+    size?: number;
+};
+
+type FileHashResult = {
+    success?: boolean;
+    hash?: string;
+    error?: string;
+};
+
+type MatchedFile = {
+    name: string;
+    relativePath: string;
+    extension: string;
+};
+
+function normalizeExtension(fileName: string): string {
+    const match = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
+    return match?.[1] || 'other';
+}
+
+function isImageFile(fileName: string): boolean {
+    return IMAGE_EXTENSIONS.has(normalizeExtension(fileName));
+}
+
+function isVideoFile(fileName: string): boolean {
+    return VIDEO_EXTENSIONS.has(normalizeExtension(fileName));
+}
+
+function isDocumentFile(fileName: string): boolean {
+    return DOCUMENT_EXTENSIONS.has(normalizeExtension(fileName));
+}
+
+function getSupportedFileKind(fileKinds: string[]): SupportedFileKind | null {
+    if (fileKinds.includes('images')) {
+        return 'images';
+    }
+    if (fileKinds.includes('videos')) {
+        return 'videos';
+    }
+    if (fileKinds.includes('documents')) {
+        return 'documents';
+    }
+    return null;
+}
+
+function isMatchingFileKind(fileKind: SupportedFileKind, fileName: string): boolean {
+    switch (fileKind) {
+        case 'images':
+            return isImageFile(fileName);
+        case 'videos':
+            return isVideoFile(fileName);
+        case 'documents':
+            return isDocumentFile(fileName);
+    }
+}
+
+function getKindRootFolderName(fileKind: SupportedFileKind): string {
+    switch (fileKind) {
+        case 'images':
+            return 'Images';
+        case 'videos':
+            return 'Videos';
+        case 'documents':
+            return 'Documents';
+    }
+}
+
+function getKindLabelPlural(fileKind: SupportedFileKind): string {
+    switch (fileKind) {
+        case 'images':
+            return 'image files';
+        case 'videos':
+            return 'video files';
+        case 'documents':
+            return 'document files';
+    }
+}
+
+function summarizeNames(names: string[], limit = 5): string {
+    if (names.length <= limit) {
+        return names.join(', ');
+    }
+    return `${names.slice(0, limit).join(', ')} and ${names.length - limit} more`;
+}
+
+function getPrimaryLocalTaskHint(preparedWorkRequest: PreparedWorkRequestContext): LocalTaskPlanHint | undefined {
+    return preparedWorkRequest.frozenWorkRequest.tasks[0]?.localPlanHint;
+}
+
+function getEntryRelativePath(entry: DirectoryEntry): string {
+    return entry.path || entry.name;
+}
+
+function listTopLevelFilesByKind(
+    listing: DirectoryEntry[],
+    fileKind: SupportedFileKind
+): MatchedFile[] {
+    return listing
+        .filter((entry) => !entry.isDir && isMatchingFileKind(fileKind, entry.name))
+        .map((entry) => ({
+            name: entry.name,
+            relativePath: getEntryRelativePath(entry),
+            extension: normalizeExtension(entry.name).toUpperCase(),
+        }));
+}
+
+function buildListDirArgs(targetPath: string, traversalScope: LocalTaskPlanHint['traversalScope']): Record<string, unknown> {
+    return traversalScope === 'recursive'
+        ? { path: targetPath, recursive: true, max_depth: 16 }
+        : { path: targetPath };
+}
+
+async function tryExecuteDeterministicLocalWorkflow(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps): Promise<ExecutionRuntimeResult | null> {
+    const localHint = getPrimaryLocalTaskHint(input.preparedWorkRequest);
+    const targetPath = localHint?.targetFolder?.resolvedPath;
+    const fileKind = localHint ? getSupportedFileKind(localHint.fileKinds) : null;
+
+    if (!localHint || !targetPath || !fileKind) {
+        return null;
+    }
+
+    switch (localHint.intent) {
+        case 'inspect_folder':
+            return executeInspectFilesWorkflow(input, deps, targetPath, fileKind, localHint.traversalScope);
+        case 'organize_files':
+            return executeOrganizeFilesWorkflow(input, deps, targetPath, fileKind, localHint.traversalScope);
+        case 'deduplicate_files':
+            return executeDeduplicateFilesWorkflow(input, deps, targetPath, fileKind, localHint.traversalScope);
+        case 'delete_files':
+            return executeDeleteFilesWorkflow(input, deps, targetPath, fileKind, localHint.traversalScope);
+        default:
+            return null;
+    }
+}
+
+async function executeInspectFilesWorkflow(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps, targetPath: string, fileKind: SupportedFileKind, traversalScope: LocalTaskPlanHint['traversalScope']): Promise<ExecutionRuntimeResult> {
+    const listing = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        buildListDirArgs(targetPath, traversalScope),
+        { workspacePath: input.workspacePath }
+    );
+
+    if (!Array.isArray(listing)) {
+        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+    }
+
+    const matchingFiles = (listing as DirectoryEntry[])
+        .filter((entry) => !entry.isDir && isMatchingFileKind(fileKind, entry.name))
+        .map((entry) => entry.name);
+    const kindLabel = getKindLabelPlural(fileKind);
+    const scopeLabel = traversalScope === 'recursive' ? 'recursive' : 'top-level';
+
+    const summary = matchingFiles.length === 0
+        ? `No ${scopeLabel} ${kindLabel} were found in ${targetPath}.`
+        : `Found ${matchingFiles.length} ${scopeLabel} ${kindLabel} in ${targetPath}: ${summarizeNames(matchingFiles)}.`;
+
+    return completeDeterministicWorkflow(input, deps, summary);
+}
+
+async function executeOrganizeFilesWorkflow(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps, targetPath: string, fileKind: SupportedFileKind, traversalScope: LocalTaskPlanHint['traversalScope']): Promise<ExecutionRuntimeResult> {
+    const listing = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        buildListDirArgs(targetPath, traversalScope),
+        { workspacePath: input.workspacePath }
+    );
+
+    if (!Array.isArray(listing)) {
+        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+    }
+
+    const matchingFiles = listTopLevelFilesByKind(listing as DirectoryEntry[], fileKind);
+    const kindLabel = getKindLabelPlural(fileKind);
+
+    if (matchingFiles.length === 0) {
+        return completeDeterministicWorkflow(
+            input,
+            deps,
+            `No ${traversalScope === 'recursive' ? 'recursive' : 'top-level'} ${kindLabel} were found in ${targetPath}, so nothing was reorganized.`
+        );
+    }
+
+    const categoryRoot = path.join(targetPath, getKindRootFolderName(fileKind));
+    const categories = Array.from(new Set(matchingFiles.map((file) => file.extension)));
+    for (const category of categories) {
+        const result = await deps.executeTool(
+            input.taskId,
+            'create_directory',
+            { path: path.join(categoryRoot, category) },
+            { workspacePath: input.workspacePath }
+        );
+
+        if (result?.error) {
+            return failDeterministicWorkflow(
+                input,
+                deps,
+                `Failed to create destination folder for ${category}: ${result.error}`
+            );
+        }
+    }
+
+    const moves = matchingFiles.map((file) => ({
+        source_path: path.join(targetPath, file.relativePath),
+        destination_path: path.join(categoryRoot, file.extension, file.relativePath),
+    }));
+    const moveResult = await deps.executeTool(
+        input.taskId,
+        'batch_move_files',
+        { moves },
+        { workspacePath: input.workspacePath }
+    );
+
+    if (moveResult?.error || moveResult?.success === false) {
+        const failedMoves = Array.isArray(moveResult?.results)
+            ? moveResult.results.filter((result: any) => result.success === false)
+            : [];
+        const errorMessage = failedMoves.length > 0
+            ? failedMoves.map((result: any) => result.error).join('; ')
+            : moveResult?.error || 'Unknown move failure';
+        return failDeterministicWorkflow(
+            input,
+            deps,
+            `Failed to organize image files: ${errorMessage}`
+        );
+    }
+
+    const verifyResult = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        { path: categoryRoot },
+        { workspacePath: input.workspacePath }
+    );
+    const createdFolders = Array.isArray(verifyResult)
+        ? (verifyResult as DirectoryEntry[]).filter((entry) => entry.isDir).map((entry) => entry.name)
+        : categories;
+
+    return completeDeterministicWorkflow(
+        input,
+        deps,
+        `Organized ${matchingFiles.length} ${kindLabel} from ${targetPath} into ${categoryRoot}. Created folders: ${createdFolders.join(', ')}.`
+    );
+}
+
+async function executeDeduplicateFilesWorkflow(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps, targetPath: string, fileKind: SupportedFileKind, traversalScope: LocalTaskPlanHint['traversalScope']): Promise<ExecutionRuntimeResult> {
+    const listing = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        buildListDirArgs(targetPath, traversalScope),
+        { workspacePath: input.workspacePath }
+    );
+
+    if (!Array.isArray(listing)) {
+        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+    }
+
+    const matchingFiles = listTopLevelFilesByKind(listing as DirectoryEntry[], fileKind);
+    const kindLabel = getKindLabelPlural(fileKind);
+    if (matchingFiles.length < 2) {
+        return completeDeterministicWorkflow(
+            input,
+            deps,
+            `Found fewer than two ${traversalScope === 'recursive' ? 'recursive' : 'top-level'} ${kindLabel} in ${targetPath}, so there were no duplicates to quarantine.`
+        );
+    }
+
+    const hashGroups = new Map<string, MatchedFile[]>();
+    for (const file of matchingFiles) {
+        const hashResult = await deps.executeTool(
+            input.taskId,
+            'compute_file_hash',
+            { path: path.join(targetPath, file.relativePath) },
+            { workspacePath: input.workspacePath }
+        ) as FileHashResult;
+
+        if (!hashResult?.hash) {
+            return failDeterministicWorkflow(
+                input,
+                deps,
+                `Failed to hash ${file.relativePath}: ${hashResult?.error || 'unknown hash error'}`
+            );
+        }
+
+        const group = hashGroups.get(hashResult.hash) ?? [];
+        group.push(file);
+        hashGroups.set(hashResult.hash, group);
+    }
+
+    const duplicateGroups = Array.from(hashGroups.entries()).filter(([, files]) => files.length > 1);
+    if (duplicateGroups.length === 0) {
+        return completeDeterministicWorkflow(
+            input,
+            deps,
+            `No duplicate top-level ${kindLabel} were found in ${targetPath}.`
+        );
+    }
+
+    const quarantineRoot = path.join(targetPath, 'Duplicates');
+    const quarantineResult = await deps.executeTool(
+        input.taskId,
+        'create_directory',
+        { path: quarantineRoot },
+        { workspacePath: input.workspacePath }
+    );
+
+    if (quarantineResult?.error) {
+        return failDeterministicWorkflow(
+            input,
+            deps,
+            `Failed to create duplicate quarantine folder: ${quarantineResult.error}`
+        );
+    }
+
+    const moves = duplicateGroups.flatMap(([hash, files]) => {
+        const quarantineFolder = path.join(quarantineRoot, hash.slice(0, 12));
+        return files.slice(1).map((file) => ({
+            source_path: path.join(targetPath, file.relativePath),
+            destination_path: path.join(quarantineFolder, file.relativePath),
+        }));
+    });
+
+    const moveResult = await deps.executeTool(
+        input.taskId,
+        'batch_move_files',
+        { moves },
+        { workspacePath: input.workspacePath }
+    );
+
+    if (moveResult?.error || moveResult?.success === false) {
+        const failedMoves = Array.isArray(moveResult?.results)
+            ? moveResult.results.filter((result: any) => result.success === false)
+            : [];
+        const errorMessage = failedMoves.length > 0
+            ? failedMoves.map((result: any) => result.error).join('; ')
+            : moveResult?.error || 'Unknown move failure';
+        return failDeterministicWorkflow(
+            input,
+            deps,
+            `Failed to quarantine duplicate ${kindLabel}: ${errorMessage}`
+        );
+    }
+
+    const verifyResult = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        { path: quarantineRoot },
+        { workspacePath: input.workspacePath }
+    );
+    const quarantineFolders = Array.isArray(verifyResult)
+        ? (verifyResult as DirectoryEntry[]).filter((entry) => entry.isDir).map((entry) => entry.name)
+        : duplicateGroups.map(([hash]) => hash.slice(0, 12));
+
+    return completeDeterministicWorkflow(
+        input,
+        deps,
+        `Quarantined ${moves.length} duplicate ${kindLabel} across ${duplicateGroups.length} duplicate groups from ${targetPath} into ${quarantineRoot}. Created folders: ${quarantineFolders.join(', ')}.`
+    );
+}
+
+async function executeDeleteFilesWorkflow(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps, targetPath: string, fileKind: SupportedFileKind, traversalScope: LocalTaskPlanHint['traversalScope']): Promise<ExecutionRuntimeResult> {
+    const listing = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        buildListDirArgs(targetPath, traversalScope),
+        { workspacePath: input.workspacePath }
+    );
+
+    if (!Array.isArray(listing)) {
+        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+    }
+
+    const matchingFiles = listTopLevelFilesByKind(listing as DirectoryEntry[], fileKind);
+    const kindLabel = getKindLabelPlural(fileKind);
+    if (matchingFiles.length === 0) {
+        return completeDeterministicWorkflow(
+            input,
+            deps,
+            `No ${traversalScope === 'recursive' ? 'recursive' : 'top-level'} ${kindLabel} were found in ${targetPath}, so nothing was deleted.`
+        );
+    }
+
+    const deleteResult = await deps.executeTool(
+        input.taskId,
+        'batch_delete_paths',
+        {
+            deletes: matchingFiles.map((file) => ({
+                path: path.join(targetPath, file.relativePath),
+            })),
+        },
+        { workspacePath: input.workspacePath }
+    );
+
+    if (deleteResult?.error || deleteResult?.success === false) {
+        const failedDeletes = Array.isArray(deleteResult?.results)
+            ? deleteResult.results.filter((result: any) => result.success === false)
+            : [];
+        const errorMessage = failedDeletes.length > 0
+            ? failedDeletes.map((result: any) => result.error).join('; ')
+            : deleteResult?.error || 'Unknown delete failure';
+        return failDeterministicWorkflow(
+            input,
+            deps,
+            `Failed to delete ${kindLabel}: ${errorMessage}`
+        );
+    }
+
+    const verifyResult = await deps.executeTool(
+        input.taskId,
+        'list_dir',
+        buildListDirArgs(targetPath, traversalScope),
+        { workspacePath: input.workspacePath }
+    );
+    const remainingImageFiles = Array.isArray(verifyResult)
+        ? (verifyResult as DirectoryEntry[])
+            .filter((entry) => !entry.isDir && isMatchingFileKind(fileKind, entry.name))
+            .map((entry) => entry.name)
+        : [];
+
+    const deletedNames = matchingFiles.map((file) => file.name);
+    return completeDeterministicWorkflow(
+        input,
+        deps,
+        remainingImageFiles.length === 0
+            ? `Deleted ${deletedNames.length} ${traversalScope === 'recursive' ? 'recursive' : 'top-level'} ${kindLabel} from ${targetPath}: ${summarizeNames(deletedNames)}.`
+            : `Deleted ${deletedNames.length} ${traversalScope === 'recursive' ? 'recursive' : 'top-level'} ${kindLabel} from ${targetPath}, but ${remainingImageFiles.length} ${kindLabel} remain: ${summarizeNames(remainingImageFiles)}.`
+    );
+}
+
+function completeDeterministicWorkflow(input: {
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps, summary: string): ExecutionRuntimeResult {
+    deps.markWorkRequestExecutionCompleted(input.preparedWorkRequest, summary);
+    if (input.emitFinishedStatus) {
+        deps.reporter.status('finished');
+    }
+    deps.reporter.finished({
+        summary,
+        duration: input.emitFinishedStatus ? 0 : Date.now() - input.startedAt,
+    });
+    return {
+        success: true,
+        summary,
+        artifactsCreated: [],
+    };
+}
+
+function failDeterministicWorkflow(input: {
+    preparedWorkRequest: PreparedWorkRequestContext;
+}, deps: ExecutionRuntimeDeps, errorMessage: string): ExecutionRuntimeResult {
+    deps.markWorkRequestExecutionFailed(input.preparedWorkRequest, errorMessage);
+    deps.reporter.failed({
+        error: errorMessage,
+        errorCode: 'LOCAL_WORKFLOW_ERROR',
+        recoverable: false,
+    });
+    return {
+        success: false,
+        summary: '',
+        error: errorMessage,
+        artifactsCreated: [],
+    };
 }

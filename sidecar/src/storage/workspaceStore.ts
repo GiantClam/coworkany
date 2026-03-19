@@ -102,88 +102,15 @@ function isAutoNamedWorkspace(workspace: Workspace): boolean {
 
 export class WorkspaceStore {
     private configPath: string;
-    private managedWorkspaceRoot: string;
-    private legacyConfigPath?: string;
     private config: WorkspaceConfig = { workspaces: [] };
 
-    constructor(appDataDir: string, legacyConfigPath?: string) {
+    constructor(appDataDir: string) {
         this.configPath = path.join(appDataDir, 'workspaces.json');
-        this.managedWorkspaceRoot = path.join(appDataDir, 'workspaces');
-        this.legacyConfigPath = legacyConfigPath;
         this.load();
     }
 
-    private sanitizeWorkspaceSegment(name: string): string {
-        const normalized = name
-            .trim()
-            .replace(/[^a-z0-9]+/gi, '_')
-            .replace(/^_+|_+$/g, '')
-            .toLowerCase();
-
-        return normalized || 'workspace';
-    }
-
-    private buildManagedWorkspacePath(seed: string, currentPath?: string): string {
-        const safeSeed = this.sanitizeWorkspaceSegment(seed);
-        let candidate = path.join(this.managedWorkspaceRoot, safeSeed);
-        let suffix = 1;
-
-        while (
-            fs.existsSync(candidate) &&
-            path.normalize(candidate) !== path.normalize(currentPath ?? '')
-        ) {
-            candidate = path.join(this.managedWorkspaceRoot, `${safeSeed}_${suffix}`);
-            suffix += 1;
-        }
-
-        return candidate;
-    }
-
-    private migrateWorkspacePath(workspace: Workspace): Workspace {
-        const currentPath = path.normalize(workspace.path);
-        const sharedRoot = path.normalize(this.managedWorkspaceRoot);
-
-        if (
-            currentPath === sharedRoot ||
-            currentPath.startsWith(`${sharedRoot}${path.sep}`)
-        ) {
-            this.initWorkspaceDirectory(currentPath);
-            return {
-                ...workspace,
-                path: currentPath,
-            };
-        }
-
-        const sourceExists = fs.existsSync(currentPath);
-        const seed =
-            workspace.name.trim() ||
-            path.basename(currentPath) ||
-            'workspace';
-        const nextPath = this.buildManagedWorkspacePath(seed, currentPath);
-
-        try {
-            fs.mkdirSync(sharedRoot, { recursive: true });
-            if (
-                sourceExists &&
-                currentPath !== nextPath &&
-                !fs.existsSync(nextPath)
-            ) {
-                fs.cpSync(currentPath, nextPath, { recursive: true, force: false });
-            }
-        } catch (error) {
-            console.warn('[WorkspaceStore] Failed to copy legacy workspace contents:', error);
-        }
-
-        this.initWorkspaceDirectory(nextPath);
-
-        return {
-            ...workspace,
-            path: nextPath,
-        };
-    }
-
     private normalizeWorkspace(workspace: Workspace): Workspace {
-        const normalizedWorkspace = this.migrateWorkspacePath({
+        return {
             ...workspace,
             name: workspace.name.trim() || 'New workspace',
             path: path.normalize(workspace.path),
@@ -192,9 +119,7 @@ export class WorkspaceStore {
                 : isAutoNamedWorkspace(workspace),
             defaultSkills: Array.isArray(workspace.defaultSkills) ? workspace.defaultSkills : [],
             defaultToolpacks: normalizeDefaultToolpacks(workspace.defaultToolpacks),
-        });
-
-        return normalizedWorkspace;
+        };
     }
 
     private normalizeConfig(raw: WorkspaceConfig): WorkspaceConfig {
@@ -216,52 +141,11 @@ export class WorkspaceStore {
         };
     }
 
-    private recoverManagedWorkspaceDirectories(baseConfig: WorkspaceConfig): boolean {
-        if (!fs.existsSync(this.managedWorkspaceRoot)) {
-            return false;
-        }
-
-        const knownPaths = new Set(
-            baseConfig.workspaces.map((workspace) => path.normalize(workspace.path))
-        );
-        let changed = false;
-
-        for (const entry of fs.readdirSync(this.managedWorkspaceRoot, { withFileTypes: true })) {
-            if (!entry.isDirectory()) {
-                continue;
-            }
-
-            const workspacePath = path.join(this.managedWorkspaceRoot, entry.name);
-            const normalizedPath = path.normalize(workspacePath);
-            if (knownPaths.has(normalizedPath)) {
-                continue;
-            }
-
-            const stats = fs.statSync(workspacePath);
-            baseConfig.workspaces.push(this.normalizeWorkspace({
-                id: randomUUID(),
-                name: 'New workspace',
-                path: normalizedPath,
-                createdAt: stats.birthtime.toISOString(),
-                lastAccessedAt: stats.mtime.toISOString(),
-                autoNamed: true,
-                defaultSkills: [],
-                defaultToolpacks: ['builtin-websearch'],
-            }));
-            knownPaths.add(normalizedPath);
-            changed = true;
-        }
-
-        return changed;
-    }
-
     /**
      * Load workspaces from storage
      */
     private load(): void {
         try {
-            let changed = false;
-            let loadedLegacy = false;
             let baseConfig: WorkspaceConfig = { workspaces: [] };
 
             if (fs.existsSync(this.configPath)) {
@@ -269,46 +153,10 @@ export class WorkspaceStore {
                 baseConfig = this.normalizeConfig(JSON.parse(data) as WorkspaceConfig);
             }
 
-            if (this.legacyConfigPath && fs.existsSync(this.legacyConfigPath)) {
-                const legacyData = fs.readFileSync(this.legacyConfigPath, 'utf-8');
-                const legacyConfig = this.normalizeConfig(JSON.parse(legacyData) as WorkspaceConfig);
-                loadedLegacy = legacyConfig.workspaces.length > 0;
-
-                if (legacyConfig.workspaces.length > 0) {
-                    const seenIds = new Set(baseConfig.workspaces.map((workspace) => workspace.id));
-                    const seenPaths = new Set(
-                        baseConfig.workspaces.map((workspace) => path.normalize(workspace.path))
-                    );
-
-                    for (const legacyWorkspace of legacyConfig.workspaces) {
-                        const normalizedPath = path.normalize(legacyWorkspace.path);
-                        if (seenIds.has(legacyWorkspace.id) || seenPaths.has(normalizedPath)) {
-                            continue;
-                        }
-                        baseConfig.workspaces.push(legacyWorkspace);
-                        seenIds.add(legacyWorkspace.id);
-                        seenPaths.add(normalizedPath);
-                        changed = true;
-                    }
-
-                    if (!baseConfig.activeWorkspaceId && legacyConfig.activeWorkspaceId) {
-                        baseConfig.activeWorkspaceId = legacyConfig.activeWorkspaceId;
-                        changed = true;
-                    }
-                }
-            }
-
-            if (this.recoverManagedWorkspaceDirectories(baseConfig)) {
-                changed = true;
-            }
-
             this.config = baseConfig;
 
-            if (!fs.existsSync(this.configPath) || changed) {
+            if (!fs.existsSync(this.configPath)) {
                 this.save();
-                if (loadedLegacy) {
-                    console.error(`[WorkspaceStore] Migrated workspaces from legacy path: ${this.legacyConfigPath}`);
-                }
             }
 
             console.error(`[WorkspaceStore] Loaded ${this.config.workspaces.length} workspaces`);

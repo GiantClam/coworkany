@@ -83,22 +83,26 @@ export function DependencySetupSection() {
                         className={styles.runtimeDependencyCard}
                     >
                         <div className={styles.runtimeDependencyCopy}>
-                            <div className={styles.runtimeDependencyTitleRow}>
-                                <strong>{dependency.name}</strong>
-                                {dependency.optional && (
-                                    <span className={styles.runtimeChipInfo}>Optional</span>
-                                )}
-                                <span className={dependency.installed ? styles.runtimeChipReady : styles.runtimeChipMuted}>
-                                    Bundled
-                                </span>
-                                <span className={dependency.ready ? styles.runtimeChipReady : styles.runtimeChipMuted}>
-                                    Runtime Ready
-                                </span>
-                                {typeof dependency.running === 'boolean' && (
-                                    <span className={dependency.running ? styles.runtimeChipReady : styles.runtimeChipMuted}>
-                                        {dependency.running ? 'Running' : 'Stopped'}
+                            <div className={styles.runtimeDependencyHeader}>
+                                <div className={styles.runtimeDependencyTitleRow}>
+                                    <strong>{dependency.name}</strong>
+                                </div>
+                                <div className={styles.runtimeChipRow}>
+                                    {dependency.optional && (
+                                        <span className={styles.runtimeChipInfo}>Optional</span>
+                                    )}
+                                    <span className={dependency.installed ? styles.runtimeChipReady : styles.runtimeChipMuted}>
+                                        Bundled
                                     </span>
-                                )}
+                                    <span className={dependency.ready ? styles.runtimeChipReady : styles.runtimeChipMuted}>
+                                        Runtime Ready
+                                    </span>
+                                    {typeof dependency.running === 'boolean' && (
+                                        <span className={dependency.running ? styles.runtimeChipReady : styles.runtimeChipMuted}>
+                                            {dependency.running ? 'Running' : 'Stopped'}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                             {dependency.description && (
                                 <div className={styles.runtimeDependencyDescription}>

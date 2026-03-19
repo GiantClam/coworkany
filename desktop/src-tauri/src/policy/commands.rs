@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+use crate::sidecar::{forward_effect_response_to_sidecar, SidecarState};
 
 // ============================================================================
 // State Types
@@ -124,6 +125,37 @@ impl ConfirmationRequest {
             EffectType::ScreenCapture => 60,
             EffectType::UiControl => 100,
         }
+    }
+}
+
+fn is_host_folder_request(request: &EffectRequest) -> bool {
+    let Some(target_path) = &request.payload.path else {
+        return false;
+    };
+    let Some(scope) = &request.scope else {
+        return false;
+    };
+    let Some(workspace_paths) = &scope.workspace_paths else {
+        return false;
+    };
+
+    let target = std::path::PathBuf::from(target_path);
+    !workspace_paths
+        .iter()
+        .map(std::path::PathBuf::from)
+        .any(|workspace| target.starts_with(&workspace))
+}
+
+fn approval_type_for_confirmation(input: &ConfirmEffectInput, request: &EffectRequest) -> Option<ConfirmationPolicy> {
+    if !input.remember {
+        return None;
+    }
+
+    match request.effect_type {
+        EffectType::FilesystemRead | EffectType::FilesystemWrite if is_host_folder_request(request) => {
+            Some(ConfirmationPolicy::Permanent)
+        }
+        _ => Some(ConfirmationPolicy::Session),
     }
 }
 
@@ -241,6 +273,7 @@ pub async fn request_effect(
 pub async fn confirm_effect(
     input: ConfirmEffectInput,
     state: State<'_, PolicyEngineState>,
+    sidecar_state: State<'_, SidecarState>,
     app: AppHandle,
 ) -> Result<EffectResponse, String> {
     info!(
@@ -263,7 +296,10 @@ pub async fn confirm_effect(
 
     // Build response
     let engine = state.engine.lock().await;
-    let response = engine.to_response(pending.outcome, true);
+    let mut response = engine.to_response(pending.outcome, true);
+    if let Some(approval_type) = approval_type_for_confirmation(&input, &pending.request) {
+        response.approval_type = Some(approval_type);
+    }
 
     // Log to audit
     {
@@ -276,7 +312,76 @@ pub async fn confirm_effect(
         warn!("Failed to emit effect-confirmed: {}", e);
     }
 
+    if let Err(e) = forward_effect_response_to_sidecar(&sidecar_state, &response) {
+        warn!("Failed to forward effect-confirmed to sidecar: {}", e);
+    }
+
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::{EffectContext, EffectPayload, EffectScope, EffectSource};
+
+    fn make_request(effect_type: EffectType, path: Option<&str>) -> EffectRequest {
+        EffectRequest {
+            id: "request-1".to_string(),
+            timestamp: "2026-03-19T00:00:00Z".to_string(),
+            effect_type,
+            source: EffectSource::Agent,
+            source_id: None,
+            payload: EffectPayload {
+                path: path.map(str::to_string),
+                content: None,
+                operation: Some("read".to_string()),
+                command: None,
+                args: None,
+                cwd: None,
+                url: None,
+                method: None,
+                headers: None,
+                description: Some("test".to_string()),
+            },
+            context: Some(EffectContext {
+                task_id: Some("task-1".to_string()),
+                tool_name: Some("list_dir".to_string()),
+                reasoning: Some("test".to_string()),
+            }),
+            scope: Some(EffectScope {
+                workspace_paths: Some(vec!["/tmp/workspace".to_string()]),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn remembers_host_folder_filesystem_access_permanently() {
+        let request = make_request(EffectType::FilesystemRead, Some("/Users/tester/Downloads"));
+        let input = ConfirmEffectInput {
+            request_id: "request-1".to_string(),
+            remember: true,
+        };
+
+        assert_eq!(
+            approval_type_for_confirmation(&input, &request),
+            Some(ConfirmationPolicy::Permanent)
+        );
+    }
+
+    #[test]
+    fn remembers_shell_access_for_session_only() {
+        let request = make_request(EffectType::ShellWrite, None);
+        let input = ConfirmEffectInput {
+            request_id: "request-1".to_string(),
+            remember: true,
+        };
+
+        assert_eq!(
+            approval_type_for_confirmation(&input, &request),
+            Some(ConfirmationPolicy::Session)
+        );
+    }
 }
 
 /// User denies an effect
@@ -284,6 +389,7 @@ pub async fn confirm_effect(
 pub async fn deny_effect(
     input: DenyEffectInput,
     state: State<'_, PolicyEngineState>,
+    sidecar_state: State<'_, SidecarState>,
     app: AppHandle,
 ) -> Result<EffectResponse, String> {
     info!("Effect denied by user: {}", input.request_id);
@@ -321,6 +427,10 @@ pub async fn deny_effect(
     // Emit denial result
     if let Err(e) = app.emit("effect-denied", &response) {
         warn!("Failed to emit effect-denied: {}", e);
+    }
+
+    if let Err(e) = forward_effect_response_to_sidecar(&sidecar_state, &response) {
+        warn!("Failed to forward effect-denied to sidecar: {}", e);
     }
 
     Ok(response)

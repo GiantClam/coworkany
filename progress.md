@@ -1,5 +1,20 @@
 # Progress
 
+- 2026-03-19: 为本地 host-folder workflow 新增结构化 `compute_file_hash` builtin，并将其纳入 `STANDARD_TOOLS` 与 builtin policy effect 推导。
+- 2026-03-19: 收窄本地文件类任务的 `preferredTools`，对已支持的 inspect/organize/deduplicate 场景默认不再偏向 `run_command`。
+- 2026-03-19: `execution/runtime.ts` 已新增 `deduplicate-downloads-images` 确定性执行器：先 `list_dir`，再对顶层图片计算 hash，最后把重复项隔离到 `Duplicates/<hash-prefix>/`。
+- 2026-03-19: desktop `confirm_effect` 现在会对 host-folder 文件访问在 `remember=true` 时回传 `approvalType=permanent`，shell 等高风险动作仍保留 session 级记忆。
+- 2026-03-19: sidecar `PolicyBridge` / runtime handler / `HostAccessGrantManager` 已改为保留真实 `approvalType`，并把 `permanent` grant 落盘后跨 manager 实例复用。
+- 2026-03-19: 新增结构化删除 builtin：`delete_path`、`batch_delete_paths`；`delete_files` 的 preferred tools 已从 `run_command` 收敛到这些结构化工具。
+- 2026-03-19: builtin policy 与 host grant 现在能识别 `payload.operation=delete`，控制面对 “删除 Downloads 文件夹下的图片文件” 会生成 `delete-host-folder-files` workflow。
+- 2026-03-19: `execution/runtime.ts` 已新增 `delete-host-folder-files` 的确定性执行器；当前对图片删除采用保守策略，只删除目标目录下的顶层图片文件，并在删除后复查剩余图片。
+- 2026-03-19: `wellKnownFolders` 现支持显式绝对路径解析，控制面对 `整理 /Users/tester/Pictures/Inbox 里的图片文件` 这类输入会生成 `explicit_path` resolved target 和 generic host-folder workflow。
+- 2026-03-19: `execution/runtime.ts` 的图片类 deterministic executor 已改为按 `intent + fileKinds` 路由，不再只靠 `workflowId` 精确匹配；generic host-folder image organize 现在可直接复用同一执行路径。
+- 2026-03-19: deterministic executor 已进一步抽成 file-kind aware 版本，`images/videos/documents` 共用 inspect/organize/deduplicate/delete 逻辑；显式路径文档整理已通过回归测试。
+- 2026-03-19: `localTaskIntent` 已新增 `traversalScope`，可识别“递归/所有子文件夹/entire folder/subfolders”等信号；`workRequestExecutionPrompt` 会显式写出 `Traversal scope`。
+- 2026-03-19: `list_dir` 已支持 `recursive + max_depth`，并在返回项中携带相对 `path`；deterministic executor 现可在递归模式下保留子目录相对路径执行 organize/deduplicate/delete。
+- 2026-03-19: 新增并通过 `structured-file-tools`、`builtin-policy`、`work-request-control-plane`、`work-request-runtime`、`execution-runtime` 的定向测试；`bun run typecheck` 通过。
+
 - 2026-03-17: 建立计划文件，开始梳理 sidecar 的工具注册、调度器启动和延时执行能力缺口。
 - 2026-03-17: 新增 `schedule_task` 与 `ScheduledTaskStore`，并把 `PERSONAL_TOOLS`、`KNOWLEDGE_TOOLS` 接入 sidecar 运行时工具清单。
 - 2026-03-17: 在 sidecar 启动时实际启动 `HeartbeatEngine`，注册 `scheduled-task-runner` interval trigger，轮询并执行到期任务。

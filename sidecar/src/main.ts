@@ -86,6 +86,7 @@ import {
 } from './handlers';
 import { ToolpackStore, SkillStore, WorkspaceStore } from './storage';
 import { createPostExecutionLearningManager } from './agent/postExecutionLearning';
+import { adjustCompactionRemoveCount } from './execution/conversationCompaction';
 import {
     scanDefaultRepositories,
     validateSkillUrl,
@@ -99,6 +100,7 @@ import { STANDARD_TOOLS, ToolDefinition } from './tools/standard';
 import { STUB_TOOLS } from './tools/stubs';
 import { globalToolRegistry } from './tools/registry';
 import { MCPGateway } from './mcp/gateway';
+import { PolicyBridge } from './bridges';
 import { setSearchConfig, webSearchTool, type SearchConfig, type SearchProvider } from './tools/websearch';
 import { BUILTIN_TOOLS, readTaskPlanHead, countIncompletePlanSteps } from './tools/builtin';
 import {
@@ -223,6 +225,8 @@ import { createHeartbeatEngine } from './proactive';
 import * as os from 'os';
 // NOTE: fs and path are imported at the top of the file (log file setup)
 import { getCurrentPlatform } from './utils/commandAlternatives';
+import { buildBuiltinEffectRequest } from './tools/builtinPolicy';
+import { HostAccessGrantManager, deriveHostAccessRequest } from './security/hostAccessGrantManager';
 
 // ============================================================================
 // Event Emitter
@@ -258,6 +262,34 @@ function emit(message: OutputMessage): void {
 function emitAny(message: Record<string, unknown>): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
+}
+
+function sendIpcCommandAndWait(
+    type: string,
+    payload: Record<string, unknown>,
+    timeoutMs = 30_000
+): Promise<IpcResponse> {
+    const commandId = randomUUID();
+
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            pendingIpcResponses.delete(commandId);
+            reject(new Error(`IPC response timeout for ${type}`));
+        }, timeoutMs);
+
+        pendingIpcResponses.set(commandId, {
+            resolve,
+            reject,
+            timeout,
+        });
+
+        emitAny({
+            id: commandId,
+            timestamp: new Date().toISOString(),
+            type,
+            payload,
+        });
+    });
 }
 
 setVoicePlaybackReporter((state) => {
@@ -357,6 +389,23 @@ type AnthropicMessage = {
 };
 
 const mcpGateway = new MCPGateway();
+const pendingIpcResponses = new Map<
+    string,
+    {
+        resolve: (response: IpcResponse) => void;
+        reject: (error: Error) => void;
+        timeout: ReturnType<typeof setTimeout>;
+    }
+>();
+const policyBridge = new PolicyBridge({
+    sendCommand: async (command, payload) => {
+        const response = await sendIpcCommandAndWait(command, {
+            request: payload,
+        });
+        return (response.payload as { response: unknown }).response;
+    },
+});
+mcpGateway.setPolicyBridge(policyBridge);
 
 const DEFAULT_MAX_HISTORY_MESSAGES = 20;
 const taskSessionStore = new TaskSessionStore<
@@ -1253,15 +1302,13 @@ const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim() || path.join(workspaceRoot, '.coworkany');
 const toolpackStore = new ToolpackStore(workspaceRoot);
 const skillStore = new SkillStore(workspaceRoot);
-const workspaceStore = new WorkspaceStore(
-    appDataRoot,
-    path.join(workspaceRoot, 'workspaces.json')
-);
+const workspaceStore = new WorkspaceStore(appDataRoot);
 const workRequestStore = new WorkRequestStore(path.join(appDataRoot, 'work-requests.json'));
 const scheduledTaskStore = new ScheduledTaskStore(path.join(appDataRoot, 'scheduled-tasks.json'));
 const SCHEDULED_TASK_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const SCHEDULED_TASK_STALE_RUNNING_TIMEOUT_MS = SCHEDULED_TASK_EXECUTION_TIMEOUT_MS + 60 * 1000;
 let directiveManagerCache: { root: string; manager: DirectiveManager } | null = null;
+let hostAccessGrantManagerCache: { root: string; manager: HostAccessGrantManager } | null = null;
 
 function getResolvedAppDataRoot(): string {
     return desktopRuntimeContext?.appDataDir?.trim() || appDataRoot;
@@ -1276,6 +1323,17 @@ function getDirectiveManager(): DirectiveManager {
         };
     }
     return directiveManagerCache.manager;
+}
+
+function getHostAccessGrantManager(): HostAccessGrantManager {
+    const root = getResolvedAppDataRoot();
+    if (!hostAccessGrantManagerCache || hostAccessGrantManagerCache.root !== root) {
+        hostAccessGrantManagerCache = {
+            root,
+            manager: new HostAccessGrantManager(path.join(root, 'host-access-grants.json')),
+        };
+    }
+    return hostAccessGrantManagerCache.manager;
 }
 
 function getResolvedShell(): string {
@@ -1439,6 +1497,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
 function getRuntimeResponseDeps(): RuntimeResponseDeps {
     return {
         taskEventBus,
+        policyBridge,
     };
 }
 
@@ -2380,13 +2439,23 @@ const PERSONAL_TOOLS = createPersonalTools({
             workspacePath: context.workspacePath,
             workRequestStore,
         });
+        const effectiveSpeakResult = args.speak_result ?? false;
+        if (effectiveSpeakResult && !frozenWorkRequest.presentation.ttsEnabled) {
+            frozenWorkRequest.presentation = {
+                ...frozenWorkRequest.presentation,
+                ttsEnabled: true,
+                ttsMode: 'full',
+                ttsMaxChars: 0,
+            };
+            workRequestStore.upsert(frozenWorkRequest);
+        }
         const primaryTask = frozenWorkRequest.tasks[0];
         const record = scheduleTaskInternal({
             title: args.title?.trim() || primaryTask?.title || args.task_query.trim().slice(0, 60),
             taskQuery: primaryTask ? buildExecutionQuery(frozenWorkRequest) : args.task_query,
             executeAt: parseScheduledTimeExpression(args.time),
             workspacePath: context.workspacePath,
-            speakResult: args.speak_result ?? false,
+            speakResult: effectiveSpeakResult,
             sourceTaskId: context.taskId,
             config: toScheduledTaskConfig(taskSessionStore.getConfig(context.taskId)),
             workRequestId: frozenWorkRequest.id,
@@ -2741,7 +2810,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                 workspacePath: record.workspacePath,
                 config: record.config,
                 activeFile: undefined,
-                emitStartedEvent: false,
+                emitStartedEvent: true,
                 allowAutonomousFallback: false,
                 extraSystemPrompt: SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT,
             }),
@@ -3190,6 +3259,37 @@ async function executeInternalTool(
     const registeredTool = globalToolRegistry.getTool(toolName);
     if (registeredTool) {
         try {
+            const effectRequest = buildBuiltinEffectRequest({
+                tool: registeredTool,
+                args: typeof args === 'object' && args !== null ? args : {},
+                context: { workspacePath: context.workspacePath, taskId },
+            });
+            const hostAccessRequest = deriveHostAccessRequest(effectRequest);
+            if (effectRequest) {
+                const grantManager = getHostAccessGrantManager();
+                const hasExistingGrant = hostAccessRequest
+                    ? grantManager.hasGrant(hostAccessRequest)
+                    : false;
+
+                if (!hasExistingGrant) {
+                    const policyResponse = await policyBridge.requestEffect(effectRequest);
+                    if (!policyResponse.approved) {
+                        return { error: `Tool execution denied: ${policyResponse.denialReason || 'policy denied'}` };
+                    }
+
+                    if (
+                        hostAccessRequest &&
+                        (policyResponse.approvalType === 'session' ||
+                            policyResponse.approvalType === 'permanent')
+                    ) {
+                        grantManager.recordGrant({
+                            targetPath: hostAccessRequest.targetPath,
+                            access: hostAccessRequest.access,
+                            scope: policyResponse.approvalType === 'permanent' ? 'persistent' : 'session',
+                        });
+                    }
+                }
+            }
             const result = await registeredTool.handler(args, { workspacePath: context.workspacePath, taskId });
             return result;
         } catch (error: any) {
@@ -3460,7 +3560,13 @@ function pushConversationMessage(
     if (conversation.length > limit) {
         // Keep the first message (system/initial) and recent messages
         const keepRecent = Math.floor(limit * 0.75);
-        const removeCount = conversation.length - keepRecent;
+        const requestedRemoveCount = conversation.length - keepRecent;
+        const removeCount = adjustCompactionRemoveCount(conversation, requestedRemoveCount);
+
+        if (removeCount <= 0) {
+            console.log(`[Compaction] Task ${taskId}: skipped truncation to preserve tool-call continuity`);
+            return conversation;
+        }
 
         // Build summary from messages we're about to remove
         const removedMessages = conversation.slice(0, removeCount);
@@ -4308,7 +4414,7 @@ async function runAgentLoop(
                     }
 
                     // Inject as a system-level user message so it refreshes the plan in context
-                    pushConversationMessage(taskId, {
+                    messages = pushConversationMessage(taskId, {
                         role: 'user',
                         content: [{ type: 'text', text: planContext }],
                     });
@@ -4322,7 +4428,7 @@ async function runAgentLoop(
         let response = await streamLlmResponse(taskId, messages, options, config);
 
         // Add assistant response to history
-        pushConversationMessage(taskId, response);
+        messages = pushConversationMessage(taskId, response);
 
         // Extract tool use blocks
         let toolUses: any[] = [];
@@ -4352,7 +4458,7 @@ async function runAgentLoop(
                 console.warn(
                     `[Gate] Truncated assistant response without tool calls (retry ${truncatedNoToolRetries}/${MAX_TRUNCATED_NO_TOOL_RETRIES}, ${responseTextLength} chars)`
                 );
-                pushConversationMessage(taskId, {
+                messages = pushConversationMessage(taskId, {
                     role: 'user',
                     content: [{
                         type: 'text',
@@ -4398,13 +4504,13 @@ async function runAgentLoop(
 
                 // Inject gate warnings if any
                 if (gateWarnings.length > 0) {
-                    pushConversationMessage(taskId, {
+                    messages = pushConversationMessage(taskId, {
                         role: 'user',
                         content: [{ type: 'text', text: gateWarnings.join('\n\n') }],
                     });
                     // Give the LLM one more chance to address the gates
                     const retryResponse = await streamLlmResponse(taskId, messages, options, config);
-                    pushConversationMessage(taskId, retryResponse);
+                    messages = pushConversationMessage(taskId, retryResponse);
                     const retryToolUses: any[] = [];
                     if (Array.isArray(retryResponse.content)) {
                         for (const block of retryResponse.content) {
@@ -5495,7 +5601,7 @@ async function runAgentLoop(
         }
 
         // Add tool results to history as a USER message
-        pushConversationMessage(taskId, {
+        messages = pushConversationMessage(taskId, {
             role: 'user',
             content: toolResults,
         });
@@ -5563,7 +5669,7 @@ async function runAgentLoop(
 
                     // Inject context into conversation so LLM knows what happened
                     // Use a plain text user message (not tool_result) to avoid API validation issues
-                    pushConversationMessage(taskId, {
+                    messages = pushConversationMessage(taskId, {
                         role: 'user',
                         content: `[System Notification] The task was suspended because: ${suspended.reason}. ` +
                             `The user has now completed the required action (${resumeResult.reason || 'manual action completed'}). ` +
@@ -5593,7 +5699,7 @@ async function runAgentLoop(
                             content: queued.content,
                         });
 
-                        pushConversationMessage(taskId, {
+                        messages = pushConversationMessage(taskId, {
                             role: 'user',
                             content: queued.content,
                         });
@@ -5837,6 +5943,8 @@ function getExecutionRuntimeDeps(taskId: string) {
         mergeSystemPrompt,
         ensureToolpacksRegistered,
         getToolsForTask,
+        executeTool: (runtimeTaskId: string, toolName: string, args: Record<string, unknown>, context: { workspacePath: string }) =>
+            executeInternalToolWithEvents(runtimeTaskId, toolName, args, context),
         buildProviderConfig: (options: { modelId?: string; maxTokens?: number; systemPrompt?: string | { skills: string } }) =>
             resolveProviderConfig(loadLlmConfig(workspaceRoot), options as AnthropicStreamOptions),
         runAgentLoop,
@@ -5985,6 +6093,15 @@ async function processLine(line: string): Promise<void> {
 // ========================================================================
 
 async function handleResponse(response: IpcResponse): Promise<void> {
+    if ('commandId' in response && typeof response.commandId === 'string') {
+        const pending = pendingIpcResponses.get(response.commandId);
+        if (pending) {
+            clearTimeout(pending.timeout);
+            pendingIpcResponses.delete(response.commandId);
+            pending.resolve(response);
+        }
+    }
+
     if (await handleRuntimeResponse(response, getRuntimeResponseDeps())) {
         return;
     }

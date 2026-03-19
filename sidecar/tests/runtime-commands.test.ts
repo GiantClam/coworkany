@@ -39,7 +39,7 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         prepareWorkRequestContext: () => ({
             frozenWorkRequest: {
                 clarification: { required: false },
-                mode: 'immediate',
+                mode: 'immediate_task',
             },
             executionQuery: 'run task',
             workRequestExecutionPrompt: 'prompt',
@@ -179,25 +179,12 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(false);
     });
 
-    test('handles send_task_message clarification path and emits idle task state', async () => {
+    test('handles send_task_message follow-up path and continues agent flow', async () => {
         const emitted: any[] = [];
         const pushed: any[] = [];
         let continued = false;
         const deps = createRuntimeCommandDeps({
             emit: (message) => emitted.push(message),
-            prepareWorkRequestContext: () => ({
-                frozenWorkRequest: {
-                    id: 'wr-1',
-                    clarification: {
-                        required: true,
-                        reason: 'missing details',
-                        questions: ['Which repo?'],
-                        missingFields: ['repo'],
-                    },
-                    mode: 'immediate',
-                },
-                executionQuery: 'question',
-            }),
             pushConversationMessage: (taskId, message) => {
                 pushed.push({ taskId, message });
                 return [];
@@ -217,13 +204,69 @@ describe('runtime commands handler', () => {
         } as any, deps);
 
         expect(handled).toBe(true);
-        expect(pushed).toHaveLength(2);
+        expect(pushed).toHaveLength(1);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+        ]);
+        expect(continued).toBe(true);
+    });
+
+    test('handles send_task_message scheduled follow-up path without continuing agent flow', async () => {
+        const emitted: any[] = [];
+        const pushed: any[] = [];
+        const scheduledCalls: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            pushConversationMessage: (taskId, message) => {
+                pushed.push({ taskId, message });
+                return [];
+            },
+            prepareWorkRequestContext: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-1',
+                    mode: 'scheduled_task',
+                    schedule: { executeAt: '2026-03-19T06:00:00.000Z' },
+                    presentation: { ttsEnabled: true },
+                    tasks: [{
+                        title: 'Scheduled Reddit',
+                        objective: '检索 Reddit',
+                        constraints: ['用语音播报'],
+                        acceptanceCriteria: ['每篇只保留标题和简要介绍'],
+                    }],
+                    clarification: { required: false },
+                },
+                executionQuery: 'ignored',
+                workRequestExecutionPrompt: undefined,
+            }),
+            scheduleTaskInternal: (input) => {
+                scheduledCalls.push(input);
+                return { id: 'scheduled-2' };
+            },
+            buildScheduledConfirmationMessage: () => '已安排在 1 分钟后执行',
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4b',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-4',
+                content: '1 分钟后，检索 Reddit 并语音播报',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(scheduledCalls).toHaveLength(1);
+        expect(scheduledCalls[0]?.speakResult).toBe(true);
         expect(emitted.map((message) => message.type)).toEqual([
             'send_task_message_response',
             'CHAT_MESSAGE',
-            'TASK_CLARIFICATION_REQUIRED',
-            'TASK_STATUS',
+            'TASK_FINISHED',
         ]);
+        expect(pushed).toHaveLength(1);
         expect(continued).toBe(false);
     });
 
@@ -282,11 +325,18 @@ describe('runtime commands handler', () => {
 describe('runtime responses handler', () => {
     test('maps request_effect_response and apply_patch_response into task event bus raw events', async () => {
         const rawCalls: any[] = [];
+        const confirmations: any[] = [];
         const deps = createRuntimeResponseDeps({
             taskEventBus: {
                 emitRaw: (taskId, type, payload) => {
                     rawCalls.push({ taskId, type, payload });
                 },
+            },
+            policyBridge: {
+                handleConfirmation: (requestId, approved, approvalType) => {
+                    confirmations.push({ requestId, approved, approvalType });
+                },
+                handleDenial: () => {},
             },
         });
 
@@ -298,6 +348,7 @@ describe('runtime responses handler', () => {
                 response: {
                     approved: true,
                     requestId: 'req-1',
+                    approvalType: 'permanent',
                 },
             },
         } as any, deps);
@@ -315,6 +366,13 @@ describe('runtime responses handler', () => {
 
         expect(handledEffect).toBe(true);
         expect(handledPatch).toBe(true);
+        expect(confirmations).toEqual([
+            {
+                requestId: 'req-1',
+                approved: true,
+                approvalType: 'permanent',
+            },
+        ]);
         expect(rawCalls).toEqual([
             {
                 taskId: 'global',
@@ -323,6 +381,7 @@ describe('runtime responses handler', () => {
                     response: {
                         approved: true,
                         requestId: 'req-1',
+                        approvalType: 'permanent',
                     },
                     approvedBy: 'policy',
                 },

@@ -48,6 +48,16 @@ describe('scheduledTaskPresentation', () => {
         expect(cleaned).toBe('1. 标题：A\n2. 标题：B');
     });
 
+    test('strips trailing follow-up suggestions from final result blocks', () => {
+        const cleaned = cleanScheduledTaskResultText(`1. 标题：A
+2. 标题：B
+
+如果你要，我现在也可以帮你改成 2 分钟后或立即执行一次。`);
+
+        expect(cleaned).toBe('1. 标题：A\n2. 标题：B');
+        expect(cleaned).not.toContain('2 分钟后');
+    });
+
     test('builds failure message for the original task session', () => {
         const message = buildScheduledTaskFailureMessage('整理 Reddit', '模型超时');
         expect(message).toBe('定时任务“整理 Reddit”执行失败：模型超时');

@@ -1,5 +1,20 @@
 # Findings
 
+- 本地系统目录任务要稳定执行，关键不在 prompt 放权，而在控制面先把 `Downloads/Desktop/Documents` 解析成结构化目标，再决定 workflow、审批和工具。
+- 对“整理/查看/去重 Downloads 图片”这类高频任务，structured builtin 已经比 `run_command` 更合适；当前可直接用 `list_dir/create_directory/batch_move_files/compute_file_hash` 闭环。
+- `deduplicate-downloads-images` 如果只按文件名去重会有错误语义，因此这轮补了 `compute_file_hash`，改为按内容 hash 分组，保留 1 份，其余移动到 `Duplicates/<hash-prefix>/`。
+- builtin policy 现在应把 `compute_file_hash` 视为 `filesystem:read`；只要目标在 workspace 外，就和 `list_dir/view_file` 一样需要先过 host-folder grant。
+- `remember` 之前在审批链上会被 sidecar 压扁成 `session`，即使 desktop 想表达 `permanent` 也会丢失；现在 `approvalType` 已沿 `desktop confirm_effect -> request_effect_response -> PolicyBridge -> HostAccessGrantManager` 原样传递。
+- 当前“工作区外首次读取必须弹确认框”已由 desktop policy engine 兜底；host-folder remember 也已可持久复用，但仍未接平台原生 bookmark/known-folder 授权。
+- `delete_files` 之前仍要依赖 `run_command`；现在已补 `delete_path` / `batch_delete_paths`，并让 builtin policy 把它们标成 `payload.operation=delete`。
+- host-folder grant 之前对所有 `filesystem:write` 都只记成 `write`；现在如果 effect payload 明确是 `delete`，grant access 会正确记录为 `delete`，避免误把删除权限和普通写权限混为一类。
+- 对 delete 做确定性执行时，默认边界必须比 organize 更保守；当前实现只删除目标目录下的顶层图片文件，不递归进入子目录，也不会默认删除非图片文件。
+- 如果控制面只能识别 well-known folder，generic host-folder workflow 就很难被自然语言真正命中；这轮补了显式绝对路径解析后，`/Users/...` 这类输入才会真正走到 generic host-folder workflow。
+- runtime 之前靠 `workflowId === ...` 分支做 deterministic 执行，扩展性差；现在图片类本地任务已改为按 `intent + fileKinds` 路由，generic host-folder workflow 可以直接复用同一执行器。
+- 要把 deterministic executor 真正做通用，关键不是继续复制 `execute*ImagesWorkflow`，而是先把扩展名集合、目标根目录名和 summary 文案抽成 file-kind 映射；这轮已经按这个方向改成 `images/videos/documents` 共享执行逻辑。
+- 递归能力最好挂在现有 `list_dir` 上，而不是再造一个平行工具；这样 policy、tool selection、prompt guidance 和 runtime wiring 都能复用同一条链路。
+- 对 deterministic executor 来说，递归模式下最关键的数据不是 `name`，而是相对路径；否则 organize/deduplicate/delete 一进入子目录就会丢源路径上下文并产生同名冲突。
+
 - `PERSONAL_TOOLS` 已定义，但当前未注册进 sidecar，也未加入 `getToolsForTask()`。
 - `HeartbeatEngine` 有完整实现，但当前 sidecar 主流程没有真正启动它。
 - 现有 `set_reminder` 只会创建一条普通 task，不会在未来自动执行复杂任务。

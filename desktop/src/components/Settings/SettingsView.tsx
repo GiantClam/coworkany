@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SettingsView Component
  *
  * Main settings interface using child components and useSettings hook.
@@ -51,7 +51,8 @@ const SystemIcon = () => (
 );
 
 export function SettingsView() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
+    const { mode } = useThemeStore();
     const {
         config,
         loading,
@@ -103,6 +104,7 @@ export function SettingsView() {
 
     const activeProfile = config.profiles?.find((profile) => profile.id === config.activeProfileId)
         ?? config.profiles?.[0];
+    const hasProfiles = Boolean(config.profiles?.length);
     const hasSearchCredential = Boolean(
         searchSettings.serperApiKey
         || searchSettings.tavilyApiKey
@@ -115,67 +117,74 @@ export function SettingsView() {
         brave: 'Brave',
         searxng: 'SearXNG',
     }[searchSettings.provider ?? 'searxng'];
+    const themeLabelKey = {
+        light: 'settings.light',
+        dark: 'settings.dark',
+        auto: 'settings.system',
+    }[mode];
+    const languageLabel = i18n.language === 'zh' ? '中文' : 'English';
 
     return (
         <div className={styles.container}>
-            <div className={styles.header}>
-                <div className={styles.headerContent}>
-                    <span className={styles.headerKicker}>System preferences</span>
-                    <h2 className={styles.pageTitle}>{t('settings.title')}</h2>
-                    <p>{t('settings.subtitle')}</p>
+            <section className={styles.heroPanel}>
+                <div className={styles.header}>
+                    <div className={styles.headerContent}>
+                        <span className={styles.headerKicker}>System preferences</span>
+                        <h2 className={styles.pageTitle}>{t('settings.title')}</h2>
+                        <p>{t('settings.subtitle')}</p>
+                    </div>
+                    <button type="button" className={styles.refreshBtn} onClick={() => void refresh()} disabled={loading}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M23 4v6h-6" />
+                            <path d="M1 20v-6h6" />
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                        </svg>
+                        {t('settings.reload')}
+                    </button>
                 </div>
-                <button type="button" className={styles.refreshBtn} onClick={() => void refresh()} disabled={loading}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M23 4v6h-6" />
-                        <path d="M1 20v-6h6" />
-                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                    </svg>
-                    {t('settings.reload')}
-                </button>
-            </div>
 
-            <div className={styles.overviewGrid}>
-                <SummaryCard
-                    eyebrow={t('settings.summaryAiEyebrow', 'AI')}
-                    title={activeProfile?.name ?? t('settings.summaryAiTitle', 'No active model yet')}
-                    description={activeProfile
-                        ? `${activeProfile.provider}${activeProfile.verified ? ' · verified' : ''}`
-                        : t('settings.summaryAiDescription', 'Run onboarding or add your first model profile below.')}
-                />
-                <SummaryCard
-                    eyebrow={t('settings.summaryConnectivityEyebrow', 'Connectivity')}
-                    title={`${searchProviderLabel}${proxySettings.enabled ? ' + Proxy' : ''}`}
-                    description={hasSearchCredential
-                        ? t('settings.summaryConnectivityConfigured', 'Search is configured. Network controls are ready below.')
-                        : t('settings.summaryConnectivityPending', 'Search keys and proxy are optional, but configure them here before heavy research tasks.')}
-                />
-                <SummaryCard
-                    eyebrow={t('settings.summaryRuntimeEyebrow', 'Capabilities')}
-                    title={t('settings.summaryRuntimeTitle', 'Marketplace, memory, and browser automation')}
-                    description={t(
-                        'settings.summaryRuntimeDescription',
-                        'Use Runtime Setup to prepare Skillhub, local RAG, and optional browser smart mode on a fresh machine.'
-                    )}
-                />
-            </div>
-
-            <DependencySetupSection />
-
-            <div className={styles.settingsColumns}>
-                <div className={styles.settingsColumn}>
-                    <ProfileEditor
-                        onSave={validateAndAddProfile}
-                        isValidating={isValidating}
-                        validationMsg={validationMsg}
+                <div className={styles.overviewGrid}>
+                    <SummaryCard
+                        eyebrow={t('settings.summaryAiEyebrow', { defaultValue: 'AI' })}
+                        title={activeProfile?.name ?? t('settings.summaryAiTitle', { defaultValue: 'No active model yet' })}
+                        description={activeProfile
+                            ? `${activeProfile.provider}${activeProfile.verified ? ' · verified' : ''}`
+                            : t('settings.summaryAiDescription', { defaultValue: 'Add your first model profile to start new tasks with the right runtime.' })}
                     />
+                    <SummaryCard
+                        eyebrow={t('settings.summaryConnectivityEyebrow', { defaultValue: 'Connectivity' })}
+                        title={`${searchProviderLabel}${proxySettings.enabled ? ' + Proxy' : ''}`}
+                        description={hasSearchCredential
+                            ? t('settings.summaryConnectivityConfigured', { defaultValue: 'Search is configured. Network controls are ready when you need them.' })
+                            : t('settings.summaryConnectivityPending', { defaultValue: 'Search credentials and proxy remain optional until you need heavier research workflows.' })}
+                    />
+                    <SummaryCard
+                        eyebrow={t('settings.summaryInterfaceEyebrow', { defaultValue: 'Interface' })}
+                        title={`${t(themeLabelKey)} · ${languageLabel}`}
+                        description={t('settings.summaryInterfaceDescription', {
+                            defaultValue: 'Appearance, language, shortcuts, and directives stay grouped on the right for quick adjustments.',
+                        })}
+                    />
+                </div>
+            </section>
 
-                    <div className={styles.section}>
-                        <ProfileList
-                            config={config}
-                            onSwitch={switchProfile}
-                            onDelete={deleteProfile}
-                            onUpdateMaxHistory={updateMaxHistoryMessages}
+            <div className={styles.contentShell}>
+                <div className={styles.primaryColumn}>
+                    <div className={`${styles.profileWorkspace} ${!hasProfiles ? styles.profileWorkspaceEmpty : ''}`}>
+                        <ProfileEditor
+                            onSave={validateAndAddProfile}
+                            isValidating={isValidating}
+                            validationMsg={validationMsg}
                         />
+
+                        <div className={styles.section}>
+                            <ProfileList
+                                config={config}
+                                onSwitch={switchProfile}
+                                onDelete={deleteProfile}
+                                onUpdateMaxHistory={updateMaxHistoryMessages}
+                            />
+                        </div>
                     </div>
 
                     <SearchSettings
@@ -189,9 +198,11 @@ export function SettingsView() {
                         onSave={saveProxySettings}
                         saved={proxySaved}
                     />
+
+                    <DependencySetupSection />
                 </div>
 
-                <div className={styles.settingsColumn}>
+                <div className={styles.secondaryColumn}>
                     <AppearanceSection />
                     <ShortcutSettings />
                     <div className={styles.section}>

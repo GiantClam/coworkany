@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { createHash } from 'crypto';
 import { getAlternativeCommands, extractBaseCommand } from '../utils/commandAlternatives';
 import { checkCommand } from './commandSandbox';
 
@@ -48,6 +49,23 @@ interface CommandErrorAnalysis {
     type: CommandErrorType;
     suggestion: string;
     alternatives?: string[];  // Alternative commands to try
+}
+
+function resolveContextPath(workspacePath: string, candidate: string): string {
+    return path.resolve(workspacePath, candidate);
+}
+
+async function movePath(sourcePath: string, destinationPath: string): Promise<void> {
+    try {
+        await fs.promises.rename(sourcePath, destinationPath);
+    } catch (error: any) {
+        if (error?.code !== 'EXDEV') {
+            throw error;
+        }
+
+        await fs.promises.copyFile(sourcePath, destinationPath);
+        await fs.promises.unlink(sourcePath);
+    }
 }
 
 /**
@@ -147,20 +165,54 @@ const listDir: ToolDefinition = {
                 type: 'string',
                 description: 'The directory path to list. If omitted, lists the workspace root.',
             },
+            recursive: {
+                type: 'boolean',
+                description: 'Whether to recursively list descendant files and directories.',
+            },
+            max_depth: {
+                type: 'integer',
+                description: 'Optional maximum recursion depth when recursive=true. Depth 1 means direct children only.',
+            },
         },
     },
-    handler: async (args: { path?: string }, context) => {
+    handler: async (args: { path?: string; recursive?: boolean; max_depth?: number }, context) => {
         const targetPath = args.path
-            ? path.resolve(context.workspacePath, args.path)
+            ? resolveContextPath(context.workspacePath, args.path)
             : context.workspacePath;
 
         try {
-            const entires = await fs.promises.readdir(targetPath, { withFileTypes: true });
-            const result = entires.map((entry) => ({
-                name: entry.name,
-                isDir: entry.isDirectory(),
-                size: entry.isFile() ? fs.statSync(path.join(targetPath, entry.name)).size : undefined,
-            }));
+            const recursive = args.recursive === true;
+            const maxDepth = typeof args.max_depth === 'number' && args.max_depth > 0
+                ? Math.floor(args.max_depth)
+                : undefined;
+
+            const collectEntries = async (currentPath: string, relativeBase: string, depth: number): Promise<Array<Record<string, unknown>>> => {
+                const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
+                const results: Array<Record<string, unknown>> = [];
+
+                for (const entry of entries) {
+                    const entryRelativePath = relativeBase ? path.join(relativeBase, entry.name) : entry.name;
+                    const entryAbsolutePath = path.join(currentPath, entry.name);
+
+                    results.push({
+                        name: entry.name,
+                        path: entryRelativePath,
+                        isDir: entry.isDirectory(),
+                        size: entry.isFile() ? fs.statSync(entryAbsolutePath).size : undefined,
+                    });
+
+                    const canDescend = recursive &&
+                        entry.isDirectory() &&
+                        (maxDepth === undefined || depth < maxDepth);
+                    if (canDescend) {
+                        results.push(...await collectEntries(entryAbsolutePath, entryRelativePath, depth + 1));
+                    }
+                }
+
+                return results;
+            };
+
+            const result = await collectEntries(targetPath, '', 1);
             return result;
         } catch (error: any) {
             return { error: `Failed to list directory: ${error.message}` };
@@ -194,7 +246,7 @@ const viewFile: ToolDefinition = {
         required: ['path'],
     },
     handler: async (args: { path: string; start_line?: number; end_line?: number }, context) => {
-        const targetPath = path.resolve(context.workspacePath, args.path);
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
         try {
             const content = await fs.promises.readFile(targetPath, 'utf-8');
 
@@ -235,7 +287,7 @@ const writeToFile: ToolDefinition = {
         required: ['path', 'content'],
     },
     handler: async (args: { path: string; content: string }, context) => {
-        const targetPath = path.resolve(context.workspacePath, args.path);
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
         try {
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
             await fs.promises.writeFile(targetPath, args.content, 'utf-8');
@@ -276,7 +328,7 @@ const replaceFileContent: ToolDefinition = {
         required: ['path', 'target_content', 'replacement_content'],
     },
     handler: async (args: { path: string; target_content: string; replacement_content: string }, context) => {
-        const targetPath = path.resolve(context.workspacePath, args.path);
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
         try {
             const content = await fs.promises.readFile(targetPath, 'utf-8');
             if (!content.includes(args.target_content)) {
@@ -288,6 +340,281 @@ const replaceFileContent: ToolDefinition = {
         } catch (error: any) {
             return { error: `Failed to replace content: ${error.message}` };
         }
+    },
+};
+
+const createDirectory: ToolDefinition = {
+    name: 'create_directory',
+    description: 'Create a directory if it does not exist. Supports absolute paths and intermediate directories.',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            path: {
+                type: 'string',
+                description: 'The directory path to create.',
+            },
+        },
+        required: ['path'],
+    },
+    handler: async (args: { path: string }, context) => {
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
+        try {
+            await fs.promises.mkdir(targetPath, { recursive: true });
+            return { success: true, path: targetPath };
+        } catch (error: any) {
+            return { error: `Failed to create directory: ${error.message}` };
+        }
+    },
+};
+
+const computeFileHash: ToolDefinition = {
+    name: 'compute_file_hash',
+    description: 'Compute a content hash for a file. Useful for deterministic duplicate detection.',
+    effects: ['filesystem:read'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            path: {
+                type: 'string',
+                description: 'The file path to hash.',
+            },
+            algorithm: {
+                type: 'string',
+                description: 'The hash algorithm to use. Defaults to sha256.',
+            },
+        },
+        required: ['path'],
+    },
+    handler: async (args: { path: string; algorithm?: string }, context) => {
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
+        const algorithm = args.algorithm || 'sha256';
+
+        try {
+            const hash = createHash(algorithm);
+            const buffer = await fs.promises.readFile(targetPath);
+            hash.update(buffer);
+            return {
+                success: true,
+                path: targetPath,
+                algorithm,
+                hash: hash.digest('hex'),
+            };
+        } catch (error: any) {
+            return { error: `Failed to compute file hash: ${error.message}` };
+        }
+    },
+};
+
+const moveFile: ToolDefinition = {
+    name: 'move_file',
+    description: 'Move or rename a file. Creates destination directories if needed.',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            source_path: {
+                type: 'string',
+                description: 'The source file path.',
+            },
+            destination_path: {
+                type: 'string',
+                description: 'The destination file path.',
+            },
+            overwrite: {
+                type: 'boolean',
+                description: 'Whether to overwrite the destination file if it exists.',
+            },
+        },
+        required: ['source_path', 'destination_path'],
+    },
+    handler: async (args: { source_path: string; destination_path: string; overwrite?: boolean }, context) => {
+        const sourcePath = resolveContextPath(context.workspacePath, args.source_path);
+        const destinationPath = resolveContextPath(context.workspacePath, args.destination_path);
+        try {
+            if (!args.overwrite) {
+                const exists = await fs.promises
+                    .access(destinationPath, fs.constants.F_OK)
+                    .then(() => true)
+                    .catch(() => false);
+                if (exists) {
+                    return { error: `Destination already exists: ${destinationPath}` };
+                }
+            }
+
+            await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+            await movePath(sourcePath, destinationPath);
+            return { success: true, source_path: sourcePath, destination_path: destinationPath };
+        } catch (error: any) {
+            return { error: `Failed to move file: ${error.message}` };
+        }
+    },
+};
+
+const deletePath: ToolDefinition = {
+    name: 'delete_path',
+    description: 'Delete a file or directory. Directories require recursive=true.',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            path: {
+                type: 'string',
+                description: 'The file or directory path to delete.',
+            },
+            recursive: {
+                type: 'boolean',
+                description: 'Required when deleting a directory.',
+            },
+            force: {
+                type: 'boolean',
+                description: 'Ignore missing files and force deletion.',
+            },
+        },
+        required: ['path'],
+    },
+    handler: async (args: { path: string; recursive?: boolean; force?: boolean }, context) => {
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
+        try {
+            await fs.promises.rm(targetPath, {
+                recursive: args.recursive ?? false,
+                force: args.force ?? false,
+            });
+            return { success: true, path: targetPath };
+        } catch (error: any) {
+            return { error: `Failed to delete path: ${error.message}` };
+        }
+    },
+};
+
+const batchMoveFiles: ToolDefinition = {
+    name: 'batch_move_files',
+    description: 'Move multiple files in one structured operation. Creates destination directories as needed.',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            moves: {
+                type: 'array',
+                description: 'A list of move operations to execute.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        source_path: { type: 'string' },
+                        destination_path: { type: 'string' },
+                        overwrite: { type: 'boolean' },
+                    },
+                    required: ['source_path', 'destination_path'],
+                },
+            },
+        },
+        required: ['moves'],
+    },
+    handler: async (
+        args: { moves: Array<{ source_path: string; destination_path: string; overwrite?: boolean }> },
+        context
+    ) => {
+        const results: Array<Record<string, unknown>> = [];
+
+        for (const move of args.moves ?? []) {
+            const sourcePath = resolveContextPath(context.workspacePath, move.source_path);
+            const destinationPath = resolveContextPath(context.workspacePath, move.destination_path);
+
+            try {
+                if (!move.overwrite) {
+                    const exists = await fs.promises
+                        .access(destinationPath, fs.constants.F_OK)
+                        .then(() => true)
+                        .catch(() => false);
+                    if (exists) {
+                        results.push({
+                            success: false,
+                            source_path: sourcePath,
+                            destination_path: destinationPath,
+                            error: `Destination already exists: ${destinationPath}`,
+                        });
+                        continue;
+                    }
+                }
+
+                await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+                await movePath(sourcePath, destinationPath);
+                results.push({
+                    success: true,
+                    source_path: sourcePath,
+                    destination_path: destinationPath,
+                });
+            } catch (error: any) {
+                results.push({
+                    success: false,
+                    source_path: sourcePath,
+                    destination_path: destinationPath,
+                    error: error.message,
+                });
+            }
+        }
+
+        return {
+            success: results.every((result) => result.success === true),
+            results,
+        };
+    },
+};
+
+const batchDeletePaths: ToolDefinition = {
+    name: 'batch_delete_paths',
+    description: 'Delete multiple files or directories in one structured operation.',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            deletes: {
+                type: 'array',
+                description: 'A list of delete operations to execute.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string' },
+                        recursive: { type: 'boolean' },
+                        force: { type: 'boolean' },
+                    },
+                    required: ['path'],
+                },
+            },
+        },
+        required: ['deletes'],
+    },
+    handler: async (
+        args: { deletes: Array<{ path: string; recursive?: boolean; force?: boolean }> },
+        context
+    ) => {
+        const results: Array<Record<string, unknown>> = [];
+
+        for (const deletion of args.deletes ?? []) {
+            const targetPath = resolveContextPath(context.workspacePath, deletion.path);
+
+            try {
+                await fs.promises.rm(targetPath, {
+                    recursive: deletion.recursive ?? false,
+                    force: deletion.force ?? false,
+                });
+                results.push({
+                    success: true,
+                    path: targetPath,
+                });
+            } catch (error: any) {
+                results.push({
+                    success: false,
+                    path: targetPath,
+                    error: error.message,
+                });
+            }
+        }
+
+        return {
+            success: results.every((result) => result.success === true),
+            results,
+        };
     },
 };
 
@@ -487,5 +814,11 @@ export const STANDARD_TOOLS: ToolDefinition[] = [
     viewFile,
     writeToFile,
     replaceFileContent,
+    createDirectory,
+    computeFileHash,
+    moveFile,
+    deletePath,
+    batchMoveFiles,
+    batchDeletePaths,
     runCommand,
 ];

@@ -171,7 +171,15 @@ export function ShortcutSettings() {
                             <div className={styles.shortcutCopy}>
                                 <span className={styles.shortcutLabel}>{t(entry.labelKey)}</span>
                                 <span className={styles.shortcutHint}>
-                                    {recording === entry.key ? t('settings.pressKeys') : shortcuts[entry.key]}
+                                    {recording === entry.key
+                                        ? t('settings.pressKeys')
+                                        : entry.scope === 'global'
+                                            ? t('settings.shortcutScopeGlobalHint', {
+                                                defaultValue: 'Works even when CoworkAny is in the background.',
+                                            })
+                                            : t('settings.shortcutScopeWindowHint', {
+                                                defaultValue: 'Available while the CoworkAny window is focused.',
+                                            })}
                                 </span>
                             </div>
                         </div>

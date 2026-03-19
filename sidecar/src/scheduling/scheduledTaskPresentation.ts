@@ -3,6 +3,12 @@ const DROPPED_RESULT_BLOCK_PATTERNS = [
     /^(?:我理解你的需求是|为了立刻开始|在我正式整理前|如果你愿意|你只要回一句)/u,
     /(?:时间范围|结果形式|偏好（可选）|按默认开始|你说的“.*”是想)/u,
     /(?:补充信息|补充几个关键项|确认\s*\d+\s*个偏好|可选)/u,
+    /^(?:如果你要|如果需要|要的话|我现在也可以|我也可以)\b/u,
+];
+
+const TRAILING_FOLLOWUP_PATTERNS = [
+    /\n{2,}(?:如果你要|如果需要|要的话|我现在也可以|我也可以)[\s\S]*$/u,
+    /\n{2,}(?:If you want|If needed|I can also)[\s\S]*$/iu,
 ];
 
 function stripMarkdownSyntax(text: string): string {
@@ -46,6 +52,14 @@ function stripLeadingResultPreamble(block: string): string {
         .trim();
 }
 
+function stripTrailingFollowup(text: string): string {
+    let trimmed = text.trim();
+    for (const pattern of TRAILING_FOLLOWUP_PATTERNS) {
+        trimmed = trimmed.replace(pattern, '').trim();
+    }
+    return trimmed;
+}
+
 export function cleanScheduledTaskResultText(text: string): string {
     const stripped = stripMarkdownSyntax(text);
     if (!stripped) {
@@ -74,12 +88,12 @@ export function cleanScheduledTaskResultText(text: string): string {
         uniqueBlocks.push(cleanedBlock);
     }
 
-    const cleaned = uniqueBlocks.join('\n\n').trim();
+    const cleaned = stripTrailingFollowup(uniqueBlocks.join('\n\n').trim());
     if (cleaned) {
         return cleaned;
     }
 
-    return stripped
+    return stripTrailingFollowup(stripped)
         .replace(/\s+/g, ' ')
         .trim();
 }

@@ -1,5 +1,22 @@
 # Task Plan
 
+## Current Focus (2026-03-19)
+- [completed] A. 为系统标准目录请求补齐控制面解析、host grant 与 builtin policy bridge
+- [completed] B. 为 `inspect-downloads-images` / `organize-downloads-images` 落地确定性执行器
+- [completed] C. 新增 `compute_file_hash` 结构化工具，并将 `deduplicate-downloads-images` 落地为 hash-based 确定性执行器
+- [completed] D. 将“remember host-folder access”补成真正的 persistent grant 语义，并让 desktop -> sidecar -> grant store 传递真实 `approvalType`
+- [completed] E. 为 `delete_files` 补齐结构化 builtin、delete workflow 和 host grant 的 `delete` 语义，进一步缩小 `run_command` 使用面
+- [completed] F. 为 `delete-host-folder-files` 增加图片删除确定性执行器，覆盖 `list_dir -> batch_delete_paths -> verify`
+- [completed] G. 支持显式绝对路径解析，并将图片类 deterministic executor 从“按 workflow ID 硬编码”收敛为“按 intent + fileKinds 路由”
+- [completed] H. 将 deterministic executor 推进到 file-kind aware：`images/videos/documents` 共用 inspect/organize/deduplicate/delete 路由
+- [completed] I. 为控制面增加 `traversalScope`，并让 `list_dir` / deterministic executor 支持可控递归扫描
+- [pending] J. 继续补更多 file kind、混合规则、递归删除保护与更细粒度的用户确认模型
+
+## Current Risks (2026-03-19)
+- `HostAccessGrantManager` 现在已能持久复用 host-folder grant，但这仍是应用层 grant store；尚未接 macOS bookmark / Windows 原生持久授权。
+- 递归扫描现在已可用，但删除侧仍默认偏保守；需要更细粒度的删除保护，避免递归删除在复杂目录上放大影响面。
+- 当前 deterministic executor 已支持 `images/videos/documents + top_level/recursive`，但混合 file kind 和更复杂筛选条件还未进入确定性路径。
+
 ## Goal
 继续推进 sidecar 执行架构重构：在 `TaskEventBus` 基础上继续收掉剩余内联 task/global events，把 `main.ts` 中绝大多数事件对象构造切到统一 bus，仅保留确实需要特殊顺序控制的极少数例外。
 

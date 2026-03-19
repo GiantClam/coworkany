@@ -13,9 +13,9 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 90vw;
-    height: 85vh;
-    max-width: 1200px;
+    width: 92vw;
+    height: 88vh;
+    max-width: 1280px;
     z-index: 101;
     display: flex;
     flex-direction: column;
@@ -27,15 +27,16 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--space-4);
+    padding: 14px 16px;
     border-bottom: 1px solid var(--border-subtle);
 }
 
 .modal-dialog-title {
     margin: 0;
     font-weight: 600;
-    color: var(--text-primary);
-    font-size: 16px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    letter-spacing: 0.01em;
 }
 
 .modal-close-btn {

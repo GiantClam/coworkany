@@ -1,4 +1,4 @@
-import type { IpcCommand, IpcResponse } from '../protocol';
+import type { ConfirmationPolicy, IpcCommand, IpcResponse } from '../protocol';
 
 function respond(commandId: string, type: string, payload: Record<string, unknown>): IpcResponse {
     return {
@@ -96,6 +96,28 @@ export type RuntimeCommandDeps = {
     stopVoicePlayback: (reason?: string) => Promise<boolean>;
     getVoicePlaybackState: () => unknown;
 };
+
+function buildExecutionQueryFromFrozenWorkRequest(request: {
+    tasks?: Array<{
+        objective?: string;
+        constraints?: string[];
+        acceptanceCriteria?: string[];
+    }>;
+}): string {
+    return (request.tasks ?? [])
+        .map((task) => {
+            const parts = [task.objective ?? ''];
+            if (Array.isArray(task.constraints) && task.constraints.length > 0) {
+                parts.push(`约束：${task.constraints.join('；')}`);
+            }
+            if (Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0) {
+                parts.push(`验收标准：${task.acceptanceCriteria.join('；')}`);
+            }
+            return parts.filter(Boolean).join('\n');
+        })
+        .filter(Boolean)
+        .join('\n\n');
+}
 
 export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCommandDeps): Promise<boolean> {
     switch (command.type) {
@@ -200,53 +222,17 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
 
-            const artifactContract = deps.taskSessionStore.getArtifactContract(taskId) || deps.buildArtifactContract(content);
-
-            const language = /[\u4e00-\u9fff]/.test(content) ? 'zh-CN' : 'en';
-            const frozenWorkRequest = {
-                schemaVersion: 1,
-                id: `followup-${Date.now()}`,
-                mode: 'chat' as const,
+            const preparedWorkRequest = deps.prepareWorkRequestContext({
                 sourceText: content,
                 workspacePath,
-                tasks: [{
-                    id: `task-${Date.now()}`,
-                    title: 'Follow-up',
-                    objective: content,
-                    constraints: [],
-                    acceptanceCriteria: [],
-                    dependencies: [],
-                    preferredSkills: [],
-                    preferredTools: [],
-                }],
-                clarification: {
-                    required: false,
-                    reason: undefined,
-                    questions: [],
-                    missingFields: [],
-                    canDefault: true,
-                    assumptions: [],
-                },
-                presentation: {
-                    uiFormat: 'chat_message' as const,
-                    ttsEnabled: false,
-                    ttsMode: 'full' as const,
-                    ttsMaxChars: 0,
-                    language,
-                },
-                createdAt: new Date().toISOString(),
-                frozenAt: new Date().toISOString(),
-            };
+                workRequestStore: deps.workRequestStore,
+            });
+            const { frozenWorkRequest } = preparedWorkRequest;
+            const artifactContract =
+                deps.taskSessionStore.getArtifactContract(taskId) ||
+                deps.buildArtifactContract(preparedWorkRequest.executionQuery || content);
 
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
-
-            const preparedWorkRequest = {
-                frozenWorkRequest,
-                executionPlan: { workRequestId: frozenWorkRequest.id, runMode: 'single' as const, steps: [] },
-                executionQuery: content,
-                preferredSkillIds: [],
-                workRequestExecutionPrompt: undefined,
-            };
 
             if (frozenWorkRequest.clarification.required) {
                 const clarificationMessage = deps.buildClarificationMessage(frozenWorkRequest);
@@ -268,6 +254,32 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         `Clarification requested for work request ${frozenWorkRequest.id}: ${clarificationMessage}`
                     );
                 }
+                return true;
+            }
+
+            if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
+                const primaryTask = frozenWorkRequest.tasks?.[0];
+                const record = deps.scheduleTaskInternal({
+                    title: primaryTask?.title || content.trim().slice(0, 60) || 'Scheduled Task',
+                    taskQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || content,
+                    executeAt: new Date(frozenWorkRequest.schedule.executeAt),
+                    workspacePath,
+                    speakResult: frozenWorkRequest.presentation?.ttsEnabled ?? false,
+                    sourceTaskId: taskId,
+                    config: deps.toScheduledTaskConfig(effectiveTaskConfig),
+                    workRequestId: frozenWorkRequest.id,
+                    frozenWorkRequest,
+                });
+                const confirmationMessage = deps.buildScheduledConfirmationMessage(record);
+                deps.pushConversationMessage(taskId, { role: 'assistant', content: confirmationMessage });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: confirmationMessage,
+                }));
+                deps.emit(deps.createTaskFinishedEvent(taskId, {
+                    summary: confirmationMessage,
+                    duration: 0,
+                }));
                 return true;
             }
 
@@ -478,20 +490,45 @@ export type RuntimeResponseDeps = {
     taskEventBus: {
         emitRaw: (taskId: string, type: string, payload: unknown) => void;
     };
+    policyBridge?: {
+        handleConfirmation: (
+            requestId: string,
+            approved: boolean,
+            approvalType?: ConfirmationPolicy
+        ) => void;
+        handleDenial: (requestId: string, reason?: string) => void;
+    };
 };
 
 export async function handleRuntimeResponse(response: IpcResponse, deps: RuntimeResponseDeps): Promise<boolean> {
     switch (response.type) {
         case 'request_effect_response': {
-            const approved = (response.payload as any).response.approved;
+            const effectResponse = (response.payload as any).response;
+            const approved = effectResponse.approved;
+            const requestId = effectResponse.requestId as string | undefined;
+            const denialReason = effectResponse.denialReason as string | undefined;
+            const approvalType = effectResponse.approvalType as ConfirmationPolicy | undefined;
+
+            if (requestId) {
+                if (approved) {
+                    deps.policyBridge?.handleConfirmation(
+                        requestId,
+                        true,
+                        approvalType
+                    );
+                } else if (denialReason && denialReason !== 'awaiting_confirmation') {
+                    deps.policyBridge?.handleDenial(requestId, denialReason);
+                }
+            }
+
             if (approved) {
                 deps.taskEventBus.emitRaw('global', 'EFFECT_APPROVED', {
-                    response: (response.payload as any).response,
+                    response: effectResponse,
                     approvedBy: 'policy',
                 });
             } else {
                 deps.taskEventBus.emitRaw('global', 'EFFECT_DENIED', {
-                    response: (response.payload as any).response,
+                    response: effectResponse,
                     deniedBy: 'policy',
                 });
             }

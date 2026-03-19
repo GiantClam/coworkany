@@ -117,7 +117,11 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                 </div>
             </div>
 
-            <div className={styles.infoBox}>{t('settings.providerFallback')}</div>
+            <div className={styles.infoBox}>
+                {t('settings.providerFallbackCompact', {
+                    defaultValue: 'If the selected provider fails, CoworkAny automatically falls back to other configured providers.',
+                })}
+            </div>
         </div>
     );
 }

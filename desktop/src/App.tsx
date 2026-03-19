@@ -401,7 +401,7 @@ function App() {
                 <ModalDialog
                     open={settingsDialogOpen}
                     onClose={() => setSettingsDialogOpen(false)}
-                    title={t('chat.llmSettings')}
+                    title={t('settings.title')}
                 >
                     <Suspense fallback={<div style={{ padding: 16 }}>Loading...</div>}>
                         <div style={{ height: '100%', overflow: 'hidden' }}>

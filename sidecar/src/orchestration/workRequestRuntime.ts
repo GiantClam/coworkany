@@ -12,6 +12,7 @@ import {
 } from './workRequestAnalyzer';
 import { type FrozenWorkRequest } from './workRequestSchema';
 import { type ScheduledTaskRecord } from '../scheduling/scheduledTasks';
+import { formatWorkflowForPrompt, selectLocalWorkflow } from './localWorkflowRegistry';
 
 export type PreparedWorkRequestContext = {
     frozenWorkRequest: FrozenWorkRequest;
@@ -163,8 +164,36 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
     const hasStructuredConstraints = request.tasks.some((task) =>
         task.constraints.length > 0 || task.acceptanceCriteria.length > 0
     );
+    const workflowGuidance = request.tasks
+        .map((task) => {
+            if (!task.localPlanHint?.preferredWorkflow) {
+                return null;
+            }
 
-    if (!hasStructuredConstraints && executionQuery === normalizedSource) {
+            const workflow = selectLocalWorkflow({
+                intent: task.localPlanHint.intent,
+                folderId: task.localPlanHint.targetFolder?.kind === 'well_known_folder'
+                    ? task.localPlanHint.targetFolder.folderId
+                    : undefined,
+                fileKinds: task.localPlanHint.fileKinds,
+            });
+            if (!workflow) {
+                return null;
+            }
+
+            const folderPath = task.localPlanHint.targetFolder?.resolvedPath;
+            const preferredToolsLine =
+                task.preferredTools.length > 0
+                    ? `Preferred tools: ${task.preferredTools.join(', ')}`
+                    : undefined;
+            const folderLine = folderPath ? `Resolved target: ${folderPath}` : undefined;
+            const traversalLine = `Traversal scope: ${task.localPlanHint.traversalScope}`;
+            return [folderLine, traversalLine, preferredToolsLine, formatWorkflowForPrompt(workflow)].filter(Boolean).join('\n');
+        })
+        .filter((value): value is string => Boolean(value))
+        .join('\n\n');
+
+    if (!hasStructuredConstraints && executionQuery === normalizedSource && !workflowGuidance) {
         return undefined;
     }
 
@@ -175,6 +204,8 @@ This user input has already been analyzed and frozen by the control plane.
 Execute the task using this structured request instead of re-interpreting the raw user message:
 
 ${executionQuery}
+
+${workflowGuidance ? `\n## Deterministic Local Workflow Guidance\n\n${workflowGuidance}\n` : ''}
 
 Rules:
 - Treat the frozen work request as the source of truth for execution.

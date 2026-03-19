@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { type FrozenWorkRequest } from '../orchestration/workRequestSchema';
+import { type FrozenWorkRequest, type PresentationContract } from '../orchestration/workRequestSchema';
 
 export interface ScheduledTaskConfig {
     modelId?: string;
@@ -86,6 +86,56 @@ function normalizeRecords(raw: unknown): ScheduledTaskRecord[] {
                 : undefined,
             config: entry.config ? { ...entry.config } : undefined,
         }));
+}
+
+function migrateScheduledTaskRecord(record: ScheduledTaskRecord): {
+    record: ScheduledTaskRecord;
+    changed: boolean;
+} {
+    const frozenWorkRequest = record.frozenWorkRequest;
+    if (!frozenWorkRequest) {
+        return { record, changed: false };
+    }
+
+    const currentPresentation = frozenWorkRequest.presentation;
+    const uiFormat =
+        currentPresentation?.uiFormat === 'table' ||
+        currentPresentation?.uiFormat === 'report' ||
+        currentPresentation?.uiFormat === 'artifact'
+            ? currentPresentation.uiFormat
+            : 'chat_message';
+    const nextPresentation: PresentationContract = {
+        uiFormat,
+        ttsEnabled: currentPresentation?.ttsEnabled ?? record.speakResult,
+        ttsMode: 'full',
+        ttsMaxChars: 0,
+        language: typeof currentPresentation?.language === 'string' && currentPresentation.language.trim().length > 0
+            ? currentPresentation.language
+            : 'zh-CN',
+    };
+
+    const changed =
+        !currentPresentation ||
+        currentPresentation.ttsMode !== nextPresentation.ttsMode ||
+        currentPresentation.ttsMaxChars !== nextPresentation.ttsMaxChars ||
+        currentPresentation.ttsEnabled !== nextPresentation.ttsEnabled ||
+        currentPresentation.language !== nextPresentation.language ||
+        currentPresentation.uiFormat !== nextPresentation.uiFormat;
+
+    if (!changed) {
+        return { record, changed: false };
+    }
+
+    return {
+        changed: true,
+        record: {
+            ...record,
+            frozenWorkRequest: {
+                ...frozenWorkRequest,
+                presentation: nextPresentation,
+            },
+        },
+    };
 }
 
 function parseChineseNumber(raw: string): number {
@@ -285,7 +335,17 @@ export class ScheduledTaskStore {
             if (!fs.existsSync(this.filePath)) {
                 return [];
             }
-            return normalizeRecords(JSON.parse(fs.readFileSync(this.filePath, 'utf-8')));
+            const normalized = normalizeRecords(JSON.parse(fs.readFileSync(this.filePath, 'utf-8')));
+            let changed = false;
+            const migrated = normalized.map((record) => {
+                const result = migrateScheduledTaskRecord(record);
+                changed = changed || result.changed;
+                return result.record;
+            });
+            if (changed) {
+                this.write(migrated);
+            }
+            return migrated;
         } catch (error) {
             console.error('[ScheduledTaskStore] Failed to read scheduled tasks:', error);
             return [];

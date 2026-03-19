@@ -16,7 +16,7 @@ export const ModalDialog: React.FC<ModalDialogProps> = ({ open, onClose, title, 
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
             <Dialog.Portal>
                 <Dialog.Overlay className="modal-dialog-overlay" />
-                <Dialog.Content className="modal-dialog-content">
+                <Dialog.Content className="modal-dialog-content" aria-describedby={undefined}>
                     <div className="modal-dialog-header">
                         <Dialog.Title className="modal-dialog-title">{title}</Dialog.Title>
                         <button

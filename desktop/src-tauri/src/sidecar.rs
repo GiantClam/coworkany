@@ -1358,6 +1358,28 @@ impl Default for SidecarManager {
     }
 }
 
+pub fn forward_effect_response_to_sidecar(
+    state: &SidecarState,
+    response: &EffectResponse,
+) -> Result<(), String> {
+    let manager = state
+        .0
+        .lock()
+        .map_err(|e| format!("failed to lock sidecar state: {}", e))?;
+
+    manager
+        .send_raw_command(json!({
+            "id": Uuid::new_v4().to_string(),
+            "type": "request_effect_response",
+            "commandId": Uuid::new_v4().to_string(),
+            "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "response": response
+            }
+        }))
+        .map_err(|e| e.to_string())
+}
+
 impl Drop for SidecarManager {
     fn drop(&mut self) {
         self.shutdown();

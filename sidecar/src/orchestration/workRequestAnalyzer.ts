@@ -10,6 +10,8 @@ import {
 } from './workRequestSchema';
 import { detectScheduledIntent } from '../scheduling/scheduledTasks';
 import { cleanScheduledTaskResultText, normalizeScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
+import { analyzeLocalTaskIntent } from './localTaskIntent';
+import type { SystemFolderResolutionOptions } from '../system/wellKnownFolders';
 
 function detectLanguage(text: string): string {
     return /[\u4e00-\u9fff]/.test(text) ? 'zh-CN' : 'en';
@@ -97,13 +99,23 @@ function splitSegments(text: string): string[] {
         .filter(Boolean);
 }
 
-function buildTaskDefinition(text: string, mode: NormalizedWorkRequest['mode']): TaskDefinition {
+function buildTaskDefinition(
+    text: string,
+    mode: NormalizedWorkRequest['mode'],
+    workspacePath: string,
+    systemContext: SystemFolderResolutionOptions = {}
+): TaskDefinition {
     const segments = splitSegments(text);
     const objective = (segments[0] || text).trim();
     const constraints = segments.slice(1);
     const acceptanceCriteria = segments.filter((segment) =>
         /(只保留|必须|不要|输出|格式|每篇|唯一标识|summary|summarize|reply only|只回复)/i.test(segment)
     );
+    const localTaskPlan = analyzeLocalTaskIntent({
+        text,
+        workspacePath,
+        ...systemContext,
+    });
 
     return {
         id: randomUUID(),
@@ -113,7 +125,10 @@ function buildTaskDefinition(text: string, mode: NormalizedWorkRequest['mode']):
         acceptanceCriteria,
         dependencies: [],
         preferredSkills: inferPreferredSkills(text, mode),
-        preferredTools: [],
+        preferredTools: localTaskPlan?.preferredTools ?? [],
+        preferredWorkflow: localTaskPlan?.preferredWorkflow,
+        resolvedTargets: localTaskPlan?.targetFolder ? [localTaskPlan.targetFolder] : undefined,
+        localPlanHint: localTaskPlan,
     };
 }
 
@@ -131,6 +146,7 @@ export function analyzeWorkRequest(input: {
     sourceText: string;
     workspacePath: string;
     now?: Date;
+    systemContext?: SystemFolderResolutionOptions;
 }): NormalizedWorkRequest {
     const sourceText = input.sourceText.trim();
     const scheduledIntent = detectScheduledIntent(sourceText, input.now);
@@ -158,7 +174,7 @@ export function analyzeWorkRequest(input: {
                 recurrence: null,
             }
             : undefined,
-        tasks: [buildTaskDefinition(executableText, mode)],
+        tasks: [buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext)],
         clarification: {
             ...clarification,
             assumptions: [

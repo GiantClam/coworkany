@@ -8,6 +8,10 @@ import { isTauri } from '../../lib/tauri';
 
 export type SidebarTab = 'chat' | 'tasks';
 
+function normalizePath(value: string | undefined): string {
+    return (value ?? '').replace(/[\\/]+$/, '');
+}
+
 interface SidebarProps {
     activeTab: SidebarTab;
     onTabChange: (tab: SidebarTab) => void;
@@ -128,10 +132,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
     };
 
     const getWorkspaceSessions = (workspacePath: string) => {
-        if (activeWorkspace?.path === workspacePath) {
-            return Array.from(sessions.values());
+        const normalizedWorkspacePath = normalizePath(workspacePath);
+        if (!normalizedWorkspacePath) {
+            return [];
         }
-        return [];
+
+        return Array.from(sessions.values())
+            .filter((session) => normalizePath(session.workspacePath) === normalizedWorkspacePath)
+            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     };
 
     const handleCloseWindow = async () => {

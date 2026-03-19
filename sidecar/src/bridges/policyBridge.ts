@@ -26,7 +26,7 @@ export interface PolicyBridgeConfig {
 
 export interface ConfirmationResult {
     approved: boolean;
-    remember?: boolean;
+    approvalType?: EffectResponse['approvalType'];
     reason?: string;
 }
 
@@ -84,10 +84,14 @@ export class PolicyBridge {
     /**
      * Called when user confirms an effect (from event listener).
      */
-    handleConfirmation(requestId: string, approved: boolean, remember?: boolean): void {
+    handleConfirmation(
+        requestId: string,
+        approved: boolean,
+        approvalType?: EffectResponse['approvalType']
+    ): void {
         const pending = this.pendingConfirmations.get(requestId);
         if (pending) {
-            pending.resolve({ approved, remember });
+            pending.resolve({ approved, approvalType });
             this.pendingConfirmations.delete(requestId);
         }
     }
@@ -121,7 +125,7 @@ export class PolicyBridge {
                         requestId,
                         timestamp: new Date().toISOString(),
                         approved: result.approved,
-                        approvalType: result.remember ? 'session' : 'once',
+                        approvalType: result.approvalType ?? (result.approved ? 'once' : undefined),
                         denialReason: result.reason,
                     });
                 },

@@ -90,7 +90,11 @@ export function ProxySettings({ settings, onSave, saved }: ProxySettingsProps) {
                 </Field>
             </div>
 
-            <div className={styles.infoBox}>{t('settings.proxyHint')}</div>
+            <div className={styles.infoBox}>
+                {t('settings.proxyHintCompact', {
+                    defaultValue: 'Only sidecar provider traffic uses this proxy. Keep local hosts direct through the bypass list.',
+                })}
+            </div>
         </div>
     );
 }

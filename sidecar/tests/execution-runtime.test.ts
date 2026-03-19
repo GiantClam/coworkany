@@ -76,6 +76,7 @@ function makeDeps(overrides: Partial<ExecutionRuntimeDeps> = {}): ExecutionRunti
         },
         ensureToolpacksRegistered: async () => undefined,
         getToolsForTask: () => [],
+        executeTool: async () => ({}),
         buildProviderConfig: () => ({}),
         runAgentLoop: async () => ({
             artifactsCreated: ['/tmp/out.html'],
@@ -114,6 +115,95 @@ function makeDeps(overrides: Partial<ExecutionRuntimeDeps> = {}): ExecutionRunti
         quickLearnFromError: async () => ({ learned: true }),
         ...overrides,
     };
+}
+
+function makeLocalPreparedWorkRequest(workflowId: string) {
+    const intentByWorkflow: Record<string, 'inspect_folder' | 'organize_files' | 'deduplicate_files' | 'delete_files'> = {
+        'inspect-downloads-images': 'inspect_folder',
+        'organize-downloads-images': 'organize_files',
+        'deduplicate-downloads-images': 'deduplicate_files',
+        'delete-host-folder-files': 'delete_files',
+    };
+    const preferredToolsByWorkflow: Record<string, string[]> = {
+        'inspect-downloads-images': ['list_dir'],
+        'organize-downloads-images': ['list_dir', 'create_directory', 'batch_move_files'],
+        'deduplicate-downloads-images': ['list_dir', 'compute_file_hash', 'create_directory', 'batch_move_files'],
+        'delete-host-folder-files': ['list_dir', 'delete_path', 'batch_delete_paths'],
+    };
+    const requiredAccessByWorkflow: Record<string, string[]> = {
+        'inspect-downloads-images': ['read'],
+        'organize-downloads-images': ['read', 'write', 'move'],
+        'deduplicate-downloads-images': ['read', 'write', 'move'],
+        'delete-host-folder-files': ['read', 'delete'],
+    };
+
+    const prepared = makePreparedWorkRequest();
+    prepared.frozenWorkRequest.sourceText = '整理 Downloads 文件夹下的图片文件';
+    prepared.frozenWorkRequest.tasks[0].preferredTools = preferredToolsByWorkflow[workflowId] ?? [];
+    prepared.frozenWorkRequest.tasks[0].preferredWorkflow = workflowId;
+    prepared.frozenWorkRequest.tasks[0].resolvedTargets = [{
+        kind: 'well_known_folder',
+        folderId: 'downloads',
+        sourcePhrase: 'Downloads',
+        resolvedPath: '/Users/tester/Downloads',
+        os: 'macos',
+        confidence: 0.98,
+    }];
+    prepared.frozenWorkRequest.tasks[0].localPlanHint = {
+        intent: intentByWorkflow[workflowId] ?? 'organize_files',
+        targetFolder: prepared.frozenWorkRequest.tasks[0].resolvedTargets[0],
+        fileKinds: ['images'],
+        preferredTools: preferredToolsByWorkflow[workflowId] ?? [],
+        preferredWorkflow: workflowId,
+        requiredAccess: requiredAccessByWorkflow[workflowId] ?? ['read', 'write', 'move'],
+        traversalScope: 'top_level',
+        requiresHostAccessGrant: true,
+    };
+    prepared.executionQuery = '整理 Downloads 文件夹下的图片文件';
+    return prepared;
+}
+
+function makeExplicitPathPreparedWorkRequest(input: {
+    workflowId: string;
+    intent: 'inspect_folder' | 'organize_files' | 'delete_files' | 'deduplicate_files';
+    sourceText: string;
+    targetPath: string;
+    fileKinds: string[];
+    traversalScope?: 'top_level' | 'recursive';
+}) {
+    const prepared = makePreparedWorkRequest();
+    prepared.frozenWorkRequest.sourceText = input.sourceText;
+    prepared.frozenWorkRequest.tasks[0].preferredTools = input.intent === 'inspect_folder'
+        ? ['list_dir']
+        : input.intent === 'delete_files'
+            ? ['list_dir', 'delete_path', 'batch_delete_paths']
+            : input.intent === 'deduplicate_files'
+                ? ['list_dir', 'compute_file_hash', 'create_directory', 'batch_move_files']
+                : ['list_dir', 'create_directory', 'batch_move_files'];
+    prepared.frozenWorkRequest.tasks[0].preferredWorkflow = input.workflowId;
+    prepared.frozenWorkRequest.tasks[0].resolvedTargets = [{
+        kind: 'explicit_path',
+        sourcePhrase: input.targetPath,
+        resolvedPath: input.targetPath,
+        os: 'macos',
+        confidence: 0.99,
+    }];
+    prepared.frozenWorkRequest.tasks[0].localPlanHint = {
+        intent: input.intent,
+        targetFolder: prepared.frozenWorkRequest.tasks[0].resolvedTargets[0],
+        fileKinds: input.fileKinds,
+        preferredTools: prepared.frozenWorkRequest.tasks[0].preferredTools,
+        preferredWorkflow: input.workflowId,
+        requiredAccess: input.intent === 'inspect_folder'
+            ? ['read']
+            : input.intent === 'delete_files'
+                ? ['read', 'delete']
+                : ['read', 'write', 'move'],
+        traversalScope: input.traversalScope ?? 'top_level',
+        requiresHostAccessGrant: true,
+    };
+    prepared.executionQuery = input.sourceText;
+    return prepared;
 }
 
 describe('execution runtime', () => {
@@ -321,5 +411,442 @@ describe('execution runtime', () => {
             : capturedSystemPrompt?.skills;
         expect(promptText).toContain('## User Directives');
         expect(promptText).toContain('Do not use any.');
+    });
+
+    test('executePreparedTaskFlow uses deterministic local workflow for downloads image inspection', async () => {
+        let agentLoopCalled = false;
+        const summaries: string[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-6',
+            userQuery: '查看 Downloads 里的图片',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeLocalPreparedWorkRequest('inspect-downloads-images'),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName) => {
+                if (toolName === 'list_dir') {
+                    return [
+                        { name: 'a.png', isDir: false },
+                        { name: 'notes.txt', isDir: false },
+                        { name: 'b.jpg', isDir: false },
+                    ];
+                }
+                return {};
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: ({ summary }) => {
+                    summaries.push(summary);
+                },
+                onFailed: () => undefined,
+            }),
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(result.summary).toContain('Found 2 top-level image files');
+        expect(summaries[0]).toContain('a.png');
+    });
+
+    test('executePreparedTaskFlow uses deterministic local workflow for downloads image organization', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: string[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-7',
+            userQuery: '整理 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeLocalPreparedWorkRequest('organize-downloads-images'),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push(toolName);
+                if (toolName === 'list_dir' && args.path === '/Users/tester/Downloads') {
+                    return [
+                        { name: 'a.png', isDir: false },
+                        { name: 'b.jpg', isDir: false },
+                    ];
+                }
+                if (toolName === 'list_dir') {
+                    return [
+                        { name: 'PNG', isDir: true },
+                        { name: 'JPG', isDir: true },
+                    ];
+                }
+                if (toolName === 'create_directory') {
+                    return { success: true };
+                }
+                if (toolName === 'batch_move_files') {
+                    return {
+                        success: true,
+                        results: [
+                            { success: true },
+                            { success: true },
+                        ],
+                    };
+                }
+                return {};
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(toolCalls).toEqual([
+            'list_dir',
+            'create_directory',
+            'create_directory',
+            'batch_move_files',
+            'list_dir',
+        ]);
+        expect(result.summary).toContain('Organized 2 image files');
+        expect(result.summary).toContain('Created folders: PNG, JPG');
+    });
+
+    test('executePreparedTaskFlow uses deterministic local workflow for downloads image deduplication', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: string[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-8',
+            userQuery: '给 Downloads 文件夹下的图片去重',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeLocalPreparedWorkRequest('deduplicate-downloads-images'),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push(toolName);
+                if (toolName === 'list_dir' && args.path === '/Users/tester/Downloads') {
+                    return [
+                        { name: 'a.png', isDir: false },
+                        { name: 'copy-a.png', isDir: false },
+                        { name: 'b.jpg', isDir: false },
+                    ];
+                }
+                if (toolName === 'compute_file_hash' && args.path === '/Users/tester/Downloads/a.png') {
+                    return { success: true, hash: 'hash-a' };
+                }
+                if (toolName === 'compute_file_hash' && args.path === '/Users/tester/Downloads/copy-a.png') {
+                    return { success: true, hash: 'hash-a' };
+                }
+                if (toolName === 'compute_file_hash' && args.path === '/Users/tester/Downloads/b.jpg') {
+                    return { success: true, hash: 'hash-b' };
+                }
+                if (toolName === 'create_directory') {
+                    return { success: true };
+                }
+                if (toolName === 'batch_move_files') {
+                    return {
+                        success: true,
+                        results: [{ success: true }],
+                    };
+                }
+                if (toolName === 'list_dir' && args.path === '/Users/tester/Downloads/Duplicates') {
+                    return [{ name: 'hash-a', isDir: true }];
+                }
+                return {};
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(toolCalls).toEqual([
+            'list_dir',
+            'compute_file_hash',
+            'compute_file_hash',
+            'compute_file_hash',
+            'create_directory',
+            'batch_move_files',
+            'list_dir',
+        ]);
+        expect(result.summary).toContain('Quarantined 1 duplicate image files');
+        expect(result.summary).toContain('/Users/tester/Downloads/Duplicates');
+    });
+
+    test('executePreparedTaskFlow uses deterministic local workflow for host-folder image deletion', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: string[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-9',
+            userQuery: '删除 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeLocalPreparedWorkRequest('delete-host-folder-files'),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push(toolName);
+                if (toolName === 'list_dir' && args.path === '/Users/tester/Downloads') {
+                    if (toolCalls.filter((name) => name === 'list_dir').length === 1) {
+                        return [
+                            { name: 'a.png', isDir: false },
+                            { name: 'notes.txt', isDir: false },
+                            { name: 'b.jpg', isDir: false },
+                        ];
+                    }
+
+                    return [
+                        { name: 'notes.txt', isDir: false },
+                    ];
+                }
+                if (toolName === 'batch_delete_paths') {
+                    return {
+                        success: true,
+                        results: [
+                            { success: true, path: '/Users/tester/Downloads/a.png' },
+                            { success: true, path: '/Users/tester/Downloads/b.jpg' },
+                        ],
+                    };
+                }
+                return {};
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(toolCalls).toEqual([
+            'list_dir',
+            'batch_delete_paths',
+            'list_dir',
+        ]);
+        expect(result.summary).toContain('Deleted 2 top-level image files');
+        expect(result.summary).toContain('/Users/tester/Downloads');
+    });
+
+    test('executePreparedTaskFlow uses deterministic local workflow for generic explicit-path image organization', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: string[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-10',
+            userQuery: '整理 /Users/tester/Pictures/Inbox 里的图片文件',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeExplicitPathPreparedWorkRequest({
+                workflowId: 'organize-host-folder-files',
+                intent: 'organize_files',
+                sourceText: '整理 /Users/tester/Pictures/Inbox 里的图片文件',
+                targetPath: '/Users/tester/Pictures/Inbox',
+                fileKinds: ['images'],
+            }),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push(toolName);
+                if (toolName === 'list_dir' && args.path === '/Users/tester/Pictures/Inbox') {
+                    if (toolCalls.filter((name) => name === 'list_dir').length === 1) {
+                        return [
+                            { name: 'screen1.png', isDir: false },
+                            { name: 'screen2.jpg', isDir: false },
+                        ];
+                    }
+
+                    return [
+                        { name: 'PNG', isDir: true },
+                        { name: 'JPG', isDir: true },
+                    ];
+                }
+                if (toolName === 'create_directory') {
+                    return { success: true };
+                }
+                if (toolName === 'batch_move_files') {
+                    return {
+                        success: true,
+                        results: [
+                            { success: true },
+                            { success: true },
+                        ],
+                    };
+                }
+                return {};
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(toolCalls).toEqual([
+            'list_dir',
+            'create_directory',
+            'create_directory',
+            'batch_move_files',
+            'list_dir',
+        ]);
+        expect(result.summary).toContain('Organized 2 image files');
+        expect(result.summary).toContain('/Users/tester/Pictures/Inbox');
+    });
+
+    test('executePreparedTaskFlow uses deterministic local workflow for generic explicit-path document organization', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: string[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-11',
+            userQuery: '整理 /Users/tester/Documents/Inbox 里的 PDF 文档',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeExplicitPathPreparedWorkRequest({
+                workflowId: 'organize-host-folder-files',
+                intent: 'organize_files',
+                sourceText: '整理 /Users/tester/Documents/Inbox 里的 PDF 文档',
+                targetPath: '/Users/tester/Documents/Inbox',
+                fileKinds: ['documents'],
+            }),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push(toolName);
+                if (toolName === 'list_dir' && args.path === '/Users/tester/Documents/Inbox') {
+                    if (toolCalls.filter((name) => name === 'list_dir').length === 1) {
+                        return [
+                            { name: 'a.pdf', isDir: false },
+                            { name: 'b.docx', isDir: false },
+                        ];
+                    }
+
+                    return [
+                        { name: 'PDF', isDir: true },
+                        { name: 'DOCX', isDir: true },
+                    ];
+                }
+                if (toolName === 'create_directory') {
+                    return { success: true };
+                }
+                if (toolName === 'batch_move_files') {
+                    return {
+                        success: true,
+                        results: [
+                            { success: true },
+                            { success: true },
+                        ],
+                    };
+                }
+                return {};
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(toolCalls).toEqual([
+            'list_dir',
+            'create_directory',
+            'create_directory',
+            'batch_move_files',
+            'list_dir',
+        ]);
+        expect(result.summary).toContain('Organized 2 document files');
+        expect(result.summary).toContain('/Users/tester/Documents/Inbox/Documents');
+    });
+
+    test('executePreparedTaskFlow uses recursive traversal for explicit-path document organization', async () => {
+        let agentLoopCalled = false;
+        const listDirArgs: any[] = [];
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-12',
+            userQuery: '递归整理 /Users/tester/Documents/Inbox 里的 PDF 文档和所有子文件夹',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makeExplicitPathPreparedWorkRequest({
+                workflowId: 'organize-host-folder-files',
+                intent: 'organize_files',
+                sourceText: '递归整理 /Users/tester/Documents/Inbox 里的 PDF 文档和所有子文件夹',
+                targetPath: '/Users/tester/Documents/Inbox',
+                fileKinds: ['documents'],
+                traversalScope: 'recursive',
+            }),
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+            executeTool: async (_taskId, toolName, args) => {
+                if (toolName === 'list_dir') {
+                    listDirArgs.push(args);
+                    if (listDirArgs.length === 1) {
+                        return [
+                            { name: 'nested', path: 'nested', isDir: true },
+                            { name: 'a.pdf', path: 'nested/a.pdf', isDir: false },
+                            { name: 'b.docx', path: 'nested/deeper/b.docx', isDir: false },
+                        ];
+                    }
+
+                    return [
+                        { name: 'PDF', isDir: true },
+                        { name: 'DOCX', isDir: true },
+                    ];
+                }
+                if (toolName === 'create_directory') {
+                    return { success: true };
+                }
+                if (toolName === 'batch_move_files') {
+                    return {
+                        success: true,
+                        results: [
+                            { success: true },
+                            { success: true },
+                        ],
+                    };
+                }
+                return {};
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(result.success).toBe(true);
+        expect(listDirArgs[0]).toMatchObject({
+            path: '/Users/tester/Documents/Inbox',
+            recursive: true,
+            max_depth: 16,
+        });
+        expect(result.summary).toContain('Organized 2 document files');
     });
 });

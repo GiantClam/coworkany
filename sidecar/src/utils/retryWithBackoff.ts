@@ -48,6 +48,45 @@ export interface RetryInfo {
 const RETRYABLE_STATUS_CODES = [429, 500, 502, 503];
 const NON_RETRYABLE_ERRORS = ['missing_api_key', 'missing_base_url', 'invalid_api_key'];
 
+function formatErrorDetails(error: Error): string {
+    const details: string[] = [];
+    const unknownError = error as Error & {
+        code?: string;
+        errno?: string | number;
+        syscall?: string;
+        cause?: unknown;
+    };
+
+    if (unknownError.name && unknownError.name !== 'Error') {
+        details.push(`name=${unknownError.name}`);
+    }
+    if (unknownError.code) {
+        details.push(`code=${unknownError.code}`);
+    }
+    if (unknownError.errno !== undefined) {
+        details.push(`errno=${String(unknownError.errno)}`);
+    }
+    if (unknownError.syscall) {
+        details.push(`syscall=${unknownError.syscall}`);
+    }
+
+    let currentCause = unknownError.cause;
+    let depth = 0;
+    while (currentCause && depth < 3) {
+        if (currentCause instanceof Error) {
+            const parts = [currentCause.name, currentCause.message].filter(Boolean);
+            details.push(`cause=${parts.join(': ')}`);
+            currentCause = (currentCause as Error & { cause?: unknown }).cause;
+        } else {
+            details.push(`cause=${String(currentCause)}`);
+            break;
+        }
+        depth += 1;
+    }
+
+    return details.length > 0 ? ` (${details.join(', ')})` : '';
+}
+
 // ============================================================================
 // Main function
 // ============================================================================
@@ -157,7 +196,10 @@ export async function fetchWithBackoff(
                 throw lastError;
             } else {
                 const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
-                console.warn(`[Retry] Network error on attempt ${attempt + 1}: ${msg}. Retrying in ${delay}ms...`);
+                console.warn(
+                    `[Retry] Network error on attempt ${attempt + 1}: ${msg}${formatErrorDetails(lastError)}. ` +
+                    `Retrying in ${delay}ms...`
+                );
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }

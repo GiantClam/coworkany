@@ -145,103 +145,125 @@ export const DirectivesEditor: React.FC = () => {
             <div className={styles.stack}>
                 {directives.map((directive) => (
                     <div key={directive.id} className={styles.directiveCard}>
-                        <div className={styles.directiveInfo} style={{ alignItems: 'stretch', flex: 1 }}>
-                            <span className={styles.priorityBadge}>P{directive.priority}</span>
-                            <div className={styles.directiveCopy} style={{ gap: 8 }}>
+                        <div className={styles.directiveEditorTop}>
+                            <div className={styles.directiveBadgeRow}>
+                                <span className={styles.priorityBadge}>P{directive.priority}</span>
+                                <button
+                                    type="button"
+                                    className={`${styles.toggleInline} ${directive.enabled ? styles.toggleInlineActive : ''}`}
+                                    aria-pressed={directive.enabled}
+                                    onClick={() => void toggleDirective(directive)}
+                                    disabled={loading}
+                                >
+                                    {directive.enabled ? t('common.on') : t('common.off')}
+                                </button>
+                            </div>
+
+                            <div className={styles.directiveActions}>
+                                <button
+                                    type="button"
+                                    className={styles.secondaryAction}
+                                    onClick={() => void removeDirective(directive.id)}
+                                    disabled={loading}
+                                >
+                                    {t('common.remove')}
+                                </button>
+                                <button
+                                    type="button"
+                                    className={styles.verifyButton}
+                                    onClick={() => void saveDirective(directive)}
+                                    disabled={loading}
+                                >
+                                    {t('common.save')}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className={styles.directiveFields}>
+                            <div className={styles.field}>
+                                <div className={styles.label}>{t('settings.directiveName', { defaultValue: 'Name' })}</div>
                                 <input
-                                    className="input-field"
+                                    className={styles.inputField}
                                     value={directive.name}
                                     onChange={(event) => updateLocalDirective(directive.id, { name: event.target.value })}
                                     disabled={loading}
                                 />
+                            </div>
+                            <div className={styles.field}>
+                                <div className={styles.label}>{t('settings.directiveContent', { defaultValue: 'Instruction' })}</div>
                                 <textarea
-                                    className="input-field"
+                                    className={`${styles.inputField} ${styles.textareaField}`}
                                     value={directive.content}
                                     onChange={(event) => updateLocalDirective(directive.id, { content: event.target.value })}
                                     disabled={loading}
-                                    rows={3}
-                                    style={{ resize: 'vertical' }}
+                                    rows={4}
                                 />
+                            </div>
+                            <div className={styles.field}>
+                                <div className={styles.label}>{t('settings.directiveTrigger', { defaultValue: 'Trigger Regex' })}</div>
                                 <input
-                                    className="input-field"
+                                    className={styles.inputField}
                                     value={directive.trigger ?? ''}
                                     onChange={(event) => updateLocalDirective(directive.id, { trigger: event.target.value })}
                                     disabled={loading}
-                                    placeholder="Trigger regex (optional)"
+                                    placeholder={t('settings.directiveTriggerPlaceholder', { defaultValue: 'Optional' })}
                                 />
                             </div>
-                        </div>
-
-                        <div className={styles.directiveActions} style={{ alignItems: 'stretch' }}>
-                            <button
-                                type="button"
-                                className={`${styles.toggleInline} ${directive.enabled ? styles.toggleInlineActive : ''}`}
-                                aria-pressed={directive.enabled}
-                                onClick={() => void toggleDirective(directive)}
-                                disabled={loading}
-                            >
-                                {directive.enabled ? t('common.on') : t('common.off')}
-                            </button>
-                            <button
-                                type="button"
-                                className={styles.verifyButton}
-                                onClick={() => void saveDirective(directive)}
-                                disabled={loading}
-                            >
-                                {t('common.save')}
-                            </button>
-                            <button
-                                type="button"
-                                className={styles.verifyButton}
-                                onClick={() => void removeDirective(directive.id)}
-                                disabled={loading}
-                            >
-                                {t('common.remove')}
-                            </button>
                         </div>
                     </div>
                 ))}
             </div>
 
             <div className={styles.directiveCard} style={{ marginTop: 12 }}>
-                <div className={styles.directiveInfo} style={{ alignItems: 'stretch', flex: 1 }}>
-                    <span className={styles.priorityBadge}>P{draft.priority}</span>
-                    <div className={styles.directiveCopy} style={{ gap: 8 }}>
+                <div className={styles.directiveEditorTop}>
+                    <div className={styles.directiveBadgeRow}>
+                        <span className={styles.priorityBadge}>P{draft.priority}</span>
+                    </div>
+
+                    <button
+                        type="button"
+                        className={styles.verifyButton}
+                        onClick={() => void addDirective()}
+                        disabled={loading || !draft.name.trim() || !draft.content.trim()}
+                    >
+                        <PlusIcon />
+                        <span>{t('settings.addNewDirective')}</span>
+                    </button>
+                </div>
+
+                <div className={styles.directiveFields}>
+                    <div className={styles.field}>
+                        <div className={styles.label}>{t('settings.directiveName', { defaultValue: 'Name' })}</div>
                         <input
-                            className="input-field"
+                            className={styles.inputField}
                             value={draft.name}
                             onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
                             disabled={loading}
-                            placeholder="Directive name"
+                            placeholder={t('settings.directiveNamePlaceholder', { defaultValue: 'Directive name' })}
                         />
+                    </div>
+                    <div className={styles.field}>
+                        <div className={styles.label}>{t('settings.directiveContent', { defaultValue: 'Instruction' })}</div>
                         <textarea
-                            className="input-field"
+                            className={`${styles.inputField} ${styles.textareaField}`}
                             value={draft.content}
                             onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
                             disabled={loading}
-                            rows={3}
-                            placeholder="Directive content"
-                            style={{ resize: 'vertical' }}
+                            rows={4}
+                            placeholder={t('settings.directiveContentPlaceholder', { defaultValue: 'Directive content' })}
                         />
+                    </div>
+                    <div className={styles.field}>
+                        <div className={styles.label}>{t('settings.directiveTrigger', { defaultValue: 'Trigger Regex' })}</div>
                         <input
-                            className="input-field"
+                            className={styles.inputField}
                             value={draft.trigger}
                             onChange={(event) => setDraft((prev) => ({ ...prev, trigger: event.target.value }))}
                             disabled={loading}
-                            placeholder="Trigger regex (optional)"
+                            placeholder={t('settings.directiveTriggerPlaceholder', { defaultValue: 'Optional' })}
                         />
                     </div>
                 </div>
-
-                <button
-                    type="button"
-                    className={`${styles.verifyButton} ${styles.sectionCta}`}
-                    onClick={() => void addDirective()}
-                    disabled={loading || !draft.name.trim() || !draft.content.trim()}
-                >
-                    <PlusIcon />
-                    <span>{t('settings.addNewDirective')}</span>
-                </button>
             </div>
 
             {error && (

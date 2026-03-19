@@ -1,3 +1,6 @@
+import type { LocalTaskPlanHint } from './localTaskIntent';
+import type { ResolvedFolderReference } from '../system/wellKnownFolders';
+
 export type WorkMode =
     | 'chat'
     | 'immediate_task'
@@ -21,6 +24,9 @@ export type TaskDefinition = {
     dependencies: string[];
     preferredSkills: string[];
     preferredTools: string[];
+    preferredWorkflow?: string;
+    resolvedTargets?: ResolvedFolderReference[];
+    localPlanHint?: LocalTaskPlanHint;
 };
 
 export type ClarificationDecision = {

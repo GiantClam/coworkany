@@ -52,6 +52,186 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[0]?.preferredSkills).toContain('planning-with-files');
     });
 
+    test('resolves downloads image organization requests into a host-folder local task plan', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '整理 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredTools).toEqual([
+            'list_dir',
+            'create_directory',
+            'batch_move_files',
+        ]);
+        expect(analyzed.tasks[0]?.preferredWorkflow).toBe('organize-downloads-images');
+        expect(analyzed.tasks[0]?.resolvedTargets?.[0]).toMatchObject({
+            kind: 'well_known_folder',
+            folderId: 'downloads',
+            sourcePhrase: 'Downloads',
+            resolvedPath: '/Users/tester/Downloads',
+            os: 'macos',
+        });
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'organize_files',
+            fileKinds: ['images'],
+            traversalScope: 'top_level',
+            preferredTools: ['list_dir', 'create_directory', 'batch_move_files'],
+            requiredAccess: ['read', 'write', 'move'],
+            requiresHostAccessGrant: true,
+        });
+    });
+
+    test('resolves Chinese system folder phrases without requiring an absolute path', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '查看下载文件夹里的图片',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/home/tester',
+                platform: 'linux',
+            },
+        });
+
+        expect(analyzed.tasks[0]?.resolvedTargets?.[0]).toMatchObject({
+            folderId: 'downloads',
+            resolvedPath: '/home/tester/Downloads',
+            os: 'linux',
+        });
+        expect(analyzed.tasks[0]?.localPlanHint?.intent).toBe('inspect_folder');
+        expect(analyzed.tasks[0]?.preferredTools).toEqual(['list_dir']);
+    });
+
+    test('resolves downloads image deduplication requests into a deterministic hash-based workflow', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '给 Downloads 文件夹下的图片去重',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredTools).toEqual([
+            'list_dir',
+            'compute_file_hash',
+            'create_directory',
+            'batch_move_files',
+        ]);
+        expect(analyzed.tasks[0]?.preferredWorkflow).toBe('deduplicate-downloads-images');
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'deduplicate_files',
+            fileKinds: ['images'],
+            traversalScope: 'top_level',
+            preferredTools: ['list_dir', 'compute_file_hash', 'create_directory', 'batch_move_files'],
+            requiredAccess: ['read', 'write', 'move'],
+            requiresHostAccessGrant: true,
+        });
+    });
+
+    test('resolves host-folder delete requests into structured delete tools', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '删除 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredTools).toEqual([
+            'list_dir',
+            'delete_path',
+            'batch_delete_paths',
+        ]);
+        expect(analyzed.tasks[0]?.preferredWorkflow).toBe('delete-host-folder-files');
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'delete_files',
+            fileKinds: ['images'],
+            traversalScope: 'top_level',
+            preferredTools: ['list_dir', 'delete_path', 'batch_delete_paths'],
+            requiredAccess: ['read', 'delete'],
+            requiresHostAccessGrant: true,
+        });
+    });
+
+    test('resolves explicit absolute paths into generic host-folder workflows', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '整理 /Users/tester/Pictures/Inbox 里的图片文件',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredWorkflow).toBe('organize-host-folder-files');
+        expect(analyzed.tasks[0]?.resolvedTargets?.[0]).toMatchObject({
+            kind: 'explicit_path',
+            sourcePhrase: '/Users/tester/Pictures/Inbox',
+            resolvedPath: '/Users/tester/Pictures/Inbox',
+            os: 'macos',
+        });
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'organize_files',
+            fileKinds: ['images'],
+            traversalScope: 'top_level',
+            preferredTools: ['list_dir', 'create_directory', 'batch_move_files'],
+            requiresHostAccessGrant: true,
+        });
+    });
+
+    test('resolves explicit absolute paths for document organization into generic workflows', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '整理 /Users/tester/Documents/Inbox 里的 PDF 文档',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredWorkflow).toBe('organize-host-folder-files');
+        expect(analyzed.tasks[0]?.resolvedTargets?.[0]).toMatchObject({
+            kind: 'explicit_path',
+            sourcePhrase: '/Users/tester/Documents/Inbox',
+            resolvedPath: '/Users/tester/Documents/Inbox',
+            os: 'macos',
+        });
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'organize_files',
+            fileKinds: ['documents'],
+            traversalScope: 'top_level',
+            preferredTools: ['list_dir', 'create_directory', 'batch_move_files'],
+            requiresHostAccessGrant: true,
+        });
+    });
+
+    test('detects recursive traversal scope for explicit-path document organization', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '递归整理 /Users/tester/Documents/Inbox 里的 PDF 文档和所有子文件夹',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'organize_files',
+            fileKinds: ['documents'],
+            traversalScope: 'recursive',
+            requiresHostAccessGrant: true,
+        });
+    });
+
     test('analyzes and freezes scheduled requests before execution', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '20秒后，整理 3 篇 Reddit 内容，并将结果用语音播报给我。每篇只保留标题和一句启发。',
