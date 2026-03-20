@@ -73,9 +73,61 @@ describe('#16: Voice Input (STT)', () => {
         expect(content).toContain('MediaRecorder');
         expect(content).toContain('transcribe_audio');
         expect(content).toContain('get_voice_provider_status');
+        expect(content).toContain('getVoiceSettings');
+        expect(content).toContain('providerMode');
         expect(content).toContain('getUserMedia');
         expect(content).toContain('requestMicrophoneAccess');
         expect(content).toContain('service-not-allowed');
+    });
+
+    test('macOS system ASR uses native bridge instead of Web Speech fallback', () => {
+        const hookContent = readFile(path.join(DESKTOP_SRC, 'hooks', 'useVoiceInput.ts'));
+        const ipcContent = readFile(path.join(DESKTOP_SRC, '..', 'src-tauri', 'src', 'ipc.rs'));
+        const nativeContent = readFile(path.join(DESKTOP_SRC, '..', 'src-tauri', 'native', 'macos_asr.m'));
+        expect(hookContent).toContain('supportsNativeSystemAsr');
+        expect(hookContent).toContain('start_native_asr');
+        expect(hookContent).toContain('stop_native_asr');
+        expect(hookContent).toContain('native-asr-segment');
+        expect(ipcContent).toContain('pub async fn start_native_asr');
+        expect(ipcContent).toContain('pub async fn stop_native_asr');
+        expect(ipcContent).toContain('native-asr-segment');
+        expect(nativeContent).toContain('coworkany_native_asr_on_segment');
+        expect(nativeContent).toContain('result.isFinal');
+        expect(nativeContent).toContain('coworkany_start_recognition_task');
+    });
+
+    test('auto/system ASR no longer falls back to remote transcription provider', () => {
+        const hookContent = readFile(path.join(DESKTOP_SRC, 'hooks', 'useVoiceInput.ts'));
+        const ipcContent = readFile(path.join(DESKTOP_SRC, '..', 'src-tauri', 'src', 'ipc.rs'));
+        expect(hookContent).toContain('resolveAsrSelection');
+        expect(hookContent).toContain("await startRecordedListening('custom')");
+        expect(hookContent).toContain("setError('speech_not_supported')");
+        expect(ipcContent).toContain('allow_remote_provider_fallback = provider_mode.is_none()');
+    });
+
+    test('settings exposes voice provider mode controls', () => {
+        const settingsView = readFile(
+            path.join(DESKTOP_SRC, 'components', 'Settings', 'SettingsView.tsx')
+        );
+        const configStore = readFile(path.join(DESKTOP_SRC, 'lib', 'configStore.ts'));
+        expect(settingsView).toContain('VoiceSettings');
+        expect(configStore).toContain('getVoiceSettings');
+        expect(configStore).toContain('saveVoiceSettings');
+        expect(configStore).toContain("providerMode: 'auto'");
+    });
+
+    test('continuous voice mode auto-submits finalized segments', () => {
+        const inputArea = readFile(
+            path.join(DESKTOP_SRC, 'components', 'Chat', 'components', 'InputArea.tsx')
+        );
+        const chatInterface = readFile(
+            path.join(DESKTOP_SRC, 'components', 'Chat', 'ChatInterface.tsx')
+        );
+        expect(inputArea).toContain('onVoiceSegment');
+        expect(inputArea).toContain('lastFinalSegmentId');
+        expect(chatInterface).toContain('voiceSegmentQueueRef');
+        expect(chatInterface).toContain('processVoiceSegmentQueue');
+        expect(chatInterface).toContain('submitRequest(segment, { includeAttachments: false })');
     });
 
     test('i18n has voice input translations', () => {
@@ -87,6 +139,7 @@ describe('#16: Voice Input (STT)', () => {
         expect(en.voice.stopRecording).toBeDefined();
         expect(en.voice.listening).toBeDefined();
         expect(en.voice.processingTranscription).toBeDefined();
+        expect(en.voice.speechPermissionError).toBeDefined();
     });
 });
 

@@ -10,16 +10,35 @@
  * reusing the user's existing Chrome browser and login sessions.
  */
 
-import { ToolDefinition } from './standard';
+import { ToolDefinition, type ToolContext } from './standard';
 import { browserService } from '../services/browserService';
 import type { BrowserMode } from '../services/browserService';
 
-async function ensureBrowserConnected(): Promise<void> {
+function createCancellationSignal(context?: ToolContext): { signal?: AbortSignal; cleanup: () => void } {
+    if (!context?.onCancel) {
+        return {
+            signal: undefined,
+            cleanup: () => {},
+        };
+    }
+
+    const controller = new AbortController();
+    const unsubscribe = context.onCancel((reason) => {
+        controller.abort(reason || 'Browser task cancelled');
+    });
+
+    return {
+        signal: controller.signal,
+        cleanup: () => unsubscribe(),
+    };
+}
+
+async function ensureBrowserConnected(signal?: AbortSignal): Promise<void> {
     if (browserService.isConnected()) {
         return;
     }
 
-    const connection = await browserService.connect({});
+    const connection = await browserService.connect({ signal });
     const mode = connection.isUserProfile ? 'CDP (system Chrome)' : 'Playwright Chromium (persistent profile)';
     console.error(`[BrowserTools] Auto-connected browser via ${mode}`);
 }
@@ -55,12 +74,17 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
             },
         },
     },
-    handler: async (args: { profile_name?: string; headless?: boolean; require_user_profile?: boolean }) => {
+    handler: async (
+        args: { profile_name?: string; headless?: boolean; require_user_profile?: boolean },
+        context?: ToolContext
+    ) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
             const connection = await browserService.connect({
                 profileName: args.profile_name,
                 headless: args.headless,
                 requireUserProfile: args.require_user_profile,
+                signal,
             });
 
             const profiles = await browserService.getAvailableProfiles();
@@ -86,6 +110,8 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
                     ? 'User-profile mode required but unavailable. Start Chrome with --remote-debugging-port=9222 and retry browser_connect.'
                     : 'Browser connection failed unexpectedly. This should not happen as Playwright fallback is usually available.',
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -101,7 +127,8 @@ export const browserDisconnectTool: ToolDefinition = {
         type: 'object',
         properties: {},
     },
-    handler: async () => {
+    handler: async (_args: {}, context?: ToolContext) => {
+        const { cleanup } = createCancellationSignal(context);
         try {
             await browserService.disconnect();
             return {
@@ -113,6 +140,8 @@ export const browserDisconnectTool: ToolDefinition = {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -178,12 +207,17 @@ export const browserNavigateTool: ToolDefinition = {
         },
         required: ['url'],
     },
-    handler: async (args: { url: string; wait_until?: 'load' | 'domcontentloaded' | 'networkidle'; timeout_ms?: number }) => {
+    handler: async (
+        args: { url: string; wait_until?: 'load' | 'domcontentloaded' | 'networkidle'; timeout_ms?: number },
+        context?: ToolContext
+    ) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.navigate(args.url, {
                 waitUntil: args.wait_until,
                 timeout: args.timeout_ms,
+                signal,
             });
 
             return {
@@ -196,6 +230,8 @@ export const browserNavigateTool: ToolDefinition = {
                 error: error instanceof Error ? error.message : String(error),
                 tip: 'Navigation failed. If auto-connect did not succeed, try browser_connect explicitly and retry.',
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -220,12 +256,14 @@ export const browserScreenshotTool: ToolDefinition = {
             },
         },
     },
-    handler: async (args: { selector?: string; full_page?: boolean }) => {
+    handler: async (args: { selector?: string; full_page?: boolean }, context?: ToolContext) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.screenshot({
                 selector: args.selector,
                 fullPage: args.full_page,
+                signal,
             });
 
             return {
@@ -240,6 +278,8 @@ export const browserScreenshotTool: ToolDefinition = {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -260,10 +300,11 @@ export const browserGetContentTool: ToolDefinition = {
             },
         },
     },
-    handler: async (args: { as_html?: boolean }) => {
+    handler: async (args: { as_html?: boolean }, context?: ToolContext) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
-            const result = await browserService.getContent(!args.as_html);
+            await ensureBrowserConnected(signal);
+            const result = await browserService.getContent(!args.as_html, { signal });
 
             return {
                 success: true,
@@ -274,6 +315,8 @@ export const browserGetContentTool: ToolDefinition = {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -306,7 +349,10 @@ export const browserClickTool: ToolDefinition = {
             },
         },
     },
-    handler: async (args: { selector?: string; text?: string; timeout_ms?: number }) => {
+    handler: async (
+        args: { selector?: string; text?: string; timeout_ms?: number },
+        context?: ToolContext
+    ) => {
         if (!args.selector && !args.text) {
             return {
                 success: false,
@@ -314,12 +360,14 @@ export const browserClickTool: ToolDefinition = {
             };
         }
 
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.click({
                 selector: args.selector,
                 text: args.text,
                 timeout: args.timeout_ms,
+                signal,
             });
 
             return {
@@ -332,6 +380,8 @@ export const browserClickTool: ToolDefinition = {
                 error: error instanceof Error ? error.message : String(error),
                 tip: 'Check if the element exists and is visible.',
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -361,13 +411,18 @@ export const browserFillTool: ToolDefinition = {
         },
         required: ['selector', 'value'],
     },
-    handler: async (args: { selector: string; value: string; clear_first?: boolean }) => {
+    handler: async (
+        args: { selector: string; value: string; clear_first?: boolean },
+        context?: ToolContext
+    ) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.fill({
                 selector: args.selector,
                 value: args.value,
                 clearFirst: args.clear_first,
+                signal,
             });
 
             return {
@@ -380,6 +435,8 @@ export const browserFillTool: ToolDefinition = {
                 error: error instanceof Error ? error.message : String(error),
                 tip: 'Check if the input field exists and is enabled.',
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -410,13 +467,18 @@ export const browserWaitTool: ToolDefinition = {
         },
         required: ['selector'],
     },
-    handler: async (args: { selector: string; state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout_ms?: number }) => {
+    handler: async (
+        args: { selector: string; state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout_ms?: number },
+        context?: ToolContext
+    ) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.wait({
                 selector: args.selector,
                 state: args.state,
                 timeout: args.timeout_ms,
+                signal,
             });
 
             return {
@@ -428,6 +490,8 @@ export const browserWaitTool: ToolDefinition = {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -453,10 +517,11 @@ export const browserExecuteScriptTool: ToolDefinition = {
         },
         required: ['script'],
     },
-    handler: async (args: { script: string }) => {
+    handler: async (args: { script: string }, context?: ToolContext) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
-            const result = await browserService.executeScript(args.script);
+            await ensureBrowserConnected(signal);
+            const result = await browserService.executeScript(args.script, { signal });
 
             return {
                 success: true,
@@ -467,6 +532,8 @@ export const browserExecuteScriptTool: ToolDefinition = {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -503,13 +570,18 @@ In auto mode: tries precise first, then falls back to smart.`,
         },
         required: ['file_path'],
     },
-    handler: async (args: { file_path: string; selector?: string; instruction?: string }) => {
+    handler: async (
+        args: { file_path: string; selector?: string; instruction?: string },
+        context?: ToolContext
+    ) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.uploadFile({
                 filePath: args.file_path,
                 selector: args.selector,
                 instruction: args.instruction,
+                signal,
             });
 
             return {
@@ -523,6 +595,8 @@ In auto mode: tries precise first, then falls back to smart.`,
                 error: error instanceof Error ? error.message : String(error),
                 tip: 'Make sure the file exists and the browser is connected. For complex upload UIs, try smart mode with browser_set_mode.',
             };
+        } finally {
+            cleanup();
         }
     },
 };
@@ -612,12 +686,14 @@ Examples:
         },
         required: ['action'],
     },
-    handler: async (args: { action: string; context?: string }) => {
+    handler: async (args: { action: string; context?: string }, context?: ToolContext) => {
+        const { signal, cleanup } = createCancellationSignal(context);
         try {
-            await ensureBrowserConnected();
+            await ensureBrowserConnected(signal);
             const result = await browserService.aiAction({
                 action: args.action,
                 context: args.context,
+                signal,
             });
 
             return {
@@ -632,6 +708,8 @@ Examples:
                 error: error instanceof Error ? error.message : String(error),
                 tip: 'Ensure browser-use-service is running and the browser is connected.',
             };
+        } finally {
+            cleanup();
         }
     },
 };

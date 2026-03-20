@@ -7,9 +7,14 @@ const appPath = path.join(desktopDir, 'src-tauri', 'target', 'release', 'bundle'
 const swiftScript = path.join(desktopDir, 'tests', 'native-shell-macos.swift');
 const promptAccessibility = process.argv.includes('--prompt-accessibility');
 const noLaunch = process.argv.includes('--no-launch');
+const clickContinueTask = process.argv.includes('--click-continue-task');
+const pidIndex = process.argv.indexOf('--pid');
+const pid = pidIndex >= 0 ? process.argv[pidIndex + 1] : undefined;
 
 const submitTextIndex = process.argv.indexOf('--submit-text');
 const submitText = submitTextIndex >= 0 ? process.argv[submitTextIndex + 1] : undefined;
+const waitTimeoutIndex = process.argv.indexOf('--wait-timeout');
+const waitTimeout = waitTimeoutIndex >= 0 ? process.argv[waitTimeoutIndex + 1] : undefined;
 
 if (process.platform !== 'darwin') {
   console.error('[native-shell-macos] This runner is macOS-only.');
@@ -23,8 +28,17 @@ if (promptAccessibility) {
 if (noLaunch) {
   args.push('--no-launch');
 }
+if (clickContinueTask) {
+  args.push('--click-continue-task');
+}
+if (pid) {
+  args.push('--pid', pid);
+}
 if (submitText) {
   args.push('--submit-text', submitText);
+}
+if (waitTimeout) {
+  args.push('--wait-timeout', waitTimeout);
 }
 
 const child = spawn('swift', args, {

@@ -59,6 +59,20 @@ describe('task runtime recovery', () => {
         });
     });
 
+    test('keeps interrupted runtimes resumable across repeated restarts', () => {
+        const recovery = planTaskRuntimeRecovery(makeRecord({
+            status: 'interrupted',
+        }));
+
+        expect(recovery).toEqual({
+            type: 'restore_interrupted',
+            record: expect.objectContaining({
+                taskId: 'task-1',
+                status: 'interrupted',
+            }),
+        });
+    });
+
     test('treats malformed suspended records as interrupted', () => {
         const recovery = planTaskRuntimeRecovery(makeRecord({
             status: 'suspended',

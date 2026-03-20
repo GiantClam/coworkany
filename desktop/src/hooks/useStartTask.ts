@@ -8,6 +8,7 @@ import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore } from '../stores/useTaskEventStore';
 import { useWorkspaceStore, type Workspace } from '../stores/useWorkspaceStore';
+import type { VoiceProviderMode } from '../types';
 
 // ============================================================================
 // Types
@@ -28,6 +29,7 @@ export interface StartTaskConfig {
     enabledClaudeSkills?: string[];
     enabledToolpacks?: string[];
     enabledSkills?: string[];
+    voiceProviderMode?: VoiceProviderMode;
 }
 
 export interface StartTaskResult {

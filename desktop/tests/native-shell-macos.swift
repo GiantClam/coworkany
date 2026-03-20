@@ -10,6 +10,7 @@ enum NativeShellError: Error, CustomStringConvertible {
     case attributeReadFailed(String)
     case dragDidNotMoveWindow(CGPoint, CGPoint)
     case elementNotFound(String)
+    case elementNotFoundWithDiagnostics(String, String)
     case valueVerificationFailed(String)
 
     var description: String {
@@ -28,6 +29,8 @@ enum NativeShellError: Error, CustomStringConvertible {
             return "Window did not move after drag. Before: \(before), after: \(after)"
         case .elementNotFound(let description):
             return "Could not find UI element: \(description)"
+        case .elementNotFoundWithDiagnostics(let description, let diagnostics):
+            return "Could not find UI element: \(description)\nAccessibility snapshot:\n\(diagnostics)"
         case .valueVerificationFailed(let description):
             return "Could not verify input value: \(description)"
         }
@@ -38,20 +41,26 @@ struct CliOptions {
     let appPath: String
     let bundleId: String
     let processName: String?
+    let processId: pid_t?
     let inputProbe: String
     let submitText: String?
+    let clickContinueTask: Bool
     let promptAccessibility: Bool
     let noLaunch: Bool
+    let waitTimeout: TimeInterval
 }
 
 func parseArgs() -> CliOptions {
     var appPath = "/Users/beihuang/Documents/github/coworkany/desktop/src-tauri/target/release/bundle/macos/CoworkAny.app"
     var bundleId = "com.coworkany.desktop"
     var processName: String?
+    var processId: pid_t?
     var inputProbe = "sk-native-shell-test"
     var submitText: String?
+    var clickContinueTask = false
     var promptAccessibility = false
     var noLaunch = false
+    var waitTimeout: TimeInterval = 15
 
     var iterator = CommandLine.arguments.dropFirst().makeIterator()
     while let arg = iterator.next() {
@@ -62,14 +71,24 @@ func parseArgs() -> CliOptions {
             if let value = iterator.next() { bundleId = value }
         case "--process-name":
             if let value = iterator.next() { processName = value }
+        case "--pid":
+            if let value = iterator.next(), let parsed = Int32(value) {
+                processId = parsed
+            }
         case "--input":
             if let value = iterator.next() { inputProbe = value }
         case "--submit-text":
             if let value = iterator.next() { submitText = value }
+        case "--click-continue-task":
+            clickContinueTask = true
         case "--prompt-accessibility":
             promptAccessibility = true
         case "--no-launch":
             noLaunch = true
+        case "--wait-timeout":
+            if let value = iterator.next(), let parsed = TimeInterval(value) {
+                waitTimeout = parsed
+            }
         default:
             continue
         }
@@ -79,10 +98,13 @@ func parseArgs() -> CliOptions {
         appPath: appPath,
         bundleId: bundleId,
         processName: processName,
+        processId: processId,
         inputProbe: inputProbe,
         submitText: submitText,
+        clickContinueTask: clickContinueTask,
         promptAccessibility: promptAccessibility,
-        noLaunch: noLaunch
+        noLaunch: noLaunch,
+        waitTimeout: waitTimeout
     )
 }
 
@@ -93,7 +115,14 @@ func requireAccessibilityTrust(prompt: Bool) throws {
     }
 }
 
-func runningApps(bundleId: String, processName: String?) -> [NSRunningApplication] {
+func runningApps(bundleId: String, processName: String?, processId: pid_t?) -> [NSRunningApplication] {
+    if let processId {
+        if let app = NSRunningApplication(processIdentifier: processId) {
+            return [app]
+        }
+        return []
+    }
+
     if let processName, !processName.isEmpty {
         return NSWorkspace.shared.runningApplications.filter { app in
             app.localizedName == processName
@@ -104,20 +133,20 @@ func runningApps(bundleId: String, processName: String?) -> [NSRunningApplicatio
 }
 
 func terminateExistingApps(bundleId: String, processName: String?) {
-    let apps = runningApps(bundleId: bundleId, processName: processName)
+    let apps = runningApps(bundleId: bundleId, processName: processName, processId: nil)
     for app in apps {
         _ = app.terminate()
     }
 
     let deadline = Date().addingTimeInterval(5)
     while Date() < deadline {
-        if runningApps(bundleId: bundleId, processName: processName).isEmpty {
+        if runningApps(bundleId: bundleId, processName: processName, processId: nil).isEmpty {
             return
         }
         Thread.sleep(forTimeInterval: 0.2)
     }
 
-    for app in runningApps(bundleId: bundleId, processName: processName) {
+    for app in runningApps(bundleId: bundleId, processName: processName, processId: nil) {
         _ = app.forceTerminate()
     }
     Thread.sleep(forTimeInterval: 0.5)
@@ -140,10 +169,15 @@ func launchApp(at appPath: String) throws {
     }
 }
 
-func waitForRunningApp(bundleId: String, processName: String?, timeout: TimeInterval = 15) throws -> NSRunningApplication {
+func waitForRunningApp(
+    bundleId: String,
+    processName: String?,
+    processId: pid_t?,
+    timeout: TimeInterval = 15
+) throws -> NSRunningApplication {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
-        let apps = runningApps(bundleId: bundleId, processName: processName)
+        let apps = runningApps(bundleId: bundleId, processName: processName, processId: processId)
         if let app = apps.sorted(by: { ($0.launchDate ?? .distantPast) < ($1.launchDate ?? .distantPast) }).last {
             return app
         }
@@ -322,6 +356,18 @@ func readStringAttribute(_ element: AXUIElement, _ attribute: CFString) -> Strin
     copyOptionalAttribute(element, attribute) as? String
 }
 
+func readElementLabel(_ element: AXUIElement) -> String {
+    [
+        readStringAttribute(element, kAXTitleAttribute as CFString),
+        readStringAttribute(element, kAXDescriptionAttribute as CFString),
+        readStringAttribute(element, kAXValueAttribute as CFString),
+        readStringAttribute(element, kAXIdentifierAttribute as CFString),
+    ]
+    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
+}
+
 func findElement(in root: AXUIElement, where predicate: (AXUIElement) -> Bool) -> AXUIElement? {
     for element in collectDescendants(from: root) {
         if predicate(element) {
@@ -334,7 +380,7 @@ func findElement(in root: AXUIElement, where predicate: (AXUIElement) -> Bool) -
 func pressGetStartedIfPresent(in window: AXUIElement) {
     guard let button = findElement(in: window, where: { element in
         let role = readStringAttribute(element, kAXRoleAttribute as CFString) ?? ""
-        let title = (readStringAttribute(element, kAXTitleAttribute as CFString) ?? "").lowercased()
+        let title = readElementLabel(element).lowercased()
         return role == kAXButtonRole as String && title.contains("get started")
     }) else {
         return
@@ -342,6 +388,61 @@ func pressGetStartedIfPresent(in window: AXUIElement) {
 
     AXUIElementPerformAction(button, kAXPressAction as CFString)
     Thread.sleep(forTimeInterval: 0.6)
+}
+
+func waitForButton(
+    in window: AXUIElement,
+    labels: [String],
+    timeout: TimeInterval = 20
+) throws -> AXUIElement {
+    let normalizedLabels = labels.map { $0.lowercased() }
+    let deadline = Date().addingTimeInterval(timeout)
+
+    while Date() < deadline {
+        if let button = findElement(in: window, where: { element in
+            let role = readStringAttribute(element, kAXRoleAttribute as CFString) ?? ""
+            guard role == kAXButtonRole as String else {
+                return false
+            }
+
+            let label = readElementLabel(element).lowercased()
+            return normalizedLabels.contains(where: { label.contains($0) })
+        }) {
+            return button
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+
+    throw NativeShellError.elementNotFoundWithDiagnostics(
+        "button matching: \(labels.joined(separator: ", "))",
+        summarizeAccessibilitySnapshot(window)
+    )
+}
+
+func summarizeAccessibilitySnapshot(_ root: AXUIElement, limit: Int = 160) -> String {
+    let elements = collectDescendants(from: root, limit: limit)
+    let interesting = elements.compactMap { element -> String? in
+        let role = readStringAttribute(element, kAXRoleAttribute as CFString) ?? ""
+        guard role == kAXButtonRole as String
+            || role == kAXStaticTextRole as String
+            || role == kAXTextFieldRole as String
+            || role == "AXSecureTextField"
+        else {
+            return nil
+        }
+
+        let label = readElementLabel(element)
+        if label.isEmpty {
+            return "\(role): <empty>"
+        }
+        return "\(role): \(label)"
+    }
+
+    if interesting.isEmpty {
+        return "<no interesting AX elements>"
+    }
+
+    return interesting.joined(separator: "\n")
 }
 
 func findEditableField(in window: AXUIElement, timeout: TimeInterval = 12) throws -> AXUIElement {
@@ -420,11 +521,28 @@ func main() throws {
         try launchApp(at: options.appPath)
     }
 
-    let app = try waitForRunningApp(bundleId: options.bundleId, processName: options.processName)
+    let app = try waitForRunningApp(
+        bundleId: options.bundleId,
+        processName: options.processName,
+        processId: options.processId,
+        timeout: options.waitTimeout
+    )
     app.activate()
     Thread.sleep(forTimeInterval: 1.0)
 
     let window = try getWindowElement(for: app)
+    if options.clickContinueTask {
+        let continueTaskButton = try waitForButton(
+            in: window,
+            labels: ["continue task", "resume the task", "resume task"],
+            timeout: 30
+        )
+        AXUIElementPerformAction(continueTaskButton, kAXPressAction as CFString)
+        Thread.sleep(forTimeInterval: 1.0)
+        print("Resume passed: pressed Continue task")
+        return
+    }
+
     if hasNativeWindowControls(window) {
         print("Drag passed: native macOS title bar detected")
     } else {

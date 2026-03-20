@@ -27,41 +27,37 @@ export function getPendingTaskStatus(session: Pick<TaskSession, 'status' | 'even
         return null;
     }
 
-    let lastUserTurnIndex = -1;
-    for (let index = 0; index < session.events.length; index += 1) {
-        if (isUserTurnBoundary(session.events[index])) {
-            lastUserTurnIndex = index;
-        }
-    }
-
-    if (lastUserTurnIndex === -1) {
-        return { phase: 'waiting_for_model' };
-    }
-
-    let hasAssistantResponse = false;
     let latestRateLimited = false;
-    const runningTools = new Map<string, string>();
+    const completedTools = new Set<string>();
 
-    for (let index = lastUserTurnIndex + 1; index < session.events.length; index += 1) {
+    for (let index = session.events.length - 1; index >= 0; index -= 1) {
         const event = session.events[index];
         const payload = event.payload as Record<string, unknown>;
 
+        if (isUserTurnBoundary(event)) {
+            break;
+        }
+
         if (isAssistantResponse(event)) {
-            hasAssistantResponse = true;
+            return null;
         }
 
         switch (event.type) {
             case 'RATE_LIMITED':
                 latestRateLimited = true;
                 break;
-            case 'TOOL_CALLED':
-                if (typeof payload.toolId === 'string' && typeof payload.toolName === 'string') {
-                    runningTools.set(payload.toolId, payload.toolName);
-                }
-                break;
             case 'TOOL_RESULT':
                 if (typeof payload.toolId === 'string') {
-                    runningTools.delete(payload.toolId);
+                    completedTools.add(payload.toolId);
+                }
+                break;
+            case 'TOOL_CALLED':
+                if (
+                    typeof payload.toolId === 'string' &&
+                    typeof payload.toolName === 'string' &&
+                    !completedTools.has(payload.toolId)
+                ) {
+                    return { phase: 'running_tool', toolName: payload.toolName };
                 }
                 break;
             default:
@@ -69,18 +65,8 @@ export function getPendingTaskStatus(session: Pick<TaskSession, 'status' | 'even
         }
     }
 
-    if (hasAssistantResponse) {
-        return null;
-    }
-
     if (latestRateLimited) {
         return { phase: 'retrying' };
-    }
-
-    const runningToolsArray = Array.from(runningTools.values());
-    const lastRunningTool = runningToolsArray[runningToolsArray.length - 1];
-    if (lastRunningTool) {
-        return { phase: 'running_tool', toolName: lastRunningTool };
     }
 
     return { phase: 'waiting_for_model' };

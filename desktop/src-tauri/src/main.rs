@@ -12,26 +12,26 @@
 mod diff;
 mod git_integration;
 mod ipc;
+mod platform_asr;
 mod platform_runtime;
 mod policy;
 mod process_manager;
+mod screen_capture;
 mod shadow_fs;
 mod sidecar;
-mod screen_capture;
 mod tray;
 mod window_manager;
-
 
 use policy::{ConsoleAuditSink, PolicyEngineState};
 use process_manager::ProcessManagerState;
 use shadow_fs::ShadowFsState;
 use sidecar::SidecarState;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
 #[cfg(target_os = "macos")]
 use tauri::TitleBarStyle;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 const APP_IDENTIFIER: &str = "com.coworkany.desktop";
@@ -62,7 +62,10 @@ fn update_global_shortcut(
         .register(new_shortcut.as_str())
         .map_err(|e| format!("Failed to register shortcut '{}': {}", new_shortcut, e))?;
 
-    info!("Global shortcut updated: '{}' -> '{}'", old_shortcut, new_shortcut);
+    info!(
+        "Global shortcut updated: '{}' -> '{}'",
+        old_shortcut, new_shortcut
+    );
     Ok(())
 }
 
@@ -85,7 +88,7 @@ fn main() {
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt::layer().with_writer(std::io::stderr))             // console
+        .with(fmt::layer().with_writer(std::io::stderr)) // console
         .with(fmt::layer().with_ansi(false).with_writer(non_blocking)) // file
         .init();
 
@@ -104,11 +107,14 @@ fn main() {
             ipc::start_task,
             ipc::cancel_task,
             ipc::send_task_message,
+            ipc::resume_interrupted_task,
             ipc::clear_task_history,
             ipc::get_tasks, // Previously added
             ipc::get_voice_state,
             ipc::get_voice_provider_status,
             ipc::stop_voice,
+            ipc::start_native_asr,
+            ipc::stop_native_asr,
             ipc::transcribe_audio,
             ipc::get_sidecar_status,
             ipc::get_llm_settings,

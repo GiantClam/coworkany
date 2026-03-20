@@ -2,6 +2,7 @@ import type { StoredSkill } from '../../storage/skillStore';
 import type { ToolContext, ToolDefinition } from '../standard';
 
 export type SpeechProviderKind = 'asr' | 'tts';
+export type VoiceProviderMode = 'auto' | 'system' | 'custom';
 
 export type SpeechProviderRegistration = {
     id: string;
@@ -101,13 +102,18 @@ export function getPreferredSpeechProvider(
     skills: StoredSkill[],
     kind: SpeechProviderKind,
     getTool: (toolName: string) => ToolDefinition | undefined,
+    mode: VoiceProviderMode = 'auto',
 ): SpeechProviderRegistration | null {
+    if (mode === 'system') {
+        return null;
+    }
     return listSpeechProviders(skills, kind, getTool)[0] ?? null;
 }
 
 export function getSpeechProviderStatus(
     skills: StoredSkill[],
     getTool: (toolName: string) => ToolDefinition | undefined,
+    mode: VoiceProviderMode = 'auto',
 ): {
     preferredAsr: 'custom' | 'system';
     preferredTts: 'custom' | 'system';
@@ -120,10 +126,11 @@ export function getSpeechProviderStatus(
 } {
     const asr = listSpeechProviders(skills, 'asr', getTool);
     const tts = listSpeechProviders(skills, 'tts', getTool);
+    const customAllowed = mode !== 'system';
 
     return {
-        preferredAsr: asr.length > 0 ? 'custom' : 'system',
-        preferredTts: tts.length > 0 ? 'custom' : 'system',
+        preferredAsr: customAllowed && asr.length > 0 ? 'custom' : 'system',
+        preferredTts: customAllowed && tts.length > 0 ? 'custom' : 'system',
         hasCustomAsr: asr.length > 0,
         hasCustomTts: tts.length > 0,
         providers: { asr, tts },
@@ -139,8 +146,9 @@ export async function invokeCustomAsrProvider(
         language?: string;
     },
     context: ToolContext,
+    mode: VoiceProviderMode = 'auto',
 ): Promise<{ success: boolean; text?: string; providerId?: string; providerName?: string; error?: string }> {
-    const provider = getPreferredSpeechProvider(skills, 'asr', getTool);
+    const provider = getPreferredSpeechProvider(skills, 'asr', getTool, mode);
     if (!provider) {
         return {
             success: false,
@@ -204,8 +212,9 @@ export async function invokeCustomTtsProvider(
         rate?: number;
     },
     context: ToolContext,
+    mode: VoiceProviderMode = 'auto',
 ): Promise<{ success: boolean; provider?: SpeechProviderRegistration; error?: string }> {
-    const provider = getPreferredSpeechProvider(skills, 'tts', getTool);
+    const provider = getPreferredSpeechProvider(skills, 'tts', getTool, mode);
     if (!provider) {
         return { success: false };
     }

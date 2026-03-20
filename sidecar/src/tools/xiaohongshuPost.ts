@@ -22,7 +22,7 @@ declare const document: any;
  * - Search ALL elements for button text, not just <button>
  */
 
-import { ToolDefinition } from './standard';
+import { ToolDefinition, type ToolContext } from './standard';
 import { browserService } from '../services/browserService';
 
 const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish';
@@ -31,37 +31,162 @@ const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish';
 // Helpers
 // ============================================================================
 
-function sleep(ms: number): Promise<void> {
-    return new Promise(r => setTimeout(r, ms));
+type FlowControl = {
+    signal?: AbortSignal;
+    cleanup: () => void;
+    throwIfCancelled: () => void;
+};
+
+function isCancellationError(error: unknown, control?: FlowControl): boolean {
+    if (control?.signal?.aborted) {
+        return true;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return /cancelled|canceled|aborted/i.test(message);
+}
+
+function rethrowIfCancelled(error: unknown, control?: FlowControl): void {
+    if (isCancellationError(error, control)) {
+        if (error instanceof Error) {
+            throw error;
+        }
+        control?.throwIfCancelled();
+        throw new Error(String(error));
+    }
+}
+
+function createFlowControl(context?: ToolContext): FlowControl {
+    if (!context?.onCancel) {
+        return {
+            signal: undefined,
+            cleanup: () => {},
+            throwIfCancelled: () => {},
+        };
+    }
+
+    const controller = new AbortController();
+    const unsubscribe = context.onCancel((reason) => {
+        controller.abort(reason || 'Xiaohongshu posting cancelled');
+    });
+
+    return {
+        signal: controller.signal,
+        cleanup: () => unsubscribe(),
+        throwIfCancelled: () => {
+            if (controller.signal.aborted) {
+                const reason = controller.signal.reason;
+                throw new Error(typeof reason === 'string' ? reason : 'Xiaohongshu posting cancelled');
+            }
+        },
+    };
+}
+
+function sleep(ms: number, control?: FlowControl): Promise<void> {
+    control?.throwIfCancelled();
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            control?.signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+
+        const onAbort = () => {
+            clearTimeout(timer);
+            control?.signal?.removeEventListener('abort', onAbort);
+            try {
+                control?.throwIfCancelled();
+            } catch (error) {
+                reject(error);
+                return;
+            }
+            reject(new Error('Xiaohongshu posting cancelled'));
+        };
+
+        if (control?.signal) {
+            if (control.signal.aborted) {
+                onAbort();
+                return;
+            }
+            control.signal.addEventListener('abort', onAbort, { once: true });
+        }
+    });
+}
+
+async function withCancellation<T>(promise: Promise<T>, control?: FlowControl): Promise<T> {
+    control?.throwIfCancelled();
+    const signal = control?.signal;
+    if (!signal) {
+        return promise;
+    }
+
+    return await new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+            cleanup();
+            try {
+                control.throwIfCancelled();
+            } catch (error) {
+                reject(error);
+                return;
+            }
+            reject(new Error('Xiaohongshu posting cancelled'));
+        };
+
+        const cleanup = () => {
+            signal.removeEventListener('abort', onAbort);
+        };
+
+        if (signal.aborted) {
+            onAbort();
+            return;
+        }
+
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(
+            (value) => {
+                cleanup();
+                resolve(value);
+            },
+            (error) => {
+                cleanup();
+                reject(error);
+            }
+        );
+    });
 }
 
 /**
  * Execute a script and return the string result.
  * Supports async IIFEs (the bridge's page.evaluate handles Promises).
  */
-async function execScript(script: string): Promise<string> {
+async function execScript(script: string, control?: FlowControl): Promise<string> {
     try {
-        const result = await browserService.executeScript(script);
+        control?.throwIfCancelled();
+        const result = await browserService.executeScript(script, { signal: control?.signal });
         return typeof result === 'string' ? result : JSON.stringify(result);
     } catch (e) {
+        rethrowIfCancelled(e, control);
         return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
     }
 }
 
-async function getPageText(): Promise<string> {
+async function getPageText(control?: FlowControl): Promise<string> {
     try {
-        const content = await browserService.getContent(true);
+        control?.throwIfCancelled();
+        const content = await browserService.getContent(true, { signal: control?.signal });
         return content.content || '';
-    } catch {
+    } catch (error) {
+        rethrowIfCancelled(error, control);
         return '';
     }
 }
 
-async function getCurrentUrl(): Promise<string> {
+async function getCurrentUrl(control?: FlowControl): Promise<string> {
     try {
-        const content = await browserService.getContent(false);
+        control?.throwIfCancelled();
+        const content = await browserService.getContent(false, { signal: control?.signal });
         return content.url || '';
-    } catch {
+    } catch (error) {
+        rethrowIfCancelled(error, control);
         return '';
     }
 }
@@ -72,7 +197,7 @@ async function getCurrentUrl(): Promise<string> {
  *
  * Returns a description of what was clicked, or an error string.
  */
-async function clickByText(text: string): Promise<string> {
+async function clickByText(text: string, control?: FlowControl): Promise<string> {
     const escapedText = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     return execScript(`(() => {
         const target = '${escapedText}';
@@ -98,13 +223,13 @@ async function clickByText(text: string): Promise<string> {
             }
         }
         return 'ERROR: element not found with text: ' + target;
-    })()`);
+    })()`, control);
 }
 
 /**
  * Diagnose current page state for debugging
  */
-async function diagnosePage(): Promise<string> {
+async function diagnosePage(control?: FlowControl): Promise<string> {
     return execScript(`(() => {
         const info = {};
         info.url = window.location.href;
@@ -151,15 +276,15 @@ async function diagnosePage(): Promise<string> {
 
         info.fileInputs = document.querySelectorAll('input[type="file"]').length;
         return JSON.stringify(info);
-    })()`);
+    })()`, control);
 }
 
 // ============================================================================
 // Login check (already fixed in previous iteration)
 // ============================================================================
 
-async function isLoggedIn(): Promise<boolean> {
-    const text = await getPageText();
+async function isLoggedIn(control?: FlowControl): Promise<boolean> {
+    const text = await getPageText(control);
     const loggedInKeywords = ['发布笔记', '创作中心', '上传图文', '上传视频', '我的主页', '数据中心'];
     const loginPageKeywords = ['密码登录', '验证码登录', '扫码登录', '手机号登录'];
 
@@ -172,7 +297,7 @@ async function isLoggedIn(): Promise<boolean> {
     if (hasLoggedIn) return true;
     if (hasLoginPage) return false;
 
-    const url = await getCurrentUrl();
+    const url = await getCurrentUrl(control);
     if (url.includes('creator.xiaohongshu.com/publish')) {
         console.log('[XHS-Post] Login check: on publish page but no keywords yet, assuming loading...');
         return false;
@@ -181,16 +306,21 @@ async function isLoggedIn(): Promise<boolean> {
     return false;
 }
 
-async function waitForLogin(maxWaitMs: number = 5 * 60 * 1000, pollIntervalMs: number = 5000): Promise<boolean> {
+async function waitForLogin(
+    maxWaitMs: number = 5 * 60 * 1000,
+    pollIntervalMs: number = 5000,
+    control?: FlowControl
+): Promise<boolean> {
     const startTime = Date.now();
     console.log('[XHS-Post] Waiting for user login...');
 
     while (Date.now() - startTime < maxWaitMs) {
-        if (await isLoggedIn()) {
+        control?.throwIfCancelled();
+        if (await isLoggedIn(control)) {
             console.log('[XHS-Post] User is logged in!');
             return true;
         }
-        await sleep(pollIntervalMs);
+        await sleep(pollIntervalMs, control);
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         if (elapsed % 30 === 0) {
             console.log(`[XHS-Post] Still waiting for login... ${elapsed}s elapsed`);
@@ -210,9 +340,10 @@ async function waitForLogin(maxWaitMs: number = 5 * 60 * 1000, pollIntervalMs: n
  * Generates a temp image via Canvas in the browser, saves to disk in the
  * bridge process, then uses Playwright's setInputFiles for reliable upload.
  */
-async function uploadImageViaPlaywright(text: string): Promise<boolean> {
+async function uploadImageViaPlaywright(text: string, control?: FlowControl): Promise<boolean> {
     try {
         console.log('[XHS-Post] Trying image upload via Playwright setInputFiles...');
+        control?.throwIfCancelled();
 
         // Call the bridge's uploadFile method which handles generation + upload
         const page = await browserService.getPage();
@@ -224,10 +355,12 @@ async function uploadImageViaPlaywright(text: string): Promise<boolean> {
             selector: 'input[type="file"]',
             filePath: '', // Will be ignored in favor of generated image
             instruction: `Generate and upload image with text: ${text}`,
+            signal: control?.signal,
         });
 
         return true;
     } catch (e) {
+        rethrowIfCancelled(e, control);
         console.log(`[XHS-Post] Playwright upload failed: ${e instanceof Error ? e.message : String(e)}`);
         return false;
     }
@@ -238,7 +371,7 @@ async function uploadImageViaPlaywright(text: string): Promise<boolean> {
  * Generates an image in the browser using Canvas API, then programmatically
  * sets it on the file input using DataTransfer API.
  */
-async function uploadImageViaCanvas(text: string): Promise<boolean> {
+async function uploadImageViaCanvas(text: string, control?: FlowControl): Promise<boolean> {
     const safeText = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     const result = await execScript(`(async () => {
         try {
@@ -295,7 +428,7 @@ async function uploadImageViaCanvas(text: string): Promise<boolean> {
         } catch (e) {
             return 'ERROR: ' + e.message;
         }
-    })()`);
+    })()`, control);
 
     console.log(`[XHS-Post] Canvas+DataTransfer upload result: ${result}`);
     return result.includes('uploaded');
@@ -305,15 +438,15 @@ async function uploadImageViaCanvas(text: string): Promise<boolean> {
  * Strategy 3: Use "文字配图" (text-to-image) feature.
  * Type text into the tiptap editor, click "生成图片".
  */
-async function uploadImageViaTextToImage(text: string): Promise<boolean> {
+async function uploadImageViaTextToImage(text: string, control?: FlowControl): Promise<boolean> {
     const safeText = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
 
     // Click "文字配图"
-    const clickResult = await clickByText('文字配图');
+    const clickResult = await clickByText('文字配图', control);
     console.log(`[XHS-Post] Click 文字配图: ${clickResult}`);
     if (clickResult.includes('ERROR')) return false;
 
-    await sleep(2000);
+    await sleep(2000, control);
 
     // Type into the tiptap contenteditable on the main page
     const typeResult = await execScript(`(() => {
@@ -341,22 +474,22 @@ async function uploadImageViaTextToImage(text: string): Promise<boolean> {
             }
         }
         return 'ERROR: no tiptap editor found';
-    })()`);
+    })()`, control);
     console.log(`[XHS-Post] Type into tiptap: ${typeResult}`);
     if (typeResult.includes('ERROR')) return false;
 
-    await sleep(1000);
+    await sleep(1000, control);
 
     // Click "生成图片" (search ALL elements, not just buttons)
-    const genResult = await clickByText('生成图片');
+    const genResult = await clickByText('生成图片', control);
     console.log(`[XHS-Post] Click 生成图片: ${genResult}`);
     if (genResult.includes('ERROR')) return false;
 
     // Wait for image generation (up to 15 seconds)
     console.log('[XHS-Post] Waiting for image generation...');
     for (let i = 0; i < 15; i++) {
-        await sleep(1000);
-        const text = await getPageText();
+        await sleep(1000, control);
+        const text = await getPageText(control);
         // After generation, look for indicators that the post editor appeared
         if (text.includes('标题') || text.includes('添加标题') || text.includes('发布')) {
             console.log(`[XHS-Post] Image generated, editor appeared (${i + 1}s)`);
@@ -382,9 +515,10 @@ async function uploadImageViaTextToImage(text: string): Promise<boolean> {
  * Wait for the post editor to appear (title input + content editor).
  * This happens after an image is successfully uploaded.
  */
-async function waitForPostEditor(maxWaitMs: number = 20000): Promise<boolean> {
+async function waitForPostEditor(maxWaitMs: number = 20000, control?: FlowControl): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
+        control?.throwIfCancelled();
         const check = await execScript(`(() => {
             // Look for title-like inputs or contenteditables
             const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
@@ -407,13 +541,13 @@ async function waitForPostEditor(maxWaitMs: number = 20000): Promise<boolean> {
                 if ((el.textContent || '').trim() === '发布') return 'publish-found';
             }
             return 'waiting';
-        })()`);
+        })()`, control);
 
         if (check !== 'waiting') {
             console.log(`[XHS-Post] Post editor detected: ${check}`);
             return true;
         }
-        await sleep(1000);
+        await sleep(1000, control);
     }
     console.log('[XHS-Post] Post editor did not appear within timeout');
     return false;
@@ -425,7 +559,7 @@ async function waitForPostEditor(maxWaitMs: number = 20000): Promise<boolean> {
  * 2. Contenteditable with data-placeholder containing "标题"
  * 3. First visible text input
  */
-async function fillTitle(title: string): Promise<string> {
+async function fillTitle(title: string, control?: FlowControl): Promise<string> {
     const safeTitle = title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     return execScript(`(() => {
         const title = '${safeTitle}';
@@ -476,14 +610,14 @@ async function fillTitle(title: string): Promise<string> {
         }
 
         return 'ERROR: no title field found';
-    })()`);
+    })()`, control);
 }
 
 /**
  * Fill the content/description field.
  * Looks for contenteditable elements that are NOT the title.
  */
-async function fillContent(content: string): Promise<string> {
+async function fillContent(content: string, control?: FlowControl): Promise<string> {
     const safeContent = content.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     return execScript(`(() => {
         const content = '${safeContent}';
@@ -546,7 +680,7 @@ async function fillContent(content: string): Promise<string> {
         }
 
         return 'ERROR: no content field found';
-    })()`);
+    })()`, control);
 }
 
 /**
@@ -562,7 +696,7 @@ async function fillContent(content: string): Promise<string> {
  *  3. Prefer elements lower on the page (submit buttons sit at the bottom).
  *  4. Fallback: use Playwright click via bridge for more realistic event.
  */
-async function clickPublish(): Promise<{ clicked: boolean; message: string }> {
+async function clickPublish(control?: FlowControl): Promise<{ clicked: boolean; message: string }> {
     // Scroll the page down first to ensure the submit button is visible
     await execScript(`(() => {
         // Try to scroll the main editor container
@@ -573,8 +707,8 @@ async function clickPublish(): Promise<{ clicked: boolean; message: string }> {
             }
         }
         window.scrollTo(0, document.body.scrollHeight);
-    })()`);
-    await sleep(1000);
+    })()`, control);
+    await sleep(1000, control);
 
     const result = await execScript(`(() => {
         const targets = ['发布笔记', '发布'];
@@ -701,7 +835,7 @@ async function clickPublish(): Promise<{ clicked: boolean; message: string }> {
             candidates: candidates.length,
             allCandidates: debugInfo,
         });
-    })()`);
+    })()`, control);
 
     try {
         return JSON.parse(result);
@@ -716,8 +850,9 @@ async function clickPublish(): Promise<{ clicked: boolean; message: string }> {
  *
  * Tries several selectors commonly used on XHS creator platform.
  */
-async function tryPlaywrightClickPublish(): Promise<string> {
+async function tryPlaywrightClickPublish(control?: FlowControl): Promise<string> {
     try {
+        control?.throwIfCancelled();
         const page = await browserService.getPage();
         if (!page) return 'ERROR: no page';
 
@@ -736,11 +871,15 @@ async function tryPlaywrightClickPublish(): Promise<string> {
 
         for (const sel of selectors) {
             try {
+                control?.throwIfCancelled();
                 const loc = page.locator(sel).first();
-                const visible = await loc.isVisible({ timeout: 2000 }).catch(() => false);
+                const visible = await withCancellation(
+                    loc.isVisible({ timeout: 2000 }).catch(() => false),
+                    control
+                );
                 if (visible) {
-                    await loc.scrollIntoViewIfNeeded();
-                    await loc.click({ timeout: 5000 });
+                    await withCancellation(loc.scrollIntoViewIfNeeded(), control);
+                    await withCancellation(loc.click({ timeout: 5000 }), control);
                     return `clicked via Playwright: ${sel}`;
                 }
             } catch {
@@ -750,17 +889,22 @@ async function tryPlaywrightClickPublish(): Promise<string> {
 
         // Last resort: find by XPath (community pattern)
         try {
+            control?.throwIfCancelled();
             const xpathLoc = page.locator('xpath=//button[contains(text(),"发布")]').first();
-            const vis = await xpathLoc.isVisible({ timeout: 2000 }).catch(() => false);
+            const vis = await withCancellation(
+                xpathLoc.isVisible({ timeout: 2000 }).catch(() => false),
+                control
+            );
             if (vis) {
-                await xpathLoc.click({ timeout: 5000 });
+                await withCancellation(xpathLoc.click({ timeout: 5000 }), control);
                 return 'clicked via Playwright XPath: //button[contains(text(),"发布")]';
             }
         } catch {}
 
         // Also try: find by CSS position (right side, bottom area)
         try {
-            const posResult = await page.evaluate(() => {
+            control?.throwIfCancelled();
+            const posResult = await withCancellation(page.evaluate(() => {
                 const all = document.querySelectorAll('*');
                 for (const el of all) {
                     const txt = (el.textContent || '').trim();
@@ -773,17 +917,19 @@ async function tryPlaywrightClickPublish(): Promise<string> {
                     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, tag: el.tagName, cls: (el.className || '').substring(0, 40) };
                 }
                 return null;
-            });
+            }), control);
             if (posResult) {
-                await page.mouse.click(posResult.x, posResult.y);
+                await withCancellation(page.mouse.click(posResult.x, posResult.y), control);
                 return `clicked via Playwright mouse at (${posResult.x}, ${posResult.y}): ${posResult.tag}.${posResult.cls}`;
             }
         } catch (e) {
+            rethrowIfCancelled(e, control);
             return `ERROR: Playwright click failed: ${e instanceof Error ? e.message : String(e)}`;
         }
 
         return 'ERROR: no publish button found via Playwright';
     } catch (e) {
+        rethrowIfCancelled(e, control);
         return `ERROR: Playwright fallback failed: ${e instanceof Error ? e.message : String(e)}`;
     }
 }
@@ -792,12 +938,17 @@ async function tryPlaywrightClickPublish(): Promise<string> {
 // Main posting flow
 // ============================================================================
 
-async function executePostingFlow(title: string, content: string): Promise<{
+async function executePostingFlow(
+    title: string,
+    content: string,
+    control?: FlowControl
+): Promise<{
     success: boolean;
     message: string;
     steps: Array<{ step: string; result: string; success: boolean }>;
 }> {
     const steps: Array<{ step: string; result: string; success: boolean }> = [];
+    control?.throwIfCancelled();
 
     // ── Step 1: Ensure browser is connected ──────────────────────────
     try {
@@ -806,9 +957,10 @@ async function executePostingFlow(title: string, content: string): Promise<{
         steps.push({ step: 'browser_check', result: 'Browser connected', success: true });
     } catch {
         try {
-            await browserService.connect({});
+            await browserService.connect({ signal: control?.signal });
             steps.push({ step: 'browser_connect', result: 'Connected to browser', success: true });
         } catch (e) {
+            rethrowIfCancelled(e, control);
             const msg = e instanceof Error ? e.message : String(e);
             steps.push({ step: 'browser_connect', result: msg, success: false });
             return { success: false, message: `Failed to connect to browser: ${msg}`, steps };
@@ -817,21 +969,22 @@ async function executePostingFlow(title: string, content: string): Promise<{
 
     // ── Step 2: Navigate to publish page ─────────────────────────────
     try {
-        await browserService.navigate(PUBLISH_URL);
-        await sleep(3000);
+        await browserService.navigate(PUBLISH_URL, { signal: control?.signal });
+        await sleep(3000, control);
         steps.push({ step: 'navigate', result: `Navigated to ${PUBLISH_URL}`, success: true });
     } catch (e) {
+        rethrowIfCancelled(e, control);
         const msg = e instanceof Error ? e.message : String(e);
         steps.push({ step: 'navigate', result: msg, success: false });
         return { success: false, message: `Failed to navigate: ${msg}`, steps };
     }
 
     // ── Step 3: Check login status ───────────────────────────────────
-    let loggedIn = await isLoggedIn();
+    let loggedIn = await isLoggedIn(control);
     if (!loggedIn) {
         steps.push({ step: 'login_check', result: 'Not logged in, waiting...', success: true });
         console.log('[XHS-Post] Login required. Please login in the browser window...');
-        loggedIn = await waitForLogin(5 * 60 * 1000, 5000);
+        loggedIn = await waitForLogin(5 * 60 * 1000, 5000, control);
         if (!loggedIn) {
             steps.push({ step: 'login_timeout', result: 'Login timed out', success: false });
             return { success: false, message: 'Login timed out. Please login and try again.', steps };
@@ -842,20 +995,20 @@ async function executePostingFlow(title: string, content: string): Promise<{
     }
 
     // Re-navigate if needed (login might have changed page)
-    const url1 = await getCurrentUrl();
+    const url1 = await getCurrentUrl(control);
     if (!url1.includes('creator.xiaohongshu.com/publish')) {
-        await browserService.navigate(PUBLISH_URL);
-        await sleep(3000);
+        await browserService.navigate(PUBLISH_URL, { signal: control?.signal });
+        await sleep(3000, control);
     }
 
     // ── Step 4: Initial page diagnosis ───────────────────────────────
-    const diag1 = await diagnosePage();
+    const diag1 = await diagnosePage(control);
     steps.push({ step: 'page_diagnosis', result: diag1.substring(0, 300), success: true });
 
     // ── Step 5: Click "上传图文" tab ─────────────────────────────────
-    const tabResult = await clickByText('上传图文');
+    const tabResult = await clickByText('上传图文', control);
     steps.push({ step: 'click_image_tab', result: tabResult, success: !tabResult.includes('ERROR') });
-    await sleep(2000);
+    await sleep(2000, control);
 
     // ── Step 6: Upload image (required by XHS before editor appears) ─
     let imageUploaded = false;
@@ -863,11 +1016,11 @@ async function executePostingFlow(title: string, content: string): Promise<{
     // Strategy A: Canvas + DataTransfer (no bridge changes needed)
     if (!imageUploaded) {
         console.log('[XHS-Post] Trying Canvas + DataTransfer image upload...');
-        imageUploaded = await uploadImageViaCanvas(title);
+        imageUploaded = await uploadImageViaCanvas(title, control);
         if (imageUploaded) {
-            await sleep(3000);
+            await sleep(3000, control);
             // Verify that something changed (editor appeared or image thumbnail visible)
-            const afterUpload = await getPageText();
+            const afterUpload = await getPageText(control);
             if (afterUpload.includes('标题') || afterUpload.includes('添加标题') || afterUpload.includes('发布')) {
                 steps.push({ step: 'image_upload', result: 'Canvas+DataTransfer upload succeeded', success: true });
             } else {
@@ -884,11 +1037,12 @@ async function executePostingFlow(title: string, content: string): Promise<{
     if (!imageUploaded) {
         console.log('[XHS-Post] Trying Playwright setInputFiles...');
         try {
+            control?.throwIfCancelled();
             // Use the bridge's uploadFile with image generation
             const page = await browserService.getPage();
             if (page && typeof page.evaluate === 'function') {
                 // Generate image base64 in browser, then pass to bridge for upload
-                const base64 = await page.evaluate(({ text }: { text: string }) => {
+                const base64 = await withCancellation(page.evaluate(({ text }: { text: string }) => {
                     const canvas = document.createElement('canvas');
                     canvas.width = 1080;
                     canvas.height = 1080;
@@ -907,7 +1061,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
                     ctx.textBaseline = 'middle';
                     ctx.fillText(text.substring(0, 20), 540, 540);
                     return canvas.toDataURL('image/png').split(',')[1];
-                }, { text: title });
+                }, { text: title }), control);
 
                 if (base64) {
                     // Write to temp file via sidecar fs
@@ -917,15 +1071,17 @@ async function executePostingFlow(title: string, content: string): Promise<{
                     const tmpPath = path.join(os.tmpdir(), `xhs_post_${Date.now()}.png`);
                     fs.writeFileSync(tmpPath, Buffer.from(base64 as string, 'base64'));
                     console.log(`[XHS-Post] Generated temp image: ${tmpPath}`);
+                    control?.throwIfCancelled();
 
                     // Upload via browserService.uploadFile
                     await browserService.uploadFile({
                         selector: 'input[type="file"]',
                         filePath: tmpPath,
+                        signal: control?.signal,
                     });
 
-                    await sleep(3000);
-                    const afterUpload = await getPageText();
+                    await sleep(3000, control);
+                    const afterUpload = await getPageText(control);
                     if (afterUpload.includes('标题') || afterUpload.includes('发布')) {
                         imageUploaded = true;
                         steps.push({ step: 'image_upload', result: 'Playwright setInputFiles succeeded', success: true });
@@ -936,6 +1092,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
                 }
             }
         } catch (e) {
+            rethrowIfCancelled(e, control);
             console.log(`[XHS-Post] Playwright setInputFiles failed: ${e instanceof Error ? e.message : String(e)}`);
         }
         if (!imageUploaded) {
@@ -946,7 +1103,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
     // Strategy C: "文字配图" text-to-image feature
     if (!imageUploaded) {
         console.log('[XHS-Post] Trying 文字配图 (text-to-image)...');
-        imageUploaded = await uploadImageViaTextToImage(content);
+        imageUploaded = await uploadImageViaTextToImage(content, control);
         steps.push({
             step: 'image_upload_text2img',
             result: imageUploaded ? '文字配图 succeeded' : '文字配图 failed',
@@ -955,37 +1112,37 @@ async function executePostingFlow(title: string, content: string): Promise<{
     }
 
     if (!imageUploaded) {
-        const diag = await diagnosePage();
+        const diag = await diagnosePage(control);
         steps.push({ step: 'image_upload_final', result: 'All image upload strategies failed. Diag: ' + diag.substring(0, 200), success: false });
         // Don't return yet — try to continue anyway (the editor might still be available)
     }
 
     // ── Step 7: Wait for post editor ─────────────────────────────────
-    const editorReady = await waitForPostEditor(15000);
+    const editorReady = await waitForPostEditor(15000, control);
     steps.push({ step: 'wait_editor', result: editorReady ? 'Editor ready' : 'Editor not found (continuing anyway)', success: editorReady });
 
     // ── Step 8: Diagnose before filling ──────────────────────────────
-    const diag2 = await diagnosePage();
+    const diag2 = await diagnosePage(control);
     steps.push({ step: 'pre_fill_diagnosis', result: diag2.substring(0, 300), success: true });
 
     // ── Step 9: Fill title ───────────────────────────────────────────
-    const titleResult = await fillTitle(title);
+    const titleResult = await fillTitle(title, control);
     console.log(`[XHS-Post] Fill title: ${titleResult}`);
     steps.push({ step: 'fill_title', result: titleResult, success: !titleResult.includes('ERROR') });
 
     // ── Step 10: Fill content ────────────────────────────────────────
-    const contentResult = await fillContent(content);
+    const contentResult = await fillContent(content, control);
     console.log(`[XHS-Post] Fill content: ${contentResult}`);
     steps.push({ step: 'fill_content', result: contentResult, success: !contentResult.includes('ERROR') });
 
-    await sleep(2000);
+    await sleep(2000, control);
 
     // ── Step 11: Pre-publish diagnosis ───────────────────────────────
-    const diag3 = await diagnosePage();
+    const diag3 = await diagnosePage(control);
     steps.push({ step: 'pre_publish_diagnosis', result: diag3.substring(0, 300), success: true });
 
     // ── Step 12: Click publish ───────────────────────────────────────
-    const publishResult = await clickPublish();
+    const publishResult = await clickPublish(control);
     console.log(`[XHS-Post] Publish: ${JSON.stringify(publishResult)}`);
     steps.push({
         step: 'click_publish',
@@ -1004,7 +1161,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
 
         // If event-dispatch didn't find the button, try Playwright bridge click
         console.log('[XHS-Post] Event dispatch did not find button, trying Playwright click...');
-        const pwClick = await tryPlaywrightClickPublish();
+        const pwClick = await tryPlaywrightClickPublish(control);
         steps.push({
             step: 'click_publish_playwright',
             result: pwClick,
@@ -1029,9 +1186,9 @@ async function executePostingFlow(title: string, content: string): Promise<{
     let verifyText = '';
 
     for (let attempt = 0; attempt < 10; attempt++) {
-        await sleep(2000);
-        verifyUrl = await getCurrentUrl();
-        verifyText = await getPageText();
+        await sleep(2000, control);
+        verifyUrl = await getCurrentUrl(control);
+        verifyText = await getPageText(control);
 
         // Explicit success indicators
         if (verifyUrl.includes('publish/success') ||
@@ -1065,7 +1222,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
                 }
             }
             return 'no-dialog';
-        })()`);
+        })()`, control);
         if (hasDialog !== 'no-dialog') {
             console.log(`[XHS-Post] Dialog detected: ${hasDialog}`);
             // Try to click confirm/OK in the dialog
@@ -1079,7 +1236,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
                     }
                 }
                 return 'no-confirm-btn';
-            })()`);
+            })()`, control);
             console.log(`[XHS-Post] Dialog confirm: ${confirmResult}`);
         }
 
@@ -1102,7 +1259,7 @@ async function executePostingFlow(title: string, content: string): Promise<{
 
     if (!verified) {
         // Final diagnosis
-        const finalDiag = await diagnosePage();
+        const finalDiag = await diagnosePage(control);
         steps.push({ step: 'final_diagnosis', result: finalDiag.substring(0, 300), success: false });
     }
 
@@ -1145,13 +1302,14 @@ Use this tool when asked to post on Xiaohongshu. Provide title and content.`,
         },
         required: ['title', 'content'],
     },
-    handler: async (args: { title: string; content: string }) => {
+    handler: async (args: { title: string; content: string }, context?: ToolContext) => {
         const { title, content } = args;
+        const control = createFlowControl(context);
 
         console.log(`[XHS-Post] Starting posting flow - Title: "${title}", Content: "${content}"`);
 
         try {
-            const result = await executePostingFlow(title, content);
+            const result = await executePostingFlow(title, content, control);
 
             console.log(`[XHS-Post] Posting flow completed - success: ${result.success}`);
             for (const step of result.steps) {
@@ -1164,9 +1322,13 @@ Use this tool when asked to post on Xiaohongshu. Provide title and content.`,
             console.error(`[XHS-Post] Fatal error: ${msg}`);
             return {
                 success: false,
-                message: `Fatal error during posting: ${msg}`,
+                cancelled: isCancellationError(error, control),
+                error_type: isCancellationError(error, control) ? 'cancelled' : 'unknown',
+                message: isCancellationError(error, control) ? msg : `Fatal error during posting: ${msg}`,
                 steps: [{ step: 'fatal', result: msg, success: false }],
             };
+        } finally {
+            control.cleanup();
         }
     },
 };

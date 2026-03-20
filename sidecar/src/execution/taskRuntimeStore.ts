@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { type TaskSessionConfig } from './taskSessionStore';
 
-export type PersistedTaskRuntimeStatus = 'running' | 'suspended';
+export type PersistedTaskRuntimeStatus = 'running' | 'suspended' | 'interrupted';
 
 export type PersistedTaskSuspension = {
     reason: string;
@@ -38,7 +38,9 @@ function isRecord(value: unknown): value is PersistedTaskRuntimeRecord {
         typeof candidate.workspacePath === 'string' &&
         typeof candidate.createdAt === 'string' &&
         typeof candidate.updatedAt === 'string' &&
-        (candidate.status === 'running' || candidate.status === 'suspended') &&
+        (candidate.status === 'running' ||
+            candidate.status === 'suspended' ||
+            candidate.status === 'interrupted') &&
         Array.isArray(candidate.conversation) &&
         typeof candidate.historyLimit === 'number' &&
         Array.isArray(candidate.artifactsCreated)

@@ -3,6 +3,7 @@
 //! These are the Tauri commands that the React frontend can invoke.
 //! They forward to the SidecarManager for actual processing.
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
@@ -11,21 +12,19 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::platform_runtime::{
-    build_runtime_snapshot,
-    resolve_skillhub_executable,
-};
+use crate::platform_asr;
+use crate::platform_runtime::{build_runtime_snapshot, resolve_skillhub_executable};
 use crate::process_manager::{ProcessManagerState, ServiceInfo};
 use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
 
 static STARTUP_PROCESS_INSTANT: OnceLock<Instant> = OnceLock::new();
 static STARTUP_PROCESS_EPOCH_MS: OnceLock<u128> = OnceLock::new();
-const SKILLHUB_INSTALL_SCRIPT_URL: &str = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh";
+const SKILLHUB_INSTALL_SCRIPT_URL: &str =
+    "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh";
 
 pub fn init_startup_clock() {
     STARTUP_PROCESS_INSTANT.get_or_init(Instant::now);
@@ -67,6 +66,8 @@ pub struct StartTaskConfigInput {
     pub enabled_toolpacks: Option<Vec<String>>,
     #[serde(rename = "enabledSkills")]
     pub enabled_skills: Option<Vec<String>>,
+    #[serde(rename = "voiceProviderMode")]
+    pub voice_provider_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +96,13 @@ pub struct SendTaskMessageInput {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub content: String,
+    pub config: Option<StartTaskConfigInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResumeInterruptedTaskInput {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
     pub config: Option<StartTaskConfigInput>,
 }
 
@@ -231,6 +239,14 @@ pub struct ClearTaskHistoryResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SendTaskMessageResult {
+    pub success: bool,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResumeInterruptedTaskResult {
     pub success: bool,
     #[serde(rename = "taskId")]
     pub task_id: String,
@@ -388,6 +404,19 @@ pub struct TranscribeAudioInput {
     pub audio_base64: String,
     pub mime_type: Option<String>,
     pub language: Option<String>,
+    pub provider_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceProviderStatusInput {
+    pub provider_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAsrInput {
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -421,15 +450,13 @@ fn build_command(command_type: &str, payload: Value) -> Value {
                 }
                 Value::Object(cleaned)
             }
-            Value::Array(items) => {
-                Value::Array(
-                    items
-                        .into_iter()
-                        .map(prune_nulls)
-                        .filter(|item| !item.is_null())
-                        .collect(),
-                )
-            }
+            Value::Array(items) => Value::Array(
+                items
+                    .into_iter()
+                    .map(prune_nulls)
+                    .filter(|item| !item.is_null())
+                    .collect(),
+            ),
             other => other,
         }
     }
@@ -498,7 +525,10 @@ async fn ensure_sidecar_running(
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
     if !manager.is_running() {
         debug!("Sidecar not running, spawning...");
-        manager.spawn(app_handle.clone()).map_err(|e| e.to_string())?;
+        manager
+            .spawn(app_handle.clone())
+            .map_err(|e| e.to_string())?;
+        let _ = app_handle.emit("sidecar-reconnected", ());
     }
     Ok(())
 }
@@ -508,6 +538,11 @@ async fn send_command_and_wait(
     command: Value,
     timeout_ms: u64,
 ) -> Result<Value, String> {
+    let command_id = command
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "command id missing".to_string())?
+        .to_string();
     let rx = {
         let manager = state.0.lock().map_err(|e| e.to_string())?;
         manager
@@ -516,21 +551,51 @@ async fn send_command_and_wait(
     };
 
     // Use tokio::task::spawn_blocking since recv_timeout blocks the thread
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
             Ok(response) => Ok(response),
             Err(err) => Err(format!("response timeout: {}", err)),
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    match result {
+        Ok(response) => {
+            if response.get("type").and_then(Value::as_str) == Some("transport_error_response") {
+                let payload = response
+                    .get("payload")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let error_message = payload
+                    .get("details")
+                    .and_then(Value::as_str)
+                    .or_else(|| payload.get("error").and_then(Value::as_str))
+                    .unwrap_or("sidecar transport failed")
+                    .to_string();
+                if let Ok(mut manager) = state.0.lock() {
+                    manager.invalidate_transport(&error_message);
+                }
+                return Err(error_message);
+            }
+
+            Ok(response)
+        }
+        Err(error_message) => {
+            if let Ok(mut manager) = state.0.lock() {
+                manager.clear_pending_response(&command_id);
+                manager.invalidate_transport(&format!(
+                    "command {} timed out waiting for sidecar ack",
+                    command_id
+                ));
+            }
+            Err(error_message)
+        }
+    }
 }
 
 fn app_data_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())
+    app_handle.path().app_data_dir().map_err(|e| e.to_string())
 }
 
 fn llm_config_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
@@ -573,12 +638,14 @@ fn default_transcription_model(provider: &str) -> String {
 }
 
 fn select_transcription_model_from_catalog(model_ids: &[String]) -> Option<String> {
-    preferred_transcription_model_ids().iter().find_map(|candidate| {
-        model_ids
-            .iter()
-            .find(|model_id| model_id.as_str() == *candidate)
-            .cloned()
-    })
+    preferred_transcription_model_ids()
+        .iter()
+        .find_map(|candidate| {
+            model_ids
+                .iter()
+                .find(|model_id| model_id.as_str() == *candidate)
+                .cloned()
+        })
 }
 
 fn openai_compatible_default(provider: &str) -> Option<&'static str> {
@@ -595,7 +662,9 @@ fn openai_compatible_default(provider: &str) -> Option<&'static str> {
     }
 }
 
-fn build_transcription_provider_from_profile(profile: &LlmProfile) -> Option<TranscriptionProvider> {
+fn build_transcription_provider_from_profile(
+    profile: &LlmProfile,
+) -> Option<TranscriptionProvider> {
     let default_model = default_transcription_model(&profile.provider);
 
     match profile.provider.as_str() {
@@ -640,7 +709,9 @@ fn build_transcription_provider_from_profile(profile: &LlmProfile) -> Option<Tra
     }
 }
 
-fn build_transcription_provider_from_legacy_config(config: &LlmConfig) -> Option<TranscriptionProvider> {
+fn build_transcription_provider_from_legacy_config(
+    config: &LlmConfig,
+) -> Option<TranscriptionProvider> {
     let provider = config.provider.as_deref()?.to_string();
     let default_model = default_transcription_model(&provider);
 
@@ -689,7 +760,10 @@ fn build_transcription_provider_from_legacy_config(config: &LlmConfig) -> Option
 fn resolve_transcription_provider(config: &LlmConfig) -> Option<TranscriptionProvider> {
     if let Some(profiles) = &config.profiles {
         if let Some(active_profile_id) = &config.active_profile_id {
-            if let Some(active) = profiles.iter().find(|profile| &profile.id == active_profile_id) {
+            if let Some(active) = profiles
+                .iter()
+                .find(|profile| &profile.id == active_profile_id)
+            {
                 if let Some(provider) = build_transcription_provider_from_profile(active) {
                     return Some(provider);
                 }
@@ -728,7 +802,10 @@ async fn discover_transcription_model(
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("model discovery failed with status {}", response.status()));
+        return Err(format!(
+            "model discovery failed with status {}",
+            response.status()
+        ));
     }
 
     let payload = response.json::<Value>().await.map_err(|e| e.to_string())?;
@@ -808,7 +885,11 @@ fn summarize_attachment_content_for_log(content: &str) -> String {
         image_count,
         file_count,
         text_preview,
-        if content.chars().count() > 120 { "…" } else { "" }
+        if content.chars().count() > 120 {
+            "…"
+        } else {
+            ""
+        }
     )
 }
 
@@ -852,6 +933,7 @@ pub async fn start_task(
         enabled_claude_skills: cfg.enabled_claude_skills,
         enabled_toolpacks: cfg.enabled_toolpacks,
         enabled_skills: cfg.enabled_skills,
+        voice_provider_mode: cfg.voice_provider_mode,
     });
 
     // Send command to sidecar and wait for the immediate ack so the frontend
@@ -967,10 +1049,10 @@ pub async fn get_tasks(
         "status": input.status
     });
     let command = build_command("get_tasks", payload);
-    
+
     // Sidecar returns Full Response Object (with type, commandId, payload)
     let response = send_command_and_wait(&state, command, 3000).await?;
-    
+
     // meaningful data is in response.payload
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
@@ -1000,11 +1082,17 @@ pub async fn get_voice_state(
 /// Get current voice provider preference from sidecar
 #[tauri::command]
 pub async fn get_voice_provider_status(
+    input: Option<VoiceProviderStatusInput>,
     state: State<'_, SidecarState>,
     app_handle: AppHandle,
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
-    let command = build_command("get_voice_provider_status", json!({}));
+    let command = build_command(
+        "get_voice_provider_status",
+        json!({
+            "providerMode": input.and_then(|value| value.provider_mode),
+        }),
+    );
     let response = send_command_and_wait(&state, command, 3000).await?;
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
@@ -1031,6 +1119,95 @@ pub async fn stop_voice(
     })
 }
 
+/// Start native system ASR when the host platform supports it.
+#[tauri::command]
+pub async fn start_native_asr(
+    input: Option<NativeAsrInput>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    if !platform_asr::is_supported() {
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": "speech_not_supported",
+            }),
+        });
+    }
+
+    let app_for_emit = app_handle.clone();
+    platform_asr::set_segment_callback(Some(std::sync::Arc::new(move |event| {
+        info!(
+            "native_asr segment locale={:?} confidence={:?} text={}",
+            event.locale, event.confidence, event.text
+        );
+        let _ = app_for_emit.emit(
+            "native-asr-segment",
+            json!({
+                "text": event.text,
+                "locale": event.locale,
+                "confidence": event.confidence,
+            }),
+        );
+    })));
+
+    let language = input
+        .and_then(|value| value.language)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    info!("start_native_asr: language_hint={:?}", language);
+
+    match platform_asr::start(language.as_deref()) {
+        Ok(()) => Ok(GenericIpcResult {
+            success: true,
+            payload: json!({
+                "supported": true,
+            }),
+        }),
+        Err(err) => {
+            platform_asr::set_segment_callback(None);
+            Ok(GenericIpcResult {
+                success: false,
+                payload: json!({
+                    "error": err.code,
+                    "details": err.message,
+                }),
+            })
+        }
+    }
+}
+
+/// Stop native system ASR and return the captured transcript.
+#[tauri::command]
+pub async fn stop_native_asr() -> Result<GenericIpcResult, String> {
+    if !platform_asr::is_supported() {
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": "speech_not_supported",
+            }),
+        });
+    }
+
+    info!("stop_native_asr");
+    let result = match platform_asr::stop() {
+        Ok(transcript) => Ok(GenericIpcResult {
+            success: true,
+            payload: json!({
+                "text": transcript,
+            }),
+        }),
+        Err(err) => Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": err.code,
+                "details": err.message,
+            }),
+        }),
+    };
+    platform_asr::set_segment_callback(None);
+    result
+}
+
 /// Transcribe recorded voice input using a configured OpenAI-compatible endpoint.
 #[tauri::command]
 pub async fn transcribe_audio(
@@ -1038,12 +1215,18 @@ pub async fn transcribe_audio(
     state: State<'_, SidecarState>,
     app_handle: AppHandle,
 ) -> Result<GenericIpcResult, String> {
+    let provider_mode = input.provider_mode.as_deref();
+    let allow_remote_provider_fallback = provider_mode.is_none();
     ensure_sidecar_running(&state, &app_handle).await?;
-    let custom_command = build_command("transcribe_voice", json!({
-        "audioBase64": input.audio_base64,
-        "mimeType": input.mime_type,
-        "language": input.language,
-    }));
+    let custom_command = build_command(
+        "transcribe_voice",
+        json!({
+            "audioBase64": input.audio_base64.clone(),
+            "mimeType": input.mime_type.clone(),
+            "language": input.language.clone(),
+            "providerMode": input.provider_mode.clone(),
+        }),
+    );
     let custom_response = send_command_and_wait(&state, custom_command, 30000).await?;
     let custom_payload = custom_response.get("payload").cloned().unwrap_or(json!({}));
     if custom_payload.get("success").and_then(Value::as_bool) == Some(true) {
@@ -1065,6 +1248,15 @@ pub async fn transcribe_audio(
         });
     }
 
+    if !allow_remote_provider_fallback {
+        return Ok(GenericIpcResult {
+            success: false,
+            payload: json!({
+                "error": "transcription_unavailable",
+            }),
+        });
+    }
+
     let config = get_llm_settings(app_handle.clone()).await?.payload;
     let Some(provider) = resolve_transcription_provider(&config) else {
         return Ok(GenericIpcResult {
@@ -1074,7 +1266,8 @@ pub async fn transcribe_audio(
             }),
         });
     };
-    let selected_model = match discover_transcription_model(&provider, config.proxy.as_ref()).await {
+    let selected_model = match discover_transcription_model(&provider, config.proxy.as_ref()).await
+    {
         Ok(Some(model)) => model,
         Ok(None) => {
             return Ok(GenericIpcResult {
@@ -1088,9 +1281,7 @@ pub async fn transcribe_audio(
         Err(err) => {
             debug!(
                 "transcribe_audio: model discovery failed for provider {}: {}. Falling back to {}",
-                provider.provider,
-                err,
-                provider.fallback_model
+                provider.provider, err, provider.fallback_model
             );
             provider.fallback_model.clone()
         }
@@ -1133,7 +1324,12 @@ pub async fn transcribe_audio(
                 .map_err(|e| e.to_string())?,
         );
 
-    if let Some(language) = input.language.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(language) = input
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         form = form.text("language", language.to_string());
     }
 
@@ -1162,10 +1358,7 @@ pub async fn transcribe_audio(
         };
         error!(
             "transcribe_audio: provider={} model={} status={} body={}",
-            provider.provider,
-            selected_model,
-            status,
-            error_body
+            provider.provider, selected_model, status, error_body
         );
         return Ok(GenericIpcResult {
             success: false,
@@ -1254,32 +1447,120 @@ pub async fn send_task_message(
         enabled_claude_skills: cfg.enabled_claude_skills,
         enabled_toolpacks: cfg.enabled_toolpacks,
         enabled_skills: cfg.enabled_skills,
+        voice_provider_mode: cfg.voice_provider_mode,
     });
 
-    let command = IpcCommand::send_task_message(
-        input.task_id.clone(),
+    let task_id = input.task_id.clone();
+    let command = serde_json::to_value(IpcCommand::send_task_message(
+        task_id.clone(),
         input.content,
         config,
-    );
+    ))
+    .map_err(|e| e.to_string())?;
 
-    {
-        let manager = state.0.lock().map_err(|e| e.to_string())?;
-        manager.send_command(command).map_err(|e| {
-            error!("Failed to send send_task_message command: {}", e);
-            e.to_string()
-        })?;
-    }
+    let response = match send_command_and_wait(&state, command, 5000).await {
+        Ok(value) => value,
+        Err(error_message) => {
+            error!(
+                "Failed to send send_task_message command: {}",
+                error_message
+            );
+            return Ok(SendTaskMessageResult {
+                success: false,
+                task_id,
+                error: Some(error_message),
+            });
+        }
+    };
+
+    let payload = response
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let success = payload
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let task_id = payload
+        .get("taskId")
+        .and_then(Value::as_str)
+        .unwrap_or(task_id.as_str())
+        .to_string();
+    let error = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| (!success).then(|| "send_task_message_failed".to_string()));
 
     Ok(SendTaskMessageResult {
-        success: true,
+        success,
+        task_id,
+        error,
+    })
+}
+
+/// Resume a recoverable interrupted task from saved context
+#[tauri::command]
+pub async fn resume_interrupted_task(
+    input: ResumeInterruptedTaskInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<ResumeInterruptedTaskResult, String> {
+    info!(
+        "resume_interrupted_task command received: task_id={}",
+        input.task_id
+    );
+
+    ensure_sidecar_running(&state, &app_handle).await?;
+
+    let config = input.config.map(|cfg| TaskConfig {
+        model_id: cfg.model_id,
+        max_tokens: cfg.max_tokens,
+        max_history_messages: cfg.max_history_messages,
+        enabled_claude_skills: cfg.enabled_claude_skills,
+        enabled_toolpacks: cfg.enabled_toolpacks,
+        enabled_skills: cfg.enabled_skills,
+        voice_provider_mode: cfg.voice_provider_mode,
+    });
+
+    let command = IpcCommand::resume_interrupted_task(input.task_id.clone(), config);
+    let command_value = serde_json::to_value(command).map_err(|e| e.to_string())?;
+    let response = match send_command_and_wait(&state, command_value, 10000).await {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(ResumeInterruptedTaskResult {
+                success: false,
+                task_id: input.task_id,
+                error: Some(error),
+            });
+        }
+    };
+    let payload = response
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let success = payload
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let error = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| (!success).then(|| "resume_interrupted_task_failed".to_string()));
+
+    Ok(ResumeInterruptedTaskResult {
+        success,
         task_id: input.task_id,
-        error: None,
+        error,
     })
 }
 
 /// Get sidecar status
 #[tauri::command]
-pub async fn get_sidecar_status(state: State<'_, SidecarState>) -> Result<SidecarStatusResult, String> {
+pub async fn get_sidecar_status(
+    state: State<'_, SidecarState>,
+) -> Result<SidecarStatusResult, String> {
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
 
     Ok(SidecarStatusResult {
@@ -1307,21 +1588,32 @@ pub async fn get_llm_settings(app_handle: AppHandle) -> Result<LlmConfigResult, 
             })?;
             if let Ok(store_json) = serde_json::from_str::<Value>(&store_raw) {
                 if let Some(llm_config) = store_json.get("llmConfig") {
-                    let migrated = serde_json::to_string_pretty(llm_config).map_err(|e| e.to_string())?;
+                    let migrated =
+                        serde_json::to_string_pretty(llm_config).map_err(|e| e.to_string())?;
                     if let Some(parent) = path.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .map_err(|e| e.to_string())?;
                     }
-                    tokio::fs::write(&path, &migrated).await.map_err(|e| e.to_string())?;
+                    tokio::fs::write(&path, &migrated)
+                        .await
+                        .map_err(|e| e.to_string())?;
                     info!("get_llm_settings: migrated llmConfig from settings.json");
                     migrated
                 } else {
                     let legacy_path = legacy_llm_config_path()?;
                     if legacy_path.exists() {
-                        let legacy_raw = tokio::fs::read_to_string(&legacy_path).await.map_err(|e| e.to_string())?;
+                        let legacy_raw = tokio::fs::read_to_string(&legacy_path)
+                            .await
+                            .map_err(|e| e.to_string())?;
                         if let Some(parent) = path.parent() {
-                            tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                            tokio::fs::create_dir_all(parent)
+                                .await
+                                .map_err(|e| e.to_string())?;
                         }
-                        tokio::fs::write(&path, &legacy_raw).await.map_err(|e| e.to_string())?;
+                        tokio::fs::write(&path, &legacy_raw)
+                            .await
+                            .map_err(|e| e.to_string())?;
                         info!("get_llm_settings: migrated legacy llm-config.json");
                         legacy_raw
                     } else {
@@ -1344,11 +1636,17 @@ pub async fn get_llm_settings(app_handle: AppHandle) -> Result<LlmConfigResult, 
         } else {
             let legacy_path = legacy_llm_config_path()?;
             if legacy_path.exists() {
-                let legacy_raw = tokio::fs::read_to_string(&legacy_path).await.map_err(|e| e.to_string())?;
+                let legacy_raw = tokio::fs::read_to_string(&legacy_path)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| e.to_string())?;
                 }
-                tokio::fs::write(&path, &legacy_raw).await.map_err(|e| e.to_string())?;
+                tokio::fs::write(&path, &legacy_raw)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 info!("get_llm_settings: migrated legacy llm-config.json");
                 legacy_raw
             } else {
@@ -1369,7 +1667,10 @@ pub async fn get_llm_settings(app_handle: AppHandle) -> Result<LlmConfigResult, 
         e.to_string()
     })?;
 
-    info!("get_llm_settings: parsed config, provider={:?}", config.provider);
+    info!(
+        "get_llm_settings: parsed config, provider={:?}",
+        config.provider
+    );
     Ok(LlmConfigResult {
         success: true,
         payload: config,
@@ -1379,24 +1680,32 @@ pub async fn get_llm_settings(app_handle: AppHandle) -> Result<LlmConfigResult, 
 
 /// Save LLM config to the shared app data directory.
 #[tauri::command]
-pub async fn save_llm_settings(mut input: LlmConfig, app: AppHandle) -> Result<LlmConfigResult, String> {
+pub async fn save_llm_settings(
+    mut input: LlmConfig,
+    app: AppHandle,
+) -> Result<LlmConfigResult, String> {
     let path = llm_config_path(&app)?;
     info!("save_llm_settings: saving to {:?}", path);
     // Preserve the $schema field
     if input.schema.is_none() {
         input.schema = Some("./llm-config.schema.json".to_string());
     }
-    
+
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(&input).map_err(|e| e.to_string())?;
     tokio::fs::write(&path, content).await.map_err(|e| {
         error!("save_llm_settings: failed to write file: {}", e);
         e.to_string()
     })?;
-    
-    info!("save_llm_settings: saved config, provider={:?}", input.provider);
+
+    info!(
+        "save_llm_settings: saved config, provider={:?}",
+        input.provider
+    );
 
     if let Err(e) = app.emit("llm-settings-updated", &input) {
         tracing::warn!("Failed to emit llm-settings-updated: {}", e);
@@ -1422,8 +1731,11 @@ pub struct ValidateLlmInput {
 /// Validate LLM connectivity
 #[tauri::command]
 pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpcResult, String> {
-    info!("validate_llm_settings: validating connectivity for {}", input.provider);
-    
+    info!(
+        "validate_llm_settings: validating connectivity for {}",
+        input.provider
+    );
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -1442,10 +1754,19 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
         match provider {
             "openai" => Some(("https://api.openai.com/v1", "gpt-4o")),
             "aiberm" => Some(("https://aiberm.com/v1", "gpt-5.3-codex")),
-            "nvidia" => Some(("https://integrate.api.nvidia.com/v1", "meta/llama-3.1-70b-instruct")),
+            "nvidia" => Some((
+                "https://integrate.api.nvidia.com/v1",
+                "meta/llama-3.1-70b-instruct",
+            )),
             "siliconflow" => Some(("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct")),
-            "gemini" => Some(("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash")),
-            "qwen" => Some(("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus")),
+            "gemini" => Some((
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                "gemini-2.0-flash",
+            )),
+            "qwen" => Some((
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-plus",
+            )),
             "minimax" => Some(("https://api.minimax.chat/v1", "MiniMax-Text-01")),
             "kimi" => Some(("https://api.moonshot.cn/v1", "moonshot-v1-8k")),
             _ => None,
@@ -1456,7 +1777,9 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
         "anthropic" => {
             let settings = input.anthropic.ok_or("Missing Anthropic settings")?;
             let key = settings.api_key.ok_or("Missing API key")?;
-            let model = settings.model.unwrap_or_else(|| "claude-3-5-sonnet-20240620".to_string());
+            let model = settings
+                .model
+                .unwrap_or_else(|| "claude-3-5-sonnet-20240620".to_string());
             (
                 "https://api.anthropic.com/v1/messages".to_string(),
                 key,
@@ -1470,7 +1793,9 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
         "openrouter" => {
             let settings = input.openrouter.ok_or("Missing OpenRouter settings")?;
             let key = settings.api_key.ok_or("Missing API key")?;
-            let model = settings.model.unwrap_or_else(|| "anthropic/claude-3.5-sonnet".to_string());
+            let model = settings
+                .model
+                .unwrap_or_else(|| "anthropic/claude-3.5-sonnet".to_string());
             (
                 "https://openrouter.ai/api/v1/chat/completions".to_string(),
                 key,
@@ -1487,7 +1812,7 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
             let base_url = settings.base_url.ok_or("Missing Base URL")?;
             let model = settings.model.ok_or("Missing Model ID")?;
             let format = settings.api_format.unwrap_or_else(|| "openai".to_string());
-            
+
             if format == "anthropic" {
                 (
                     base_url,
@@ -1516,7 +1841,7 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
                 let key = settings.api_key.ok_or("Missing API key")?;
                 let model = settings.model.unwrap_or_else(|| default_model.to_string());
                 let request_url = normalize_openai_compatible_url(
-                    settings.base_url.as_deref().unwrap_or(default_url)
+                    settings.base_url.as_deref().unwrap_or(default_url),
                 );
                 (
                     request_url,
@@ -1546,17 +1871,27 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
             .header("content-type", "application/json");
     }
 
-    let res = request.json(&body).send().await.map_err(|e| format!("Request failed: {}", e))?;
-    
+    let res = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
     let status = res.status();
     if status.is_success() {
-        info!("validate_llm_settings: connectivity verified for {}", input.provider);
+        info!(
+            "validate_llm_settings: connectivity verified for {}",
+            input.provider
+        );
         Ok(GenericIpcResult {
             success: true,
             payload: json!({ "message": "Connection successful" }),
         })
     } else {
-        let error_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = res
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         error!("Validation failed with status {}: {}", status, error_text);
         Ok(GenericIpcResult {
             success: false,
@@ -1577,7 +1912,9 @@ pub async fn load_sessions(app_handle: AppHandle) -> Result<SessionsSnapshotResu
         });
     }
 
-    let raw = tokio::fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
+    let raw = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| e.to_string())?;
     let snapshot: SessionsSnapshot = serde_json::from_str(&raw).unwrap_or_default();
     Ok(SessionsSnapshotResult {
         success: true,
@@ -1670,10 +2007,14 @@ pub async fn save_sessions(
 ) -> Result<SessionsSnapshotResult, String> {
     let path = sessions_path(&app_handle)?;
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    let content = serde_json::to_string_pretty(&input).map_err(|e| e.to_string())?;
-    tokio::fs::write(&path, content).await.map_err(|e| e.to_string())?;
+    let content = serde_json::to_string(&input).map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(SessionsSnapshotResult {
         success: true,
@@ -1692,7 +2033,9 @@ pub async fn get_workspace_root() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_default_workspace_path(app_handle: AppHandle) -> Result<String, String> {
-    let dir = app_data_dir(&app_handle)?.join("workspaces").join("workspace");
+    let dir = app_data_dir(&app_handle)?
+        .join("workspaces")
+        .join("workspace");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().to_string())
 }
@@ -2142,10 +2485,7 @@ pub async fn install_from_github(
 pub async fn search_skillhub_skills(
     input: SearchSkillhubInput,
 ) -> Result<GenericIpcResult, String> {
-    let mut args = vec![
-        "--skip-self-upgrade".to_string(),
-        "search".to_string(),
-    ];
+    let mut args = vec!["--skip-self-upgrade".to_string(), "search".to_string()];
     if let Some(query) = input.query {
         let trimmed = query.trim();
         if !trimmed.is_empty() {
@@ -2303,7 +2643,8 @@ pub async fn install_skillhub_cli(app_handle: AppHandle) -> Result<GenericIpcRes
         }
 
         let executable = resolve_skillhub_executable().map_err(|_| {
-            "Skillhub installer finished but executable was not found in ~/.local/bin or PATH".to_string()
+            "Skillhub installer finished but executable was not found in ~/.local/bin or PATH"
+                .to_string()
         })?;
 
         info!("install_skillhub_cli: completed at {:?}", executable);
@@ -2349,11 +2690,15 @@ pub async fn prepare_service_runtime(
     manager.set_app_handle(app_handle.clone());
     Ok(GenericIpcResult {
         success: true,
-        payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
-            "message": message,
-            "service": input.name,
-            "errors": Value::Null,
-        })),
+        payload: runtime_snapshot_payload(
+            &app_handle,
+            Some(&manager),
+            json!({
+                "message": message,
+                "service": input.name,
+                "errors": Value::Null,
+            }),
+        ),
     })
 }
 
@@ -2526,7 +2871,11 @@ pub fn start_all_services(
     Ok(ServiceOperationResult {
         success: errors.is_empty(),
         message: if errors.is_empty() {
-            format!("Started {} service(s): {}", started.len(), started.join(", "))
+            format!(
+                "Started {} service(s): {}",
+                started.len(),
+                started.join(", ")
+            )
         } else {
             format!(
                 "Started {} service(s), {} failed",
@@ -2534,7 +2883,11 @@ pub fn start_all_services(
                 errors.len()
             )
         },
-        errors: if errors.is_empty() { None } else { Some(errors) },
+        errors: if errors.is_empty() {
+            None
+        } else {
+            Some(errors)
+        },
     })
 }
 
@@ -2582,9 +2935,17 @@ pub fn start_all_services_background(
 
         let success = errors.is_empty();
         let message = if success {
-            format!("Started {} service(s): {}", started.len(), started.join(", "))
+            format!(
+                "Started {} service(s): {}",
+                started.len(),
+                started.join(", ")
+            )
         } else {
-            format!("Started {} service(s), {} failed", started.len(), errors.len())
+            format!(
+                "Started {} service(s), {} failed",
+                started.len(),
+                errors.len()
+            )
         };
 
         let _ = app_for_emit.emit(
@@ -2632,19 +2993,27 @@ pub fn start_service(
     match manager.start_service(&name) {
         Ok(()) => Ok(GenericIpcResult {
             success: true,
-            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
-                "message": format!("Service '{}' started", name),
-                "service": name,
-                "errors": Value::Null,
-            })),
+            payload: runtime_snapshot_payload(
+                &app_handle,
+                Some(&manager),
+                json!({
+                    "message": format!("Service '{}' started", name),
+                    "service": name,
+                    "errors": Value::Null,
+                }),
+            ),
         }),
         Err(e) => Ok(GenericIpcResult {
             success: false,
-            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
-                "message": format!("Failed to start service '{}'", name),
-                "service": name,
-                "errors": [e.to_string()],
-            })),
+            payload: runtime_snapshot_payload(
+                &app_handle,
+                Some(&manager),
+                json!({
+                    "message": format!("Failed to start service '{}'", name),
+                    "service": name,
+                    "errors": [e.to_string()],
+                }),
+            ),
         }),
     }
 }
@@ -2662,19 +3031,27 @@ pub fn stop_service(
     match manager.stop_service(&name) {
         Ok(()) => Ok(GenericIpcResult {
             success: true,
-            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
-                "message": format!("Service '{}' stopped", name),
-                "service": name,
-                "errors": Value::Null,
-            })),
+            payload: runtime_snapshot_payload(
+                &app_handle,
+                Some(&manager),
+                json!({
+                    "message": format!("Service '{}' stopped", name),
+                    "service": name,
+                    "errors": Value::Null,
+                }),
+            ),
         }),
         Err(e) => Ok(GenericIpcResult {
             success: false,
-            payload: runtime_snapshot_payload(&app_handle, Some(&manager), json!({
-                "message": format!("Failed to stop service '{}'", name),
-                "service": name,
-                "errors": [e.to_string()],
-            })),
+            payload: runtime_snapshot_payload(
+                &app_handle,
+                Some(&manager),
+                json!({
+                    "message": format!("Failed to stop service '{}'", name),
+                    "service": name,
+                    "errors": [e.to_string()],
+                }),
+            ),
         }),
     }
 }
@@ -2735,12 +3112,15 @@ pub fn health_check_service(
 /// Predownload embedding model for RAG on first-run setup.
 /// Uses persistent cache path so subsequent runs do not redownload.
 #[tauri::command]
-pub async fn prepare_rag_embedding_model(app_handle: AppHandle) -> Result<GenericIpcResult, String> {
+pub async fn prepare_rag_embedding_model(
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
     match tauri::async_runtime::spawn_blocking(move || {
         crate::process_manager::RagService::predownload_embedding_model(&app_handle)
     })
     .await
-    .map_err(|e| e.to_string())? {
+    .map_err(|e| e.to_string())?
+    {
         Ok(message) => Ok(GenericIpcResult {
             success: true,
             payload: json!({

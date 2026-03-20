@@ -8,7 +8,7 @@
  * - Auto-fallback from precise to smart mode (browser_ai_action suggestion)
  */
 
-import { ToolDefinition } from './standard';
+import { ToolDefinition, type ToolContext } from './standard';
 import { BROWSER_TOOLS } from './builtin';
 import type { AdaptiveExecutor } from '../agent/adaptiveExecutor';
 import type { SuspendResumeManager } from '../agent/suspendResumeManager';
@@ -24,6 +24,22 @@ export function createEnhancedBrowserTools(
     suspendResumeManager: SuspendResumeManager,
     taskIdGetter: () => string | undefined
 ): ToolDefinition[] {
+    const createCancellationSignal = (context?: ToolContext): { signal?: AbortSignal; cleanup: () => void } => {
+        if (!context?.onCancel) {
+            return { signal: undefined, cleanup: () => {} };
+        }
+
+        const controller = new AbortController();
+        const unsubscribe = context.onCancel((reason) => {
+            controller.abort(reason || 'Browser task cancelled');
+        });
+
+        return {
+            signal: controller.signal,
+            cleanup: () => unsubscribe(),
+        };
+    };
+
     const isXDomain = (urlOrHost: string): boolean => {
         const lower = (urlOrHost || '').toLowerCase();
         return lower.includes('x.com') || lower.includes('twitter.com');
@@ -37,7 +53,7 @@ export function createEnhancedBrowserTools(
         ].some((d) => lower.includes(d));
     };
 
-    const detectXLoginState = async (): Promise<{ needsLogin: boolean; loggedIn: boolean }> => {
+    const detectXLoginState = async (signal?: AbortSignal): Promise<{ needsLogin: boolean; loggedIn: boolean }> => {
         try {
             const state = await browserService.executeScript<{
                 hasPrimaryHome: boolean;
@@ -56,7 +72,7 @@ export function createEnhancedBrowserTools(
                 const p = (location.pathname || '').toLowerCase();
                 const hasLoginFlowPath = p.includes('/i/flow/login') || p.includes('/login') || p.includes('/signin');
                 return { hasPrimaryHome, hasComposer, hasAuthInputs, hasLoginCta, hasLoginFlowPath };
-            })()`);
+            })()`, { signal });
 
             const loggedIn = !!(state.hasPrimaryHome || state.hasComposer);
             const needsLogin = !loggedIn && !!(state.hasAuthInputs || state.hasLoginCta || state.hasLoginFlowPath);
@@ -77,7 +93,7 @@ export function createEnhancedBrowserTools(
         if (['browser_click', 'browser_fill', 'browser_wait', 'browser_upload_file'].includes(tool.name)) {
             enhancedTools.push({
                 ...tool,
-                handler: async (args: any) => {
+                handler: async (args: any, context: ToolContext) => {
                     // Wrap in adaptive executor for retry with alternatives
                     const result = await adaptiveExecutor.executeWithRetry(
                         {
@@ -88,7 +104,7 @@ export function createEnhancedBrowserTools(
                         },
                         async (toolName, retryArgs) => {
                             // Call original handler
-                            return await tool.handler(retryArgs, undefined as any);
+                            return await tool.handler(retryArgs, context);
                         }
                     );
 
@@ -113,15 +129,17 @@ export function createEnhancedBrowserTools(
         else if (tool.name === 'browser_navigate') {
             enhancedTools.push({
                 ...tool,
-                handler: async (args: any) => {
+                handler: async (args: any, context: ToolContext) => {
+                    const { signal, cleanup } = createCancellationSignal(context);
                     const taskId = taskIdGetter();
 
-                    // Call original navigate
-                    const result = await tool.handler(args, undefined as any);
+                    try {
+                        // Call original navigate
+                        const result = await tool.handler(args, context);
 
-                    // Check if authentication is required
-                    if (result.success && taskId) {
-                        try {
+                        // Check if authentication is required
+                        if (result.success && taskId) {
+                            try {
                             // Guardrail: if this is a login-sensitive site and we're on
                             // persistent_profile mode, require explicit user confirmation.
                             const connInfo = browserService.getConnectionInfo();
@@ -150,7 +168,7 @@ export function createEnhancedBrowserTools(
 
                             // Check for login indicators using page content
                             // This works with both CDP-connected pages and Bridge proxy pages
-                            const contentResult = await browserService.getContent(true);
+                            const contentResult = await browserService.getContent(true, { signal });
                             const pageText = contentResult.content || '';
                             const currentUrl = contentResult.url || args.url || '';
 
@@ -172,7 +190,7 @@ export function createEnhancedBrowserTools(
                                 (hasLoginUrl || (hasLoginKeyword && hasAuthFormKeyword)) &&
                                 !hasLoggedInKeyword;
                             if (isXDomain(currentUrl || args.url || '')) {
-                                const xState = await detectXLoginState();
+                                const xState = await detectXLoginState(signal);
                                 if (xState.loggedIn) {
                                     needsLogin = false;
                                 } else if (xState.needsLogin) {
@@ -199,12 +217,12 @@ export function createEnhancedBrowserTools(
                                         async () => {
                                             // Check if user has logged in by looking at page content
                                             try {
-                                                const checkContent = await browserService.getContent(true);
+                                                const checkContent = await browserService.getContent(true, { signal });
                                                 const checkText = checkContent.content || '';
                                                 const checkUrl = checkContent.url || '';
 
                                                 if (isXDomain(checkUrl || args.url || '')) {
-                                                    const xState = await detectXLoginState();
+                                                    const xState = await detectXLoginState(signal);
                                                     // For X/Twitter, avoid generic fallback heuristics that can
                                                     // produce false positives during redirects/hydration.
                                                     // Only resume when explicit logged-in signals are present.
@@ -237,12 +255,15 @@ export function createEnhancedBrowserTools(
                                     message: `Task suspended. Please login to ${domain} in the browser. The task will resume automatically.`,
                                 };
                             }
-                        } catch (error) {
-                            console.error('[BrowserEnhanced] Error checking authentication:', error);
+                            } catch (error) {
+                                console.error('[BrowserEnhanced] Error checking authentication:', error);
+                            }
                         }
-                    }
 
-                    return result;
+                        return result;
+                    } finally {
+                        cleanup();
+                    }
                 },
             });
         }
@@ -250,7 +271,7 @@ export function createEnhancedBrowserTools(
         else if (tool.name === 'browser_ai_action') {
             enhancedTools.push({
                 ...tool,
-                handler: async (args: any) => {
+                handler: async (args: any, context: ToolContext) => {
                     const result = await adaptiveExecutor.executeWithRetry(
                         {
                             id: `browser_ai_action-${Date.now()}`,
@@ -259,7 +280,7 @@ export function createEnhancedBrowserTools(
                             args,
                         },
                         async (toolName, retryArgs) => {
-                            return await tool.handler(retryArgs, undefined as any);
+                            return await tool.handler(retryArgs, context);
                         }
                     );
 

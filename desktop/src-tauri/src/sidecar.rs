@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,9 +22,7 @@ use uuid::Uuid;
 
 use crate::diff::{apply_patch as apply_patch_diff, DiffHunk, FilePatch, PatchOperation};
 use crate::platform_runtime::{
-    build_platform_runtime_context,
-    resolve_app_data_dir,
-    resolve_app_dir,
+    build_platform_runtime_context, resolve_app_data_dir, resolve_app_dir,
     resolve_sidecar_entry_path,
 };
 use crate::policy::commands as policy_commands;
@@ -36,6 +35,20 @@ use crate::shadow_fs::{self, ShadowFsState};
 struct PackagedSidecar {
     executable: std::path::PathBuf,
     bridge_script: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SidecarProxySettings {
+    enabled: Option<bool>,
+    url: Option<String>,
+    bypass: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SidecarLlmConfig {
+    proxy: Option<SidecarProxySettings>,
 }
 
 // ============================================================================
@@ -103,6 +116,8 @@ pub struct TaskConfig {
     pub enabled_toolpacks: Option<Vec<String>>,
     #[serde(rename = "enabledSkills", skip_serializing_if = "Option::is_none")]
     pub enabled_skills: Option<Vec<String>>,
+    #[serde(rename = "voiceProviderMode", skip_serializing_if = "Option::is_none")]
+    pub voice_provider_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +126,15 @@ pub struct SendTaskMessagePayload {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<TaskConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ResumeInterruptedTaskPayload {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<TaskConfig>,
 }
@@ -158,6 +182,12 @@ pub enum IpcCommand {
         timestamp: String,
         payload: SendTaskMessagePayload,
     },
+    #[serde(rename = "resume_interrupted_task")]
+    ResumeInterruptedTask {
+        id: String,
+        timestamp: String,
+        payload: ResumeInterruptedTaskPayload,
+    },
 }
 
 impl IpcCommand {
@@ -197,11 +227,7 @@ impl IpcCommand {
         }
     }
 
-    pub fn send_task_message(
-        task_id: String,
-        content: String,
-        config: Option<TaskConfig>,
-    ) -> Self {
+    pub fn send_task_message(task_id: String, content: String, config: Option<TaskConfig>) -> Self {
         IpcCommand::SendTaskMessage {
             id: Uuid::new_v4().to_string(),
             timestamp: chrono_now(),
@@ -210,6 +236,14 @@ impl IpcCommand {
                 content,
                 config,
             },
+        }
+    }
+
+    pub fn resume_interrupted_task(task_id: String, config: Option<TaskConfig>) -> Self {
+        IpcCommand::ResumeInterruptedTask {
+            id: Uuid::new_v4().to_string(),
+            timestamp: chrono_now(),
+            payload: ResumeInterruptedTaskPayload { task_id, config },
         }
     }
 }
@@ -228,9 +262,20 @@ pub struct SidecarManager {
     stdout_handle: Option<thread::JoinHandle<()>>,
     stderr_handle: Option<thread::JoinHandle<()>>,
     pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
+    transport_healthy: Arc<AtomicBool>,
 }
 
 impl SidecarManager {
+    fn force_development_sidecar() -> bool {
+        matches!(
+            std::env::var("COWORKANY_FORCE_DEVELOPMENT_SIDECAR")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("1" | "true" | "yes" | "on")
+        )
+    }
+
     pub fn new() -> Self {
         Self {
             child: None,
@@ -238,6 +283,7 @@ impl SidecarManager {
             stdout_handle: None,
             stderr_handle: None,
             pending_responses: Arc::new(Mutex::new(HashMap::new())),
+            transport_healthy: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -249,26 +295,31 @@ impl SidecarManager {
         }
 
         info!("Spawning sidecar process...");
+        self.transport_healthy = Arc::new(AtomicBool::new(true));
 
         let app_dir = resolve_app_dir();
         let app_data_dir = resolve_app_data_dir(&app_handle);
+        let force_development = Self::force_development_sidecar();
         let mut launch_mode = "development".to_string();
-        let mut child = if !cfg!(debug_assertions) {
-            if let Some(packaged) = Self::resolve_packaged_sidecar(&app_handle) {
-                launch_mode = "packaged".to_string();
-                Self::spawn_packaged_sidecar(&packaged, &app_dir, &app_data_dir)
-                    .or_else(|error| {
-                        warn!(
-                            "Failed to start packaged sidecar ({}), falling back to development entry",
-                            error
-                        );
-                        launch_mode = "development".to_string();
-                        Self::spawn_development_sidecar(&app_dir, &app_data_dir)
-                    })?
-            } else {
-                Self::spawn_development_sidecar(&app_dir, &app_data_dir)?
-            }
+        let packaged = if force_development {
+            None
         } else {
+            Self::resolve_packaged_sidecar(&app_handle)
+        };
+        let mut child = if let Some(packaged) = packaged {
+            launch_mode = "packaged".to_string();
+            Self::spawn_packaged_sidecar(&packaged, &app_dir, &app_data_dir).or_else(|error| {
+                warn!(
+                    "Failed to start packaged sidecar ({}), falling back to development entry",
+                    error
+                );
+                launch_mode = "development".to_string();
+                Self::spawn_development_sidecar(&app_dir, &app_data_dir)
+            })?
+        } else {
+            if force_development {
+                info!("COWORKANY_FORCE_DEVELOPMENT_SIDECAR enabled; skipping packaged sidecar");
+            }
             Self::spawn_development_sidecar(&app_dir, &app_data_dir)?
         };
 
@@ -281,11 +332,18 @@ impl SidecarManager {
         self.stdin = Some(stdin.clone());
 
         let runtime_context = build_platform_runtime_context(&app_handle, Some(&launch_mode));
+        let transport_healthy = self.transport_healthy.clone();
 
         // Spawn stdout reader thread
         let pending_responses = self.pending_responses.clone();
         let stdout_handle = thread::spawn(move || {
-            Self::stdout_reader_loop(stdout, app_handle, stdin, pending_responses);
+            Self::stdout_reader_loop(
+                stdout,
+                app_handle,
+                stdin,
+                pending_responses,
+                transport_healthy,
+            );
         });
         self.stdout_handle = Some(stdout_handle);
 
@@ -295,8 +353,11 @@ impl SidecarManager {
         });
         self.stderr_handle = Some(stderr_handle);
 
-        self.send_runtime_bootstrap(&runtime_context)?;
         self.child = Some(child);
+        if let Err(error) = self.send_runtime_bootstrap(&runtime_context) {
+            self.invalidate_transport("failed to bootstrap sidecar runtime context");
+            return Err(error);
+        }
 
         Ok(())
     }
@@ -335,9 +396,18 @@ impl SidecarManager {
             pending.insert(command_id.clone(), tx);
         }
 
-        self.send_raw_command(command)?;
+        if let Err(error) = self.send_raw_command(command) {
+            self.clear_pending_response(&command_id);
+            return Err(error);
+        }
 
         Ok(rx)
+    }
+
+    pub fn clear_pending_response(&self, command_id: &str) {
+        if let Ok(mut pending) = self.pending_responses.lock() {
+            pending.remove(command_id);
+        }
     }
 
     fn send_runtime_bootstrap(
@@ -357,6 +427,12 @@ impl SidecarManager {
 
     /// Shutdown the sidecar process
     pub fn shutdown(&mut self) {
+        self.transport_healthy.store(false, Ordering::SeqCst);
+        fail_pending_responses(
+            &self.pending_responses,
+            "sidecar_shutdown",
+            "Sidecar was shut down before the request completed",
+        );
         if let Some(mut child) = self.child.take() {
             info!("Shutting down sidecar...");
 
@@ -374,8 +450,32 @@ impl SidecarManager {
         }
     }
 
+    pub fn invalidate_transport(&mut self, reason: &str) {
+        let was_healthy = self.transport_healthy.swap(false, Ordering::SeqCst);
+        if was_healthy {
+            warn!("Invalidating sidecar transport: {}", reason);
+        } else {
+            debug!("Sidecar transport already unhealthy: {}", reason);
+        }
+
+        fail_pending_responses(&self.pending_responses, "sidecar_disconnected", reason);
+        self.stdin = None;
+
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
     /// Check if sidecar is running
     pub fn is_running(&mut self) -> bool {
+        if !self.transport_healthy.load(Ordering::SeqCst) {
+            if self.child.is_some() || self.stdin.is_some() {
+                self.invalidate_transport("sidecar transport marked unhealthy");
+            }
+            return false;
+        }
+
         if let Some(ref mut child) = self.child {
             // try_wait checks if the process has exited without blocking
             match child.try_wait() {
@@ -410,6 +510,7 @@ impl SidecarManager {
         app_handle: AppHandle,
         stdin: Arc<Mutex<ChildStdin>>,
         pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
+        transport_healthy: Arc<AtomicBool>,
     ) {
         let reader = BufReader::new(stdout);
 
@@ -430,7 +531,8 @@ impl SidecarManager {
                                 }
                             }
                             Some(SidecarMessageKind::VoiceState) => {
-                                let payload = message.get("payload").cloned().unwrap_or(message.clone());
+                                let payload =
+                                    message.get("payload").cloned().unwrap_or(message.clone());
                                 if let Err(e) = app_handle.emit("voice-state", payload) {
                                     error!("Failed to emit voice-state: {}", e);
                                 }
@@ -469,6 +571,12 @@ impl SidecarManager {
             }
         }
 
+        transport_healthy.store(false, Ordering::SeqCst);
+        fail_pending_responses(
+            &pending_responses,
+            "sidecar_disconnected",
+            "Sidecar connection closed before the request completed",
+        );
         info!("Stdout reader loop ended (sidecar closed stdout)");
 
         // Notify frontend that sidecar has disconnected
@@ -497,6 +605,9 @@ impl SidecarManager {
     }
 
     fn write_stdin_line(&self, line: &str) -> Result<(), SidecarError> {
+        if !self.transport_healthy.load(Ordering::SeqCst) {
+            return Err(SidecarError::NotRunning);
+        }
         let stdin = self.stdin.as_ref().ok_or(SidecarError::NotRunning)?;
         write_json_line(stdin, line)
     }
@@ -530,13 +641,12 @@ impl SidecarManager {
             command.env("COWORKANY_PLAYWRIGHT_BRIDGE", bridge_script);
         }
 
-        Self::apply_proxy_env(&mut command);
+        Self::apply_proxy_env(&mut command, app_data_dir);
         command.spawn().map_err(SidecarError::from)
     }
 
     fn spawn_development_sidecar(app_dir: &str, app_data_dir: &str) -> Result<Child, SidecarError> {
-        let sidecar_path =
-            resolve_sidecar_entry_path().map_err(SidecarError::SendError)?;
+        let sidecar_path = resolve_sidecar_entry_path().map_err(SidecarError::SendError)?;
         let sidecar_dir = sidecar_path.parent().unwrap().parent().unwrap();
         let tsx_path = sidecar_dir.join("node_modules/tsx/dist/cli.mjs");
 
@@ -558,7 +668,7 @@ impl SidecarManager {
                 .stderr(Stdio::piped())
                 .env("COWORKANY_APP_DIR", app_dir)
                 .env("COWORKANY_APP_DATA_DIR", app_data_dir);
-            Self::apply_proxy_env(&mut node_cmd);
+            Self::apply_proxy_env(&mut node_cmd, app_data_dir);
 
             return node_cmd.spawn().map_err(SidecarError::from);
         }
@@ -577,7 +687,7 @@ impl SidecarManager {
             .stderr(Stdio::piped())
             .env("COWORKANY_APP_DIR", app_dir)
             .env("COWORKANY_APP_DATA_DIR", app_data_dir);
-        Self::apply_proxy_env(&mut npx_cmd);
+        Self::apply_proxy_env(&mut npx_cmd, app_data_dir);
 
         npx_cmd
             .spawn()
@@ -591,7 +701,7 @@ impl SidecarManager {
                     .stderr(Stdio::piped())
                     .env("COWORKANY_APP_DIR", app_dir)
                     .env("COWORKANY_APP_DATA_DIR", app_data_dir);
-                Self::apply_proxy_env(&mut bun_cmd);
+                Self::apply_proxy_env(&mut bun_cmd, app_data_dir);
                 bun_cmd.spawn()
             })
             .map_err(SidecarError::from)
@@ -641,26 +751,51 @@ impl SidecarManager {
         proxy_url.to_string()
     }
 
-    fn apply_proxy_env(command: &mut Command) {
-        // Priority:
-        // 1) explicit COWORKANY_PROXY_URL
-        // 2) standard proxy envs
-        // 3) global-agent envs
-        let proxy = Self::first_non_empty_env(&[
-            "COWORKANY_PROXY_URL",
-            "HTTPS_PROXY",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-            "HTTP_PROXY",
-            "http_proxy",
-            "GLOBAL_AGENT_HTTPS_PROXY",
-            "GLOBAL_AGENT_HTTP_PROXY",
-        ]);
+    fn proxy_from_llm_config(app_data_dir: &str) -> Option<(String, Option<String>)> {
+        let path = std::path::Path::new(app_data_dir).join("llm-config.json");
+        let raw = fs::read_to_string(path).ok()?;
+        let config: SidecarLlmConfig = serde_json::from_str(&raw).ok()?;
+        let proxy = config.proxy?;
+        if proxy.enabled != Some(true) {
+            return None;
+        }
+
+        let url = proxy.url?.trim().to_string();
+        if url.is_empty() {
+            return None;
+        }
+
+        let bypass = proxy
+            .bypass
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Some((url, bypass))
+    }
+
+    fn apply_proxy_env(command: &mut Command, app_data_dir: &str) {
+        let proxy_from_config = Self::proxy_from_llm_config(app_data_dir);
+        let proxy = proxy_from_config
+            .as_ref()
+            .map(|(url, _)| url.to_string())
+            .or_else(|| {
+                Self::first_non_empty_env(&[
+                    "COWORKANY_PROXY_URL",
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                    "HTTP_PROXY",
+                    "http_proxy",
+                    "GLOBAL_AGENT_HTTPS_PROXY",
+                    "GLOBAL_AGENT_HTTP_PROXY",
+                ])
+            });
 
         if let Some(proxy_url) = proxy {
             // Populate both uppercase and lowercase to maximize runtime compatibility.
             command
+                .env("COWORKANY_PROXY_URL", &proxy_url)
                 .env("HTTPS_PROXY", &proxy_url)
                 .env("https_proxy", &proxy_url)
                 .env("HTTP_PROXY", &proxy_url)
@@ -668,13 +803,29 @@ impl SidecarManager {
                 .env("ALL_PROXY", &proxy_url)
                 .env("all_proxy", &proxy_url)
                 .env("GLOBAL_AGENT_HTTPS_PROXY", &proxy_url)
-                .env("GLOBAL_AGENT_HTTP_PROXY", &proxy_url);
+                .env("GLOBAL_AGENT_HTTP_PROXY", &proxy_url)
+                .env(
+                    "COWORKANY_PROXY_SOURCE",
+                    if proxy_from_config.is_some() {
+                        "config"
+                    } else {
+                        "env"
+                    },
+                )
+                .env("NODE_USE_ENV_PROXY", "1");
 
             let log_proxy = Self::sanitize_proxy_for_log(&proxy_url);
-            info!("Sidecar proxy enabled: {}", log_proxy);
+            if proxy_from_config.is_some() {
+                info!("Sidecar proxy enabled from llm-config: {}", log_proxy);
+            } else {
+                info!("Sidecar proxy enabled from environment: {}", log_proxy);
+            }
         }
 
-        let no_proxy = Self::first_non_empty_env(&["NO_PROXY", "no_proxy"])
+        let no_proxy = proxy_from_config
+            .as_ref()
+            .and_then(|(_, bypass)| bypass.clone())
+            .or_else(|| Self::first_non_empty_env(&["NO_PROXY", "no_proxy"]))
             .unwrap_or_else(|| "localhost,127.0.0.1,::1".to_string());
         command
             .env("NO_PROXY", &no_proxy)
@@ -1335,7 +1486,10 @@ fn write_json_line(stdin: &Arc<Mutex<ChildStdin>>, line: &str) -> Result<(), Sid
 fn send_raw(stdin: &Arc<Mutex<ChildStdin>>, message: serde_json::Value) {
     if let Ok(line) = serde_json::to_string(&message) {
         if let Err(error) = write_json_line(stdin, &line) {
-            error!("Failed to write sidecar response to stdin bridge: {}", error);
+            error!(
+                "Failed to write sidecar response to stdin bridge: {}",
+                error
+            );
         }
     }
 }
@@ -1350,6 +1504,33 @@ fn build_error_response(command_id: &str, response_type: &str, error: &str) -> s
             "error": error
         }
     })
+}
+
+fn fail_pending_responses(
+    pending_responses: &Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
+    error_code: &str,
+    error_message: &str,
+) {
+    let pending = match pending_responses.lock() {
+        Ok(mut guard) => std::mem::take(&mut *guard),
+        Err(error) => {
+            error!("Failed to lock pending sidecar responses: {}", error);
+            return;
+        }
+    };
+
+    for (command_id, waiter) in pending {
+        let _ = waiter.send(json!({
+            "type": "transport_error_response",
+            "commandId": command_id,
+            "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "success": false,
+                "error": error_code,
+                "details": error_message,
+            }
+        }));
+    }
 }
 
 impl Default for SidecarManager {
@@ -1401,5 +1582,104 @@ impl SidecarState {
 impl Default for SidecarState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SidecarManager;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_millis();
+        std::env::temp_dir().join(format!("coworkany-{name}-{}-{millis}", std::process::id()))
+    }
+
+    fn command_env_map(command: &Command) -> HashMap<String, String> {
+        command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().to_string(),
+                        value.to_string_lossy().to_string(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn apply_proxy_env_uses_llm_config_proxy_settings() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let app_data_dir = unique_temp_dir("sidecar-proxy-config");
+        fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        fs::write(
+            app_data_dir.join("llm-config.json"),
+            r#"{
+                "proxy": {
+                    "enabled": true,
+                    "url": "http://127.0.0.1:7890",
+                    "bypass": "localhost,127.0.0.1,::1,.local"
+                }
+            }"#,
+        )
+        .expect("write llm-config");
+
+        let original_https_proxy = std::env::var_os("HTTPS_PROXY");
+        let original_coworkany_proxy = std::env::var_os("COWORKANY_PROXY_URL");
+        std::env::remove_var("HTTPS_PROXY");
+        std::env::remove_var("COWORKANY_PROXY_URL");
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_proxy_env(&mut command, app_data_dir.to_str().expect("utf8 path"));
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("COWORKANY_PROXY_URL"),
+            Some(&"http://127.0.0.1:7890".to_string())
+        );
+        assert_eq!(
+            envs.get("HTTPS_PROXY"),
+            Some(&"http://127.0.0.1:7890".to_string())
+        );
+        assert_eq!(
+            envs.get("http_proxy"),
+            Some(&"http://127.0.0.1:7890".to_string())
+        );
+        assert_eq!(
+            envs.get("GLOBAL_AGENT_HTTPS_PROXY"),
+            Some(&"http://127.0.0.1:7890".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_PROXY_SOURCE"),
+            Some(&"config".to_string())
+        );
+        assert_eq!(envs.get("NODE_USE_ENV_PROXY"), Some(&"1".to_string()));
+        assert_eq!(
+            envs.get("NO_PROXY"),
+            Some(&"localhost,127.0.0.1,::1,.local".to_string())
+        );
+
+        match original_https_proxy {
+            Some(value) => std::env::set_var("HTTPS_PROXY", value),
+            None => std::env::remove_var("HTTPS_PROXY"),
+        }
+        match original_coworkany_proxy {
+            Some(value) => std::env::set_var("COWORKANY_PROXY_URL", value),
+            None => std::env::remove_var("COWORKANY_PROXY_URL"),
+        }
+
+        let _ = fs::remove_dir_all(&app_data_dir);
     }
 }

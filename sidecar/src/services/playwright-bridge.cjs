@@ -24,6 +24,7 @@ const readline = require('readline');
 let browser = null;
 let context = null;
 let page = null;
+const activeCommands = new Map();
 
 function send(obj) {
     process.stdout.write(JSON.stringify(obj) + '\n');
@@ -31,6 +32,49 @@ function send(obj) {
 
 function log(msg) {
     process.stderr.write(`[PW-Bridge] ${msg}\n`);
+}
+
+async function interruptCurrentPageOperation(reason) {
+    if (!page || !context) {
+        return;
+    }
+
+    try {
+        if (!page.isClosed()) {
+            await page.close({ runBeforeUnload: false });
+        }
+    } catch (error) {
+        log(`Failed to close page during cancellation: ${error.message || String(error)}`);
+    }
+
+    try {
+        page = await context.newPage();
+        log(`Replaced page after cancellation${reason ? `: ${reason}` : ''}`);
+    } catch (error) {
+        log(`Failed to create replacement page after cancellation: ${error.message || String(error)}`);
+    }
+}
+
+function createCommandControl(id) {
+    const control = {
+        id,
+        cancelled: false,
+        reason: 'Command cancelled',
+        async cancel(reason) {
+            if (control.cancelled) {
+                return;
+            }
+            control.cancelled = true;
+            control.reason = reason || 'Command cancelled';
+            await interruptCurrentPageOperation(control.reason);
+        },
+    };
+    activeCommands.set(id, control);
+    return control;
+}
+
+function getCommandCancellationError(control) {
+    return new Error(control?.reason || 'Command cancelled');
 }
 
 /**
@@ -539,6 +583,19 @@ async function handleCommand(line) {
     }
 
     const { id, method, params } = cmd;
+
+    if (method === 'cancel') {
+        const targetId = params?.targetId;
+        const control = targetId ? activeCommands.get(targetId) : null;
+        if (control) {
+            await control.cancel(params?.reason);
+            send({ id, success: true, result: { cancelled: true, targetId } });
+        } else {
+            send({ id, success: true, result: { cancelled: false, targetId } });
+        }
+        return;
+    }
+
     const handler = handlers[method];
 
     if (!handler) {
@@ -546,11 +603,23 @@ async function handleCommand(line) {
         return;
     }
 
+    const control = createCommandControl(id);
+
     try {
         const result = await handler(params || {});
-        send({ id, success: true, result });
+        if (control.cancelled) {
+            send({ id, success: false, error: control.reason, cancelled: true });
+        } else {
+            send({ id, success: true, result });
+        }
     } catch (error) {
-        send({ id, success: false, error: error.message || String(error) });
+        if (control.cancelled) {
+            send({ id, success: false, error: control.reason, cancelled: true });
+        } else {
+            send({ id, success: false, error: error.message || String(error) });
+        }
+    } finally {
+        activeCommands.delete(id);
     }
 }
 

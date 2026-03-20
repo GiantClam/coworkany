@@ -4,7 +4,7 @@
  * Main chat interface using child components
  */
 
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './ChatInterface.css';
 import { invoke } from '@tauri-apps/api/core';
@@ -13,7 +13,7 @@ import { useStartTask, useCancelTask } from '../../hooks/useStartTask';
 import { useActiveSession, useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
-import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
+import { useResumeInterruptedTask, useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useClearTaskHistory } from '../../hooks/useClearTaskHistory';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { useWorkspace } from '../../hooks/useWorkspace';
@@ -24,6 +24,8 @@ import { InputArea } from './components/InputArea';
 import { WelcomeSection } from '../Welcome/WelcomeSection';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
 import { getPendingTaskStatus } from './Timeline/pendingTaskStatus';
+import { getVoiceSettings } from '../../lib/configStore';
+import type { TaskEvent } from '../../types';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('../Skills/SkillsView');
@@ -80,9 +82,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const activeSession = useActiveSession();
     const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
+    const addTaskEvent = useTaskEventStore((state) => state.addEvent);
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
+    const { resumeInterruptedTask, isLoading: isResuming, error: resumeError } = useResumeInterruptedTask();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
     const { voiceState, stopPlayback, isStopping: isStoppingVoice, error: stopVoiceError } = useVoicePlayback();
     const { skills } = useSkills({ autoRefresh: true });
@@ -98,6 +102,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         handlePaste,
         buildContentWithAttachments,
     } = useFileAttachment();
+    const voiceSegmentQueueRef = useRef<string[]>([]);
+    const processingVoiceSegmentsRef = useRef(false);
     useEffect(() => {
         let mounted = true;
         let unlistenSettings: UnlistenFn | undefined;
@@ -143,10 +149,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         [toolpacks]
     );
 
+    const activeModelName = useMemo(() => {
+        const activeProfile = llmConfig.profiles?.find((profile) => profile.id === llmConfig.activeProfileId);
+        return activeProfile ? activeProfile.name : t('chat.noProfiles');
+    }, [llmConfig.activeProfileId, llmConfig.profiles, t]);
+
     const pendingTaskStatus = useMemo(
         () => activeSession ? getPendingTaskStatus(activeSession) : null,
         [activeSession]
     );
+    const canResumeInterruptedTask = activeSession?.failure?.errorCode === 'INTERRUPTED';
 
     const setActiveProfile = useCallback(async (id: string) => {
         try {
@@ -206,29 +218,92 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         void addFiles(imageFiles);
     }, [addFiles]);
 
-    const handleSubmit = useCallback(async () => {
-        const trimmedQuery = query.trim();
-        if (!trimmedQuery && attachments.length === 0) return;
-        const requestContent = buildContentWithAttachments(query);
-        const titleSource = trimmedQuery || attachments[0]?.name || t('chat.currentTask');
+    const appendLocalTaskEvent = useCallback((
+        taskId: string,
+        type: TaskEvent['type'],
+        payload: TaskEvent['payload']
+    ) => {
+        const currentSession = useTaskEventStore.getState().getSession(taskId);
+        const event: TaskEvent = {
+            id: `local-${type.toLowerCase()}-${crypto.randomUUID()}`,
+            taskId,
+            sequence: (currentSession?.events.at(-1)?.sequence ?? 0) + 1,
+            type,
+            timestamp: new Date().toISOString(),
+            payload,
+        };
+        addTaskEvent(event);
+        return event;
+    }, [addTaskEvent]);
+
+    const submitRequest = useCallback(async (
+        text: string,
+        options?: { includeAttachments?: boolean }
+    ): Promise<boolean> => {
+        const includeAttachments = options?.includeAttachments ?? true;
+        const trimmedQuery = text.trim();
+        if (!trimmedQuery && (!includeAttachments || attachments.length === 0)) return false;
+        const requestContent = includeAttachments ? buildContentWithAttachments(text) : trimmedQuery;
+        const titleSource = trimmedQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
         const enabledSkillsForRequest = enabledSkills;
         const enabledToolpacksForRequest = enabledToolpacks;
 
         if (activeSession?.taskId && !activeSession.isDraft) {
+            const voiceSettings = await getVoiceSettings();
+            const taskId = activeSession.taskId;
+            const sentContent = requestContent;
+            const sendStartedAt = new Date().toISOString();
+            appendLocalTaskEvent(taskId, 'TASK_STATUS', { status: 'running' });
             const result = await sendMessage({
-                taskId: activeSession.taskId,
-                content: requestContent,
+                taskId,
+                content: sentContent,
                 config: {
                     enabledClaudeSkills: enabledSkillsForRequest,
                     enabledToolpacks: enabledToolpacksForRequest,
                     enabledSkills: enabledSkillsForRequest,
+                    voiceProviderMode: voiceSettings.providerMode,
                 },
             });
             if (result?.success) {
+                window.setTimeout(() => {
+                    const currentSession = useTaskEventStore.getState().getSession(taskId);
+                    const hasUserEvent = currentSession?.events.some((event) => (
+                        event.type === 'CHAT_MESSAGE'
+                        && event.timestamp >= sendStartedAt
+                        && event.payload?.role === 'user'
+                        && event.payload?.content === sentContent
+                    )) ?? false;
+
+                    if (hasUserEvent) {
+                        return;
+                    }
+
+                    const fallbackEvent: TaskEvent = {
+                        id: `local-user-${crypto.randomUUID()}`,
+                        taskId,
+                        sequence: (currentSession?.events.at(-1)?.sequence ?? 0) + 1,
+                        type: 'CHAT_MESSAGE',
+                        timestamp: new Date().toISOString(),
+                        payload: {
+                            role: 'user',
+                            content: sentContent,
+                        },
+                    };
+                    addTaskEvent(fallbackEvent);
+                }, 250);
                 setQuery('');
-                clearAttachments();
+                if (includeAttachments) {
+                    clearAttachments();
+                }
+            } else {
+                appendLocalTaskEvent(taskId, 'TASK_FAILED', {
+                    error: result?.error ?? t('chat.connectionError'),
+                    errorCode: 'SIDECAR_DELIVERY_FAILED',
+                    recoverable: true,
+                    suggestion: t('chat.connectionError'),
+                });
             }
-            return;
+            return result?.success === true;
         }
 
         const draftTaskId = activeSession?.isDraft ? activeSession.taskId : undefined;
@@ -280,10 +355,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const currentPath = currentWorkspace?.path;
         if (!currentPath) {
             setWorkspaceError('Workspace path is not available and could not be created.');
-            return;
+            return false;
         }
 
         setWorkspaceError(null);
+        const voiceSettings = await getVoiceSettings();
         const result = await startTask({
             title: titleSource.slice(0, 60),
             userQuery: requestContent,
@@ -292,13 +368,56 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 enabledClaudeSkills: enabledSkillsForRequest,
                 enabledToolpacks: enabledToolpacksForRequest,
                 enabledSkills: enabledSkillsForRequest,
+                voiceProviderMode: voiceSettings.providerMode,
             },
         }, draftTaskId ? { draftTaskId } : undefined);
         if (result?.success) {
             setQuery('');
-            clearAttachments();
+            if (includeAttachments) {
+                clearAttachments();
+            }
         }
-    }, [query, attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask, syncWorkspace]);
+        return result?.success === true;
+    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask, syncWorkspace, addTaskEvent, appendLocalTaskEvent]);
+
+    const handleSubmit = useCallback(async () => {
+        await submitRequest(query, { includeAttachments: true });
+    }, [query, submitRequest]);
+
+    const processVoiceSegmentQueue = useCallback(async () => {
+        if (processingVoiceSegmentsRef.current) {
+            return;
+        }
+
+        processingVoiceSegmentsRef.current = true;
+        try {
+            while (voiceSegmentQueueRef.current.length > 0) {
+                const segment = voiceSegmentQueueRef.current.shift()?.trim() || '';
+                if (!segment) {
+                    continue;
+                }
+
+                setQuery(segment);
+                const success = await submitRequest(segment, { includeAttachments: false });
+                if (!success) {
+                    setQuery(segment);
+                    break;
+                }
+            }
+        } finally {
+            processingVoiceSegmentsRef.current = false;
+        }
+    }, [submitRequest]);
+
+    const handleVoiceSegment = useCallback((text: string) => {
+        const normalized = text.trim();
+        if (!normalized) {
+            return;
+        }
+
+        voiceSegmentQueueRef.current.push(normalized);
+        void processVoiceSegmentQueue();
+    }, [processVoiceSegmentQueue]);
 
     const handleCancel = useCallback(async () => {
         if (activeSession?.taskId) {
@@ -308,6 +427,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
         }
     }, [activeSession?.taskId, cancelTask]);
+
+    const handleResumeInterruptedTask = useCallback(async () => {
+        if (!activeSession?.taskId || activeSession.isDraft || !canResumeInterruptedTask) {
+            return;
+        }
+
+        const voiceSettings = await getVoiceSettings();
+        const result = await resumeInterruptedTask({
+            taskId: activeSession.taskId,
+            config: {
+                enabledClaudeSkills: enabledSkills,
+                enabledToolpacks,
+                enabledSkills,
+                voiceProviderMode: voiceSettings.providerMode,
+            },
+        });
+
+        if (result?.success) {
+            setQuery('');
+            clearAttachments();
+        }
+    }, [activeSession, canResumeInterruptedTask, clearAttachments, enabledSkills, enabledToolpacks, resumeInterruptedTask]);
 
     const handleStopVoice = useCallback(async () => {
         await stopPlayback();
@@ -364,9 +505,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenProject={() => {}}
                     onTaskList={onOpenTasks ?? (() => {})}
                 />
-                {(workspaceError || startError || cancelError || sendError || clearError || stopVoiceError) && (
+                {(workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError) && (
                     <div className="chat-error">
-                        {workspaceError || startError || cancelError || sendError || clearError || stopVoiceError}
+                        {workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError}
                     </div>
                 )}
                 <InputArea
@@ -375,6 +516,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     disabled={isStarting}
                     onQueryChange={setQuery}
                     onSubmit={handleSubmit}
+                    onVoiceSegment={handleVoiceSegment}
                     attachments={attachments}
                     attachmentError={attachmentError}
                     onRemoveAttachment={removeAttachment}
@@ -395,7 +537,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 title={activeSession?.title || t('chat.newSessionTitle')}
                 status={activeSession.status}
                 statusLabel={statusLabel}
-                llmConfig={llmConfig}
+                modelName={activeModelName}
                 enabledSkillsCount={enabledSkills.length}
                 enabledToolpacksCount={enabledToolpacks.length}
                 isClearing={isClearing}
@@ -412,9 +554,36 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 canClearHistory={!activeSession.isDraft}
             />
 
-            {(workspaceError || startError || cancelError || sendError || clearError || stopVoiceError) && (
+            {(workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError) && (
                 <div className="chat-error">
-                    {workspaceError || startError || cancelError || sendError || clearError || stopVoiceError}
+                    {workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError}
+                </div>
+            )}
+
+            {canResumeInterruptedTask && (
+                <div className="chat-recovery-banner">
+                    <div className="chat-recovery-copy">
+                        <strong>
+                            {t('chat.resumeInterruptedTitle', {
+                                defaultValue: 'Task interrupted, but the saved context is still available.',
+                            })}
+                        </strong>
+                        <span>
+                            {activeSession.failure?.suggestion || t('chat.resumeInterruptedSuggestion', {
+                                defaultValue: 'Resume the task to continue from the saved context.',
+                            })}
+                        </span>
+                    </div>
+                    <button
+                        type="button"
+                        className="status-action accent"
+                        onClick={() => {
+                            void handleResumeInterruptedTask();
+                        }}
+                        disabled={isSending || isStarting || isResuming}
+                    >
+                        {t('chat.resumeInterruptedAction', { defaultValue: 'Continue task' })}
+                    </button>
                 </div>
             )}
 
@@ -424,9 +593,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <InputArea
                 query={query}
                 placeholder={activeSession.status === 'running' ? t('chat.newInstructions') : t('chat.newInstructions')}
-                disabled={isSending || isStarting}
+                disabled={isSending || isStarting || isResuming}
                 onQueryChange={setQuery}
                 onSubmit={handleSubmit}
+                onVoiceSegment={handleVoiceSegment}
                 attachments={attachments}
                 attachmentError={attachmentError}
                 onRemoveAttachment={removeAttachment}

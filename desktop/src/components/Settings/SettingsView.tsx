@@ -12,6 +12,7 @@ import { ProfileList } from './components/ProfileList';
 import { SearchSettings } from './components/SearchSettings';
 import { ProxySettings } from './components/ProxySettings';
 import { ShortcutSettings } from './components/ShortcutSettings';
+import { VoiceSettings } from './components/VoiceSettings';
 import { DependencySetupSection } from './components/DependencySetupSection';
 import { useSettings } from './hooks/useSettings';
 import { toast } from '../Common/ToastProvider';
@@ -204,6 +205,7 @@ export function SettingsView() {
 
                 <div className={styles.secondaryColumn}>
                     <AppearanceSection />
+                    <VoiceSettings />
                     <ShortcutSettings />
                     <div className={styles.section}>
                         <DirectivesEditor />

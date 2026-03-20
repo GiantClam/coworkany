@@ -12,13 +12,14 @@ import {
 } from '../../agent/jarvis/voiceInterface';
 import type { StoredSkill } from '../../storage/skillStore';
 import { globalToolRegistry } from '../registry';
-import { invokeCustomTtsProvider } from './speechProviders';
+import { invokeCustomTtsProvider, type VoiceProviderMode } from './speechProviders';
 
 // Singleton instance with lazy initialization
 let voiceInterface = createVoiceInterface();
 let initialized = false;
 let voicePlaybackReporter: ((state: VoicePlaybackState) => void) | null = null;
 let listEnabledSkills: (() => StoredSkill[]) | null = null;
+let getVoiceProviderModeForTask: ((taskId: string) => VoiceProviderMode | undefined) | null = null;
 let customPlaybackState: VoicePlaybackState | null = null;
 let activeCustomStopToolName: string | null = null;
 let activeCustomContext: ToolContext | null = null;
@@ -51,8 +52,12 @@ async function ensureInitialized(): Promise<void> {
     }
 }
 
-export function configureVoiceProviders(input: { listEnabledSkills: () => StoredSkill[] }): void {
+export function configureVoiceProviders(input: {
+    listEnabledSkills: () => StoredSkill[];
+    getVoiceProviderModeForTask?: (taskId: string) => VoiceProviderMode | undefined;
+}): void {
     listEnabledSkills = input.listEnabledSkills;
+    getVoiceProviderModeForTask = input.getVoiceProviderModeForTask ?? null;
 }
 
 export function setVoicePlaybackReporter(reporter: ((state: VoicePlaybackState) => void) | null): void {
@@ -70,7 +75,8 @@ export async function speakText(
     await ensureInitialized();
 
     const enabledSkills = listEnabledSkills?.() ?? [];
-    if (enabledSkills.length > 0) {
+    const providerMode = getVoiceProviderModeForTask?.(context.taskId) ?? 'auto';
+    if (enabledSkills.length > 0 && providerMode !== 'system') {
         customPlaybackState = {
             isSpeaking: true,
             canStop: false,
@@ -87,6 +93,7 @@ export async function speakText(
             (toolName) => globalToolRegistry.getTool(toolName),
             { text },
             context,
+            providerMode,
         );
 
         if (customResult.success && customResult.provider) {

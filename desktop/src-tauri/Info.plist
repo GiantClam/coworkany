@@ -4,5 +4,7 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>CoworkAny uses your microphone for voice input transcription.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>CoworkAny uses speech recognition to convert your voice into text.</string>
 </dict>
 </plist>

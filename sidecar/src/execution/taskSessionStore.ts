@@ -6,6 +6,7 @@ export type TaskSessionConfig = {
     enabledToolpacks?: string[];
     enabledSkills?: string[];
     workspacePath?: string;
+    voiceProviderMode?: 'auto' | 'system' | 'custom';
 };
 
 export type TaskResumeMessage = {

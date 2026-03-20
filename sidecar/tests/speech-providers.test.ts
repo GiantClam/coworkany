@@ -62,6 +62,27 @@ describe('speechProviders', () => {
         expect(status.hasCustomTts).toBe(true);
     });
 
+    test('system mode suppresses custom provider preference without hiding availability', () => {
+        const skills = [
+            makeSkill('custom-voice', { voice: { asr: { tool: 'custom_asr' }, tts: { tool: 'custom_tts' } } }),
+        ];
+        const tools = new Map([
+            ['custom_asr', makeTool('custom_asr')],
+            ['custom_tts', makeTool('custom_tts')],
+        ]);
+
+        const status = getSpeechProviderStatus(
+            skills,
+            (toolName) => tools.get(toolName),
+            'system',
+        );
+
+        expect(status.preferredAsr).toBe('system');
+        expect(status.preferredTts).toBe('system');
+        expect(status.hasCustomAsr).toBe(true);
+        expect(status.hasCustomTts).toBe(true);
+    });
+
     test('invokes the preferred ASR tool with normalized audio payload', async () => {
         const skills = [
             makeSkill('custom-asr', { voice: { asr: { tool: 'custom_asr' } } }),
@@ -90,5 +111,32 @@ describe('speechProviders', () => {
         expect(result.success).toBe(true);
         expect(result.text).toBe('zh-CN:audio/webm:YWJj');
         expect(result.providerName).toBe('custom-asr');
+    });
+
+    test('system mode skips custom ASR invocation', async () => {
+        const skills = [
+            makeSkill('custom-asr', { voice: { asr: { tool: 'custom_asr' } } }),
+        ];
+        const tools = new Map([
+            ['custom_asr', makeTool('custom_asr')],
+        ]);
+
+        const result = await invokeCustomAsrProvider(
+            skills,
+            (toolName) => tools.get(toolName),
+            {
+                audioBase64: 'YWJjZA==',
+                mimeType: 'audio/webm',
+                language: 'en-US',
+            },
+            {
+                workspacePath: '/tmp/project',
+                taskId: 'voice-test',
+            },
+            'system',
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('transcription_unavailable');
     });
 });

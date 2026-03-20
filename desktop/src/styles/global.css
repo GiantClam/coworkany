@@ -123,6 +123,11 @@ option,
 }
 
 .app-shell {
+    --app-aurora-blur: 42px;
+    --app-aurora-opacity: 0.32;
+    --app-noise-opacity: 0.18;
+    --surface-blur-strong: blur(14px) saturate(128%);
+    --surface-blur-medium: blur(12px) saturate(124%);
     position: relative;
     isolation: isolate;
     width: 100%;
@@ -136,12 +141,21 @@ option,
     background: var(--bg-app);
 }
 
+.app-shell-macos {
+    --app-aurora-blur: 26px;
+    --app-aurora-opacity: 0.16;
+    --app-noise-opacity: 0.08;
+    --surface-blur-strong: none;
+    --surface-blur-medium: none;
+    --glass-blur: none;
+}
+
 .app-aurora {
     position: absolute;
     inset: auto;
     border-radius: 9999px;
-    filter: blur(42px);
-    opacity: 0.32;
+    filter: blur(var(--app-aurora-blur));
+    opacity: var(--app-aurora-opacity);
     pointer-events: none;
     z-index: 0;
 }
@@ -175,7 +189,7 @@ option,
     inset: 0;
     z-index: 0;
     pointer-events: none;
-    opacity: 0.18;
+    opacity: var(--app-noise-opacity);
     background-image:
         radial-gradient(rgba(183, 223, 255, 0.34) 0.5px, transparent 0.5px);
     background-size: 3px 3px;

@@ -13,6 +13,10 @@ export interface SessionsSnapshot {
     activeTaskId: string | null;
 }
 
+export interface PersistScheduleOptions {
+    delayMs?: number;
+}
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
@@ -30,14 +34,16 @@ async function persistSessions(snapshot: SessionsSnapshot): Promise<void> {
 /**
  * Schedule persistence with debounce (1200ms)
  */
-export function schedulePersist(snapshot: SessionsSnapshot): void {
+export function schedulePersist(snapshot: SessionsSnapshot, options: PersistScheduleOptions = {}): void {
     if (persistTimer) {
         clearTimeout(persistTimer);
     }
+
+    const delayMs = options.delayMs ?? 1200;
     persistTimer = setTimeout(() => {
         persistTimer = null;
         void persistSessions(snapshot);
-    }, 1200);
+    }, delayMs);
 }
 
 /**

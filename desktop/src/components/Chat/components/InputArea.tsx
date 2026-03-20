@@ -25,6 +25,7 @@ interface InputAreaProps {
     disabled: boolean;
     onQueryChange: (value: string) => void;
     onSubmit: () => void | Promise<void>;
+    onVoiceSegment?: (text: string) => void | Promise<void>;
     attachments: FileAttachment[];
     attachmentError: string | null;
     onRemoveAttachment: (id: string) => void;
@@ -42,6 +43,7 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     disabled,
     onQueryChange,
     onSubmit,
+    onVoiceSegment,
     attachments,
     attachmentError,
     onRemoveAttachment,
@@ -60,8 +62,12 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
 
     // Track the previous transcript so we only append new text
     const prevTranscriptRef = useRef('');
+    const prevSegmentIdRef = useRef(0);
 
     useEffect(() => {
+        if (voiceInput.isContinuousConversation) {
+            return;
+        }
         if (voiceInput.transcript && voiceInput.transcript !== prevTranscriptRef.current) {
             const newText = voiceInput.transcript.slice(prevTranscriptRef.current.length);
             if (newText) {
@@ -69,7 +75,33 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
             }
             prevTranscriptRef.current = voiceInput.transcript;
         }
-    }, [voiceInput.transcript, onQueryChange, query]);
+    }, [voiceInput.isContinuousConversation, voiceInput.transcript, onQueryChange, query]);
+
+    useEffect(() => {
+        if (!voiceInput.isContinuousConversation) {
+            return;
+        }
+        if (voiceInput.lastFinalSegmentId === 0 || voiceInput.lastFinalSegmentId === prevSegmentIdRef.current) {
+            return;
+        }
+
+        prevSegmentIdRef.current = voiceInput.lastFinalSegmentId;
+        const text = voiceInput.lastFinalSegment.trim();
+        if (!text) {
+            return;
+        }
+
+        prevTranscriptRef.current = voiceInput.transcript;
+        onQueryChange(text);
+        void onVoiceSegment?.(text);
+    }, [
+        onQueryChange,
+        onVoiceSegment,
+        voiceInput.isContinuousConversation,
+        voiceInput.lastFinalSegment,
+        voiceInput.lastFinalSegmentId,
+        voiceInput.transcript,
+    ]);
 
     useEffect(() => {
         const textArea = textAreaRef.current;
@@ -96,6 +128,12 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
         if (voiceInput.error === 'microphone_denied') {
             return t('voice.microphoneError');
         }
+        if (voiceInput.error === 'speech_permission_denied') {
+            return t('voice.speechPermissionError');
+        }
+        if (voiceInput.error === 'speech_bundle_required') {
+            return t('voice.speechBundleRequired');
+        }
         if (voiceInput.error === 'no_speech' || voiceInput.error === 'empty_audio') {
             return t('voice.noSpeechDetected');
         }
@@ -104,6 +142,9 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
         }
         if (voiceInput.error === 'transcription_failed') {
             return t('voice.transcriptionFailed');
+        }
+        if (voiceInput.error === 'native_asr_failed') {
+            return t('voice.nativeAsrFailed');
         }
         if (voiceInput.error === 'recording_failed') {
             return t('voice.recordingError');

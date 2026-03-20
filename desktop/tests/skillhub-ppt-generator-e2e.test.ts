@@ -390,6 +390,23 @@ class BrowserDesktopHarness {
         });
 
         await wait(5000);
+        await this.sendSidecarCommand('bootstrap_runtime_context', {
+            runtimeContext: {
+                platform: process.platform,
+                arch: process.arch,
+                appDir: this.desktopDir,
+                appDataDir: this.appDataDir,
+                shell: process.env.SHELL || '/bin/zsh',
+                sidecarLaunchMode: 'development',
+                python: {
+                    available: false,
+                },
+                skillhub: {
+                    available: false,
+                },
+                managedServices: [],
+            },
+        });
     }
 
     private async emitToPage(eventName: string, payload: unknown): Promise<void> {

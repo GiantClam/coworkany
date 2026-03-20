@@ -27,6 +27,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
     const { t } = useTranslation();
     const [showCopy, setShowCopy] = useState(false);
     const [copied, setCopied] = useState(false);
+    const isStreamingAssistant = !isUser && 'isStreaming' in item && item.isStreaming === true;
     const userContent = isUser ? parseInlineAttachments(item.content) : null;
     const copyableContent = isUser ? (userContent?.text || item.content) : item.content;
 
@@ -39,7 +40,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
     };
 
     // Parse content for verification and quality data
-    const parsed = isUser ? null : parseMessageContent(item.content);
+    const parsed = isUser || isStreamingAssistant ? null : parseMessageContent(item.content);
 
     // Markdown renderer component
     const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => (
@@ -143,7 +144,11 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
                     </div>
                 ) : (
                     // Standard markdown rendering
-                    <MarkdownRenderer content={item.content} />
+                    isStreamingAssistant ? (
+                        <div className={styles.streamingText}>{item.content}</div>
+                    ) : (
+                        <MarkdownRenderer content={item.content} />
+                    )
                 )}
             </div>
         </div>

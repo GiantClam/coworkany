@@ -20,6 +20,17 @@ export interface SendTaskMessageResult {
     error?: string;
 }
 
+export interface ResumeInterruptedTaskInput {
+    taskId: string;
+    config?: StartTaskConfig;
+}
+
+export interface ResumeInterruptedTaskResult {
+    success: boolean;
+    taskId: string;
+    error?: string;
+}
+
 export function useSendTaskMessage() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -38,7 +49,11 @@ export function useSendTaskMessage() {
                 const errorMessage = e instanceof Error ? e.message : String(e);
                 setError(errorMessage);
                 console.error('[useSendTaskMessage] Error:', e);
-                return null;
+                return {
+                    success: false,
+                    taskId: input.taskId,
+                    error: errorMessage,
+                };
             } finally {
                 setIsLoading(false);
             }
@@ -48,6 +63,39 @@ export function useSendTaskMessage() {
 
     return {
         sendMessage,
+        isLoading,
+        error,
+    };
+}
+
+export function useResumeInterruptedTask() {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const resumeInterruptedTask = useCallback(
+        async (input: ResumeInterruptedTaskInput): Promise<ResumeInterruptedTaskResult | null> => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const result = await invoke<ResumeInterruptedTaskResult>('resume_interrupted_task', { input });
+                if (!result.success && result.error) {
+                    setError(result.error);
+                }
+                return result;
+            } catch (e) {
+                const errorMessage = e instanceof Error ? e.message : String(e);
+                setError(errorMessage);
+                console.error('[useResumeInterruptedTask] Error:', e);
+                return null;
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        []
+    );
+
+    return {
+        resumeInterruptedTask,
         isLoading,
         error,
     };

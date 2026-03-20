@@ -178,7 +178,12 @@ impl ShadowFs {
                     .unwrap_or(original_path)
                     .to_string_lossy()
                     .to_string();
-                Some(compute_unified_diff(&original_content, new_content, &relative_path, 3))
+                Some(compute_unified_diff(
+                    &original_content,
+                    new_content,
+                    &relative_path,
+                    3,
+                ))
             }
         };
 

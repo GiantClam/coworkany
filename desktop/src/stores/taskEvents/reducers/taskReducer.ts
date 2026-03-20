@@ -30,6 +30,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'running',
                 title: payload.title as string,
+                failure: undefined,
                 clarificationQuestions: undefined,
                 workspacePath: (payload.context as Record<string, unknown>)?.workspacePath as string,
                 messages: [
@@ -58,6 +59,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'finished',
                 summary: payload.summary as string,
+                failure: undefined,
                 suspension: undefined,
                 clarificationQuestions: undefined,
                 assistantDraft: undefined,
@@ -68,6 +70,12 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'failed',
                 summary: payload.error as string,
+                failure: {
+                    error: (payload.error as string) ?? 'Unknown error',
+                    errorCode: typeof payload.errorCode === 'string' ? payload.errorCode : undefined,
+                    recoverable: payload.recoverable === true,
+                    suggestion: typeof payload.suggestion === 'string' ? payload.suggestion.trim() : undefined,
+                },
                 suspension: undefined,
                 clarificationQuestions: undefined,
                 assistantDraft: undefined,
@@ -83,6 +91,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             return {
                 ...session,
                 status: status ?? session.status,
+                failure: status === 'running' ? undefined : session.failure,
                 assistantDraft: status === 'running' ? session.assistantDraft : undefined,
             };
         }
@@ -92,6 +101,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: 'idle',
                 summary: (payload.reason as string | undefined) ?? session.summary,
+                failure: undefined,
                 suspension: undefined,
                 clarificationQuestions: ((payload.questions as string[] | undefined) ?? []).filter(Boolean),
                 assistantDraft: undefined,
@@ -117,6 +127,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             const nextSession: TaskSession = {
                 ...session,
                 status: 'idle',
+                failure: undefined,
                 suspension: nextSuspension,
                 assistantDraft: undefined,
             };
@@ -136,6 +147,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             return appendSystemMessage({
                 ...session,
                 status: 'running',
+                failure: undefined,
                 suspension: undefined,
             }, event, 'Task resumed');
 

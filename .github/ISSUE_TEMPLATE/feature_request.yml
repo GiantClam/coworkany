@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new feature or product improvement
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user or developer problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior or workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. What other approaches did you consider?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - desktop UX
+        - sidecar runtime
+        - tools / MCP
+        - browser automation
+        - memory / RAG
+        - packaging / release
+        - docs
+        - unknown
+  - type: textarea
+    id: impact
+    attributes:
+      label: Why this matters
+      description: Explain the expected impact on users or contributors.

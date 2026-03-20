@@ -9,7 +9,9 @@ use crate::process_manager::ProcessManager;
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeBinaryInfo {
     pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
 
@@ -43,11 +45,15 @@ pub struct RuntimeDependencyStatus {
     pub description: String,
     pub installed: bool,
     pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub running: Option<bool>,
     pub bundled: bool,
     pub optional: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -103,7 +109,9 @@ pub fn resolve_sidecar_entry_path() -> Result<PathBuf, String> {
     candidates
         .into_iter()
         .find(|candidate| candidate.exists())
-        .ok_or_else(|| "Unable to locate sidecar/src/main.ts from current runtime paths".to_string())
+        .ok_or_else(|| {
+            "Unable to locate sidecar/src/main.ts from current runtime paths".to_string()
+        })
 }
 
 pub fn find_system_python() -> Option<PathBuf> {
@@ -121,7 +129,10 @@ pub fn managed_service_runtime_dir(
     app_handle: &AppHandle,
     service_name: &str,
 ) -> Result<PathBuf, String> {
-    let app_data_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     Ok(app_data_dir
         .join("managed-services")
         .join(service_name)
@@ -223,7 +234,11 @@ pub fn build_platform_runtime_context(
         sidecar_launch_mode: sidecar_launch_mode.map(str::to_string),
         python: binary_info(
             python,
-            Some(if running_from_app_bundle() { "system_or_bundle" } else { "system" }),
+            Some(if running_from_app_bundle() {
+                "system_or_bundle"
+            } else {
+                "system"
+            }),
         ),
         skillhub: binary_info(skillhub, Some("path_lookup")),
         managed_services: ["rag-service", "browser-use-service"]
@@ -245,21 +260,19 @@ pub fn build_runtime_snapshot(
     let runtime_context = build_platform_runtime_context(app_handle, sidecar_launch_mode);
 
     let skillhub_path = resolve_skillhub_executable().ok();
-    let skillhub_version = skillhub_path
-        .as_ref()
-        .and_then(|path| {
-            Command::new(path)
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|output| {
-                    if output.status.success() {
-                        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    } else {
-                        None
-                    }
-                })
-        });
+    let skillhub_version = skillhub_path.as_ref().and_then(|path| {
+        Command::new(path)
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+    });
 
     let rag_running = manager
         .and_then(|mgr| mgr.get_service_status("rag-service"))
@@ -275,7 +288,9 @@ pub fn build_runtime_snapshot(
             RuntimeDependencyStatus {
                 id: "skillhub-cli".to_string(),
                 name: "Skillhub CLI".to_string(),
-                description: "Used by the in-app marketplace to search and install Tencent Skillhub skills.".to_string(),
+                description:
+                    "Used by the in-app marketplace to search and install Tencent Skillhub skills."
+                        .to_string(),
                 installed: skillhub_path.is_some(),
                 ready: skillhub_path.is_some(),
                 running: None,
@@ -284,7 +299,10 @@ pub fn build_runtime_snapshot(
                 path: skillhub_path.map(|path| path.to_string_lossy().to_string()),
                 version: skillhub_version,
                 error: if resolve_skillhub_executable().is_err() {
-                    Some("skillhub CLI not found. Install it first via the official installer.".to_string())
+                    Some(
+                        "skillhub CLI not found. Install it first via the official installer."
+                            .to_string(),
+                    )
                 } else {
                     None
                 },
@@ -292,7 +310,8 @@ pub fn build_runtime_snapshot(
             RuntimeDependencyStatus {
                 id: "rag-service".to_string(),
                 name: "RAG Service".to_string(),
-                description: "Semantic memory indexing and retrieval for the local vault.".to_string(),
+                description: "Semantic memory indexing and retrieval for the local vault."
+                    .to_string(),
                 installed: packaged_service_exists(app_handle, "rag-service"),
                 ready: managed_service_runtime_ready(app_handle, "rag-service"),
                 running: rag_running,
@@ -305,7 +324,8 @@ pub fn build_runtime_snapshot(
             RuntimeDependencyStatus {
                 id: "browser-use-service".to_string(),
                 name: "Browser Smart Mode".to_string(),
-                description: "Optional AI browser automation backend used by browser_ai_action.".to_string(),
+                description: "Optional AI browser automation backend used by browser_ai_action."
+                    .to_string(),
                 installed: packaged_service_exists(app_handle, "browser-use-service"),
                 ready: managed_service_runtime_ready(app_handle, "browser-use-service"),
                 running: browser_running,
@@ -324,4 +344,45 @@ fn running_from_app_bundle() -> bool {
         .ok()
         .map(|path| path.to_string_lossy().contains(".app/Contents/MacOS/"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RuntimeBinaryInfo, RuntimeDependencyStatus};
+
+    #[test]
+    fn runtime_binary_info_omits_null_optional_fields() {
+        let value = serde_json::to_value(RuntimeBinaryInfo {
+            available: false,
+            path: None,
+            source: None,
+        })
+        .expect("serialize runtime binary info");
+
+        assert!(value.get("path").is_none());
+        assert!(value.get("source").is_none());
+    }
+
+    #[test]
+    fn runtime_dependency_status_omits_null_optional_fields() {
+        let value = serde_json::to_value(RuntimeDependencyStatus {
+            id: "skillhub-cli".to_string(),
+            name: "Skillhub CLI".to_string(),
+            description: "Optional CLI".to_string(),
+            installed: false,
+            ready: false,
+            running: None,
+            bundled: false,
+            optional: true,
+            path: None,
+            version: None,
+            error: None,
+        })
+        .expect("serialize runtime dependency status");
+
+        assert!(value.get("running").is_none());
+        assert!(value.get("path").is_none());
+        assert!(value.get("version").is_none());
+        assert!(value.get("error").is_none());
+    }
 }

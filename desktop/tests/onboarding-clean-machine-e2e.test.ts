@@ -353,6 +353,23 @@ class OnboardingHarness {
         });
 
         await wait(4000);
+        await this.sendSidecarCommand('bootstrap_runtime_context', {
+            runtimeContext: {
+                platform: process.platform,
+                arch: process.arch,
+                appDir: this.desktopDir,
+                appDataDir: this.appDataDir,
+                shell: process.env.SHELL ?? '/bin/zsh',
+                sidecarLaunchMode: 'development',
+                python: {
+                    available: false,
+                },
+                skillhub: {
+                    available: false,
+                },
+                managedServices: [],
+            },
+        });
     }
 
     private async emitToPage(eventName: string, payload: unknown): Promise<void> {
@@ -468,6 +485,7 @@ class OnboardingHarness {
                 return this.desktopDir;
             case 'start_task':
                 return this.handleStartTask(args.input as Record<string, unknown>);
+            case 'resume_interrupted_task':
             case 'send_task_message':
             case 'clear_task_history':
             case 'list_claude_skills':
@@ -876,6 +894,17 @@ test.describe('Desktop E2E - Clean machine onboarding', () => {
             await expect(page.locator('.session-item', { hasText: '你好' }).first()).toBeVisible({ timeout: 30_000 });
             await expect(page.getByText('你好').first()).toBeVisible({ timeout: 30_000 });
             await expect(page.getByText(/Task interrupted by app restart/).first()).toBeVisible({ timeout: 30_000 });
+            const continueButton = page.getByRole('button', { name: /Continue task/i }).first();
+            await expect(continueButton).toBeVisible({ timeout: 30_000 });
+
+            await continueButton.click();
+
+            await expect.poll(() => {
+                return harness.getTaskEvents().some((event) => event.type === 'TASK_RESUMED');
+            }, {
+                timeout: 30_000,
+                message: 'restarted session should emit TASK_RESUMED after Continue task',
+            }).toBe(true);
 
             await page.locator('.sidebar-settings-btn').click();
             await expect(page.getByText(/LLM Provider Settings|LLM 服务商设置/).first()).toBeVisible({ timeout: 15_000 });

@@ -62,6 +62,8 @@ export type {
     CustomProviderSettings,
     SearchSettings,
     ProxySettings,
+    VoiceProviderMode,
+    VoiceSettings,
     LlmProfile,
     LlmConfig,
     IpcResult,

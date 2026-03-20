@@ -68,6 +68,9 @@ function App() {
     const [activeTab, setActiveTab] = useState<SidebarTab>('chat');
     const startupSkeletonStartRef = useRef<number>(performance.now());
     const titlebarOffset = useNativeMacTitleBar ? 0 : 40;
+    const appShellClassName = useNativeMacTitleBar
+        ? 'app-shell app-shell-macos bg-app font-sans text-primary'
+        : 'app-shell bg-app font-sans text-primary';
 
     useEffect(() => {
         let cancelled = false;
@@ -332,7 +335,7 @@ function App() {
 
     if (!setupStateResolved) {
         return (
-            <div className="app-shell bg-app font-sans text-primary">
+            <div className={appShellClassName}>
                 {!useNativeMacTitleBar && <TitleBar />}
                 <div className="app-content" style={useNativeMacTitleBar ? { inset: 0 } : undefined}>
                     <StartupSkeleton visible />
@@ -343,7 +346,7 @@ function App() {
 
     if (showSetup) {
         return (
-            <div className="app-shell bg-app font-sans text-primary">
+            <div className={appShellClassName}>
                 {!useNativeMacTitleBar && <TitleBar />}
                 <div className="app-content" style={useNativeMacTitleBar ? { inset: 0 } : undefined}>
                     <SetupWizard onComplete={() => setShowSetup(false)} topOffset={titlebarOffset} />
@@ -353,7 +356,7 @@ function App() {
     }
 
     return (
-        <div className="app-shell bg-app font-sans text-primary">
+        <div className={appShellClassName}>
             <div className="app-aurora app-aurora-one" />
             <div className="app-aurora app-aurora-two" />
             <div className="app-aurora app-aurora-three" />

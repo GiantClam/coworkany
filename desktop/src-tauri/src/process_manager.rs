@@ -5,6 +5,7 @@
 //! - Bun Sidecar: Core agent orchestration (existing)
 //! - Python RAG Service: Memory vault semantic search (new)
 
+use crate::platform_runtime::find_system_python;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -17,7 +18,6 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
-use crate::platform_runtime::find_system_python;
 
 const MANAGED_PYTHON_RELEASE_TAG: &str = "20251217";
 const MANAGED_PYTHON_VERSION: &str = "3.10.19";
@@ -143,16 +143,21 @@ fn managed_python_download_url() -> Result<String, ProcessError> {
 }
 
 fn managed_python_root(app_handle: &AppHandle) -> Result<PathBuf, ProcessError> {
-    let base = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let base = app_handle.path().app_data_dir().map_err(|e| {
+        ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
     Ok(base.join("managed-python"))
 }
 
 fn find_python_binary_under(root: &Path) -> Option<PathBuf> {
     let direct = [
-        root.join("python").join("install").join("bin").join("python3"),
+        root.join("python")
+            .join("install")
+            .join("bin")
+            .join("python3"),
         root.join("install").join("bin").join("python3"),
         root.join("bin").join("python3"),
     ];
@@ -182,7 +187,12 @@ fn install_managed_python(app_handle: &AppHandle) -> Result<PathBuf, ProcessErro
     let cache_dir = app_handle
         .path()
         .app_cache_dir()
-        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+        .map_err(|e| {
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?
         .join("python-downloads");
     fs::create_dir_all(&cache_dir)?;
 
@@ -311,7 +321,13 @@ fn resource_service_dir(
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("..").join("..").join("..").join("..").join(dev_dir_name));
+            candidates.push(
+                dir.join("..")
+                    .join("..")
+                    .join("..")
+                    .join("..")
+                    .join(dev_dir_name),
+            );
         }
     }
 
@@ -336,18 +352,25 @@ fn resource_service_dir(
 }
 
 fn service_venv_dir(app_handle: &AppHandle, service_name: &str) -> Result<PathBuf, ProcessError> {
-    let base = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-    Ok(base.join("managed-services").join(service_name).join(".venv"))
+    let base = app_handle.path().app_data_dir().map_err(|e| {
+        ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
+    Ok(base
+        .join("managed-services")
+        .join(service_name)
+        .join(".venv"))
 }
 
 fn pip_cache_dir(app_handle: &AppHandle, service_name: &str) -> Result<PathBuf, ProcessError> {
-    let base = app_handle
-        .path()
-        .app_cache_dir()
-        .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let base = app_handle.path().app_cache_dir().map_err(|e| {
+        ProcessError::SpawnError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
     Ok(base.join("pip").join(service_name))
 }
 
@@ -394,7 +417,10 @@ fn ensure_service_runtime(
     let mut create_venv = Command::new(&bootstrap_python);
     create_venv.arg("-m").arg("venv").arg(&venv_dir);
     RagService::apply_proxy_env(&mut create_venv, app_handle);
-    run_checked_command(create_venv, &format!("Create virtualenv for {display_name}"))?;
+    run_checked_command(
+        create_venv,
+        &format!("Create virtualenv for {display_name}"),
+    )?;
 
     let cache_dir = pip_cache_dir(app_handle, service_name)?;
     fs::create_dir_all(&cache_dir)?;
@@ -436,7 +462,7 @@ fn ensure_service_runtime(
 pub struct RagService {
     config: ServiceConfig,
     process: Option<Child>,
-    process_pid: Option<u32>,  // Store PID separately for is_running check
+    process_pid: Option<u32>, // Store PID separately for is_running check
     started_at: Option<Instant>,
     #[allow(dead_code)]
     restart_count: u32,
@@ -568,12 +594,16 @@ impl RagService {
             .and_then(|(_, bypass)| bypass.clone())
             .or_else(|| Self::first_non_empty_env(&["NO_PROXY", "no_proxy"]))
             .unwrap_or_else(|| "localhost,127.0.0.1,::1".to_string());
-        command.env("NO_PROXY", &no_proxy).env("no_proxy", &no_proxy);
+        command
+            .env("NO_PROXY", &no_proxy)
+            .env("no_proxy", &no_proxy);
     }
 
     fn model_cache_dirs() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
         let base = dirs::home_dir()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            })
             .join(".coworkany")
             .join("models");
         let hf_home = base.join("hf");
@@ -581,7 +611,10 @@ impl RagService {
         let transformers_cache = hf_home.join("hub");
 
         if let Err(e) = fs::create_dir_all(&hf_home) {
-            warn!("[RAG] Failed to create HF_HOME directory {:?}: {}", hf_home, e);
+            warn!(
+                "[RAG] Failed to create HF_HOME directory {:?}: {}",
+                hf_home, e
+            );
         }
         if let Err(e) = fs::create_dir_all(&sentence_transformers_home) {
             warn!(
@@ -607,7 +640,10 @@ impl RagService {
                 "SENTENCE_TRANSFORMERS_HOME",
                 sentence_transformers_home.to_string_lossy().as_ref(),
             )
-            .env("TRANSFORMERS_CACHE", transformers_cache.to_string_lossy().as_ref());
+            .env(
+                "TRANSFORMERS_CACHE",
+                transformers_cache.to_string_lossy().as_ref(),
+            );
     }
 
     fn ensure_rag_port_available(&self) -> Result<(), ProcessError> {
@@ -629,7 +665,8 @@ impl RagService {
             "rag-service",
             "RAG service",
         )?;
-        let model_name = std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
+        let model_name =
+            std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "all-MiniLM-L6-v2".to_string());
         info!("[RAG] Predownloading embedding model: {}", model_name);
 
         let mut cmd = Command::new(&python);
@@ -889,7 +926,12 @@ impl BrowserUseService {
             .path()
             .app_data_dir()
             .map(|dir| dir.join("llm-config.json"))
-            .map_err(|e| ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+            .map_err(|e| {
+                ProcessError::SpawnError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })
     }
 
     fn normalize_base_url(url: Option<String>) -> Option<String> {
@@ -904,11 +946,16 @@ impl BrowserUseService {
             })
     }
 
-    fn active_openai_compatible_settings(app_handle: &AppHandle) -> Result<BrowserUseSettings, ProcessError> {
+    fn active_openai_compatible_settings(
+        app_handle: &AppHandle,
+    ) -> Result<BrowserUseSettings, ProcessError> {
         let path = Self::llm_config_path(app_handle)?;
         let raw = fs::read_to_string(&path)?;
         let data: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-            ProcessError::SpawnError(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+            ProcessError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            ))
         })?;
 
         let provider = data
@@ -922,7 +969,9 @@ impl BrowserUseService {
             .and_then(|v| v.as_array())
             .and_then(|profiles| {
                 active_profile_id.and_then(|id| {
-                    profiles.iter().find(|item| item.get("id").and_then(|v| v.as_str()) == Some(id))
+                    profiles
+                        .iter()
+                        .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(id))
                 })
             });
 

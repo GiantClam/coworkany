@@ -4,6 +4,7 @@
 
 pub mod diff;
 pub mod ipc;
+pub mod platform_asr;
 pub mod platform_runtime;
 pub mod policy;
 pub mod process_manager;

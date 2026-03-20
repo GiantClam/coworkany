@@ -115,6 +115,12 @@ export interface TaskSession {
     isDraft?: boolean;
     title?: string;
     summary?: string;
+    failure?: {
+        error: string;
+        errorCode?: string;
+        recoverable?: boolean;
+        suggestion?: string;
+    };
     suspension?: {
         reason: string;
         userMessage: string;

@@ -30,6 +30,8 @@ const BaseResponseSchema = z.object({
     timestamp: z.string().datetime(),
 });
 
+const VoiceProviderModeSchema = z.enum(['auto', 'system', 'custom']);
+
 // ============================================================================
 // Task Commands
 // ============================================================================
@@ -58,6 +60,7 @@ export const StartTaskCommandSchema = BaseCommandSchema.extend({
             // Backward-compatible alias
             enabledSkills: z.array(z.string()).optional(),
             disabledTools: z.array(z.string()).optional(),
+            voiceProviderMode: VoiceProviderModeSchema.optional(),
         }).optional(),
     }),
 });
@@ -132,12 +135,42 @@ export const SendTaskMessageCommandSchema = BaseCommandSchema.extend({
             enabledToolpacks: z.array(z.string()).optional(),
             enabledSkills: z.array(z.string()).optional(),
             disabledTools: z.array(z.string()).optional(),
+            voiceProviderMode: VoiceProviderModeSchema.optional(),
         }).optional(),
     }),
 });
 
 export const SendTaskMessageResponseSchema = BaseResponseSchema.extend({
     type: z.literal('send_task_message_response'),
+    payload: z.object({
+        success: z.boolean(),
+        taskId: z.string().uuid(),
+        error: z.string().optional(),
+    }),
+});
+
+/**
+ * Resume a previously interrupted task from saved context.
+ */
+export const ResumeInterruptedTaskCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('resume_interrupted_task'),
+    payload: z.object({
+        taskId: z.string().uuid(),
+        config: z.object({
+            modelId: z.string().optional(),
+            maxTokens: z.number().optional(),
+            maxHistoryMessages: z.number().int().positive().optional(),
+            enabledClaudeSkills: z.array(z.string()).optional(),
+            enabledToolpacks: z.array(z.string()).optional(),
+            enabledSkills: z.array(z.string()).optional(),
+            disabledTools: z.array(z.string()).optional(),
+            voiceProviderMode: VoiceProviderModeSchema.optional(),
+        }).optional(),
+    }),
+});
+
+export const ResumeInterruptedTaskResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('resume_interrupted_task_response'),
     payload: z.object({
         success: z.boolean(),
         taskId: z.string().uuid(),
@@ -1057,7 +1090,9 @@ export const StopVoiceResponseSchema = BaseResponseSchema.extend({
 
 export const GetVoiceProviderStatusCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_voice_provider_status'),
-    payload: z.object({}),
+    payload: z.object({
+        providerMode: VoiceProviderModeSchema.optional(),
+    }),
 });
 
 export const SpeechProviderRegistrationSchema = z.object({
@@ -1092,6 +1127,7 @@ export const TranscribeVoiceCommandSchema = BaseCommandSchema.extend({
         audioBase64: z.string(),
         mimeType: z.string().optional(),
         language: z.string().optional(),
+        providerMode: VoiceProviderModeSchema.optional(),
     }),
 });
 
@@ -1164,6 +1200,7 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     CancelTaskCommandSchema,
     ClearTaskHistoryCommandSchema,
     SendTaskMessageCommandSchema,
+    ResumeInterruptedTaskCommandSchema,
     RequestEffectCommandSchema,
     ReportEffectResultCommandSchema,
     ProposePatchCommandSchema,
@@ -1221,6 +1258,7 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     CancelTaskResponseSchema,
     ClearTaskHistoryResponseSchema,
     SendTaskMessageResponseSchema,
+    ResumeInterruptedTaskResponseSchema,
     RequestEffectResponseSchema,
     ProposePatchResponseSchema,
     ApplyPatchResponseSchema,
@@ -1277,6 +1315,8 @@ export type ClearTaskHistoryCommand = z.infer<typeof ClearTaskHistoryCommandSche
 export type ClearTaskHistoryResponse = z.infer<typeof ClearTaskHistoryResponseSchema>;
 export type SendTaskMessageCommand = z.infer<typeof SendTaskMessageCommandSchema>;
 export type SendTaskMessageResponse = z.infer<typeof SendTaskMessageResponseSchema>;
+export type ResumeInterruptedTaskCommand = z.infer<typeof ResumeInterruptedTaskCommandSchema>;
+export type ResumeInterruptedTaskResponse = z.infer<typeof ResumeInterruptedTaskResponseSchema>;
 export type RequestEffectCommand = z.infer<typeof RequestEffectCommandSchema>;
 export type ApplyPatchCommand = z.infer<typeof ApplyPatchCommandSchema>;
 export type ExecShellCommand = z.infer<typeof ExecShellCommandSchema>;

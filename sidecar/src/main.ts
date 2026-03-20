@@ -86,7 +86,7 @@ import {
     type RuntimeResponseDeps,
     type WorkspaceCommandDeps,
 } from './handlers';
-import { ToolpackStore, SkillStore, WorkspaceStore } from './storage';
+import { ToolpackStore, SkillStore, createWorkspaceStoreFacade } from './storage';
 import { createPostExecutionLearningManager } from './agent/postExecutionLearning';
 import { adjustCompactionRemoveCount } from './execution/conversationCompaction';
 import {
@@ -96,6 +96,7 @@ import {
     downloadSkillFromGitHub,
     downloadMcpFromGitHub,
 } from './utils';
+import { applyProxySettingsToProcessEnv, type ProxySettings } from './utils/proxy';
 import { detectPackageManager, getPackageManagerCommands } from './utils/packageManagerDetector';
 import { runPostEditHooks, formatHookResults } from './hooks/codeQualityHooks';
 import { STANDARD_TOOLS, ToolDefinition } from './tools/standard';
@@ -1330,7 +1331,6 @@ const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim() || path.join(workspaceRoot, '.coworkany');
 const toolpackStore = new ToolpackStore(workspaceRoot);
 const skillStore = new SkillStore(workspaceRoot);
-const workspaceStore = new WorkspaceStore(appDataRoot);
 const workRequestStore = new WorkRequestStore(path.join(appDataRoot, 'work-requests.json'));
 const scheduledTaskStore = new ScheduledTaskStore(path.join(appDataRoot, 'scheduled-tasks.json'));
 const SCHEDULED_TASK_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -1342,6 +1342,8 @@ let taskRuntimeStoreCache: { root: string; store: TaskRuntimeStore } | null = nu
 function getResolvedAppDataRoot(): string {
     return desktopRuntimeContext?.appDataDir?.trim() || appDataRoot;
 }
+
+const workspaceStore = createWorkspaceStoreFacade(getResolvedAppDataRoot);
 
 function getDirectiveManager(): DirectiveManager {
     const root = getResolvedAppDataRoot();
@@ -1474,6 +1476,7 @@ const APP_MANAGEMENT_TOOLS = createAppManagementTools({
 
 configureVoiceProviders({
     listEnabledSkills: () => skillStore.listEnabled(),
+    getVoiceProviderModeForTask: (taskId) => taskSessionStore.getConfig(taskId)?.voiceProviderMode,
 });
 
 const routerDeps: CommandRouterDeps = {
@@ -1519,6 +1522,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         createChatMessageEvent,
         createTaskClarificationRequiredEvent,
         createTaskStatusEvent,
+        createTaskResumedEvent,
         createTaskFinishedEvent,
         taskSessionStore,
         taskEventBus,
@@ -1547,9 +1551,10 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         getAutonomousAgent,
         stopVoicePlayback,
         getVoicePlaybackState,
-        getVoiceProviderStatus: () => getSpeechProviderStatus(
+        getVoiceProviderStatus: (providerMode) => getSpeechProviderStatus(
             skillStore.listEnabled(),
             (toolName) => globalToolRegistry.getTool(toolName),
+            providerMode,
         ),
         transcribeWithCustomAsr: (input) => invokeCustomAsrProvider(
             skillStore.listEnabled(),
@@ -1559,6 +1564,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
                 workspacePath: workspaceRoot,
                 taskId: 'voice-transcription',
             },
+            input.providerMode,
         ),
     };
 }
@@ -1591,6 +1597,7 @@ type LlmProfile = {
         apiKey: string;
         baseUrl?: string;
         model?: string;
+        allowInsecureTls?: boolean | null;
     };
     ollama?: {
         baseUrl?: string;
@@ -1620,6 +1627,7 @@ type LlmConfig = {
         apiKey: string;
         baseUrl?: string;
         model?: string;
+        allowInsecureTls?: boolean | null;
     };
     ollama?: {
         baseUrl?: string;
@@ -1634,6 +1642,7 @@ type LlmConfig = {
     profiles?: LlmProfile[];
     activeProfileId?: string;
     maxHistoryMessages?: number;
+    proxy?: ProxySettings;
     // Search configuration
     search?: {
         provider?: SearchProvider;
@@ -3831,17 +3840,34 @@ function restorePersistedTasks(): void {
             continue;
         }
 
-        emit(createTaskFailedEvent(record.taskId, recovery.failure));
-        clearTaskRuntimePersistence(record.taskId);
+        taskRuntimeMeta.set(record.taskId, {
+            title: record.title,
+            workspacePath: record.workspacePath,
+            createdAt: record.createdAt,
+            status: 'interrupted',
+            suspension: undefined,
+        });
+
+        if (recovery.type === 'interrupt_running') {
+            emit(createTaskFailedEvent(record.taskId, recovery.failure));
+        }
+
+        syncTaskRuntimeRecord(record.taskId);
     }
 }
 
 async function cancelTaskExecution(taskId: string, reason?: string): Promise<{ success: boolean }> {
-    const hasActiveRuntime = taskRuntimeMeta.has(taskId);
+    const runtimeMeta = taskRuntimeMeta.get(taskId);
+    const hasActiveRuntime = Boolean(runtimeMeta);
     const isSuspended = suspendResumeManager.isSuspended(taskId);
     if (!hasActiveRuntime && !isSuspended) {
         taskCancellationRegistry.clear(taskId);
         return { success: false };
+    }
+
+    if (runtimeMeta?.status === 'interrupted') {
+        clearTaskRuntimePersistence(taskId);
+        return { success: true };
     }
 
     taskCancellationRegistry.request(taskId, reason);
@@ -3861,11 +3887,15 @@ function loadLlmConfig(workspaceRootPath: string): LlmConfig {
         ].filter((candidate): candidate is string => Boolean(candidate));
 
         const configPath = candidatePaths.find((candidate) => fs.existsSync(candidate));
-        if (!configPath) return defaultConfig;
+        if (!configPath) {
+            applyProxySettingsToProcessEnv(undefined);
+            return defaultConfig;
+        }
 
         const raw = fs.readFileSync(configPath, 'utf-8');
         const data = JSON.parse(raw) as LlmConfig;
         console.error(`[LlmConfig] Loaded config from ${configPath}`);
+        applyProxySettingsToProcessEnv(data.proxy);
 
         // Basic migration: if profiles don't exist, create a default one from legacy settings
         if (!data.profiles || data.profiles.length === 0) {
@@ -3913,6 +3943,7 @@ function loadLlmConfig(workspaceRootPath: string): LlmConfig {
 
         return data;
     } catch (error) {
+        applyProxySettingsToProcessEnv(undefined);
         console.warn('[LlmConfig] Failed to load llm-config.json:', error);
         return defaultConfig;
     }
@@ -6341,34 +6372,39 @@ async function handleCommand(command: IpcCommand): Promise<void> {
 // ============================================================================
 
 let buffer = '';
+let lineProcessing = Promise.resolve();
+
+function enqueueLine(line: string): void {
+    lineProcessing = lineProcessing
+        .then(() => processLine(line))
+        .catch((err) => {
+            console.error('[ERROR] Error processing line:', err);
+        });
+}
 
 function drainBufferedLines(): void {
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
 
     for (const line of lines) {
-        processLine(line).catch(err => {
-            console.error('[ERROR] Error processing line:', err);
-        });
+        enqueueLine(line);
     }
 }
 
-function flushRemainingInputAndExit(): void {
+async function flushRemainingInputAndExit(): Promise<void> {
     const remaining = buffer.trim();
+    buffer = '';
+
     if (!remaining) {
         console.error('[INFO] Sidecar IPC stdin closed');
         process.exit(0);
         return;
     }
 
-    processLine(remaining)
-        .catch(error => {
-            console.error('[ERROR] Error processing final line:', error);
-        })
-        .finally(() => {
-            console.error('[INFO] Sidecar IPC stdin closed');
-            process.exit(0);
-        });
+    enqueueLine(remaining);
+    await lineProcessing;
+    console.error('[INFO] Sidecar IPC stdin closed');
+    process.exit(0);
 }
 
 async function processLine(line: string): Promise<void> {
@@ -6448,7 +6484,7 @@ async function main(): Promise<void> {
     });
 
     process.stdin.on('end', () => {
-        flushRemainingInputAndExit();
+        void flushRemainingInputAndExit();
     });
 
     process.stdin.on('error', (error) => {

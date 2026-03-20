@@ -67,4 +67,45 @@ describe('task reducer suspension handling', () => {
         expect(replayed.suspension?.reason).toBe('authentication_required');
         expect(replayed.messages).toHaveLength(1);
     });
+
+    test('stores recoverable failure metadata from TASK_FAILED', () => {
+        const next = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_FAILED',
+            payload: {
+                error: 'Task interrupted by sidecar restart',
+                errorCode: 'INTERRUPTED',
+                recoverable: true,
+                suggestion: 'Resume the task to continue from the saved context.',
+            },
+        }));
+
+        expect(next.status).toBe('failed');
+        expect(next.failure).toEqual({
+            error: 'Task interrupted by sidecar restart',
+            errorCode: 'INTERRUPTED',
+            recoverable: true,
+            suggestion: 'Resume the task to continue from the saved context.',
+        });
+        expect(next.messages.at(-1)?.content).toContain('Resume the task');
+    });
+
+    test('clears failure metadata when task resumes running', () => {
+        const failed = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_FAILED',
+            payload: {
+                error: 'Task interrupted by sidecar restart',
+                errorCode: 'INTERRUPTED',
+                recoverable: true,
+            },
+        }));
+
+        const resumed = applyTaskEvent(failed, makeEvent({
+            sequence: 2,
+            type: 'TASK_RESUMED',
+            payload: {},
+        }));
+
+        expect(resumed.status).toBe('running');
+        expect(resumed.failure).toBeUndefined();
+    });
 });

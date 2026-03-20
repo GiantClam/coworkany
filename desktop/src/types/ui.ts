@@ -65,6 +65,12 @@ export interface ProxySettings {
     bypass?: string;
 }
 
+export type VoiceProviderMode = 'auto' | 'system' | 'custom';
+
+export interface VoiceSettings {
+    providerMode: VoiceProviderMode;
+}
+
 export interface LlmProfile {
     id: string;
     name: string;

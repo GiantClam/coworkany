@@ -40,4 +40,31 @@ describe('TaskRuntimeStore', () => {
 
         fs.rmSync(root, { recursive: true, force: true });
     });
+
+    test('persists and reloads interrupted runtime records', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-task-runtime-'));
+        const filePath = path.join(root, 'task-runtime.json');
+
+        const store = new TaskRuntimeStore(filePath);
+        store.upsert({
+            taskId: 'task-2',
+            title: 'Interrupted task',
+            workspacePath: '/tmp/workspace',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: 'interrupted',
+            conversation: [{ role: 'assistant', content: 'partial progress' }],
+            historyLimit: 25,
+            artifactsCreated: ['/tmp/out.txt'],
+        });
+
+        const reloaded = new TaskRuntimeStore(filePath).get('task-2');
+
+        expect(reloaded?.status).toBe('interrupted');
+        expect(reloaded?.historyLimit).toBe(25);
+        expect(reloaded?.artifactsCreated).toEqual(['/tmp/out.txt']);
+        expect(reloaded?.conversation).toEqual([{ role: 'assistant', content: 'partial progress' }]);
+
+        fs.rmSync(root, { recursive: true, force: true });
+    });
 });

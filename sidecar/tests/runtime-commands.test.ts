@@ -13,6 +13,7 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         createChatMessageEvent: (taskId, payload) => ({ type: 'CHAT_MESSAGE', taskId, payload }),
         createTaskClarificationRequiredEvent: (taskId, payload) => ({ type: 'TASK_CLARIFICATION_REQUIRED', taskId, payload }),
         createTaskStatusEvent: (taskId, payload) => ({ type: 'TASK_STATUS', taskId, payload }),
+        createTaskResumedEvent: (taskId, payload) => ({ type: 'TASK_RESUMED', taskId, payload }),
         createTaskFinishedEvent: (taskId, payload) => ({ type: 'TASK_FINISHED', taskId, payload }),
         taskSessionStore: {
             clearConversation: () => {},
@@ -20,6 +21,7 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
             setHistoryLimit: () => {},
             setConfig: () => {},
             getConfig: () => undefined,
+            getConversation: () => [],
             getArtifactContract: () => undefined,
             setArtifactContract: () => {},
         },
@@ -301,6 +303,107 @@ describe('runtime commands handler', () => {
         ]);
         expect(pushed).toHaveLength(1);
         expect(continued).toBe(false);
+    });
+
+    test('handles resume_interrupted_task with saved context and continues agent flow', async () => {
+        const emitted: any[] = [];
+        const pushed: any[] = [];
+        const ensured: any[] = [];
+        const continued: any[] = [];
+        const preparedInputs: any[] = [];
+
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            ensureTaskRuntimePersistence: (input) => {
+                ensured.push(input);
+            },
+            getTaskConfig: () => ({ workspacePath: '/tmp/ws', enabledClaudeSkills: ['browser'] }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => ({ workspacePath: '/tmp/ws', enabledClaudeSkills: ['browser'] }),
+                getConversation: () => [
+                    { role: 'user', content: 'Post to Xiaohongshu with the saved draft' },
+                    { role: 'assistant', content: 'Working on it' },
+                ],
+                getArtifactContract: () => ({ type: 'artifact' }),
+                setArtifactContract: () => {},
+            },
+            pushConversationMessage: (taskId, message) => {
+                pushed.push({ taskId, message });
+                return [{ role: 'user', content: 'existing' }, message];
+            },
+            prepareWorkRequestContext: (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'resume prompt',
+                };
+            },
+            continuePreparedAgentFlow: async (input) => {
+                continued.push(input);
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-resume',
+            type: 'resume_interrupted_task',
+            payload: {
+                taskId: 'task-5',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(ensured).toEqual([{ taskId: 'task-5', title: '', workspacePath: '/tmp/ws' }]);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'resume_interrupted_task_response',
+            'TASK_STATUS',
+            'TASK_RESUMED',
+        ]);
+        expect(pushed[0]?.message?.content).toContain('[RESUME_REQUESTED]');
+        expect(preparedInputs[0]?.sourceText).toBe('Post to Xiaohongshu with the saved draft');
+        expect(continued[0]?.userMessage).toBe('Post to Xiaohongshu with the saved draft');
+    });
+
+    test('returns an error when resume_interrupted_task has no saved context', async () => {
+        const emitted: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-resume-empty',
+            type: 'resume_interrupted_task',
+            payload: {
+                taskId: 'task-6',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted[0]).toEqual(expect.objectContaining({
+            type: 'resume_interrupted_task_response',
+            payload: {
+                success: false,
+                taskId: 'task-6',
+                error: 'no_saved_context',
+            },
+        }));
     });
 
     test('handles start_autonomous_task and emits completion on success', async () => {

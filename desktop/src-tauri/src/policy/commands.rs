@@ -9,6 +9,7 @@ use super::types::{
     AgentDelegation, AgentIdentity, ConfirmationPolicy, EffectRequest, EffectResponse, EffectType,
     McpGatewayDecision, RuntimeSecurityAlert,
 };
+use crate::sidecar::{forward_effect_response_to_sidecar, SidecarState};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,7 +17,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
-use crate::sidecar::{forward_effect_response_to_sidecar, SidecarState};
 
 // ============================================================================
 // State Types
@@ -146,13 +146,18 @@ fn is_host_folder_request(request: &EffectRequest) -> bool {
         .any(|workspace| target.starts_with(&workspace))
 }
 
-fn approval_type_for_confirmation(input: &ConfirmEffectInput, request: &EffectRequest) -> Option<ConfirmationPolicy> {
+fn approval_type_for_confirmation(
+    input: &ConfirmEffectInput,
+    request: &EffectRequest,
+) -> Option<ConfirmationPolicy> {
     if !input.remember {
         return None;
     }
 
     match request.effect_type {
-        EffectType::FilesystemRead | EffectType::FilesystemWrite if is_host_folder_request(request) => {
+        EffectType::FilesystemRead | EffectType::FilesystemWrite
+            if is_host_folder_request(request) =>
+        {
             Some(ConfirmationPolicy::Permanent)
         }
         _ => Some(ConfirmationPolicy::Session),
@@ -421,7 +426,10 @@ pub async fn deny_effect(
     // Log to audit
     {
         let mut audit = state.audit_sink.lock().await;
-        let _ = audit.log(AuditEvent::denied(&pending.request, input.reason.as_deref()));
+        let _ = audit.log(AuditEvent::denied(
+            &pending.request,
+            input.reason.as_deref(),
+        ));
     }
 
     // Emit denial result

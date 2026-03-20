@@ -9,6 +9,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import { EventEmitter } from 'events';
 import {
     BrowserService,
     PlaywrightBackend,
@@ -122,6 +123,58 @@ describe('PlaywrightBackend', () => {
         }
     });
 
+    test('bridge send emits cancel command when aborted', async () => {
+        const backend = new PlaywrightBackend() as any;
+        const writes: string[] = [];
+
+        backend._bridgeProcess = {
+            stdin: {
+                write: (chunk: string) => {
+                    writes.push(chunk);
+                    return true;
+                },
+            },
+        };
+
+        const controller = new AbortController();
+        const pending = backend._bridgeSend(
+            'navigate',
+            { url: 'https://example.com', timeout: 30000 },
+            30000,
+            controller.signal
+        );
+
+        controller.abort('Task cancelled by user');
+
+        await expect(pending).rejects.toThrow('Task cancelled by user');
+
+        const messages = writes.map((entry) => JSON.parse(entry.trim()));
+        expect(messages[0]?.method).toBe('navigate');
+        expect(messages[1]?.method).toBe('cancel');
+        expect(messages[1]?.params?.reason).toBe('Task cancelled by user');
+    });
+
+    test('bridge wait for ready exits early when cancelled', async () => {
+        const backend = new PlaywrightBackend() as any;
+        const stdout = new EventEmitter();
+        const proc = new EventEmitter() as any;
+        proc.stdout = stdout;
+        let killed = false;
+        proc.kill = () => {
+            killed = true;
+            proc.emit('exit');
+            return true;
+        };
+
+        const controller = new AbortController();
+        const pending = backend._bridgeWaitForReady(proc, controller.signal);
+
+        controller.abort('Task cancelled by user');
+
+        await expect(pending).resolves.toBe(false);
+        expect(killed).toBe(true);
+    });
+
     test('uploadFile returns error for non-existent file', async () => {
         const backend = new PlaywrightBackend();
         // Even though not connected, the file check happens first when we can mock
@@ -217,6 +270,49 @@ describe('BrowserUseBackend', () => {
             expect(capturedBody.timeout_ms).toBe(5000);
         } finally {
             restore();
+        }
+    });
+
+    test('navigate aborts when cancellation signal fires', async () => {
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return await new Promise<Response>((resolve, reject) => {
+                const signal = init?.signal;
+                const onAbort = () => {
+                    signal?.removeEventListener('abort', onAbort);
+                    reject(signal?.reason ?? new Error('aborted'));
+                };
+
+                if (signal?.aborted) {
+                    onAbort();
+                    return;
+                }
+
+                signal?.addEventListener('abort', onAbort, { once: true });
+                setTimeout(() => {
+                    signal?.removeEventListener('abort', onAbort);
+                    resolve({
+                        ok: true,
+                        status: 200,
+                        json: async () => ({ success: true, url: 'https://example.com', title: 'Example' }),
+                        text: async () => '',
+                    } as Response);
+                }, 1000);
+            });
+        }) as typeof fetch;
+
+        try {
+            const backend = new BrowserUseBackend('http://mock-server:8100');
+            const controller = new AbortController();
+            const pending = backend.navigate('https://example.com', {
+                signal: controller.signal,
+            });
+
+            controller.abort('Task cancelled by user');
+
+            await expect(pending).rejects.toThrow('Task cancelled by user');
+        } finally {
+            globalThis.fetch = originalFetch;
         }
     });
 

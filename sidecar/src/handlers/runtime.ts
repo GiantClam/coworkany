@@ -39,6 +39,10 @@ export type RuntimeCommandDeps = {
     createTaskStatusEvent: (taskId: string, payload: {
         status: 'running' | 'failed' | 'idle' | 'finished';
     }) => Record<string, unknown>;
+    createTaskResumedEvent: (taskId: string, payload: {
+        resumeReason?: string;
+        suspendDurationMs: number;
+    }) => Record<string, unknown>;
     createTaskFinishedEvent: (taskId: string, payload: {
         summary: string;
         duration: number;
@@ -51,6 +55,7 @@ export type RuntimeCommandDeps = {
         setHistoryLimit: (taskId: string, limit: number) => void;
         setConfig: (taskId: string, config: any) => void;
         getConfig: (taskId: string) => any;
+        getConversation: (taskId: string) => Array<{ role?: string; content?: unknown }>;
         getArtifactContract: (taskId: string) => unknown;
         setArtifactContract: (taskId: string, contract: any) => any;
     };
@@ -103,11 +108,12 @@ export type RuntimeCommandDeps = {
     };
     stopVoicePlayback: (reason?: string) => Promise<boolean>;
     getVoicePlaybackState: () => unknown;
-    getVoiceProviderStatus: () => unknown;
+    getVoiceProviderStatus: (providerMode?: 'auto' | 'system' | 'custom') => unknown;
     transcribeWithCustomAsr: (input: {
         audioBase64: string;
         mimeType?: string;
         language?: string;
+        providerMode?: 'auto' | 'system' | 'custom';
     }) => Promise<{
         success: boolean;
         text?: string;
@@ -116,6 +122,56 @@ export type RuntimeCommandDeps = {
         error?: string;
     }>;
 };
+
+function extractMessageText(content: unknown): string {
+    if (typeof content === 'string') {
+        return content.trim();
+    }
+
+    if (!Array.isArray(content)) {
+        return '';
+    }
+
+    return content
+        .map((block: any) => {
+            if (typeof block?.text === 'string') {
+                return block.text;
+            }
+            if (block?.type === 'text' && typeof block?.content === 'string') {
+                return block.content;
+            }
+            return '';
+        })
+        .join(' ')
+        .trim();
+}
+
+function isResumeControlMessage(text: string): boolean {
+    return text.startsWith('[System Notification]') ||
+        text.startsWith('[RESUMED]') ||
+        text.startsWith('[SUSPENDED]') ||
+        text.startsWith('[RESUME_REQUESTED]');
+}
+
+function getLatestMeaningfulUserMessage(
+    conversation: Array<{ role?: string; content?: unknown }>
+): string {
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+        const message = conversation[index];
+        if (message?.role !== 'user') {
+            continue;
+        }
+
+        const text = extractMessageText(message.content);
+        if (!text || isResumeControlMessage(text)) {
+            continue;
+        }
+
+        return text;
+    }
+
+    return '';
+}
 
 function buildExecutionQueryFromFrozenWorkRequest(request: {
     tasks?: Array<{
@@ -330,6 +386,94 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             return true;
         }
 
+        case 'resume_interrupted_task': {
+            const payload = command.payload as any;
+            const taskId = payload.taskId as string;
+            const existingConversation = deps.taskSessionStore.getConversation(taskId);
+
+            if (existingConversation.length === 0) {
+                deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                    success: false,
+                    taskId,
+                    error: 'no_saved_context',
+                }));
+                return true;
+            }
+
+            const taskConfig = deps.getTaskConfig(taskId);
+            let effectiveTaskConfig = taskConfig;
+            if (payload.config) {
+                if (typeof payload.config.maxHistoryMessages === 'number' && payload.config.maxHistoryMessages > 0) {
+                    deps.taskSessionStore.setHistoryLimit(taskId, payload.config.maxHistoryMessages);
+                }
+                deps.taskSessionStore.setConfig(taskId, {
+                    ...taskConfig,
+                    ...payload.config,
+                });
+                effectiveTaskConfig = deps.getTaskConfig(taskId);
+            }
+
+            const workspacePath =
+                (effectiveTaskConfig?.workspacePath as string | undefined) ||
+                (taskConfig?.workspacePath as string | undefined) ||
+                deps.workspaceRoot;
+            const latestUserMessage = getLatestMeaningfulUserMessage(existingConversation);
+            const resumeQuery = latestUserMessage || 'Continue from the saved task context.';
+
+            deps.ensureTaskRuntimePersistence({
+                taskId,
+                title: '',
+                workspacePath,
+            });
+
+            deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                success: true,
+                taskId,
+            }));
+            deps.emit(deps.createTaskStatusEvent(taskId, { status: 'running' }));
+            deps.emit(deps.createTaskResumedEvent(taskId, {
+                resumeReason: 'interrupted_recovery',
+                suspendDurationMs: 0,
+            }));
+
+            const conversation = deps.pushConversationMessage(taskId, {
+                role: 'user',
+                content:
+                    `[RESUME_REQUESTED] The previous task execution was interrupted by a sidecar restart. ` +
+                    `Resume from the saved context, preserve completed work, and continue the original task without restarting from scratch.`,
+            });
+
+            const preparedWorkRequest = deps.prepareWorkRequestContext({
+                sourceText: resumeQuery,
+                workspacePath,
+                workRequestStore: deps.workRequestStore,
+            });
+            const artifactContract =
+                deps.taskSessionStore.getArtifactContract(taskId) ||
+                deps.buildArtifactContract(preparedWorkRequest.executionQuery || resumeQuery);
+            deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
+
+            deps.markWorkRequestExecutionStarted(preparedWorkRequest);
+            const explicitSkillIds =
+                (effectiveTaskConfig?.enabledClaudeSkills as string[] | undefined) ??
+                (effectiveTaskConfig?.enabledSkills as string[] | undefined) ??
+                (payload.config?.enabledClaudeSkills as string[] | undefined) ??
+                (payload.config?.enabledSkills as string[] | undefined);
+
+            await deps.continuePreparedAgentFlow({
+                taskId,
+                userMessage: resumeQuery,
+                workspacePath,
+                config: effectiveTaskConfig,
+                preparedWorkRequest,
+                workRequestExecutionPrompt: preparedWorkRequest.workRequestExecutionPrompt,
+                conversation,
+                artifactContract,
+                explicitSkillIds,
+            }, deps.getExecutionRuntimeDeps(taskId));
+            return true;
+        }
+
         case 'request_effect': {
             const effectPayload = command.payload as any;
             if (effectPayload.tool === 'Edit' || effectPayload.tool === 'Write') {
@@ -444,9 +588,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'get_voice_provider_status': {
+            const payload = command.payload as { providerMode?: 'auto' | 'system' | 'custom' };
             deps.emit(respond(command.id, 'get_voice_provider_status_response', {
                 success: true,
-                ...(deps.getVoiceProviderStatus() as Record<string, unknown>),
+                ...(deps.getVoiceProviderStatus(payload.providerMode) as Record<string, unknown>),
             }));
             return true;
         }
@@ -456,6 +601,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 audioBase64: string;
                 mimeType?: string;
                 language?: string;
+                providerMode?: 'auto' | 'system' | 'custom';
             };
             const result = await deps.transcribeWithCustomAsr(payload);
             deps.emit(respond(command.id, 'transcribe_voice_response', result as Record<string, unknown>));

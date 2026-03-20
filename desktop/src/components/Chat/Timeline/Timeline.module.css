@@ -257,6 +257,12 @@
     line-height: 1.7;
 }
 
+.streamingText {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 /* ============================================================================
  * System Badge
  * ============================================================================ */

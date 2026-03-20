@@ -5,7 +5,7 @@
  * Should be called once at the app root level.
  */
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore, type TaskEvent, type IpcResponse, type AuditEvent, hydrateSessions } from '../stores/useTaskEventStore';
@@ -25,11 +25,35 @@ import {
  * Call this in your app root component.
  */
 export function useTauriEvents() {
-    const addEvent = useTaskEventStore((state) => state.addEvent);
+    const addEvents = useTaskEventStore((state) => state.addEvents);
     const setSidecarConnected = useTaskEventStore((state) => state.setSidecarConnected);
     const handleIpcResponse = useTaskEventStore((state) => state.handleIpcResponse);
     const addAuditEvent = useTaskEventStore((state) => state.addAuditEvent);
     const setVoicePlaybackState = useVoicePlaybackStore((state) => state.setState);
+    const pendingTaskEventsRef = useRef<TaskEvent[]>([]);
+    const flushFrameRef = useRef<number | null>(null);
+
+    const flushTaskEvents = useCallback(() => {
+        flushFrameRef.current = null;
+        if (pendingTaskEventsRef.current.length === 0) {
+            return;
+        }
+
+        const events = pendingTaskEventsRef.current;
+        pendingTaskEventsRef.current = [];
+        addEvents(events);
+    }, [addEvents]);
+
+    const enqueueTaskEvent = useCallback((event: TaskEvent) => {
+        pendingTaskEventsRef.current.push(event);
+        if (flushFrameRef.current !== null) {
+            return;
+        }
+
+        flushFrameRef.current = window.requestAnimationFrame(() => {
+            flushTaskEvents();
+        });
+    }, [flushTaskEvents]);
 
     useEffect(() => {
         let unlistenTaskEvent: UnlistenFn | undefined;
@@ -59,7 +83,7 @@ export function useTauriEvents() {
 
             // Listen for task events from sidecar
             unlistenTaskEvent = await listen<TaskEvent>('task-event', (event) => {
-                addEvent(event.payload);
+                enqueueTaskEvent(event.payload);
             });
 
             // Listen for IPC responses (effect decisions, patch results)
@@ -70,6 +94,26 @@ export function useTauriEvents() {
             // Listen for sidecar disconnection
             unlistenSidecarDisconnected = await listen('sidecar-disconnected', () => {
                 console.warn('[Tauri] Sidecar disconnected');
+                const { sessions } = useTaskEventStore.getState();
+                const now = new Date().toISOString();
+                const failureEvents = [...sessions.values()]
+                    .filter((session) => session.status === 'running' && !session.suspension)
+                    .map((session) => ({
+                        id: `sidecar-disconnected-${session.taskId}-${crypto.randomUUID()}`,
+                        taskId: session.taskId,
+                        sequence: (session.events.at(-1)?.sequence ?? 0) + 1,
+                        type: 'TASK_FAILED' as const,
+                        timestamp: now,
+                        payload: {
+                            error: 'Connection to the sidecar was lost before the task completed.',
+                            errorCode: 'SIDECAR_DISCONNECTED',
+                            recoverable: true,
+                            suggestion: 'Retry after the sidecar reconnects.',
+                        },
+                    }));
+                if (failureEvents.length > 0) {
+                    addEvents(failureEvents);
+                }
                 setSidecarConnected(false);
             });
 
@@ -106,9 +150,14 @@ export function useTauriEvents() {
             unlistenSidecarReconnected?.();
             unlistenAuditEvent?.();
             unlistenVoiceState?.();
+            if (flushFrameRef.current !== null) {
+                window.cancelAnimationFrame(flushFrameRef.current);
+                flushFrameRef.current = null;
+            }
+            flushTaskEvents();
             console.log('[Tauri] Event listeners cleaned up');
         };
-    }, [addEvent, setSidecarConnected, handleIpcResponse, addAuditEvent, setVoicePlaybackState]);
+    }, [enqueueTaskEvent, flushTaskEvents, setSidecarConnected, handleIpcResponse, addAuditEvent, setVoicePlaybackState]);
 }
 
 // ============================================================================

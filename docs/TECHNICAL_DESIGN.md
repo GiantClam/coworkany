@@ -1,307 +1,540 @@
-# CoworkAny 技术方案
+# CoworkAny 技术设计
 
-> 版本: 1.0 | 更新日期: 2026-02-14
+> 更新日期：2026-03-20
+>
+> 本文档描述 CoworkAny 当前仓库形态下的系统结构、运行路径、核心子系统、数据边界与开发方式。它面向贡献者、架构评审和新加入项目的开发者，重点回答三个问题：
+>
+> 1. 这个系统由哪些进程和模块组成？
+> 2. 一次任务是如何被接收、审批、执行、验证并持久化的？
+> 3. 为什么它被设计成 Desktop + Sidecar + Services 的分层结构？
 
 ## 1. 产品定位
 
-CoworkAny 是一个基于 Tauri 的通用 AI 桌面助手，定位为"与 AI 协作完成任何任务"。核心能力覆盖个人助理（日历、邮件、任务管理）、网络自动化（浏览器操作、信息搜索）、编程开发（代码编写、质量检查、调试）和智能增强（自主学习、记忆系统）。
+CoworkAny 是一个面向本地持续协作场景的桌面 AI 工作台，而不是单次运行的命令行 Agent。
 
-## 2. 系统架构
+它的目标是把下列能力放进同一个产品闭环：
 
-### 2.1 三层架构
+- 图形界面交互
+- 本地任务执行
+- 安全审批与副作用治理
+- 浏览器自动化
+- 长短期记忆
+- 技能与 MCP 扩展
+- 中断恢复与持续协作
 
-```
-┌─────────────────────────────────────────────────┐
-│                  Desktop (Tauri)                 │
-│  ┌──────────────────┐  ┌──────────────────────┐ │
-│  │   Rust Backend   │  │   React Frontend     │ │
-│  │  - Window Mgmt   │  │  - Chat Interface    │ │
-│  │  - Policy Engine │  │  - Dashboard         │ │
-│  │  - Shadow FS     │  │  - Settings          │ │
-│  │  - IPC Bridge    │  │  - Skill/MCP Mgmt    │ │
-│  └────────┬─────────┘  └──────────┬───────────┘ │
-│           │ Tauri invoke/listen   │             │
-│           └───────────┬───────────┘             │
-└───────────────────────┼─────────────────────────┘
-                        │ JSON Lines over stdio
-┌───────────────────────┼─────────────────────────┐
-│              Sidecar (Bun/Node.js)              │
-│  ┌─────────┐ ┌──────────┐ ┌──────────────────┐ │
-│  │  Agent   │ │  Tools   │ │  LLM Router      │ │
-│  │  System  │ │  System  │ │  (Multi-Provider) │ │
-│  ├─────────┤ ├──────────┤ ├──────────────────┤ │
-│  │  Skills  │ │  MCP     │ │  Memory / RAG    │ │
-│  │  System  │ │  Gateway │ │  System          │ │
-│  └─────────┘ └──────────┘ └──────────────────┘ │
-└─────────────────────────────────────────────────┘
-```
+这意味着 CoworkAny 的设计重点不是“模型会不会调用工具”，而是“一个本地 AI 执行系统如何长期、可控、可恢复地参与真实工作”。
 
-### 2.2 技术栈
+## 2. 设计原则
 
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| 桌面壳 | Tauri 2.0 (Rust) | 窗口管理、安全策略、文件系统、IPC |
-| 前端 | React 18 + TypeScript + Vite 5 | SPA，多窗口路由 |
-| 样式 | Tailwind CSS 4 + CSS Modules | 正在从内联样式迁移 |
-| 状态管理 | Zustand 4 | 多 Store，subscribeWithSelector |
-| UI 组件 | Radix UI | 无障碍 headless 组件 |
-| 国际化 | react-i18next | 中英文 |
-| AI 引擎 | Bun 运行时 Sidecar | 通过 stdio 与 Rust 通信 |
-| LLM | Anthropic / OpenAI / OpenRouter / Ollama | 多 Provider 路由 |
+### 2.1 Desktop-first
 
-### 2.3 进程通信
+用户不是通过一次性 CLI 会话使用系统，而是通过桌面应用持续工作。因此：
 
-Desktop 与 Sidecar 之间通过 JSON Lines 协议通信：
+- 状态必须可见
+- 审批必须可交互
+- 任务必须可追踪
+- 中断必须可恢复
 
-- **Commands** (Tauri → Sidecar): `start_task`, `cancel_task`, `send_task_message`, `reload_tools`, `list_claude_skills`, `install_from_github` 等 35+ 命令
-- **Events** (Sidecar → Tauri): `TASK_STARTED`, `TOOL_CALLED`, `TOOL_RESULT`, `TEXT_DELTA`, `EFFECT_REQUESTED`, `PATCH_PROPOSED` 等 20+ 事件类型
-- **Effects** (双向): 所有副作用（文件写入、Shell 执行、网络请求）必须通过 PolicyBridge 审批
+### 2.2 Policy over prompt
 
-Sidecar 的 stdout 专用于 IPC，所有日志重定向到 stderr 和轮转日志文件。Rust 端有 watchdog 线程每 5 秒监控 Sidecar 进程，崩溃后自动重启（60 秒内最多 3 次）。
+高风险操作不依赖模型“自律”，而依赖运行时策略层：
 
-## 3. 核心子系统
+- 文件写入
+- Shell 执行
+- 网络访问
+- 代码执行
+- 浏览器自动化
 
-### 3.1 Agent 系统
+模型可以提出行动，但系统必须有能力决定是否放行。
 
-Agent 系统是 Sidecar 的核心，基于 ReAct（Reason-Act-Observe）循环实现。
+### 2.3 分层解耦
 
-**核心组件：**
+系统被拆成 Desktop、Rust Backend、Sidecar、Python Services 四层，不让 UI、系统桥接、Agent 智能、专用服务相互缠绕。
 
-| 组件 | 职责 |
-|------|------|
-| ReAct Loop | 推理-行动-观察循环，每任务最多 30 步 |
-| Autonomous Agent | 自主任务分解、后台执行、目标验证 |
-| Self-Learning | 能力缺口检测 → 研究 → 实验 → 知识沉淀 |
-| Code Quality | 静态分析（复杂度、安全、代码异味） |
-| Verification | 6 种验证策略的后执行验证引擎 |
-| Skill Recommendation | 16 种意图类型的技能推荐 |
-| Tool Chains | 预定义多步工具执行序列 |
+### 2.4 长期协作优先
 
-**防无限循环机制：** 连续 3 次相同工具调用触发 AUTOPILOT 干预，工具+参数组合加入永久黑名单，5 次永久封禁后强制终止。
+CoworkAny 不是一次任务执行器，因此需要：
 
-**详细设计见：** [Agent 系统设计](agent-system.md)
+- 会话级上下文
+- 长期知识沉淀
+- 任务恢复点
+- 可复用技能
 
-### 3.2 工具系统
+## 3. 总体架构
 
-工具系统采用注册表模式，支持优先级解析（MCP > 内置 > 存根）。
-
-**工具分类：**
-
-| 类别 | 工具 | 数量 |
-|------|------|------|
-| 核心 | calendar, email, system, tasks, voice | 5 |
-| 编程 | read_file, write_file, search_code, run_command, check_code_quality | 5+ |
-| 文件 | 文件读写、目录操作 | 3+ |
-| 网络 | crawl_url, web_search, browser 自动化 | 5+ |
-| 记忆 | save_to_vault, search_vault | 2+ |
-| 个人 | quick_note, get_news, check_weather | 3+ |
-| MCP | 动态注册的外部工具 | 不限 |
-
-**工具链（Tool Chains）：** 预定义的多步工具执行序列，支持条件执行和错误处理。内置 9 条链：`fix-bug-and-test`, `create-feature-safe`, `deploy-safe`, `morning-routine`, `research-topic` 等。
-
-**详细设计见：** [工具系统设计](tool-system.md)
-
-### 3.3 技能系统（Skills）
-
-技能是可复用的指令包，以 `SKILL.md` 文件定义，包含 YAML frontmatter 和 Markdown 指令体。
-
-**加载流程：**
-1. SkillStore 扫描 `.coworkany/skills/` 目录
-2. 解析 YAML frontmatter（name, description, triggers, requires）
-3. 检查工具/环境依赖
-4. 注册到 `skills.json`
-5. 用户消息匹配 triggers 时自动激活
-
-**技能来源：**
-- 内置技能（coding-standards, frontend-patterns, backend-patterns）
-- 本地安装（`.coworkany/skills/`）
-- GitHub 安装（`install_from_github` 命令）
-- 自学习生成（`vault/self-learned/`）
-
-**OpenClaw 兼容层：** `openclawCompat.ts` 支持 OpenClaw SKILL.md 格式，包括平台过滤、二进制依赖检查、自动安装器。
-
-### 3.4 MCP Gateway
-
-MCP（Model Context Protocol）Gateway 是外部工具集成的统一入口。
-
-**职责：**
-- MCP Server 生命周期管理（启动/停止/重启）
-- 工具发现和注册到 ToolRegistry
-- 策略执行（风险评分 1-10，allow/deny/warn）
-- 集中认证
-
-**存储：** `toolpacks.json` 记录已安装的 MCP 工具包，支持启用/禁用和最后使用时间追踪。
-
-### 3.5 安全模型
-
-安全模型贯穿整个系统，核心是 Effect-Gated Execution（副作用门控执行）。
-
-**三层防护：**
-1. **Pre-Input** - 输入检测和过滤
-2. **Pre-Tool** - 工具调用前的策略审批（PolicyBridge → Rust PolicyEngine）
-3. **Post-Output** - 输出检测和脱敏
-
-**Effect 类型和风险等级：**
-
-| Effect 类型 | 风险等级 | 默认策略 |
-|-------------|---------|---------|
-| filesystem_read | 2 | session |
-| filesystem_write | 6 | once |
-| shell_execute | 8 | once |
-| network_request | 4 | session |
-| code_execution | 7 | once |
-| secrets_access | 9 | never |
-| screen_capture | 5 | once |
-| ui_control | 3 | session |
-
-**Shadow FS：** 所有文件修改先暂存到影子文件系统，生成 diff 供用户审查，批准后才写入磁盘。
-
-**详细设计见：** [安全模型设计](security-model.md)
-
-### 3.6 记忆系统
-
-**三层记忆架构：**
-
-| 层级 | 存储 | 生命周期 |
-|------|------|---------|
-| 短期记忆 | 会话上下文 | 单次会话 |
-| 长期记忆 | Markdown Vault + RAG 索引 | 持久化 |
-| 外部记忆 | MCP 工具提供 | 按需 |
-
-**Vault 结构：** `~/.coworkany/vault/` 下按 `projects/`, `preferences/`, `learnings/` 分类存储 Markdown 文件，自动索引到 RAG 系统。
-
-**安全控制：** 来源标签、信任评分、PII 过滤、TTL 过期。
-
-### 3.7 自主学习
-
-自主学习系统实现 6 阶段循环：
-
-```
-Gap Detection → Research → Lab Testing → Knowledge Precipitation → Skill Generation → Confidence Tracking
+```mermaid
+flowchart LR
+    User["User"] --> UI["Desktop UI<br/>React + Vite"]
+    UI --> Rust["Rust Backend<br/>Tauri Host"]
+    Rust <--> Sidecar["Sidecar<br/>Bun / TypeScript"]
+    Sidecar --> Agent["Agent System"]
+    Sidecar --> Tools["Builtin Tools"]
+    Sidecar --> MCP["MCP Gateway"]
+    Sidecar --> Memory["Memory Layer"]
+    Rust --> Policy["Policy Engine / Shadow FS"]
+    Rust --> PM["Process Manager"]
+    PM --> Rag["rag-service<br/>FastAPI + ChromaDB"]
+    PM --> Browser["browser-use-service<br/>FastAPI + browser-use"]
+    Tools <--> Browser
+    Memory <--> Rag
 ```
 
-**触发条件：** 检测到能力缺口（工具调用失败、用户反馈、未知领域）。
+### 3.1 为什么是这四层
 
-**学习产出：**
-- Vault 知识条目（`vault/learnings/`）
-- 自动生成的技能（`skills/auto-generated/`）
-- 工具调用序列（可复用的 procedure）
+#### Desktop UI
 
-**质量控制：** 置信度追踪，仅保留高质量知识。最低阈值：4+ 工具调用、5s+ 执行时间、价值关键词匹配。
+负责：
 
-## 4. 前端架构
+- 聊天交互
+- 时间线展示
+- 设置、技能、MCP、工作区管理
+- 审批确认
 
-### 4.1 多窗口模式
+不负责：
 
-| 模式 | 尺寸 | 用途 |
-|------|------|------|
-| Launcher | 600×60 | Spotlight 风格搜索栏 |
-| Panel | 600×600 | 主聊天界面 |
-| Dashboard | 全屏覆盖 | 管理面板 |
+- 智能决策
+- 复杂业务编排
+- 底层系统权限控制
 
-窗口间支持磁性吸附（Dashboard/Settings 窗口吸附到主窗口边缘）。
+#### Rust Backend
 
-### 4.2 核心组件
+负责：
 
+- 宿主级能力与系统桥接
+- Sidecar 生命周期管理
+- 策略执行与副作用治理
+- Shadow FS、窗口管理、系统资源调用
+- Python 服务托管
+
+不负责：
+
+- 任务推理
+- LLM 决策
+- 工具语义编排
+
+#### Sidecar
+
+负责：
+
+- Agent 推理与任务编排
+- 工具选择与执行
+- LLM Provider 路由
+- 技能加载
+- MCP 工具注册
+- 记忆访问、任务恢复、验证
+
+不负责：
+
+- 直接控制 UI
+- 直接绕过策略层写入高风险副作用
+
+#### Python Services
+
+负责承接专门能力：
+
+- `rag-service`: 语义索引与检索
+- `browser-use-service`: 更高层的浏览器智能操作
+
+这样做的价值是把重依赖、专领域逻辑从主 Agent Runtime 中拆出去。
+
+## 4. 运行时拓扑
+
+### 4.1 主要进程
+
+| 进程 | 技术栈 | 主要职责 |
+| --- | --- | --- |
+| Desktop App | Tauri 2 + Rust + React 18 | UI、系统桥接、策略执行、Sidecar 宿主 |
+| Sidecar | Bun + TypeScript | Agent Runtime、工具系统、MCP、记忆、执行编排 |
+| rag-service | Python + FastAPI + ChromaDB | Markdown Vault 的索引与语义搜索 |
+| browser-use-service | Python + FastAPI + browser-use | 复杂网页智能操作 |
+
+### 4.2 实际仓库入口
+
+| 模块 | 入口文件 |
+| --- | --- |
+| Desktop 前端 | `desktop/src/main.tsx` |
+| Desktop Rust | `desktop/src-tauri/src/main.rs` |
+| Sidecar | `sidecar/src/main.ts` |
+| RAG Service | `rag-service/main.py` |
+| Browser Use Service | `browser-use-service/main.py` |
+
+### 4.3 关键桥接模块
+
+| 文件 | 职责 |
+| --- | --- |
+| `desktop/src-tauri/src/sidecar.rs` | Sidecar 启动、stdin/stdout IPC、事件转发 |
+| `desktop/src-tauri/src/process_manager.rs` | Sidecar / Python 服务统一托管 |
+| `desktop/src-tauri/src/shadow_fs.rs` | 影子文件系统与 diff 支持 |
+| `desktop/src-tauri/src/ipc.rs` | Tauri 侧 IPC 命令与桥接 |
+| `sidecar/src/main.ts` | Sidecar 入口，命令路由与运行时初始化 |
+
+## 5. 任务生命周期
+
+一次任务从输入到结束，通常经过以下阶段：
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as Desktop UI
+    participant R as Rust Backend
+    participant S as Sidecar
+    participant P as Policy
+    participant X as Tools / MCP / Services
+
+    U->>UI: 输入任务
+    UI->>R: start_task
+    R->>S: JSON Lines command
+    S->>S: 任务分析 / 选择技能 / 规划步骤
+    S->>P: 申请副作用审批
+    P-->>R: allow / warn / deny
+    R-->>UI: 审批弹窗 / 状态展示
+    UI-->>R: 用户确认
+    R-->>S: effect response
+    S->>X: 调用工具 / MCP / 服务
+    X-->>S: 返回结果
+    S-->>R: TEXT_DELTA / TOOL_RESULT / TASK_* event
+    R-->>UI: 时间线更新
+    S->>S: 结果验证 / 持久化 / 恢复点更新
 ```
-src/components/
-  Chat/
-    ChatInterface.tsx      -- 主聊天视图（Header + Timeline + InputArea）
-    Timeline/              -- 消息/事件时间线
-    TokenUsagePanel.tsx    -- Token 用量显示
-  Fluid/
-    Launcher.tsx           -- Spotlight 搜索栏
-    TaskSwitcher.tsx       -- 任务切换
-  Dashboard/               -- 管理面板
-  Settings/                -- 设置（LLM、快捷键、主题）
-  Skills/                  -- 技能管理
-  Mcp/                     -- MCP 服务器管理
-  Workspace/               -- 工作空间选择
-  Common/                  -- 通用组件（Modal、Toast、ErrorBoundary）
-```
 
-### 4.3 状态管理
+### 5.1 输入阶段
 
-| Store | 职责 |
-|-------|------|
-| useTaskStore | 任务生命周期、消息、工具调用 |
-| useUIStore | 窗口模式、视图切换、主题 |
-| useConfigStore | LLM 配置、API Key、首次运行检测 |
-| useWorkspaceStore | 工作空间 CRUD |
-| useSkillStore | 技能列表、启用/禁用 |
-| useMcpStore | MCP 工具包管理 |
+Desktop 将用户消息和上下文打包为 IPC 命令发送给 Sidecar。典型命令包括：
 
-### 4.4 Human-in-the-Loop
+- `start_task`
+- `send_task_message`
+- `cancel_task`
+- `resume_interrupted_task`
 
-关键 AI 操作通过 `EffectConfirmationDialog` 弹窗确认。PolicyEngine 控制哪些操作需要审批，用户可选择"本次允许"、"本会话允许"或"始终允许"。
+### 5.2 规划阶段
 
-## 5. 数据持久化
+Sidecar 根据任务内容做几件事：
 
-| 数据 | 存储位置 | 格式 |
-|------|---------|------|
-| MCP 工具包 | `.coworkany/toolpacks.json` | JSON |
-| 技能注册 | `.coworkany/skills.json` | JSON |
-| 工作空间 | `.coworkany/workspaces.json` | JSON |
-| 会话记忆 | `.coworkany/sessions/` | JSON |
-| 长期知识 | `~/.coworkany/vault/` | Markdown |
-| 自学习技能 | `vault/self-learned/` | SKILL.md |
-| 日志 | `.coworkany/logs/sidecar-YYYY-MM-DD.log` | 文本 |
+- 识别任务意图
+- 选择可用工具和技能
+- 决定是否需要访问记忆或 MCP
+- 创建执行路径和恢复点
 
-## 6. 开发与构建
+### 5.3 执行阶段
 
-### 6.1 项目结构
+Sidecar 调用内置工具、MCP 工具或 Python 服务完成动作。
 
-```
-coworkany/
-├── desktop/                 # Tauri 桌面应用
-│   ├── src/                 # React 前端
-│   ├── src-tauri/           # Rust 后端
-│   └── package.json
-├── sidecar/                 # AI 引擎
-│   ├── src/
-│   │   ├── agent/           # Agent 系统
-│   │   ├── tools/           # 工具系统
-│   │   ├── claude_skills/   # 技能系统
-│   │   ├── mcp/             # MCP Gateway
-│   │   ├── llm/             # LLM 路由
-│   │   ├── memory/          # 记忆系统
-│   │   ├── protocol/        # IPC 协议
-│   │   ├── storage/         # 持久化
-│   │   └── main.ts          # 入口
-│   └── package.json
-├── browser-use-service/     # 浏览器自动化服务
-├── docs/                    # 技术文档
-│   ├── TECHNICAL_DESIGN.md  # 本文档
-│   ├── agent-system.md      # Agent 系统详细设计
-│   ├── tool-system.md       # 工具系统详细设计
-│   ├── security-model.md    # 安全模型详细设计
-│   ├── USER_GUIDE_CN.md     # 用户指南
-│   └── backlog.md           # 待办事项
-├── README.md                # 项目说明
-└── CHANGELOG.md             # 变更日志
-```
+所有高风险动作都不应直接越过策略层。
 
-### 6.2 开发命令
+### 5.4 验证阶段
+
+任务执行后，运行时可继续做：
+
+- 结果验证
+- 错误重试
+- 工具链后置检查
+- 记忆沉淀
+
+### 5.5 恢复阶段
+
+当任务被中断、Sidecar 重启或桌面应用重启时，系统尝试：
+
+- 恢复任务运行时记录
+- 重建任务状态
+- 提示用户继续执行
+
+这也是 CoworkAny 与很多一次性 Agent Demo 的关键差异之一。
+
+## 6. 核心子系统
+
+### 6.1 Agent System
+
+Agent System 位于 Sidecar 内部，是系统的决策中心。
+
+主要职责：
+
+- 任务理解
+- 分步推理
+- 工具调用
+- 错误处理
+- 自学习与复用
+- 结果验证
+
+当前从目录上可以看到的核心域包括：
+
+- `sidecar/src/agent/`
+- `sidecar/src/execution/`
+- `sidecar/src/orchestration/`
+- `sidecar/src/scheduling/`
+- `sidecar/src/memory/`
+
+### 6.2 Tool System
+
+Tool System 负责把“可执行能力”以统一接口暴露给 Agent。
+
+能力大致分为：
+
+- 文件工具
+- Shell / 代码执行工具
+- 浏览器工具
+- Web 搜索与网络工具
+- 记忆工具
+- 个人效率工具
+- 语音能力
+
+内置工具定义可从 `sidecar/src/tools/` 目录理解，标准工具结构体和 effect 类型定义在 `sidecar/src/tools/standard.ts`。
+
+### 6.3 Skills
+
+Skills 是可复用指令包，适合放置：
+
+- 某类任务的流程约束
+- 特定项目规范
+- 工具组合使用规则
+- 高层执行策略
+
+CoworkAny 支持：
+
+- 本地技能
+- GitHub 安装技能
+- 自学习沉淀技能
+- OpenClaw 风格 `SKILL.md` 兼容
+
+### 6.4 MCP Gateway
+
+MCP Gateway 让外部工具和服务可以统一接入 Agent Runtime。
+
+它负责：
+
+- Server 生命周期管理
+- 工具发现
+- 注册到工具注册表
+- 与策略层协同
+
+MCP 的存在使系统不必把所有能力都硬编码在 Sidecar 内部。
+
+### 6.5 Memory Layer
+
+记忆系统大致分成三类：
+
+| 层级 | 作用 | 形态 |
+| --- | --- | --- |
+| 会话记忆 | 当前或最近会话上下文 | JSON / 运行时状态 |
+| 长期记忆 | 用户偏好、项目知识、长期经验 | Markdown Vault |
+| 语义检索层 | 从长期知识中按语义召回 | RAG Service |
+
+这套组合的重点不是“保存聊天记录”，而是让系统具备真正的跨会话连续性。
+
+### 6.6 Security Model
+
+CoworkAny 的安全设计重点是 `Effect-Gated Execution`。
+
+常见 effect 可以抽象为：
+
+- `filesystem:read`
+- `filesystem:write`
+- `filesystem:delete`
+- `network:outbound`
+- `process:spawn`
+- `code:execute`
+- `state:remember`
+
+对于高风险动作，系统会走审批与策略路径，而不是让 Agent 直接执行。
+
+### 6.7 Shadow FS
+
+影子文件系统的目标是把“文件修改”从立即落盘变成“可审查的变更候选”。
+
+价值在于：
+
+- 降低误写风险
+- 提供 diff 审查基础
+- 与审批机制结合
+- 让用户在桌面端看见即将发生的修改
+
+### 6.8 Process Manager
+
+Rust 侧进程管理负责：
+
+- 启动 Sidecar
+- 启动 Python 服务
+- 执行健康检查
+- 在异常时重启
+- 统一日志与资源路径
+
+这一层让桌面端成为真正的宿主，而不是简单前端壳。
+
+## 7. 前端架构
+
+前端位于 `desktop/src/`，核心职责不是做业务逻辑，而是把运行时状态可视化出来。
+
+### 7.1 主要界面域
+
+根据当前目录结构，前端主要包含：
+
+- `components/Chat/`
+- `components/Settings/`
+- `components/Sidebar/`
+- `components/Skills/`
+- `components/Mcp/`
+- `components/Workspace/`
+- `components/Setup/`
+- `components/jarvis/`
+
+### 7.2 前端职责
+
+- 展示任务时间线
+- 展示工具调用和事件
+- 展示审批/确认
+- 管理工作区、技能、MCP、设置
+- 触发任务启动、取消、恢复
+
+### 7.3 为什么前端不持有主导权
+
+如果把任务逻辑放在前端：
+
+- 状态难以恢复
+- 安全治理会变弱
+- 服务编排会变得混乱
+- 多运行时协作会更难维护
+
+因此 CoworkAny 把前端保持在“交互层”和“状态展示层”。
+
+## 8. 数据与持久化
+
+系统中有多类持久化数据：
+
+| 数据类型 | 典型位置 | 说明 |
+| --- | --- | --- |
+| 本地状态 | `.coworkany/` | 日志、技能、工作区状态、运行时数据 |
+| 会话与任务状态 | 项目内或应用状态目录 | 用于恢复与连续协作 |
+| 长期知识 | `~/.coworkany/vault/` | Markdown 知识库 |
+| 语义索引 | ChromaDB 路径 | RAG 检索数据 |
+| 配置 | `sidecar/llm-config.json` 等 | 模型、代理、工作区、工具相关配置 |
+
+### 8.1 为什么需要多种存储
+
+因为这些数据生命周期不同：
+
+- 有的是会话级
+- 有的是系统级
+- 有的是跨项目共享
+- 有的是只服务于索引与检索
+
+把它们混成一份单体状态文件会很难治理。
+
+## 9. 技术栈
+
+### 9.1 当前主要技术
+
+| 层级 | 技术 |
+| --- | --- |
+| Desktop Host | Tauri 2 / Rust |
+| Frontend | React 18 / TypeScript / Vite 6 |
+| UI | Radix UI / CSS Modules / Tailwind 4 |
+| Runtime | Bun / Node 兼容生态 |
+| Agent & LLM | TypeScript Agent Runtime + 多 Provider |
+| Browser Automation | Playwright + browser-use-service |
+| Memory / RAG | FastAPI + ChromaDB |
+
+### 9.2 为什么不是单语言单进程
+
+因为系统需求本身横跨：
+
+- 桌面宿主能力
+- Web UI
+- Agent 编排
+- Python 生态专长能力
+
+追求“单技术栈纯洁性”反而会牺牲产品闭环。
+
+## 10. 开发方式
+
+### 10.1 仓库形态
+
+这个仓库不是一个有统一根任务编排的标准 monorepo。
+
+它更像是几个协同演进的兄弟项目：
+
+- `desktop`
+- `sidecar`
+- `rag-service`
+- `browser-use-service`
+
+根目录没有统一 `package.json`，所以开发时通常进入子项目执行命令。
+
+### 10.2 常用开发命令
 
 ```bash
-# 安装依赖
-cd desktop && pnpm install
-cd sidecar && bun install
-
-# 开发模式
-cd desktop && pnpm tauri dev
-
-# 构建
-cd desktop && pnpm tauri build
+cd desktop
+npm install
+npm run tauri dev
 ```
 
-## 7. 路线图
+```bash
+cd sidecar
+bun install
+bun run src/main.ts
+```
 
-| 版本 | 目标 |
-|------|------|
-| v0.2.0 | UI 重构完成、性能优化、自动更新 |
-| v0.3.0 | 插件市场、社区技能分享 |
-| v0.5.0 | 多 Agent 协作、团队功能 |
-| v1.0.0 | 稳定版发布、完整文档 |
+```bash
+cd rag-service
+python main.py
+```
 
-**当前待办：** 见 [backlog.md](backlog.md)
+```bash
+cd browser-use-service
+python main.py
+```
+
+### 10.3 打包路径
+
+桌面端打包配置定义在 `desktop/src-tauri/tauri.conf.json` 中：
+
+- 开发时启动本地前端服务
+- 构建时打包桌面前端
+- 同时把 `sidecar`、`rag-service`、`browser-use-service` 带入桌面应用资源目录
+
+## 11. 与其他 Agent 框架的架构差异
+
+从架构视角看，CoworkAny 的差异主要在下面几点：
+
+### 11.1 相对 OpenClaw
+
+- CoworkAny 更强调桌面产品形态，而不只是 Agent 执行框架
+- CoworkAny 把审批体验和 GUI 交互做成系统一部分
+- CoworkAny 兼容 OpenClaw 风格 Skills，但不依赖单一技能生态作为产品全部核心
+
+### 11.2 相对 Nanobot
+
+- CoworkAny 更强调“长期协作工作台”，不只是“受限本地执行”
+- CoworkAny 内建记忆、任务恢复、图形化工作流展示
+- CoworkAny 同时吸收工作区边界与 least-privilege 思路，但落到桌面产品与策略宿主中
+
+## 12. 当前限制与演进方向
+
+### 12.1 当前限制
+
+- 仓库中仍存在较多实验性能力与本地产物
+- 文档体系还在收拢
+- 不同子项目的工具链并不完全统一
+- 某些能力仍有“设计已明确、产品细节持续打磨”的状态
+
+### 12.2 演进方向
+
+- 更稳定的审批与策略表达
+- 更强的任务恢复与连续执行体验
+- 更清晰的工作区 / 本地目录访问治理
+- 更成熟的技能与 MCP 市场化能力
+- 更完整的桌面产品体验
+
+## 13. 阅读建议
+
+如果你第一次接触这个项目，建议按下面顺序阅读：
+
+1. [README.md](../README.md)
+2. [USER_GUIDE_CN.md](./USER_GUIDE_CN.md)
+3. [tool-system.md](./tool-system.md)
+4. [security-model.md](./security-model.md)
+5. [agent-system.md](./agent-system.md)
+
+---
+
+如果只用一句话总结：
+
+**CoworkAny 的本质，是一个以桌面宿主为核心、以 Sidecar 为执行引擎、以策略层为安全边界、以记忆与服务编排为长期能力的本地 AI 协作系统。**

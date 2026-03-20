@@ -1,132 +1,181 @@
-# CoworkAny - Universal AI Assistant
+# CoworkAny
 
-**与 AI 协作完成任何任务** - 日程管理、邮件处理、网络自动化、编程开发等
+[![GitHub Repo](https://img.shields.io/badge/repo-GiantClam%2Fcoworkany-181717?logo=github)](https://github.com/GiantClam/coworkany)
+![Version](https://img.shields.io/badge/version-0.1.0--beta.1-1f6feb)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+![Desktop](https://img.shields.io/badge/Desktop-Tauri%202-24C8DB?logo=tauri)
+![Frontend](https://img.shields.io/badge/Frontend-React%2018-61DAFB?logo=react)
+![Runtime](https://img.shields.io/badge/Runtime-Bun-000000?logo=bun)
+![Memory](https://img.shields.io/badge/Memory-ChromaDB-ff7a59)
 
-一个基于 Tauri 的智能桌面助手，集成日历、邮件、浏览器自动化、自主学习和编程辅助等能力。
+> 与 AI 协作完成任何任务的桌面工作台。
+>
+> CoworkAny 把桌面应用、代理执行引擎、记忆系统、浏览器自动化、技能系统和安全审批放进一个完整闭环里，让 AI 不只是“回答问题”，而是真正参与执行、验证、恢复和持续协作。
 
----
+## 快速导航
 
-## 📋 目录
+- [为什么是 CoworkAny](#为什么是-coworkany)
+- [系统架构总览](#系统架构总览)
+- [界面预览](#界面预览)
+- [使用说明](#使用说明)
+- [相比 OpenClaw / Nanobot 的优势](#coworkany-相比-openclaw--nanobot-的优势)
+- [开发命令](#开发命令)
+- [贡献与社区](#贡献与社区)
+- [文档导航](#文档导航)
 
-- [核心能力](#核心能力)
-- [快速开始](#快速开始)
-- [使用示例](#使用示例)
-- [技术架构](#技术架构)
-- [详细功能](#详细功能)
-- [配置指南](#配置指南)
-- [开发指南](#开发指南)
+## 为什么是 CoworkAny
 
----
+大多数 AI Agent 项目只解决其中一部分问题：有的擅长 CLI 执行，有的擅长工具编排，有的擅长工作空间限制，但缺少桌面端交互、安全审批、跨会话记忆、任务恢复和可视化协作。
 
-## 🎯 核心能力
+CoworkAny 的目标不是做一个单点能力的 Agent，而是把下面这些能力收敛到一个统一产品里：
 
-### 📅 个人助理
+- `桌面交互`: Tauri 桌面壳 + React UI，适合日常持续使用，而不只是一次性命令行运行
+- `可控执行`: 所有副作用通过策略层和审批路径治理，而不是完全相信模型“自觉收手”
+- `多引擎协作`: Desktop、Sidecar、RAG、Browser Use Service 分层解耦
+- `长期协作`: 会话记忆、知识沉淀、自学习技能、任务恢复
+- `面向真实工作`: 编程、浏览器自动化、工作区操作、个人效率任务共用一个交互入口
 
-**日历管理**
-- ✅ 查看今日/本周日程
-- ✅ 智能安排会议
-- ✅ 自动查找空闲时间
-- ✅ 日程冲突检测
+## 核心能力
 
-**邮件处理**
-- ✅ 读取未读邮件
-- ✅ 智能过滤重要邮件
-- ✅ 自动回复和整理
-- ✅ 邮件摘要生成
+| 能力域 | 说明 | 典型场景 |
+| --- | --- | --- |
+| 桌面 AI 协作 | 多任务聊天、任务时间线、设置与工作区管理 | 日常问答、任务追踪、上下文切换 |
+| 编程辅助 | 文件读写、命令执行、代码质量检查、验证流程 | 修 Bug、实现功能、跑测试、审查 diff |
+| 浏览器自动化 | Playwright 桥接 + Python browser-use service | 打开站点、抓取内容、表单操作、社媒流程 |
+| 记忆系统 | Markdown Vault + RAG 索引 + 会话恢复 | 长期偏好记忆、项目知识检索、跨会话连续工作 |
+| 技能与 MCP | 本地 Skills、GitHub 安装、MCP Gateway | 扩展私有工具链、复用标准流程 |
+| 安全治理 | Effect-gated execution、审批、Shadow FS | 文件写入、Shell 执行、网络访问前置把关 |
 
-**任务管理**
-- ✅ 创建和跟踪任务
-- ✅ 优先级排序
-- ✅ 进度追踪
-- ✅ 提醒和通知
+## 系统架构总览
 
-### 🌐 网络助手
+```mermaid
+flowchart LR
+    U["User"] --> D["CoworkAny Desktop<br/>React + Tauri"]
+    D --> R["Rust Backend<br/>窗口/策略/IPC/Shadow FS"]
+    R <--> S["Sidecar<br/>Bun + TypeScript Agent Runtime"]
+    S --> A["Agent System<br/>ReAct / Workflow / Resume"]
+    S --> T["Tool System<br/>Files / Shell / Browser / Voice / Web"]
+    S --> M["MCP Gateway<br/>外部工具与工具包"]
+    S --> V["Memory Layer<br/>Session + Vault + RAG"]
+    V <--> G["RAG Service<br/>FastAPI + ChromaDB"]
+    T <--> B["Browser Use Service<br/>FastAPI + browser-use"]
+    R --> P["Policy Engine<br/>审批 / 风险分级 / 副作用门控"]
+```
 
-**浏览器自动化**
-- ✅ 社交媒体自动发帖
-- ✅ 表单自动填写
-- ✅ 网页内容抓取
-- ✅ 复用用户登录会话（Playwright）
+### 架构特征摘要
 
-**信息搜索**
-- ✅ 网页搜索和爬取
-- ✅ 内容提取和整理
-- ✅ 多源信息聚合
+- `桌面宿主化`: 不是浏览器页面包一层壳，而是让 Tauri/Rust 直接承担进程、策略、系统桥接职责
+- `执行与展示分离`: UI 不直接做智能决策，Sidecar 也不直接控制用户体验
+- `服务按能力拆分`: 记忆检索和浏览器智能操作通过独立 Python 服务承接
+- `审批内建`: 安全不是后处理，而是任务执行路径的一部分
 
-### 🧠 智能增强
+### 分层职责
 
-**自主学习**
-- ✅ 从互联网学习新技能
-- ✅ 6 阶段学习循环（Gap Detection → Research → Lab Testing → Knowledge Precipitation）
-- ✅ 自动沉淀可复用技能
-- ✅ 持续改进和优化
+#### 1. Desktop
 
-**知识管理**
-- ✅ RAG 记忆系统
-- ✅ 语义搜索
-- ✅ 笔记和整理
-- ✅ 上下文恢复
+- 提供主交互界面、任务列表、聊天时间线、设置、工作区和技能管理
+- 使用 Tauri 将前端与本地系统能力连接起来
+- 承担用户可见的审批与确认体验
 
-**自动修正**
-- ✅ 错误诊断和分析
-- ✅ 8 种自动重试策略
-- ✅ 替代命令建议
-- ✅ 递归问题解决
+#### 2. Rust Backend
 
-### 💻 编程助手
+- 管理 Sidecar 生命周期与 JSON Lines IPC
+- 负责策略执行、Shadow FS、窗口管理、进程管理
+- 统一托管 Sidecar 与 Python 服务
 
-**代码质量**
-- ✅ 自动质量检查
-- ✅ TypeScript 验证
-- ✅ Console.log 检测
-- ✅ Prettier 格式检查
+#### 3. Sidecar
 
-**开发工具**
-- ✅ 多工作空间管理
-- ✅ 技能系统（Skills）
-- ✅ MCP 服务器集成
-- ✅ Package Manager 自动检测
+- 是真正的 Agent Runtime
+- 负责任务拆解、工具调用、LLM 路由、技能装载、MCP 注册、记忆调用与恢复
+- 把 stdout 严格保留给 IPC，日志输出到 stderr 与轮转日志
 
-**智能辅助**
-- ✅ 代码验证和测试
-- ✅ 工具链自动化
-- ✅ Bug 修复建议
-- ✅ 重构建议
+#### 4. Python Services
 
----
+- `rag-service`: 为长期知识和记忆检索提供语义搜索能力
+- `browser-use-service`: 为复杂网页操作提供更高层的浏览器自动化能力
 
-## 🚀 快速开始
+## 一次任务是怎么跑起来的
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant UI as Desktop UI
+    participant Rust as Rust Backend
+    participant Sidecar as Sidecar
+    participant Policy as Policy Engine
+    participant Tools as Tools / MCP / Services
+
+    User->>UI: 输入任务
+    UI->>Rust: start_task
+    Rust->>Sidecar: JSON Lines 命令
+    Sidecar->>Sidecar: 分析意图 / 选择技能 / 规划步骤
+    Sidecar->>Policy: 请求副作用审批
+    Policy-->>Rust: allow / warn / deny
+    Rust-->>UI: 展示审批或确认
+    UI-->>Rust: 用户批准
+    Rust-->>Sidecar: effect approved
+    Sidecar->>Tools: 调用文件/命令/浏览器/MCP
+    Tools-->>Sidecar: 工具结果
+    Sidecar-->>Rust: TEXT_DELTA / TOOL_RESULT / TASK_* 事件
+    Rust-->>UI: 时间线与状态更新
+    Sidecar->>Sidecar: 结果验证 / 记忆沉淀 / 任务恢复点持久化
+```
+
+## 界面预览
+
+| 主界面 | 设置页 |
+| --- | --- |
+| ![CoworkAny main UI](output/playwright/coworkany-app.png) | ![CoworkAny settings UI](output/playwright/settings-desktop-v3.png) |
+
+| 首次启动/新环境 | 窄屏设置视图 |
+| --- | --- |
+| ![CoworkAny fresh app UI](output/playwright/coworkany-app-fresh.png) | ![CoworkAny narrow settings UI](output/playwright/settings-narrow-v2.png) |
+
+> 以上截图来自仓库内已有 Playwright 输出产物，可直接在 GitHub 首页渲染。
+
+## 仓库结构
+
+```text
+coworkany/
+├── desktop/                  # Tauri 桌面应用
+│   ├── src/                  # React 前端
+│   ├── src-tauri/            # Rust 后端与进程/策略桥接
+│   └── tests/                # UI、E2E、桌面侧验证
+├── sidecar/                  # Bun/TypeScript Agent Runtime
+│   ├── src/agent/            # Agent、学习、验证、推荐
+│   ├── src/tools/            # 内置工具与工具注册
+│   ├── src/execution/        # 运行时、任务恢复、事件
+│   ├── src/mcp/              # MCP Gateway
+│   └── tests/                # Sidecar 测试
+├── rag-service/              # Python FastAPI + ChromaDB
+├── browser-use-service/      # Python FastAPI 浏览器自动化服务
+├── docs/                     # 技术设计、用户文档、发布文档
+└── .coworkany/               # 本地状态、技能、日志、vault
+```
+
+## 使用说明
 
 ### 环境要求
 
-- Node.js >= 18
-- Bun >= 1.0
-- Rust (Tauri 开发)
-- pnpm (推荐) / npm / yarn
+- `Node.js >= 22.22.1 < 23`
+- `Bun >= 1.2.0`
+- `Rust` 与 Tauri 开发环境
+- `Python 3.x`
 
-### 安装步骤
+### 1. 安装依赖
 
-1. **克隆仓库**
-```bash
-git clone https://github.com/your-org/coworkany.git
-cd coworkany
-```
-
-2. **安装前端依赖**
 ```bash
 cd desktop
-pnpm install
-```
+npm install
 
-3. **安装 Sidecar 依赖**
-```bash
 cd ../sidecar
 bun install
 ```
 
-4. **配置 LLM API**
+### 2. 配置模型
 
-创建 `sidecar/llm-config.json`:
+创建 [sidecar/llm-config.json](sidecar/llm-config.json)：
+
 ```json
 {
   "provider": "anthropic",
@@ -137,496 +186,255 @@ bun install
 }
 ```
 
-5. **配置环境变量**（可选）
+可选环境变量可参考 [.env.example](.env.example)，用于天气、新闻、Google Calendar / Gmail 等能力。
 
-创建 `sidecar/.env`:
-```bash
-# Google 日历和邮件
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
+### 3. 启动桌面应用
 
-# 天气查询（可选）
-OPENWEATHER_API_KEY=your_key
-
-# 新闻订阅（可选）
-NEWS_API_KEY=your_key
-```
-
-6. **启动应用**
 ```bash
 cd desktop
-pnpm tauri dev
+npm run tauri dev
 ```
 
----
+当前桌面端开发流程由 [desktop/src-tauri/tauri.conf.json](desktop/src-tauri/tauri.conf.json) 驱动：
 
-## 💡 使用示例
+- `beforeDevCommand`: `npm run dev:tauri-server`
+- `devUrl`: `http://localhost:5173`
+- 打包时会同时带上 `sidecar`、`rag-service`、`browser-use-service`
 
-### 个人助理
+### 4. 单独启动服务
 
-**早晨例行**:
-```
-用户: "Good morning, what's on my schedule?"
+如果你想独立调试服务，也可以分别启动：
 
-AI:
-📅 Today's Schedule (3 events):
-  • 10:00 AM - Team Meeting
-  • 12:00 PM - Lunch with Sarah
-  • 3:00 PM - Code Review
-
-📧 Unread Emails (5 total, 2 important):
-  • Boss: Q1 Review Due Friday
-  • HR: Benefits Update Required
-
-🌤️ Weather: 18°C, Partly Cloudy
-
-✅ High-Priority Tasks:
-  1. Finish quarterly report
-  2. Review pull request #234
-  3. Send invoice to client
+```bash
+cd sidecar
+bun run src/main.ts
 ```
 
-**日程安排**:
-```
-用户: "Schedule a meeting with the marketing team tomorrow at 2pm"
-
-AI:
-✅ Checking your calendar for tomorrow...
-✅ 2pm slot is available
-✅ Created event: "Marketing Team Meeting"
-   Time: Tomorrow, 2:00 PM - 3:00 PM
-✅ Would you like me to send invitations?
+```bash
+cd rag-service
+python main.py
 ```
 
-**邮件自动化**:
-```
-用户: "Summarize my important emails and draft replies"
-
-AI:
-📧 Important Emails (3):
-
-1. From: boss@company.com
-   Subject: Q1 Strategy Review
-   Summary: Requesting presentation deck by Friday
-   ✍️ Draft Reply: "I'll prepare the deck and send it by Thursday EOD..."
-
-2. From: client@example.com
-   Subject: Project Timeline Update
-   Summary: Asking about delivery date changes
-   ✍️ Draft Reply: "The adjusted timeline puts delivery at March 15..."
+```bash
+cd browser-use-service
+python main.py
 ```
 
-### 网络自动化
+### 5. 首次使用建议路径
 
-**社交媒体发帖**:
-```
-用户: "Post 'Just shipped v2.0! 🚀' on Twitter"
+1. 打开应用后先配置模型 Provider 和 API Key
+2. 创建或选择一个工作空间
+3. 从聊天界面发起任务
+4. 当涉及文件写入、Shell、网络等副作用时，按提示审批
+5. 在时间线中观察工具调用、结果、验证和恢复状态
 
-AI:
-🌐 Connecting to Twitter (using your existing session)...
-✅ Navigated to Twitter
-✅ Found compose button
-✅ Entered text: "Just shipped v2.0! 🚀"
-✅ Posted successfully!
-📸 Screenshot saved for confirmation
-```
+## 典型使用方式
 
-**网页研究**:
-```
-用户: "Research the latest quantum computing breakthroughs"
+### 编程协作
 
-AI:
-🔍 Searching: "quantum computing 2026 breakthroughs"
-📄 Found 12 sources (Nature, MIT Tech Review, ArXiv...)
-📥 Extracting content from top 5 sources...
-
-📊 Summary:
-• IBM announced 1000-qubit processor (Jan 2026)
-• Google achieved quantum advantage in optimization
-• Main challenges: error correction, scalability
-
-💾 Saved to vault: "Quantum Computing 2026 Review"
-🔗 Sources: [links included in vault note]
+```text
+帮我分析这个仓库的架构，并找出 sidecar 的任务恢复入口
 ```
 
-### 编程任务
-
-**Bug 修复**:
+```text
+修复 desktop 中断任务恢复的 UI 状态不同步问题，然后补一条测试
 ```
-用户: "Fix the login bug where users can't submit the form"
-
-AI:
-🔍 Analyzing login component...
-🐛 Found issue: Missing form validation on empty fields
-✏️ Proposed fix:
-   [Shows code diff]
-✅ Applied fix
-🧪 Running tests...
-✅ All tests passed (15/15)
-📊 Code quality: 98/100
-```
-
-**代码重构**:
-```
-用户: "Refactor the UserService class for better readability"
-
-AI:
-📖 Analyzing UserService.ts...
-🔧 Refactoring suggestions:
-   • Extract authentication logic
-   • Reduce cyclomatic complexity (12 → 5)
-   • Add TypeScript strict types
-
-✏️ Refactored code:
-   [Shows improved code]
-✅ Tests still passing
-📈 Quality improvement: 76 → 95
-```
-
----
-
-## 🏗️ 技术架构
-
-```
-┌─────────────────────────────────────────────────┐
-│                Desktop (Tauri 2.0)              │
-│   React 18 + TypeScript    Rust Backend         │
-│   Zustand + Tailwind CSS   Policy Engine        │
-└────────────────────┬────────────────────────────┘
-                     │ JSON Lines over stdio
-┌────────────────────┼────────────────────────────┐
-│            Sidecar (Bun Runtime)                │
-│  Agent System │ Tool System │ LLM Router        │
-│  Skill System │ MCP Gateway │ Memory/RAG        │
-└─────────────────────────────────────────────────┘
-```
-
-**技术栈**: React 18 + Vite 5 | Tauri 2.0 (Rust) | Bun Sidecar | Anthropic/OpenAI/OpenRouter/Ollama
-
-**详细技术文档：**
-- [技术方案总览](docs/TECHNICAL_DESIGN.md) - 完整架构设计
-- [Agent 系统设计](docs/agent-system.md) - ReAct 循环、自主学习、工具链
-- [工具系统设计](docs/tool-system.md) - 工具清单、MCP Gateway、工具链
-- [安全模型设计](docs/security-model.md) - Effect 门控、Shadow FS、审计
-- [用户指南](docs/USER_GUIDE_CN.md) - 使用说明
-
----
-
-## 📖 详细功能
-
-### 日历管理
-
-#### 查看日程
-```
-用户: "What's on my calendar today?"
-```
-
-AI 自动调用 `calendar_check` 工具：
-- 获取今日所有事件
-- 检测日程冲突
-- 显示会议信息
-- 提供参会准备建议
-
-#### 创建事件
-```
-用户: "Schedule a team meeting next Monday at 10am"
-```
-
-AI 自动：
-1. 解析时间表达式
-2. 检查空闲时段
-3. 创建日历事件
-4. (可选) 创建关联任务
-
-#### 查找空闲时间
-```
-用户: "When am I free for a 2-hour meeting this week?"
-```
-
-AI 分析日历并推荐可用时段。
-
-### 邮件处理
-
-#### 智能过滤
-- **重要邮件**: 来自老板、VIP 发件人、紧急关键词
-- **需要行动**: 包含 "urgent", "deadline", "action required" 等
-- **优先级排序**: 按重要性和时间排序
-
-#### 自动回复
-```
-用户: "Reply to the email from Sarah about the meeting"
-```
-
-AI：
-1. 查找来自 Sarah 的邮件
-2. 理解邮件内容（关于会议）
-3. 生成合适的回复
-4. 征求用户确认后发送
 
 ### 浏览器自动化
 
-#### 支持的操作
-- `browser_connect`: 连接到用户的 Chrome（复用登录会话）
-- `browser_navigate`: 导航到 URL
-- `browser_click`: 点击元素（CSS 选择器或文本）
-- `browser_fill`: 填写表单字段
-- `browser_screenshot`: 截图确认
-- `browser_wait`: 等待元素加载
-
-#### 示例场景
-- 社交媒体发帖（小红书、Twitter）
-- 表单自动填写
-- 网页内容监控
-- 自动化测试
-
-### 自主学习
-
-#### 6 阶段学习循环
-
-```
-1. Gap Detection (检测知识差距)
-   ↓
-2. Research Engine (从互联网研究)
-   ↓
-3. Learning Processor (结构化知识)
-   ↓
-4. Lab Sandbox (安全测试)
-   ↓
-5. Confidence Tracker (评估可靠性)
-   ↓
-6. Precipitator (沉淀为技能)
+```text
+打开目标网站，抓取页面正文并整理成要点
 ```
 
-#### 自动触发
-
-当遇到以下情况时自动学习：
-- 不熟悉的库或 API
-- 失败的命令或错误
-- 未知的技术栈
-- 新的问题领域
-
-学习成果自动保存为可复用技能，下次遇到类似任务直接应用。
-
-### 工具链（Tool Chains）
-
-#### 预置工具链
-
-**通用助手**:
-- `morning-routine`: 早晨例行（日程+邮件+新闻+天气）
-- `research-topic`: 研究主题（搜索+爬取+整理+保存）
-- `meeting-prep`: 会议准备（查找资料+创建笔记）
-- `weekly-review`: 周回顾（总结任务+事件+学习）
-
-**编程开发**:
-- `fix-bug-and-test`: 修复 bug 并测试
-- `create-feature-safe`: 安全创建功能（代码+测试+质量检查+提交）
-- `refactor-safe`: 安全重构（备份+重构+测试+质量对比）
-- `deploy-safe`: 安全部署（测试+构建+质量检查+部署）
-
-#### 自定义工具链
-
-用户可以创建自己的工具链，组合任意工具形成自动化流程。
-
-### 技能系统（Skills）
-
-#### 预置技能
-
-**通用助手技能**:
-- `daily-assistant`: 日常助理（早晨例行）
-- `research-assistant`: 研究助手（深度研究）
-- `meeting-prep`: 会议准备助手
-- `email-automation`: 邮件自动化
-- `web-automation`: 网页自动化
-- `knowledge-keeper`: 知识管理
-- `travel-planner`: 旅行规划
-
-**编程技能**:
-- `systematic-debugging`: 系统化调试
-- `test-driven-development`: 测试驱动开发
-- `code-review-assistant`: 代码审查
-- `refactoring-guide`: 重构指南
-- ... 24+ 编程技能
-
-#### 技能推荐
-
-AI 根据用户消息自动分析意图并推荐合适技能：
-- **意图分析**: 检测用户想做什么（personal_management, research, bug_fix 等）
-- **触发词匹配**: 关键词自动匹配技能
-- **上下文增强**: 结合当前状态和历史
-- **置信度评分**: 高置信度（>90%）自动加载
-
----
-
-## ⚙️ 配置指南
-
-### LLM 配置
-
-**位置**: `sidecar/llm-config.json`
-
-**Anthropic Claude**:
-```json
-{
-  "provider": "anthropic",
-  "anthropic": {
-    "apiKey": "sk-ant-...",
-    "model": "claude-sonnet-4-5"
-  }
-}
+```text
+登录后进入后台，帮我检查表单提交流程里有没有明显报错
 ```
 
-**OpenRouter**:
-```json
-{
-  "provider": "openrouter",
-  "openrouter": {
-    "apiKey": "sk-or-...",
-    "model": "anthropic/claude-sonnet-4.5"
-  }
-}
+### 个人效率与知识管理
+
+```text
+总结今天的重要邮件和日程安排
 ```
 
-### Google 集成（日历和邮件）
+```text
+把这次排障过程沉淀成一条可复用技能
+```
 
-1. 访问 [Google Cloud Console](https://console.cloud.google.com)
-2. 创建 OAuth 2.0 客户端 ID
-3. 配置环境变量：
+## 适合放到 GitHub 首页的价值主张
+
+如果用一句话概括 CoworkAny：
+
+> 它不是“一个会调用工具的模型”，而是“一个带桌面交互、安全治理、长期记忆和多服务编排能力的本地 AI 工作台”。
+
+这意味着它更适合展示给下面两类人：
+
+- 想找一个完整 Agent Product 参考实现的人
+- 想看桌面 AI、执行安全、任务恢复、MCP/Skills 如何组合成产品闭环的人
+
+## CoworkAny 相比 OpenClaw / Nanobot 的优势
+
+下面的对比不是“跑分”结论，而是基于本仓库当前设计与实现方向做的产品形态对比，重点看整体协作闭环。
+
+| 维度 | CoworkAny | OpenClaw | Nanobot |
+| --- | --- | --- | --- |
+| 产品形态 | `桌面应用 + 本地 Agent Runtime + 服务编排` | 更偏 `Agent / 技能 / 执行框架` | 更偏 `受限工作区中的本地 Agent/自动化` |
+| 主要交互 | 图形界面、任务时间线、设置、审批、工作区 | 以 Agent 机制和执行模型为核心 | 以本地执行和工作区限制为核心 |
+| 安全执行 | `Policy Engine + Effect 审批 + Shadow FS + UI 确认` | 强调审批、least privilege、执行治理 | 强调 host/workspace 边界与限制 |
+| 本地长期使用体验 | `强`，适合持续桌面协作 | 通常更偏“执行引擎”视角 | 通常更偏“本地代理”视角 |
+| 任务恢复 | `内建中断恢复、状态持久化、UI 可见` | 依赖具体运行框架设计 | 依赖宿主配置与运行约束 |
+| 技能体系 | `本地 Skills + GitHub 安装 + OpenClaw 兼容层` | Skills 概念成熟 | 以工作区/宿主限制与执行为主 |
+| 外部工具扩展 | `MCP Gateway + 内置工具 + Python 服务` | 取决于框架集成 | 取决于宿主工具模型 |
+| 浏览器能力 | `Playwright Bridge + browser-use-service` | 一般需要额外集成 | 一般需要额外集成 |
+| 记忆系统 | `Session Memory + Vault + RAG Service` | 取决于上层产品是否实现 | 通常不是核心卖点 |
+
+### 更直白地说，CoworkAny 的优势在这里
+
+#### 1. 它不是单纯的 Agent Runtime，而是完整桌面产品
+
+如果你想要的是“能长期挂在桌面上使用”的 AI 协作环境，而不是一次次从命令行重新进入上下文，CoworkAny 的方向更完整。
+
+#### 2. 它把执行能力和用户可见的审批体验接起来了
+
+很多系统在安全上是对的，但用户体验上是隐形的。CoworkAny 通过桌面端把审批、确认、时间线、恢复、状态可视化整合在一起，更适合真实日常使用。
+
+#### 3. 它把多类任务收进同一个工作台
+
+代码、浏览器、工作区、记忆、技能、MCP，不再是几个分散脚本或独立工具，而是统一走一套任务生命周期。
+
+#### 4. 它天然适合扩展成“持续协作者”
+
+因为它已经有：
+
+- 会话记忆
+- 长期知识 Vault
+- 自学习技能沉淀
+- Sidecar 中断恢复
+- 可独立编排的 Python 服务
+
+这比只提供“执行一次任务”的 Agent，更接近长期搭档。
+
+## 关键设计亮点
+
+<details>
+<summary><strong>1. Effect-Gated Execution</strong></summary>
+
+所有高风险副作用都应经过治理路径，而不是直接放给模型执行：
+
+- 文件写入
+- Shell 执行
+- 网络访问
+- 浏览器操作
+- 代码执行
+
+这样可以把“模型会不会乱来”变成“系统是否允许它继续”。
+
+</details>
+
+<details>
+<summary><strong>2. Desktop + Sidecar 解耦</strong></summary>
+
+前端 UI、Rust 宿主、Agent Runtime 分层清晰：
+
+- UI 负责展示与交互
+- Rust 负责系统桥接与策略
+- Sidecar 负责智能与执行编排
+
+这使得系统更容易演进，也更适合后续替换模型、扩展工具或接入更多服务。
+
+</details>
+
+<details>
+<summary><strong>3. OpenClaw Skills 兼容思路</strong></summary>
+
+CoworkAny 并不是另起炉灶做一套完全孤立的技能生态，而是保留了对 OpenClaw 风格 `SKILL.md` 的兼容能力，降低迁移和复用成本。
+
+</details>
+
+<details>
+<summary><strong>4. Memory + RAG + Workflow 闭环</strong></summary>
+
+不是只有“我记住了”，而是：
+
+- 会话里记住
+- 长期沉淀到 Vault
+- 可以语义搜索
+- 可以继续转化成技能或流程
+
+</details>
+
+## 开发命令
+
+### Desktop
 
 ```bash
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
+cd desktop
+npm run dev
+npm run build
+npm run test
+npm run test:e2e
 ```
 
-### 可选 API
+### Sidecar
 
-**天气查询**:
-- 注册 [OpenWeatherMap](https://openweathermap.org/api)
-- 设置 `OPENWEATHER_API_KEY`
-
-**新闻订阅**:
-- 注册 [NewsAPI](https://newsapi.org/)
-- 设置 `NEWS_API_KEY`
-
-### 工作空间配置
-
-**全局配置**: `sidecar/workspaces.json`
-**项目配置**: `<workspace>/.coworkany/`
-
-```
-.coworkany/
-├── skills/           # 项目技能
-├── mcp/              # MCP 服务器配置
-└── memory/           # 记忆和会话历史
+```bash
+cd sidecar
+bun run src/main.ts
+npm run typecheck
+npm run test:stable
+npm run test:all
 ```
 
----
+## 贡献与社区
 
-## 👨‍💻 开发指南
+如果你准备把这个仓库作为开源项目参与协作，先看这些文件：
 
-### 添加新的通用工具
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md)
+- [LICENSE](LICENSE)
 
-1. **创建工具文件** (`sidecar/src/tools/personal/myTool.ts`):
-```typescript
-export const myTool: ToolDefinition = {
-  name: 'my_tool',
-  description: 'Tool description',
-  effects: ['network:outbound'],
-  input_schema: { /* ... */ },
-  handler: async (args) => {
-    // 实现逻辑
-  },
-};
-```
+仓库现在也已经带上了：
 
-2. **注册工具** (`tools/personal/index.ts`):
-```typescript
-export { myTool } from './myTool';
-export const PERSONAL_TOOLS = [
-  // ... 其他工具
-  myTool,
-];
-```
+- Bug / Feature Issue 模板
+- Pull Request 模板
+- CI、打包、Release GitHub Actions 工作流
+- Dependabot 依赖更新配置
 
-3. **无需修改核心代码**！
-   - `ReactController` 自动识别新工具
-   - `SelfCorrectionEngine` 自动处理错误
-   - `VerificationEngine` 自动验证输出
+## 文档导航
 
-### 添加新技能
+- [技术方案总览](docs/TECHNICAL_DESIGN.md)
+- [中文用户指南](docs/USER_GUIDE_CN.md)
+- [发布说明](docs/RELEASING.md)
+- [macOS 分发说明](docs/macos-distribution.md)
+- [贡献指南](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
+- [行为准则](CODE_OF_CONDUCT.md)
+- [许可证](LICENSE)
 
-1. **创建技能目录** `.agent/skills/my-skill/`
+## 适合谁
 
-2. **编写 SKILL.md**:
-```markdown
----
-name: my-skill
-description: "Skill description"
-requires:
-  tools: ['tool1', 'tool2']
-  capabilities: ['network:outbound']
-triggers:
-  - "keyword1"
-  - "keyword2"
-userInvocable: true
----
+CoworkAny 更适合下面这些人：
 
-# My Skill
+- 想把 AI 作为桌面长期协作工具，而不是一次性问答工具
+- 需要同时处理代码、浏览器、文件、知识和个人效率任务
+- 希望执行能力强，但又不想牺牲审批、安全和可见性
+- 需要跨会话延续上下文，而不是每次都重新解释项目背景
 
-## Usage
-...
-```
+## 当前状态
 
-3. **扩展技能推荐器** (`skillRecommender.ts`):
-```typescript
-{
-  name: 'my-skill',
-  description: 'Skill description',
-  triggers: ['keyword1', 'keyword2'],
-  intents: ['my_intent_type'],
-  priority: 8,
-}
-```
+这是一个正在快速演进的桌面 Agent 项目。仓库里同时包含：
+
+- 主桌面应用
+- 本地 Agent Runtime
+- Python 辅助服务
+- 大量测试与实验性能力
+
+如果你是首次进入仓库，建议优先阅读：
+
+1. [README.md](README.md)
+2. [docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md)
+3. [docs/USER_GUIDE_CN.md](docs/USER_GUIDE_CN.md)
 
 ---
 
-## 📚 参考资源
-
-- [Tauri 文档](https://tauri.app/)
-- [Bun 文档](https://bun.sh/docs)
-- [Claude API 文档](https://docs.anthropic.com/)
-- [MCP 协议](https://modelcontextprotocol.io/)
-- [Playwright 文档](https://playwright.dev/)
-- [Google Calendar API](https://developers.google.com/calendar)
-- [Gmail API](https://developers.google.com/gmail)
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-### 贡献指南
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交变更 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
-
----
-
-## 📄 许可证
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
----
-
-## 🙏 致谢
-
-- [Anthropic](https://anthropic.com/) - Claude API
-- [Tauri](https://tauri.app/) - 跨平台框架
-- [OpenClaw](https://github.com/openclaw/openclaw) - 架构理念
-- [everything-claude-code](https://github.com/affaan-m/everything-claude-code) - 功能灵感
-
----
-
-**CoworkAny - 你的通用 AI 助手，让 AI 与你协作完成任何任务** 🚀
+**CoworkAny = Desktop Product + Governed Agent Runtime + Memory + Browser Automation + Extensible Skills/MCP**

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security reports
+    url: https://github.com/GiantClam/coworkany/blob/main/SECURITY.md
+    about: Please do not disclose vulnerabilities in public issues.

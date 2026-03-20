@@ -57,6 +57,7 @@ interface TaskEventStoreState {
 
     // Actions
     addEvent: (event: TaskEvent) => void;
+    addEvents: (events: TaskEvent[]) => void;
     addAuditEvent: (event: AuditEvent) => void;
     getSession: (taskId: string) => TaskSession | undefined;
     setActiveTask: (taskId: string | null) => void;
@@ -72,6 +73,8 @@ interface TaskEventStoreState {
     reset: () => void;
     hydrate: (snapshot: SessionsSnapshot) => void;
 }
+
+const sessionEventIds = new Map<string, Set<string>>();
 
 // ============================================================================
 // Create Empty Session
@@ -93,11 +96,72 @@ function createEmptySession(taskId: string): TaskSession {
     };
 }
 
-function persistStateSnapshot(sessions: Map<string, TaskSession>, activeTaskId: string | null): void {
+function createInterruptedFailureState(): NonNullable<TaskSession['failure']> {
+    return {
+        error: 'Task interrupted by app restart',
+        errorCode: 'INTERRUPTED',
+        recoverable: true,
+        suggestion: 'Resume the task to continue from the saved context.',
+    };
+}
+
+function getOrCreateEventIdSet(taskId: string, session?: TaskSession): Set<string> {
+    const existing = sessionEventIds.get(taskId);
+    if (existing) {
+        return existing;
+    }
+
+    const next = new Set(session?.events.map((event) => event.id) ?? []);
+    sessionEventIds.set(taskId, next);
+    return next;
+}
+
+function hasSeenEvent(taskId: string, eventId: string, session?: TaskSession): boolean {
+    return getOrCreateEventIdSet(taskId, session).has(eventId);
+}
+
+function rememberEvent(taskId: string, eventId: string, session?: TaskSession): void {
+    getOrCreateEventIdSet(taskId, session).add(eventId);
+}
+
+function deleteEventIndex(taskId: string): void {
+    sessionEventIds.delete(taskId);
+}
+
+const TRANSIENT_EVENT_TYPES = new Set<TaskEvent['type']>([
+    'TEXT_DELTA',
+    'TOKEN_USAGE',
+]);
+
+const HIGH_PRIORITY_PERSIST_EVENT_TYPES = new Set<TaskEvent['type']>([
+    'TASK_FINISHED',
+    'TASK_FAILED',
+    'TASK_SUSPENDED',
+    'TASK_CLARIFICATION_REQUIRED',
+    'TASK_HISTORY_CLEARED',
+    'EFFECT_APPROVED',
+    'EFFECT_DENIED',
+    'PATCH_APPLIED',
+    'PATCH_REJECTED',
+]);
+
+function shouldPersistEvent(event: TaskEvent): boolean {
+    return !TRANSIENT_EVENT_TYPES.has(event.type);
+}
+
+function getPersistDelayMs(event: TaskEvent): number {
+    return HIGH_PRIORITY_PERSIST_EVENT_TYPES.has(event.type) ? 180 : 1200;
+}
+
+function persistStateSnapshot(
+    sessions: Map<string, TaskSession>,
+    activeTaskId: string | null,
+    delayMs?: number
+): void {
     schedulePersist({
         sessions: Array.from(sessions.values()),
         activeTaskId,
-    });
+    }, delayMs === undefined ? undefined : { delayMs });
 }
 
 // ============================================================================
@@ -105,11 +169,6 @@ function persistStateSnapshot(sessions: Map<string, TaskSession>, activeTaskId: 
 // ============================================================================
 
 function applyEvent(session: TaskSession, event: TaskEvent): TaskSession {
-    // Prevent duplicate events
-    if (session.events.some(e => e.id === event.id)) {
-        return session;
-    }
-
     // Add event to session and update timestamp
     let updated: TaskSession = {
         ...session,
@@ -149,6 +208,41 @@ function applyEvent(session: TaskSession, event: TaskEvent): TaskSession {
     return updated;
 }
 
+function applyEventsBatch(
+    sessionsInput: Map<string, TaskSession>,
+    activeTaskId: string | null,
+    events: TaskEvent[]
+): { sessions: Map<string, TaskSession>; changed: boolean } {
+    const sessions = new Map(sessionsInput);
+    let changed = false;
+    let persistDelayMs: number | undefined;
+    let needsPersist = false;
+
+    for (const event of events) {
+        const existing = sessions.get(event.taskId) ?? createEmptySession(event.taskId);
+        if (hasSeenEvent(event.taskId, event.id, existing)) {
+            continue;
+        }
+
+        const updated = applyEvent(existing, event);
+        sessions.set(event.taskId, updated);
+        rememberEvent(event.taskId, event.id, updated);
+        changed = true;
+
+        if (shouldPersistEvent(event)) {
+            const nextDelayMs = getPersistDelayMs(event);
+            persistDelayMs = persistDelayMs === undefined ? nextDelayMs : Math.min(persistDelayMs, nextDelayMs);
+            needsPersist = true;
+        }
+    }
+
+    if (changed && needsPersist) {
+        persistStateSnapshot(sessions, activeTaskId, persistDelayMs);
+    }
+
+    return { sessions, changed };
+}
+
 // ============================================================================
 // Token Cost Estimation
 // ============================================================================
@@ -186,16 +280,25 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
 
         addEvent: (event: TaskEvent) => {
             set((state) => {
-                const sessions = new Map(state.sessions);
-                const existing = sessions.get(event.taskId) ?? createEmptySession(event.taskId);
-                const updated = applyEvent(existing, event);
-                sessions.set(event.taskId, updated);
-                const snapshot: SessionsSnapshot = {
-                    sessions: Array.from(sessions.values()),
-                    activeTaskId: state.activeTaskId,
-                };
-                schedulePersist(snapshot);
-                return { sessions };
+                const result = applyEventsBatch(state.sessions, state.activeTaskId, [event]);
+                if (!result.changed) {
+                    return { sessions: state.sessions };
+                }
+                return { sessions: result.sessions };
+            });
+        },
+
+        addEvents: (events: TaskEvent[]) => {
+            if (events.length === 0) {
+                return;
+            }
+
+            set((state) => {
+                const result = applyEventsBatch(state.sessions, state.activeTaskId, events);
+                if (!result.changed) {
+                    return { sessions: state.sessions };
+                }
+                return { sessions: result.sessions };
             });
         },
 
@@ -229,6 +332,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                     createdAt: now,
                     updatedAt: now,
                 });
+                getOrCreateEventIdSet(taskId);
                 persistStateSnapshot(sessions, taskId);
                 return {
                     sessions,
@@ -260,6 +364,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
 
                 const sessions = new Map(state.sessions);
                 sessions.set(taskId, session);
+                getOrCreateEventIdSet(taskId, session);
                 const activeTaskId = makeActive ? taskId : state.activeTaskId;
                 persistStateSnapshot(sessions, activeTaskId);
                 return { sessions, activeTaskId };
@@ -284,8 +389,10 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
 
                 if (draftTaskId !== nextTaskId) {
                     sessions.delete(draftTaskId);
+                    deleteEventIndex(draftTaskId);
                 }
                 sessions.set(nextTaskId, promoted);
+                getOrCreateEventIdSet(nextTaskId, promoted);
                 persistStateSnapshot(sessions, nextTaskId);
                 return {
                     sessions,
@@ -319,8 +426,14 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                             type: approved ? 'EFFECT_APPROVED' : 'EFFECT_DENIED',
                             payload: { response: effectResponse },
                         };
+                        if (hasSeenEvent(taskId, event.id, session)) {
+                            return { pendingResponses };
+                        }
                         const sessions = new Map(state.sessions);
-                        sessions.set(taskId, applyEvent(session, event));
+                        const updated = applyEvent(session, event);
+                        sessions.set(taskId, updated);
+                        rememberEvent(taskId, event.id, updated);
+                        persistStateSnapshot(sessions, state.activeTaskId, 180);
                         return { sessions, pendingResponses };
                     }
                 }
@@ -343,8 +456,14 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                                 reason: payload.error,
                             },
                         };
+                        if (hasSeenEvent(taskId, event.id, session)) {
+                            return { pendingResponses };
+                        }
                         const sessions = new Map(state.sessions);
-                        sessions.set(taskId, applyEvent(session, event));
+                        const updated = applyEvent(session, event);
+                        sessions.set(taskId, updated);
+                        rememberEvent(taskId, event.id, updated);
+                        persistStateSnapshot(sessions, state.activeTaskId, 180);
                         return { sessions, pendingResponses };
                     }
                 }
@@ -354,6 +473,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
         },
 
         reset: () => {
+            sessionEventIds.clear();
             set({
                 sessions: new Map(),
                 activeTaskId: null,
@@ -364,14 +484,21 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
         },
 
         hydrate: (snapshot: SessionsSnapshot) => {
+            sessionEventIds.clear();
             const map = new Map<string, TaskSession>();
             for (const session of snapshot.sessions) {
                 // Fix stale 'running' status from previous sessions
                 // When app restarts, any 'running' task is actually interrupted/failed
                 const cleanedSession = session.status === 'running' && !session.suspension
-                    ? { ...session, status: 'failed' as TaskStatus, summary: 'Task interrupted by app restart' }
+                    ? {
+                        ...session,
+                        status: 'failed' as TaskStatus,
+                        summary: 'Task interrupted by app restart. Resume the task to continue from the saved context.',
+                        failure: session.failure ?? createInterruptedFailureState(),
+                    }
                     : session;
                 map.set(cleanedSession.taskId, cleanedSession);
+                getOrCreateEventIdSet(cleanedSession.taskId, cleanedSession);
             }
             let activeTaskId = snapshot.activeTaskId ?? null;
             if (!activeTaskId && snapshot.sessions.length > 0) {

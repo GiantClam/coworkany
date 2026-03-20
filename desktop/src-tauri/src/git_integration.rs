@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 
-
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GitCommit {
     pub hash: String,
@@ -70,7 +68,7 @@ impl GitManager {
             args.push(file);
         }
         if files.is_empty() {
-             args.push(".");
+            args.push(".");
         }
         self.run_git(path, &args)?;
         Ok(())
@@ -100,8 +98,16 @@ impl GitManager {
     pub fn log(&self, path: &Path, limit: usize) -> Result<Vec<GitCommit>, String> {
         let limit_str = format!("-{}", limit);
         // format: hash|author|date|message
-        let output = self.run_git(path, &["log", &limit_str, "--pretty=format:%h|%an|%ad|%s", "--date=iso"])?;
-        
+        let output = self.run_git(
+            path,
+            &[
+                "log",
+                &limit_str,
+                "--pretty=format:%h|%an|%ad|%s",
+                "--date=iso",
+            ],
+        )?;
+
         let mut commits = Vec::new();
         for line in output.lines() {
             let parts: Vec<&str> = line.split('|').collect();
@@ -137,33 +143,68 @@ impl GitManager {
 pub async fn git_status(cwd: String) -> Result<GitResult<Vec<GitStatus>>, String> {
     let manager = GitManager::new();
     match manager.status(Path::new(&cwd)) {
-        Ok(data) => Ok(GitResult { success: true, data: Some(data), error: None }),
-        Err(e) => Ok(GitResult { success: false, data: None, error: Some(e) }),
+        Ok(data) => Ok(GitResult {
+            success: true,
+            data: Some(data),
+            error: None,
+        }),
+        Err(e) => Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(e),
+        }),
     }
 }
 
 #[tauri::command]
-pub async fn git_commit(cwd: String, message: String, files: Option<Vec<String>>) -> Result<GitResult<String>, String> {
+pub async fn git_commit(
+    cwd: String,
+    message: String,
+    files: Option<Vec<String>>,
+) -> Result<GitResult<String>, String> {
     let manager = GitManager::new();
     let path = Path::new(&cwd);
-    
+
     // Auto add files or all
     if let Err(e) = manager.add(path, files.unwrap_or_default()) {
-         return Ok(GitResult { success: false, data: None, error: Some(format!("Add failed: {}", e)) });
+        return Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(format!("Add failed: {}", e)),
+        });
     }
 
     match manager.commit(path, &message) {
-        Ok(hash) => Ok(GitResult { success: true, data: Some(hash), error: None }),
-        Err(e) => Ok(GitResult { success: false, data: None, error: Some(e) }),
+        Ok(hash) => Ok(GitResult {
+            success: true,
+            data: Some(hash),
+            error: None,
+        }),
+        Err(e) => Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(e),
+        }),
     }
 }
 
 #[tauri::command]
-pub async fn git_log(cwd: String, limit: Option<usize>) -> Result<GitResult<Vec<GitCommit>>, String> {
+pub async fn git_log(
+    cwd: String,
+    limit: Option<usize>,
+) -> Result<GitResult<Vec<GitCommit>>, String> {
     let manager = GitManager::new();
     match manager.log(Path::new(&cwd), limit.unwrap_or(10)) {
-        Ok(data) => Ok(GitResult { success: true, data: Some(data), error: None }),
-        Err(e) => Ok(GitResult { success: false, data: None, error: Some(e) }),
+        Ok(data) => Ok(GitResult {
+            success: true,
+            data: Some(data),
+            error: None,
+        }),
+        Err(e) => Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(e),
+        }),
     }
 }
 
@@ -175,7 +216,11 @@ pub async fn git_checkpoint(cwd: String, branch_name: String) -> Result<GitResul
     // Check if git is initialized
     if !path.join(".git").exists() {
         if let Err(e) = manager.init(path) {
-             return Ok(GitResult { success: false, data: None, error: Some(format!("Init failed: {}", e)) });
+            return Ok(GitResult {
+                success: false,
+                data: None,
+                error: Some(format!("Init failed: {}", e)),
+            });
         }
     }
 
@@ -183,15 +228,23 @@ pub async fn git_checkpoint(cwd: String, branch_name: String) -> Result<GitResul
     // Check status first
     if let Ok(status) = manager.status(path) {
         if !status.is_empty() {
-             let _ = manager.add(path, vec![]); // add .
-             let _ = manager.commit(path, "Auto-save before checkpoint");
+            let _ = manager.add(path, vec![]); // add .
+            let _ = manager.commit(path, "Auto-save before checkpoint");
         }
     }
 
     // Pass 2: Create new branch
     match manager.create_branch(path, &branch_name) {
-        Ok(_) => Ok(GitResult { success: true, data: Some(format!("Switched to {}", branch_name)), error: None }),
-        Err(e) => Ok(GitResult { success: false, data: None, error: Some(e) }),
+        Ok(_) => Ok(GitResult {
+            success: true,
+            data: Some(format!("Switched to {}", branch_name)),
+            error: None,
+        }),
+        Err(e) => Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(e),
+        }),
     }
 }
 
@@ -202,11 +255,23 @@ pub async fn git_rollback(cwd: String) -> Result<GitResult<String>, String> {
 
     // Hard reset and clean
     if let Err(e) = manager.reset_hard(path) {
-        return Ok(GitResult { success: false, data: None, error: Some(format!("Reset failed: {}", e)) });
+        return Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(format!("Reset failed: {}", e)),
+        });
     }
     if let Err(e) = manager.clean_fd(path) {
-        return Ok(GitResult { success: false, data: None, error: Some(format!("Clean failed: {}", e)) });
+        return Ok(GitResult {
+            success: false,
+            data: None,
+            error: Some(format!("Clean failed: {}", e)),
+        });
     }
 
-    Ok(GitResult { success: true, data: Some("Rollback successful".to_string()), error: None })
+    Ok(GitResult {
+        success: true,
+        data: Some("Rollback successful".to_string()),
+        error: None,
+    })
 }

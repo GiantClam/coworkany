@@ -10,6 +10,7 @@
  */
 
 import { isTauri } from './tauri';
+import type { VoiceProviderMode, VoiceSettings } from '../types';
 
 // ============================================================================
 // Tauri Store abstraction
@@ -176,6 +177,10 @@ export interface ShortcutConfig {
     showShortcuts: string;
 }
 
+export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+    providerMode: 'auto',
+};
+
 export const DEFAULT_SHORTCUTS: ShortcutConfig = {
     toggleWindow: 'Alt+Space',
     newTask: 'Ctrl+N',
@@ -193,6 +198,28 @@ export async function getShortcuts(): Promise<ShortcutConfig> {
 /** Save the shortcut configuration */
 export async function saveShortcuts(shortcuts: ShortcutConfig): Promise<void> {
     return saveConfig('shortcuts', shortcuts);
+}
+
+// ============================================================================
+// Voice Settings
+// ============================================================================
+
+/** Get the current voice provider preference */
+export async function getVoiceSettings(): Promise<VoiceSettings> {
+    const stored = await getConfig<VoiceSettings>('voice');
+    const providerMode = stored?.providerMode;
+    return {
+        providerMode: providerMode === 'system' || providerMode === 'custom' ? providerMode : 'auto',
+    };
+}
+
+/** Save the current voice provider preference */
+export async function saveVoiceSettings(settings: VoiceSettings): Promise<void> {
+    const providerMode: VoiceProviderMode =
+        settings.providerMode === 'system' || settings.providerMode === 'custom'
+            ? settings.providerMode
+            : 'auto';
+    await saveConfig('voice', { providerMode });
 }
 
 // ============================================================================

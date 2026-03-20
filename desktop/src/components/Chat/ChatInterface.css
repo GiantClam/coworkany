@@ -12,8 +12,8 @@
         radial-gradient(680px 260px at 0% 100%, rgba(249, 115, 22, 0.06), transparent 62%),
         linear-gradient(165deg, rgba(9, 18, 38, 0.94), rgba(4, 11, 27, 0.98));
     border: 1px solid rgba(96, 165, 250, 0.14);
-    backdrop-filter: blur(14px) saturate(125%);
-    -webkit-backdrop-filter: blur(14px) saturate(125%);
+    backdrop-filter: var(--surface-blur-strong);
+    -webkit-backdrop-filter: var(--surface-blur-strong);
     box-shadow:
         0 18px 44px rgba(2, 10, 12, 0.34),
         inset 0 1px 0 rgba(239, 246, 255, 0.05);
@@ -38,8 +38,8 @@
     background:
         linear-gradient(180deg, rgba(9, 20, 43, 0.9), rgba(6, 15, 34, 0.74));
     border-bottom: 1px solid rgba(96, 165, 250, 0.12);
-    backdrop-filter: blur(14px) saturate(130%);
-    -webkit-backdrop-filter: blur(14px) saturate(130%);
+    backdrop-filter: var(--surface-blur-medium);
+    -webkit-backdrop-filter: var(--surface-blur-medium);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -302,6 +302,39 @@
     color: #ffd6df;
     font-size: 13px;
     text-align: center;
+}
+
+.chat-recovery-banner {
+    margin: 14px 20px 0;
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(251, 191, 36, 0.26);
+    background:
+        linear-gradient(135deg, rgba(120, 53, 15, 0.34), rgba(67, 20, 7, 0.2)),
+        rgba(18, 26, 42, 0.72);
+    color: #fff6dc;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.chat-recovery-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.chat-recovery-copy strong {
+    font-size: 13px;
+    color: #fff8e8;
+}
+
+.chat-recovery-copy span {
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(255, 243, 214, 0.82);
 }
 
 /* Timeline */
@@ -623,6 +656,12 @@
 
     .chat-header-chip {
         width: 100%;
+    }
+
+    .chat-recovery-banner {
+        margin: 12px 14px 0;
+        flex-direction: column;
+        align-items: flex-start;
     }
 
     .input-meta-row {

@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './Sidebar.css';
-import { useTaskEventStore, useActiveSession } from '../../stores/useTaskEventStore';
+import { useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useWorkspace } from '../../hooks/useWorkspace';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '../../lib/tauri';
+import type { TaskSession } from '../../types';
 
 export type SidebarTab = 'chat' | 'tasks';
 
@@ -16,6 +17,33 @@ interface SidebarProps {
     activeTab: SidebarTab;
     onTabChange: (tab: SidebarTab) => void;
     onOpenSettings?: () => void;
+}
+
+type SidebarSessionSummary = Pick<TaskSession, 'taskId' | 'title' | 'status' | 'workspacePath' | 'createdAt'>;
+
+function areSidebarSessionSummariesEqual(
+    previous: SidebarSessionSummary[],
+    next: SidebarSessionSummary[]
+): boolean {
+    if (previous.length !== next.length) {
+        return false;
+    }
+
+    for (let index = 0; index < previous.length; index += 1) {
+        const prevItem = previous[index];
+        const nextItem = next[index];
+        if (
+            prevItem.taskId !== nextItem.taskId ||
+            prevItem.title !== nextItem.title ||
+            prevItem.status !== nextItem.status ||
+            prevItem.workspacePath !== nextItem.workspacePath ||
+            prevItem.createdAt !== nextItem.createdAt
+        ) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 const ChatIcon = () => (
@@ -78,8 +106,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
     const { t } = useTranslation();
     const sidecarConnected = useTaskEventStore((state) => state.sidecarConnected);
     const sessionsHydrating = false;
-    const sessions = useTaskEventStore((state) => state.sessions);
-    const activeSession = useActiveSession();
+    const sessionSummaries = useTaskEventStore(
+        (state) => Array.from(state.sessions.values()).map((session) => ({
+            taskId: session.taskId,
+            title: session.title,
+            status: session.status,
+            workspacePath: session.workspacePath,
+            createdAt: session.createdAt,
+        })),
+        areSidebarSessionSummariesEqual
+    );
+    const activeTaskId = useTaskEventStore((state) => state.activeTaskId);
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
     const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
     const activeSessionRef = useRef<HTMLDivElement | null>(null);
@@ -110,7 +147,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
         if (activeSessionRef.current) {
             activeSessionRef.current.scrollIntoView({ block: 'nearest' });
         }
-    }, [activeSession?.taskId]);
+    }, [activeTaskId]);
+
+    const sessionsByWorkspace = React.useMemo(() => {
+        const grouped = new Map<string, SidebarSessionSummary[]>();
+        for (const session of sessionSummaries) {
+            const normalizedWorkspacePath = normalizePath(session.workspacePath);
+            if (!normalizedWorkspacePath) {
+                continue;
+            }
+
+            const bucket = grouped.get(normalizedWorkspacePath) ?? [];
+            bucket.push(session);
+            grouped.set(normalizedWorkspacePath, bucket);
+        }
+
+        for (const bucket of grouped.values()) {
+            bucket.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        }
+
+        return grouped;
+    }, [sessionSummaries]);
 
     const handleCreateWorkspace = async () => {
         const result = await createWorkspace(newWorkspaceName.trim());
@@ -143,16 +200,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
         });
     };
 
-    const getWorkspaceSessions = (workspacePath: string) => {
-        const normalizedWorkspacePath = normalizePath(workspacePath);
-        if (!normalizedWorkspacePath) {
-            return [];
-        }
-
-        return Array.from(sessions.values())
-            .filter((session) => normalizePath(session.workspacePath) === normalizedWorkspacePath)
-            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    };
+    const getWorkspaceSessions = (workspacePath: string) => sessionsByWorkspace.get(normalizePath(workspacePath)) ?? [];
 
     const handleCloseWindow = async () => {
         if (!isTauri()) return;
@@ -298,8 +346,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, onOpen
                                                 workspaceSessions.map((session) => (
                                                     <div
                                                         key={session.taskId}
-                                                        className={`session-item ${session.taskId === activeSession?.taskId ? 'active' : ''} ${session.status === 'running' ? 'running' : ''}`}
-                                                        ref={session.taskId === activeSession?.taskId ? activeSessionRef : undefined}
+                                                        className={`session-item ${session.taskId === activeTaskId ? 'active' : ''} ${session.status === 'running' ? 'running' : ''}`}
+                                                        ref={session.taskId === activeTaskId ? activeSessionRef : undefined}
                                                         onClick={() => setActiveTask(session.taskId)}
                                                         role="button"
                                                         tabIndex={0}

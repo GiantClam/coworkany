@@ -19,7 +19,7 @@ import { getPendingTaskStatus } from './pendingTaskStatus';
 // Main Timeline Component
 // ============================================================================
 
-export const Timeline: React.FC<{ session: TaskSession }> = ({ session }) => {
+const TimelineComponent: React.FC<{ session: TaskSession }> = ({ session }) => {
     const { t } = useTranslation();
     const [showFullHistory, setShowFullHistory] = React.useState(false);
     const shouldCollapseHistory = !IS_STARTUP_BASELINE && !showFullHistory && session.events.length > 320;
@@ -128,3 +128,7 @@ export const Timeline: React.FC<{ session: TaskSession }> = ({ session }) => {
         </div>
     );
 };
+
+export const Timeline = React.memo(TimelineComponent, (prevProps, nextProps) => prevProps.session === nextProps.session);
+
+Timeline.displayName = 'Timeline';

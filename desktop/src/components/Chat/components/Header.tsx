@@ -7,22 +7,11 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 
-interface LlmProfile {
-    id: string;
-    name: string;
-    provider: string;
-}
-
-interface LlmConfig {
-    profiles?: LlmProfile[];
-    activeProfileId?: string;
-}
-
 interface HeaderProps {
     title: string;
     status: 'idle' | 'running' | 'finished' | 'failed';
     statusLabel: string;
-    llmConfig: LlmConfig;
+    modelName: string;
     enabledSkillsCount: number;
     enabledToolpacksCount: number;
     isClearing: boolean;
@@ -58,7 +47,7 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     title,
     status,
     statusLabel,
-    llmConfig,
+    modelName,
     enabledSkillsCount,
     enabledToolpacksCount,
     isClearing,
@@ -76,8 +65,6 @@ const HeaderComponent: React.FC<HeaderProps> = ({
 }) => {
     const { t } = useTranslation();
 
-    const activeProfile = llmConfig.profiles?.find((profile) => profile.id === llmConfig.activeProfileId);
-    const modelName = activeProfile ? activeProfile.name : t('chat.noProfiles');
     const displayTitle = abbreviateTitle(title);
     const isStatusActionDisabled = !isSpeaking && status !== 'running';
     const statusActionHint = isSpeaking
@@ -185,14 +172,13 @@ const arePropsEqual = (prevProps: HeaderProps, nextProps: HeaderProps): boolean 
         prevProps.title === nextProps.title &&
         prevProps.status === nextProps.status &&
         prevProps.statusLabel === nextProps.statusLabel &&
+        prevProps.modelName === nextProps.modelName &&
         prevProps.enabledSkillsCount === nextProps.enabledSkillsCount &&
         prevProps.enabledToolpacksCount === nextProps.enabledToolpacksCount &&
         prevProps.isClearing === nextProps.isClearing &&
         prevProps.isCancelling === nextProps.isCancelling &&
         prevProps.isSpeaking === nextProps.isSpeaking &&
-        prevProps.isStoppingVoice === nextProps.isStoppingVoice &&
-        prevProps.llmConfig.activeProfileId === nextProps.llmConfig.activeProfileId &&
-        JSON.stringify(prevProps.llmConfig.profiles) === JSON.stringify(nextProps.llmConfig.profiles)
+        prevProps.isStoppingVoice === nextProps.isStoppingVoice
     );
 };
 

@@ -11,6 +11,10 @@ export type TaskRuntimeRecoveryAction =
         suspension: PersistedTaskSuspension;
     }
     | {
+        type: 'restore_interrupted';
+        record: PersistedTaskRuntimeRecord;
+    }
+    | {
         type: 'interrupt_running';
         record: PersistedTaskRuntimeRecord;
         failure: TaskFailedPayload;
@@ -21,7 +25,7 @@ export function createRestartInterruptedFailure(): TaskFailedPayload {
         error: 'Task interrupted by sidecar restart',
         errorCode: 'INTERRUPTED',
         recoverable: true,
-        suggestion: 'Send a follow-up message to continue from the saved context.',
+        suggestion: 'Resume the task to continue from the saved context.',
     };
 }
 
@@ -36,6 +40,13 @@ export function planTaskRuntimeRecovery(
                 ...record.suspension,
                 canAutoResume: false,
             },
+        };
+    }
+
+    if (record.status === 'interrupted') {
+        return {
+            type: 'restore_interrupted',
+            record,
         };
     }
 
