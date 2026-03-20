@@ -33,7 +33,7 @@
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
     "@modelcontextprotocol/server-memory": "^2026.1.26",
     "ai": "^6.0.103",
-    "express": "^4.22.1",
+    "express": "^5.2.1",
     "googleapis": "^133.0.0",
     "playwright": "^1.50.0",
     "yaml": "^2.8.2",
