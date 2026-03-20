@@ -60,7 +60,7 @@ jobs:
         run: bun run scripts/release-readiness.ts --build-desktop
 
       - name: Upload release readiness report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coworkany-release-readiness-${{ env.RELEASE_TAG }}
           path: artifacts/release-readiness/**
@@ -164,7 +164,7 @@ jobs:
             desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
 
       - name: Upload release desktop bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coworkany-release-${{ env.RELEASE_TAG }}-${{ matrix.artifact_name }}
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
