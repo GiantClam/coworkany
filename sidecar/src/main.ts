@@ -102,9 +102,9 @@ import { runPostEditHooks, formatHookResults } from './hooks/codeQualityHooks';
 import { STANDARD_TOOLS, ToolDefinition } from './tools/standard';
 import { STUB_TOOLS } from './tools/stubs';
 import { globalToolRegistry } from './tools/registry';
-import { MCPGateway } from './mcp/gateway';
+import { MCPGateway, type McpSessionIsolationPolicy } from './mcp/gateway';
 import { PolicyBridge } from './bridges';
-import { setSearchConfig, webSearchTool, type SearchConfig, type SearchProvider } from './tools/websearch';
+import { getSearchConfig, performSearch, setSearchConfig, webSearchTool, type SearchConfig, type SearchProvider } from './tools/websearch';
 import { BUILTIN_TOOLS, readTaskPlanHead, countIncompletePlanSteps } from './tools/builtin';
 import {
     voiceSpeakTool,
@@ -124,6 +124,8 @@ import { DATABASE_TOOLS } from './tools/database';
 import { createAppManagementTools } from './tools/appManagement';
 import { xiaohongshuPostTool } from './tools/xiaohongshuPost';
 import { BrowserService } from './services/browserService';
+import { getCalendarManager } from './integrations/calendar/calendarManager';
+import { getEmailManager } from './integrations/email/emailManager';
 import { CODE_EXECUTION_TOOLS } from './tools/codeExecution';
 import { KNOWLEDGE_TOOLS } from './agent/knowledgeUpdater';
 import { executeJavaScriptTool, executePythonTool } from './tools/codeExecution';
@@ -135,6 +137,7 @@ import {
 } from './execution/runtime';
 import { ExecutionResultReporter } from './execution/resultReporter';
 import { ExecutionSession } from './execution/session';
+import { openclawCompat } from './claude_skills/openclawCompat';
 import {
     TaskCancellationRegistry,
     TaskCancelledError,
@@ -149,12 +152,16 @@ import {
 import { planTaskRuntimeRecovery } from './execution/taskRuntimeRecovery';
 import {
     TaskEventBus,
+    type TaskCheckpointReachedPayload,
     type TaskFailedPayload,
     type TaskFinishedPayload,
+    type TaskPlanReadyPayload,
+    type TaskResearchUpdatedPayload,
     type TaskResumedPayload,
     type TaskStartedPayload,
     type TaskSuspendedPayload,
     type TextDeltaPayload,
+    type TaskUserActionRequiredPayload,
 } from './execution/taskEventBus';
 import { DirectiveManager } from './agent/directives/directiveManager';
 import {
@@ -172,6 +179,7 @@ import {
 import {
     buildScheduledTaskCompletionMessage,
     buildScheduledTaskFailureMessage,
+    buildScheduledTaskStartedMessage,
     buildScheduledTaskSpokenText,
     cleanScheduledTaskResultText,
 } from './scheduling/scheduledTaskPresentation';
@@ -179,6 +187,7 @@ import {
     buildExecutionQuery,
     reduceWorkResult,
 } from './orchestration/workRequestAnalyzer';
+import { snapshotFrozenWorkRequest } from './orchestration/workRequestSnapshot';
 import { WorkRequestStore } from './orchestration/workRequestStore';
 import { type FrozenWorkRequest } from './orchestration/workRequestSchema';
 import {
@@ -186,13 +195,23 @@ import {
     shouldUsePlanningFiles,
 } from './orchestration/planningFiles';
 import {
+    buildBlockingUserActionMessage,
+    buildPlanUpdatedPayload,
+    buildResearchUpdatedPayload,
+    buildWorkRequestPlanSummary,
     buildClarificationMessage,
     createFrozenWorkRequestFromText,
+    refreezePreparedWorkRequestForResearch,
+    getBlockingCheckpoint,
+    getBlockingUserAction,
+    markWorkRequestExecutionResumed,
     getScheduledTaskExecutionQuery,
     markWorkRequestExecutionCompleted,
     markWorkRequestExecutionFailed,
     markWorkRequestExecutionStarted,
+    markWorkRequestExecutionSuspended,
     prepareWorkRequestContext,
+    type PreparedWorkRequestContext,
 } from './orchestration/workRequestRuntime';
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
 import { AUTONOMOUS_LEARNING_PROTOCOL } from './data/prompts/autonomousLearning';
@@ -268,7 +287,25 @@ function emit(message: OutputMessage): void {
             postLearningManager.handleEvent(message as any);
         }
 
-        // Clear current executing task ID when task finishes or fails
+        if (message.type === 'TASK_STATUS') {
+            const status = (message as any).payload?.status;
+            if (status === 'running') {
+                currentExecutingTaskId = (message as any).taskId;
+            }
+            if (status === 'running' || status === 'idle') {
+                syncTaskRuntimeStatusFromEvent((message as any).taskId, status);
+            }
+            if (status === 'idle' || status === 'finished' || status === 'failed') {
+                if (currentExecutingTaskId === (message as any).taskId) {
+                    currentExecutingTaskId = undefined;
+                }
+            }
+        }
+
+        if (message.type === 'TASK_RESUMED') {
+            currentExecutingTaskId = (message as any).taskId;
+        }
+
         if (message.type === 'TASK_FINISHED' || message.type === 'TASK_FAILED') {
             if (currentExecutingTaskId === (message as any).taskId) {
                 currentExecutingTaskId = undefined;
@@ -443,6 +480,7 @@ type TaskRuntimeMeta = {
     suspension?: PersistedTaskSuspension;
 };
 const taskRuntimeMeta = new Map<string, TaskRuntimeMeta>();
+const activePreparedWorkRequests = new Map<string, PreparedWorkRequestContext>();
 const taskEventBus = new TaskEventBus({
     emit,
 });
@@ -459,7 +497,159 @@ const createTextDeltaEvent = taskEventBus.textDelta.bind(taskEventBus);
 const createThinkingDeltaEvent = taskEventBus.thinkingDelta.bind(taskEventBus);
 const createTaskSuspendedEvent = taskEventBus.suspended.bind(taskEventBus);
 const createTaskResumedEvent = taskEventBus.resumed.bind(taskEventBus);
+const createTaskPlanReadyEvent = taskEventBus.planReady.bind(taskEventBus);
+const createPlanUpdatedEvent = taskEventBus.planUpdated.bind(taskEventBus);
+const createTaskResearchUpdatedEvent = taskEventBus.researchUpdated.bind(taskEventBus);
+const createTaskContractReopenedEvent = taskEventBus.contractReopened.bind(taskEventBus);
+const createTaskCheckpointReachedEvent = taskEventBus.checkpointReached.bind(taskEventBus);
+const createTaskUserActionRequiredEvent = taskEventBus.userActionRequired.bind(taskEventBus);
 const artifactTelemetryPath = path.join(process.cwd(), '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl');
+
+function buildTaskPlanReadyPayload(frozenWorkRequest: FrozenWorkRequest): TaskPlanReadyPayload {
+    return {
+        summary: buildWorkRequestPlanSummary(frozenWorkRequest),
+        deliverables: frozenWorkRequest.deliverables ?? [],
+        checkpoints: frozenWorkRequest.checkpoints ?? [],
+        userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
+        hitlPolicy: frozenWorkRequest.hitlPolicy,
+        runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
+        missingInfo: frozenWorkRequest.missingInfo ?? [],
+        defaultingPolicy: frozenWorkRequest.defaultingPolicy,
+        resumeStrategy: frozenWorkRequest.resumeStrategy,
+    };
+}
+
+function buildTaskResearchUpdatedPayload(frozenWorkRequest: FrozenWorkRequest): TaskResearchUpdatedPayload {
+    return buildResearchUpdatedPayload(frozenWorkRequest);
+}
+
+async function resolveWebResearch(query: string): Promise<{
+    success: boolean;
+    summary: string;
+    resultCount?: number;
+    provider?: string;
+    error?: string;
+}> {
+    const response = await performSearch(query, 5, getSearchConfig());
+    if (response.error) {
+        return {
+            success: false,
+            summary: `Web research failed for "${query}": ${response.error}`,
+            provider: response.provider,
+            error: response.error,
+        };
+    }
+
+    const topResults = response.results.slice(0, 3).map((result) => result.title).join(' | ');
+    return {
+        success: true,
+        summary: `Web research found ${response.results.length} result(s) via ${response.provider}${topResults ? `: ${topResults}` : ''}`,
+        resultCount: response.results.length,
+        provider: response.provider,
+    };
+}
+
+async function resolveConnectedAppResearch(input: {
+    workspacePath: string;
+    sourceText: string;
+    objective: string;
+}): Promise<{
+    success: boolean;
+    summary: string;
+    connectedApps: string[];
+    error?: string;
+}> {
+    const connectedApps: string[] = [];
+    const details: string[] = [];
+    const combined = `${input.sourceText}\n${input.objective}`;
+
+    if (/(calendar|日历|schedule|会议)/i.test(combined)) {
+        const calendarManager = getCalendarManager(input.workspacePath);
+        const configured = calendarManager.isConfigured();
+        details.push(`calendar=${configured ? `configured:${calendarManager.getProviderName()}` : 'not_configured'}`);
+        if (configured) {
+            connectedApps.push(`calendar:${calendarManager.getProviderName()}`);
+        }
+    }
+
+    if (/(email|邮件|gmail|inbox|邮箱)/i.test(combined)) {
+        const emailManager = getEmailManager(input.workspacePath);
+        const configured = emailManager.isConfigured();
+        details.push(`email=${configured ? `configured:${emailManager.getProviderName()}` : 'not_configured'}`);
+        if (configured) {
+            connectedApps.push(`email:${emailManager.getProviderName()}`);
+        }
+    }
+
+    if (/(browser|网页登录|网站|页面|x.com|xiaohongshu|reddit|twitter|登录)/i.test(combined)) {
+        const browserStatus = await BrowserService.getInstance().getSmartModeStatus();
+        details.push(`browser=${browserStatus.available ? 'smart_mode_available' : browserStatus.reason || 'unavailable'}`);
+        if (browserStatus.available) {
+            connectedApps.push('browser:smart_mode');
+        }
+    }
+
+    if (details.length === 0) {
+        return {
+            success: false,
+            summary: 'No relevant connected app status was detected for this task.',
+            connectedApps: [],
+            error: 'no_relevant_connected_app',
+        };
+    }
+
+    return {
+        success: true,
+        summary: `Connected-app feasibility research: ${details.join('; ')}`,
+        connectedApps,
+    };
+}
+
+function toCheckpointReachedPayload(checkpoint: NonNullable<ReturnType<typeof getBlockingCheckpoint>>): TaskCheckpointReachedPayload {
+    return {
+        checkpointId: checkpoint.id,
+        title: checkpoint.title,
+        kind: checkpoint.kind,
+        reason: checkpoint.reason,
+        userMessage: checkpoint.userMessage,
+        requiresUserConfirmation: checkpoint.requiresUserConfirmation,
+        blocking: checkpoint.blocking,
+    };
+}
+
+function toUserActionRequiredPayload(action: {
+    id: string;
+    title: string;
+    kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
+    description: string;
+    blocking: boolean;
+    questions: string[];
+    instructions: string[];
+    fulfillsCheckpointId?: string;
+}): TaskUserActionRequiredPayload {
+    return {
+        actionId: action.id,
+        title: action.title,
+        kind: action.kind,
+        description: action.description,
+        blocking: action.blocking,
+        questions: action.questions,
+        instructions: action.instructions,
+        fulfillsCheckpointId: action.fulfillsCheckpointId,
+    };
+}
+
+function setActivePreparedWorkRequest(taskId: string, prepared: PreparedWorkRequestContext): void {
+    activePreparedWorkRequests.set(taskId, prepared);
+}
+
+function clearActivePreparedWorkRequest(taskId: string): void {
+    activePreparedWorkRequests.delete(taskId);
+}
+
+function emitPlanUpdated(taskId: string, prepared: PreparedWorkRequestContext): void {
+    emit(createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(prepared)));
+}
 
 // Forward declarations for LLM types (used by AutonomousLlmAdapter)
 type LlmProvider = 'anthropic' | 'openrouter' | 'openai' | 'aiberm' | 'ollama' | 'custom';
@@ -1472,6 +1662,18 @@ const APP_MANAGEMENT_TOOLS = createAppManagementTools({
     skillStore,
     workspaceStore,
     importSkillFromDirectory,
+    downloadSkillFromGitHub,
+    searchClawHubSkills: (query, limit) => openclawCompat.searchClawHub(query, limit),
+    installSkillFromClawHub: (skillName, targetDir) => openclawCompat.installFromClawHub(skillName, targetDir),
+    getSkillhubExecutable: () => desktopRuntimeContext?.skillhub?.path,
+    onSkillsUpdated: () => emitAny({
+        commandId: `skills-updated-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        type: 'skills_updated',
+        payload: {
+            success: true,
+        },
+    }),
 });
 
 configureVoiceProviders({
@@ -1521,6 +1723,12 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         createTaskFailedEvent,
         createChatMessageEvent,
         createTaskClarificationRequiredEvent,
+        createTaskContractReopenedEvent,
+        createTaskPlanReadyEvent,
+        createTaskResearchUpdatedEvent,
+        createPlanUpdatedEvent,
+        createTaskCheckpointReachedEvent,
+        createTaskUserActionRequiredEvent,
         createTaskStatusEvent,
         createTaskResumedEvent,
         createTaskFinishedEvent,
@@ -1529,9 +1737,17 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         suspendResumeManager,
         enqueueResumeMessage,
         getTaskConfig,
+        applyFrozenWorkRequestSessionPolicy,
+        getActivePreparedWorkRequest: (taskId) => activePreparedWorkRequests.get(taskId),
         workspaceRoot,
         workRequestStore,
-        prepareWorkRequestContext,
+        prepareWorkRequestContext: (input) => prepareWorkRequestContext({
+            ...input,
+            researchResolvers: {
+                webSearch: resolveWebResearch,
+                connectedAppStatus: resolveConnectedAppResearch,
+            },
+        }),
         buildArtifactContract,
         buildClarificationMessage,
         pushConversationMessage,
@@ -2529,10 +2745,14 @@ const selfLearningHandlers: SelfLearningToolHandlers = {
 const SELF_LEARNING_TOOLS = createSelfLearningTools(selfLearningHandlers);
 const PERSONAL_TOOLS = createPersonalTools({
     scheduleTask: async (args, context) => {
-        const frozenWorkRequest = createFrozenWorkRequestFromText({
+        const frozenWorkRequest = await createFrozenWorkRequestFromText({
             sourceText: args.task_query,
             workspacePath: context.workspacePath,
             workRequestStore,
+            researchResolvers: {
+                webSearch: resolveWebResearch,
+                connectedAppStatus: resolveConnectedAppResearch,
+            },
         });
         const effectiveSpeakResult = args.speak_result ?? false;
         if (effectiveSpeakResult && !frozenWorkRequest.presentation.ttsEnabled) {
@@ -2596,6 +2816,53 @@ function toScheduledTaskConfig(config: unknown): ScheduledTaskConfig | undefined
     };
 }
 
+function resolveEnabledToolpackServerNames(enabledToolpacks?: string[]): string[] {
+    if (!enabledToolpacks || enabledToolpacks.length === 0) {
+        return [];
+    }
+
+    return Array.from(new Set(enabledToolpacks.map((toolpackId) => {
+        const pack = toolpackStore.getById(toolpackId) ?? toolpackStore.get(toolpackId);
+        return pack?.manifest.name ?? toolpackId;
+    })));
+}
+
+function buildMcpSessionIsolationPolicy(
+    frozenWorkRequest: FrozenWorkRequest,
+    config?: TaskSessionConfig
+): McpSessionIsolationPolicy {
+    const runtimeIsolationPolicy = frozenWorkRequest.runtimeIsolationPolicy ?? {
+        connectorIsolationMode: 'deny_by_default',
+        filesystemMode: 'workspace_only',
+        allowedWorkspacePaths: [frozenWorkRequest.workspacePath],
+        writableWorkspacePaths: [frozenWorkRequest.workspacePath],
+        networkAccess: 'none' as const,
+        allowedDomains: [],
+        notes: [],
+    };
+
+    return {
+        allowedServerNames: resolveEnabledToolpackServerNames(config?.enabledToolpacks),
+        allowedWorkspacePaths: runtimeIsolationPolicy.allowedWorkspacePaths,
+        writableWorkspacePaths: runtimeIsolationPolicy.writableWorkspacePaths,
+        networkAccess: runtimeIsolationPolicy.networkAccess,
+        allowedDomains: runtimeIsolationPolicy.allowedDomains,
+    };
+}
+
+function applyFrozenWorkRequestSessionPolicy(
+    taskId: string,
+    frozenWorkRequest: FrozenWorkRequest,
+    baseConfig?: TaskSessionConfig
+): TaskSessionConfig {
+    const nextConfig = persistFrozenWorkRequestSnapshot(taskId, frozenWorkRequest, {
+        ...(baseConfig ?? taskSessionStore.getConfig(taskId) ?? {}),
+        runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
+    });
+    mcpGateway.setSessionPolicy(taskId, buildMcpSessionIsolationPolicy(frozenWorkRequest, nextConfig));
+    return nextConfig;
+}
+
 function scheduleTaskInternal(input: {
     title: string;
     taskQuery: string;
@@ -2642,6 +2909,17 @@ function emitScheduledTaskResultToSourceTask(record: ScheduledTaskRecord, result
     emit(createTaskFinishedEvent(record.sourceTaskId, {
         summary: message,
         duration: 0,
+    }));
+}
+
+function emitScheduledTaskStartedToSourceTask(record: ScheduledTaskRecord): void {
+    if (!record.sourceTaskId) {
+        return;
+    }
+
+    emit(createChatMessageEvent(record.sourceTaskId, {
+        role: 'system',
+        content: buildScheduledTaskStartedMessage(record.title),
     }));
 }
 
@@ -2735,10 +3013,14 @@ async function executeFreshTask(args: {
     const parsedUserInput = parseInlineAttachmentContent(userQuery);
     const promptUserQuery = parsedUserInput.promptText || userQuery;
     const conversationUserContent = parsedUserInput.conversationContent;
-    const preparedWorkRequest = prepareWorkRequestContext({
+    const preparedWorkRequest = await prepareWorkRequestContext({
         sourceText: promptUserQuery,
         workspacePath,
         workRequestStore,
+        researchResolvers: {
+            webSearch: resolveWebResearch,
+            connectedAppStatus: resolveConnectedAppResearch,
+        },
     });
     const {
         frozenWorkRequest,
@@ -2748,12 +3030,12 @@ async function executeFreshTask(args: {
     } = preparedWorkRequest;
 
     taskEventBus.reset(taskId);
-    taskSessionStore.setConfig(taskId, {
+    const effectiveConfig = applyFrozenWorkRequestSessionPolicy(taskId, frozenWorkRequest, {
         ...(config ?? {}),
         workspacePath,
     });
 
-    const startLimit = config?.maxHistoryMessages;
+    const startLimit = effectiveConfig?.maxHistoryMessages;
     taskSessionStore.setHistoryLimit(
         taskId,
         typeof startLimit === 'number' && startLimit > 0
@@ -2784,9 +3066,27 @@ async function executeFreshTask(args: {
         );
     }
 
-    const artifactContract = buildArtifactContract(executionQuery);
+    emit(createTaskResearchUpdatedEvent(taskId, buildTaskResearchUpdatedPayload(frozenWorkRequest)));
+    emit(createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
+    emitPlanUpdated(taskId, preparedWorkRequest);
+
+    const artifactContract = buildArtifactContract(executionQuery, frozenWorkRequest.deliverables);
     taskSessionStore.setArtifactContract(taskId, artifactContract);
     taskSessionStore.setArtifacts(taskId, []);
+
+    const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
+    if (blockingCheckpoint) {
+        emit(createTaskCheckpointReachedEvent(taskId, toCheckpointReachedPayload(blockingCheckpoint)));
+    }
+    const blockingUserAction =
+        getBlockingUserAction(
+            frozenWorkRequest,
+            frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan'
+        ) ??
+        getBlockingUserAction(frozenWorkRequest);
+    if (blockingUserAction) {
+        emit(createTaskUserActionRequiredEvent(taskId, toUserActionRequiredPayload(blockingUserAction)));
+    }
 
     if (frozenWorkRequest.clarification.required) {
         const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
@@ -2823,6 +3123,36 @@ async function executeFreshTask(args: {
         };
     }
 
+    if (blockingUserAction?.blocking && blockingUserAction.kind === 'confirm_plan') {
+        const confirmationMessage = buildBlockingUserActionMessage(blockingUserAction);
+        pushConversationMessage(taskId, {
+            role: 'user',
+            content: conversationUserContent,
+        });
+        pushConversationMessage(taskId, {
+            role: 'assistant',
+            content: confirmationMessage,
+        });
+        emit(createChatMessageEvent(taskId, {
+            role: 'assistant',
+            content: confirmationMessage,
+        }));
+        emit(createTaskStatusEvent(taskId, {
+            status: 'idle',
+        }));
+        if (shouldUsePlanningFiles(frozenWorkRequest)) {
+            appendPlanningProgressEntry(
+                workspacePath,
+                `Plan confirmation requested for work request ${frozenWorkRequest.id}: ${confirmationMessage}`
+            );
+        }
+        return {
+            success: true,
+            summary: confirmationMessage,
+            artifactsCreated: [],
+        };
+    }
+
     if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
         pushConversationMessage(taskId, {
             role: 'user',
@@ -2844,6 +3174,7 @@ async function executeFreshTask(args: {
     }
 
     markWorkRequestExecutionStarted(preparedWorkRequest);
+    emitPlanUpdated(taskId, preparedWorkRequest);
 
     const curatedPptResult = await tryCuratedPptArtifactTask(taskId, executionQuery);
     if (curatedPptResult) {
@@ -2904,6 +3235,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
     console.error(
         `[Scheduler] Starting scheduled task ${record.id} in ${record.workspacePath} as task ${taskId}`
     );
+    emitScheduledTaskStartedToSourceTask(record);
     try {
         const result = await withOperationTimeout(
             executeFreshTask({
@@ -3699,6 +4031,19 @@ function getTaskConfig(taskId: string): TaskSessionConfig | undefined {
     return taskSessionStore.getConfig(taskId);
 }
 
+function persistFrozenWorkRequestSnapshot(
+    taskId: string,
+    frozenWorkRequest: Pick<FrozenWorkRequest, 'mode' | 'sourceText' | 'tasks' | 'deliverables'>,
+    baseConfig?: TaskSessionConfig
+): TaskSessionConfig {
+    const nextConfig: TaskSessionConfig = {
+        ...(baseConfig ?? taskSessionStore.getConfig(taskId) ?? {}),
+        lastFrozenWorkRequestSnapshot: snapshotFrozenWorkRequest(frozenWorkRequest),
+    };
+    taskSessionStore.setConfig(taskId, nextConfig);
+    return nextConfig;
+}
+
 function dequeueQueuedResumeMessages(taskId: string) {
     return taskSessionStore.dequeueResumeMessages(taskId);
 }
@@ -3789,6 +4134,39 @@ function markTaskRuntimeRunning(taskId: string): void {
     syncTaskRuntimeRecord(taskId);
 }
 
+function syncTaskRuntimeStatusFromEvent(
+    taskId: string,
+    status: Extract<PersistedTaskRuntimeStatus, 'running' | 'idle'>
+): void {
+    const meta = taskRuntimeMeta.get(taskId);
+    if (!meta) {
+        return;
+    }
+    taskRuntimeMeta.set(taskId, {
+        ...meta,
+        status,
+        suspension: status === 'running' ? undefined : meta.suspension,
+    });
+    syncTaskRuntimeRecord(taskId);
+}
+
+function archiveTaskRuntimePersistence(
+    taskId: string,
+    status: Extract<PersistedTaskRuntimeStatus, 'finished' | 'failed'>
+): void {
+    const meta = taskRuntimeMeta.get(taskId);
+    if (meta) {
+        taskRuntimeMeta.set(taskId, {
+            ...meta,
+            status,
+            suspension: undefined,
+        });
+        syncTaskRuntimeRecord(taskId);
+    }
+    taskRuntimeMeta.delete(taskId);
+    taskCancellationRegistry.clear(taskId);
+}
+
 function clearTaskRuntimePersistence(taskId: string): void {
     taskRuntimeMeta.delete(taskId);
     taskCancellationRegistry.clear(taskId);
@@ -3815,6 +4193,10 @@ function restorePersistedTasks(): void {
 
         taskEventBus.reset(record.taskId);
         const recovery = planTaskRuntimeRecovery(record);
+
+        if (recovery.type === 'hydrate_only') {
+            continue;
+        }
 
         if (recovery.type === 'restore_suspended') {
             taskRuntimeMeta.set(record.taskId, {
@@ -5969,6 +6351,29 @@ async function runAgentLoop(
                     canAutoResume: suspended.resumeCondition.type === 'auto_detect',
                     maxWaitTimeMs: suspended.resumeCondition.maxWaitTime,
                 }));
+                emit(createTaskCheckpointReachedEvent(taskId, {
+                    checkpointId: `runtime-suspension-${taskId}`,
+                    title: 'Manual action required',
+                    kind: 'manual_action',
+                    reason: suspended.reason,
+                    userMessage: suspended.userMessage,
+                    requiresUserConfirmation: true,
+                    blocking: true,
+                }));
+                emit(createTaskUserActionRequiredEvent(taskId, {
+                    actionId: `runtime-suspension-${taskId}`,
+                    title: 'Complete required manual action',
+                    kind: suspended.reason.toLowerCase().includes('auth') ? 'external_auth' : 'manual_step',
+                    description: suspended.userMessage,
+                    blocking: true,
+                    questions: [],
+                    instructions: [suspended.userMessage],
+                }));
+                const preparedWorkRequest = activePreparedWorkRequests.get(taskId);
+                if (preparedWorkRequest) {
+                    markWorkRequestExecutionSuspended(preparedWorkRequest, suspended.reason);
+                    emitPlanUpdated(taskId, preparedWorkRequest);
+                }
 
                 // Wait for resume or cancellation
                 const suspendStartTime = Date.now();
@@ -6009,6 +6414,11 @@ async function runAgentLoop(
                         resumeReason: resumeResult.reason,
                         suspendDurationMs: suspendDuration,
                     }));
+                    const preparedWorkRequest = activePreparedWorkRequests.get(taskId);
+                    if (preparedWorkRequest) {
+                        markWorkRequestExecutionResumed(preparedWorkRequest, resumeResult.reason);
+                        emitPlanUpdated(taskId, preparedWorkRequest);
+                    }
 
                     // Inject context into conversation so LLM knows what happened
                     // Use a plain text user message (not tool_result) to avoid API validation issues
@@ -6203,7 +6613,8 @@ function createExecutionSession(taskId: string): ExecutionSession {
 function createExecutionResultReporter(taskId: string): ExecutionResultReporter {
     return new ExecutionResultReporter({
         onFinished: (payload) => {
-            clearTaskRuntimePersistence(taskId);
+            clearActivePreparedWorkRequest(taskId);
+            archiveTaskRuntimePersistence(taskId, 'finished');
             taskEventBus.emitFinished(taskId, {
                 summary: payload.summary,
                 artifactsCreated: payload.artifactsCreated,
@@ -6211,7 +6622,8 @@ function createExecutionResultReporter(taskId: string): ExecutionResultReporter 
             });
         },
         onFailed: (payload) => {
-            clearTaskRuntimePersistence(taskId);
+            clearActivePreparedWorkRequest(taskId);
+            archiveTaskRuntimePersistence(taskId, 'failed');
             taskEventBus.emitFailed(taskId, payload);
         },
         onStatus: (payload) => {
@@ -6300,7 +6712,123 @@ function getExecutionRuntimeDeps(taskId: string) {
         detectDegradedOutputs,
         buildArtifactTelemetry,
         reduceWorkResult,
+        markWorkRequestExecutionStarted,
         markWorkRequestExecutionCompleted,
+        refreezePreparedWorkRequestForResearch: (input: {
+            prepared: PreparedWorkRequestContext;
+            reason: string;
+            trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+        }) => refreezePreparedWorkRequestForResearch({
+            ...input,
+            workRequestStore,
+            researchResolvers: {
+                webSearch: resolveWebResearch,
+                connectedAppStatus: resolveConnectedAppResearch,
+            },
+        }),
+        emitPlanUpdated,
+        emitContractReopened: (runtimeTaskId: string, payload: {
+            summary: string;
+            reason: string;
+            trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+            nextStepId?: string;
+        }) => emit(createTaskContractReopenedEvent(runtimeTaskId, payload)),
+        emitPreparedWorkRequestRefrozen: (input: {
+            taskId: string;
+            prepared: PreparedWorkRequestContext;
+            reason: string;
+            trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+        }) => {
+            const { taskId: runtimeTaskId, prepared, reason, trigger } = input;
+            const frozenWorkRequest = prepared.frozenWorkRequest;
+            applyFrozenWorkRequestSessionPolicy(runtimeTaskId, frozenWorkRequest);
+            emit(createTaskResearchUpdatedEvent(runtimeTaskId, buildTaskResearchUpdatedPayload(prepared.frozenWorkRequest)));
+            emit(createTaskPlanReadyEvent(runtimeTaskId, buildTaskPlanReadyPayload(prepared.frozenWorkRequest)));
+            const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
+            if (blockingCheckpoint) {
+                emit(createTaskCheckpointReachedEvent(runtimeTaskId, toCheckpointReachedPayload(blockingCheckpoint)));
+            }
+            const blockingUserAction =
+                getBlockingUserAction(
+                    frozenWorkRequest,
+                    frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan'
+                ) ??
+                getBlockingUserAction(frozenWorkRequest);
+            if (blockingUserAction) {
+                emit(createTaskUserActionRequiredEvent(runtimeTaskId, toUserActionRequiredPayload(blockingUserAction)));
+            }
+            if (frozenWorkRequest.clarification.required) {
+                const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
+                pushConversationMessage(runtimeTaskId, {
+                    role: 'assistant',
+                    content: clarificationMessage,
+                });
+                emit(createChatMessageEvent(runtimeTaskId, {
+                    role: 'assistant',
+                    content: clarificationMessage,
+                }));
+                emit(createTaskClarificationRequiredEvent(runtimeTaskId, {
+                    reason: frozenWorkRequest.clarification.reason,
+                    questions: frozenWorkRequest.clarification.questions,
+                    missingFields: frozenWorkRequest.clarification.missingFields,
+                }));
+                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                return {
+                    blocked: true,
+                    summary: clarificationMessage,
+                };
+            }
+            if (blockingUserAction?.blocking && blockingUserAction.kind === 'confirm_plan') {
+                const confirmationMessage = buildBlockingUserActionMessage(blockingUserAction);
+                pushConversationMessage(runtimeTaskId, {
+                    role: 'assistant',
+                    content: confirmationMessage,
+                });
+                emit(createChatMessageEvent(runtimeTaskId, {
+                    role: 'assistant',
+                    content: confirmationMessage,
+                }));
+                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                return {
+                    blocked: true,
+                    summary: confirmationMessage,
+                };
+            }
+            if ((trigger === 'permission_block' || trigger === 'missing_resource') && !blockingUserAction && !blockingCheckpoint) {
+                const actionTitle = trigger === 'permission_block'
+                    ? 'Grant required access'
+                    : 'Resolve missing resource';
+                const description = trigger === 'permission_block'
+                    ? 'Coworkany needs the required access or approval before it can continue.'
+                    : 'Coworkany needs the missing folder, file, or resource to continue.';
+                emit(createTaskUserActionRequiredEvent(runtimeTaskId, {
+                    actionId: `refreeze-${trigger}-${runtimeTaskId}`,
+                    title: actionTitle,
+                    kind: 'manual_step',
+                    description,
+                    blocking: true,
+                    questions: [],
+                    instructions: [reason],
+                }));
+                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                return {
+                    blocked: true,
+                    summary: reason,
+                };
+            }
+            if (blockingUserAction?.blocking || blockingCheckpoint?.blocking) {
+                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                return {
+                    blocked: true,
+                    summary: blockingUserAction?.description || blockingCheckpoint?.userMessage || blockingCheckpoint?.reason,
+                };
+            }
+            return {
+                blocked: false,
+            };
+        },
+        activatePreparedWorkRequest: setActivePreparedWorkRequest,
+        clearPreparedWorkRequest: clearActivePreparedWorkRequest,
         markWorkRequestExecutionFailed,
         quickLearnFromError: (error: string, query: string, severity: number) =>
             selfLearningController.quickLearnFromError(error, query, severity),

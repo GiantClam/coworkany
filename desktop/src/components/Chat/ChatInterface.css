@@ -337,6 +337,104 @@
     color: rgba(255, 243, 214, 0.82);
 }
 
+.chat-plan-card {
+    margin: 12px 20px 0;
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(96, 165, 250, 0.18);
+    background:
+        linear-gradient(180deg, rgba(10, 27, 48, 0.78), rgba(7, 18, 35, 0.9)),
+        rgba(18, 26, 42, 0.72);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.chat-plan-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.chat-plan-card-kicker,
+.chat-plan-card-meta,
+.chat-plan-section-title {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.chat-plan-card-kicker {
+    color: #bfdbfe;
+}
+
+.chat-plan-card-meta,
+.chat-plan-section-title {
+    color: var(--text-muted);
+}
+
+.chat-plan-card-summary {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.chat-plan-callout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(251, 191, 36, 0.22);
+    background: linear-gradient(135deg, rgba(217, 119, 6, 0.14), rgba(120, 53, 15, 0.22));
+    color: #fff7ed;
+}
+
+.chat-plan-callout strong {
+    font-size: 12px;
+}
+
+.chat-plan-callout span {
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.chat-plan-callout-list,
+.chat-plan-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chat-plan-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chat-plan-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-left: 12px;
+    border-left: 2px solid rgba(96, 165, 250, 0.16);
+}
+
+.chat-plan-item strong {
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.chat-plan-item span {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
 /* Timeline */
 .timeline {
     flex: 1;

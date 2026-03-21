@@ -105,6 +105,34 @@ function createInterruptedFailureState(): NonNullable<TaskSession['failure']> {
     };
 }
 
+function deriveLatestUserFacingTitle(session: TaskSession): string | undefined {
+    const latestUserMessage = [...session.messages]
+        .reverse()
+        .find((message) => {
+            const normalized = message.content.trim();
+            return (
+                message.role === 'user' &&
+                normalized.length > 0 &&
+                !normalized.startsWith('[RESUME_REQUESTED]')
+            );
+        });
+
+    if (!latestUserMessage) {
+        return session.title;
+    }
+
+    const normalized = latestUserMessage.content.replace(/\s+/g, ' ').trim();
+    if (normalized.length === 0) {
+        return session.title;
+    }
+
+    if (session.messages.filter((message) => message.role === 'user' && message.content.trim().length > 0).length <= 1) {
+        return session.title || normalized;
+    }
+
+    return normalized.length > 80 ? `${normalized.slice(0, 79)}…` : normalized;
+}
+
 function getOrCreateEventIdSet(taskId: string, session?: TaskSession): Set<string> {
     const existing = sessionEventIds.get(taskId);
     if (existing) {
@@ -137,6 +165,11 @@ const HIGH_PRIORITY_PERSIST_EVENT_TYPES = new Set<TaskEvent['type']>([
     'TASK_FINISHED',
     'TASK_FAILED',
     'TASK_SUSPENDED',
+    'TASK_RESEARCH_UPDATED',
+    'TASK_CONTRACT_REOPENED',
+    'TASK_PLAN_READY',
+    'TASK_CHECKPOINT_REACHED',
+    'TASK_USER_ACTION_REQUIRED',
     'TASK_CLARIFICATION_REQUIRED',
     'TASK_HISTORY_CLEARED',
     'EFFECT_APPROVED',
@@ -497,7 +530,10 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                         failure: session.failure ?? createInterruptedFailureState(),
                     }
                     : session;
-                map.set(cleanedSession.taskId, cleanedSession);
+                map.set(cleanedSession.taskId, {
+                    ...cleanedSession,
+                    title: deriveLatestUserFacingTitle(cleanedSession),
+                });
                 getOrCreateEventIdSet(cleanedSession.taskId, cleanedSession);
             }
             let activeTaskId = snapshot.activeTaskId ?? null;

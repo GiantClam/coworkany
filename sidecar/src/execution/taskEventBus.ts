@@ -1,5 +1,15 @@
 import { randomUUID } from 'crypto';
 import type { TaskEvent } from '../protocol';
+import type {
+    CheckpointContract,
+    DefaultingPolicy,
+    DeliverableContract,
+    HitlPolicy,
+    MissingInfoItem,
+    ResumeStrategy,
+    RuntimeIsolationPolicy,
+    UserActionRequest,
+} from '../orchestration/workRequestSchema';
 
 export type TaskStartedPayload = {
     title: string;
@@ -28,6 +38,32 @@ export type TaskFinishedPayload = {
     duration: number;
 };
 
+export type PlanUpdatedPayload = {
+    summary: string;
+    steps: Array<{
+        id: string;
+        description: string;
+        status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+    }>;
+    currentStepId?: string;
+};
+
+export type TaskResearchUpdatedPayload = {
+    summary: string;
+    sourcesChecked: string[];
+    completedQueries: number;
+    pendingQueries: number;
+    blockingUnknowns: string[];
+    selectedStrategyTitle?: string;
+};
+
+export type TaskContractReopenedPayload = {
+    summary: string;
+    reason: string;
+    trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+    nextStepId?: string;
+};
+
 export type TextDeltaPayload = {
     delta: string;
     role: 'assistant' | 'thinking';
@@ -43,6 +79,39 @@ export type TaskSuspendedPayload = {
 export type TaskResumedPayload = {
     resumeReason?: string;
     suspendDurationMs: number;
+};
+
+export type TaskPlanReadyPayload = {
+    summary: string;
+    deliverables: DeliverableContract[];
+    checkpoints: CheckpointContract[];
+    userActionsRequired: UserActionRequest[];
+    hitlPolicy?: HitlPolicy;
+    runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    missingInfo: MissingInfoItem[];
+    defaultingPolicy?: DefaultingPolicy;
+    resumeStrategy?: ResumeStrategy;
+};
+
+export type TaskCheckpointReachedPayload = {
+    checkpointId: string;
+    title: string;
+    kind: CheckpointContract['kind'];
+    reason: string;
+    userMessage: string;
+    requiresUserConfirmation: boolean;
+    blocking: boolean;
+};
+
+export type TaskUserActionRequiredPayload = {
+    actionId: string;
+    title: string;
+    kind: UserActionRequest['kind'];
+    description: string;
+    blocking: boolean;
+    questions: string[];
+    instructions: string[];
+    fulfillsCheckpointId?: string;
 };
 
 type TaskEventMeta = {
@@ -107,6 +176,18 @@ export class TaskEventBus {
         return this.build(taskId, 'TASK_FINISHED', payload, meta);
     }
 
+    planUpdated(taskId: string, payload: PlanUpdatedPayload, meta?: TaskEventMeta): TaskEvent {
+        return this.build(taskId, 'PLAN_UPDATED', payload, meta);
+    }
+
+    researchUpdated(taskId: string, payload: TaskResearchUpdatedPayload, meta?: TaskEventMeta): TaskEvent {
+        return this.build(taskId, 'TASK_RESEARCH_UPDATED', payload, meta);
+    }
+
+    contractReopened(taskId: string, payload: TaskContractReopenedPayload, meta?: TaskEventMeta): TaskEvent {
+        return this.build(taskId, 'TASK_CONTRACT_REOPENED', payload, meta);
+    }
+
     textDelta(taskId: string, payload: TextDeltaPayload, meta?: TaskEventMeta): TaskEvent {
         return this.build(taskId, 'TEXT_DELTA', payload, meta);
     }
@@ -121,6 +202,18 @@ export class TaskEventBus {
 
     resumed(taskId: string, payload: TaskResumedPayload, meta?: TaskEventMeta): TaskEvent {
         return this.build(taskId, 'TASK_RESUMED', payload, meta);
+    }
+
+    planReady(taskId: string, payload: TaskPlanReadyPayload, meta?: TaskEventMeta): TaskEvent {
+        return this.build(taskId, 'TASK_PLAN_READY', payload, meta);
+    }
+
+    checkpointReached(taskId: string, payload: TaskCheckpointReachedPayload, meta?: TaskEventMeta): TaskEvent {
+        return this.build(taskId, 'TASK_CHECKPOINT_REACHED', payload, meta);
+    }
+
+    userActionRequired(taskId: string, payload: TaskUserActionRequiredPayload, meta?: TaskEventMeta): TaskEvent {
+        return this.build(taskId, 'TASK_USER_ACTION_REQUIRED', payload, meta);
     }
 
     raw(taskId: string, type: string, payload: unknown, meta?: TaskEventMeta): TaskEvent {
@@ -167,6 +260,18 @@ export class TaskEventBus {
         this.emit(this.finished(taskId, payload, meta));
     }
 
+    emitPlanUpdated(taskId: string, payload: PlanUpdatedPayload, meta?: TaskEventMeta): void {
+        this.emit(this.planUpdated(taskId, payload, meta));
+    }
+
+    emitResearchUpdated(taskId: string, payload: TaskResearchUpdatedPayload, meta?: TaskEventMeta): void {
+        this.emit(this.researchUpdated(taskId, payload, meta));
+    }
+
+    emitContractReopened(taskId: string, payload: TaskContractReopenedPayload, meta?: TaskEventMeta): void {
+        this.emit(this.contractReopened(taskId, payload, meta));
+    }
+
     emitTextDelta(taskId: string, payload: TextDeltaPayload, meta?: TaskEventMeta): void {
         this.emit(this.textDelta(taskId, payload, meta));
     }
@@ -181,6 +286,18 @@ export class TaskEventBus {
 
     emitResumed(taskId: string, payload: TaskResumedPayload, meta?: TaskEventMeta): void {
         this.emit(this.resumed(taskId, payload, meta));
+    }
+
+    emitPlanReady(taskId: string, payload: TaskPlanReadyPayload, meta?: TaskEventMeta): void {
+        this.emit(this.planReady(taskId, payload, meta));
+    }
+
+    emitCheckpointReached(taskId: string, payload: TaskCheckpointReachedPayload, meta?: TaskEventMeta): void {
+        this.emit(this.checkpointReached(taskId, payload, meta));
+    }
+
+    emitUserActionRequired(taskId: string, payload: TaskUserActionRequiredPayload, meta?: TaskEventMeta): void {
+        this.emit(this.userActionRequired(taskId, payload, meta));
     }
 
     emitRaw(taskId: string, type: string, payload: unknown, meta?: TaskEventMeta): void {

@@ -749,13 +749,14 @@ When the user is asking about CoworkAny itself, do not guess and do not say you 
 2. Use \`update_coworkany_config\` for changing config values.
 3. Use \`get_coworkany_paths\` for app data, config, and directory locations.
 4. Use \`list_coworkany_workspaces\`, \`create_coworkany_workspace\`, \`update_coworkany_workspace\`, \`delete_coworkany_workspace\` for workspaces.
-5. Use \`list_coworkany_skills\`, \`get_coworkany_skill\`, \`install_coworkany_skill\`, \`set_coworkany_skill_enabled\`, \`remove_coworkany_skill\` for skills.
+5. Use \`list_coworkany_skills\`, \`get_coworkany_skill\`, \`install_coworkany_skill\`, \`search_coworkany_skill_marketplace\`, \`install_coworkany_skill_from_marketplace\`, \`set_coworkany_skill_enabled\`, \`remove_coworkany_skill\` for skills.
 
 ## Important Rules
 - Prefer these tools over \`view_file\` when the user asks about CoworkAny's runtime settings.
 - If the user explicitly asks for the actual secret value, you may set \`reveal_secret=true\`.
 - If the user only asks whether a key exists or what provider is configured, keep secrets redacted.
 - Distinguish CoworkAny self-management from repository editing. If the user wants to change app settings, use the self-management tools instead of editing source code.
+- If the user asks to install a skill from Skillhub, ClawHub, or GitHub, do not ask them for a local path first. Use the marketplace install tool directly.
 `;
 
 const SKILL_SUPERPOWERS_WORKFLOW = `---
@@ -1228,6 +1229,8 @@ export const BUILTIN_SKILLS: BuiltinSkillManifest[] = [
             'list_coworkany_skills',
             'get_coworkany_skill',
             'install_coworkany_skill',
+            'search_coworkany_skill_marketplace',
+            'install_coworkany_skill_from_marketplace',
             'set_coworkany_skill_enabled',
             'remove_coworkany_skill',
         ],
@@ -1244,6 +1247,17 @@ export const BUILTIN_SKILLS: BuiltinSkillManifest[] = [
             'coworkany 工作区',
             'coworkany skills',
             'coworkany skill',
+            '从 skillhub 安装',
+            '从 clawhub 安装',
+            '从 github 安装',
+            'skillhub 安装',
+            'clawhub 安装',
+            'github 安装',
+            'install from skillhub',
+            'install from clawhub',
+            'install from github',
+            'clawhub:',
+            'github:',
             '修改 coworkany 配置',
             '配置 coworkany',
         ],

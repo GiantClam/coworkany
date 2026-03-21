@@ -1,3 +1,6 @@
+import type { FrozenWorkRequestSnapshot } from '../orchestration/workRequestSnapshot';
+import type { RuntimeIsolationPolicy } from '../orchestration/workRequestSchema';
+
 export type TaskSessionConfig = {
     modelId?: string;
     maxTokens?: number;
@@ -7,6 +10,8 @@ export type TaskSessionConfig = {
     enabledSkills?: string[];
     workspacePath?: string;
     voiceProviderMode?: 'auto' | 'system' | 'custom';
+    lastFrozenWorkRequestSnapshot?: FrozenWorkRequestSnapshot;
+    runtimeIsolationPolicy?: RuntimeIsolationPolicy;
 };
 
 export type TaskResumeMessage = {

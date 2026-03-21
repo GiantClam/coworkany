@@ -39,6 +39,11 @@ describe('work request control plane', () => {
         expect(analyzed.mode).toBe('chat');
         expect(analyzed.tasks[0]?.preferredSkills).toContain('task-orchestrator');
         expect(analyzed.tasks[0]?.preferredSkills).not.toContain('planning-with-files');
+        expect(analyzed.deliverables?.[0]).toMatchObject({
+            type: 'chat_reply',
+            required: true,
+        });
+        expect(analyzed.defaultingPolicy?.uiFormat).toBe('chat_message');
     });
 
     test('classifies complex non-scheduled input as immediate task with planning skills', () => {
@@ -50,6 +55,74 @@ describe('work request control plane', () => {
         expect(analyzed.mode).toBe('immediate_task');
         expect(analyzed.tasks[0]?.preferredSkills).toContain('superpowers-workflow');
         expect(analyzed.tasks[0]?.preferredSkills).toContain('planning-with-files');
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'pre_delivery')).toBe(true);
+        expect(analyzed.deliverables?.[0]?.type).toBe('report_file');
+        expect(analyzed.goalFrame).toMatchObject({
+            taskCategory: 'research',
+        });
+        expect(analyzed.researchQueries?.some((query) => query.kind === 'domain_research')).toBe(true);
+        expect(analyzed.strategyOptions?.some((option) => option.selected)).toBe(true);
+    });
+
+    test('preserves explicit output paths for code file requests', () => {
+        const targetPath = '/tmp/.coworkany/gui-test.js';
+        const analyzed = analyzeWorkRequest({
+            sourceText: `写一个简单的 Hello World 程序，保存到 ${targetPath}`,
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.deliverables).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                type: 'artifact_file',
+                path: targetPath,
+                format: 'js',
+            }),
+        ]));
+        expect(analyzed.deliverables?.some((deliverable) =>
+            typeof deliverable.path === 'string' && deliverable.path.endsWith('.md')
+        )).toBe(false);
+    });
+
+    test('does not require task-scope clarification for explicit path corrections that include normal pronouns', () => {
+        const originalPath = '/tmp/workspace/hello.js';
+        const correctedPath = '/tmp/workspace/hello.ts';
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                `Original task: Write a simple Hello World program and save it to ${originalPath}`,
+                `User correction: Actually, save it to ${correctedPath} instead.`,
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+        expect(analyzed.deliverables).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                type: 'artifact_file',
+                path: correctedPath,
+                format: 'ts',
+            }),
+        ]));
+    });
+
+    test('tags marketplace skill install requests as coworkany self-management tasks', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '从 skillhub 中安装 skill-vetter',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredSkills).toContain('coworkany-self-management');
+    });
+
+    test('tags clawhub marketplace skill install requests as coworkany self-management tasks', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '从 clawhub 安装 claw-vetter',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.preferredSkills).toContain('coworkany-self-management');
     });
 
     test('resolves downloads image organization requests into a host-folder local task plan', () => {
@@ -84,6 +157,16 @@ describe('work request control plane', () => {
             requiredAccess: ['read', 'write', 'move'],
             requiresHostAccessGrant: true,
         });
+        expect(analyzed.goalFrame?.taskCategory).toBe('workspace');
+        expect(analyzed.runtimeIsolationPolicy).toMatchObject({
+            connectorIsolationMode: 'deny_by_default',
+            filesystemMode: 'workspace_plus_resolved_targets',
+            allowedWorkspacePaths: expect.arrayContaining(['/tmp/workspace', '/Users/tester/Downloads']),
+            writableWorkspacePaths: expect.arrayContaining(['/tmp/workspace', '/Users/tester/Downloads']),
+            networkAccess: 'none',
+        });
+        expect(analyzed.researchQueries?.some((query) => query.kind === 'feasibility_research')).toBe(true);
+        expect(analyzed.uncertaintyRegistry?.some((item) => item.topic === 'execution_target' && item.status === 'confirmed')).toBe(true);
     });
 
     test('resolves Chinese system folder phrases without requiring an absolute path', () => {
@@ -247,21 +330,43 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[0]?.preferredSkills).toContain('task-orchestrator');
         expect(analyzed.tasks[0]?.preferredSkills).toContain('superpowers-workflow');
         expect(analyzed.tasks[0]?.preferredSkills).toContain('planning-with-files');
+        expect(analyzed.deliverables?.[0]?.type).toBe('chat_reply');
+        expect(analyzed.resumeStrategy).toMatchObject({
+            mode: 'continue_from_saved_context',
+            preserveDeliverables: true,
+        });
 
         const frozen = freezeWorkRequest(analyzed);
         const plan = buildExecutionPlan(frozen);
         expect(plan.workRequestId).toBe(frozen.id);
         expect(plan.steps.map((step) => step.kind)).toEqual([
-            'analysis',
-            'clarification',
+            'goal_framing',
+            'research',
+            'uncertainty_resolution',
+            'contract_freeze',
             'execution',
             'reduction',
             'presentation',
         ]);
         expect(plan.steps[0]?.status).toBe('completed');
         expect(plan.steps[1]?.status).toBe('completed');
-        expect(plan.steps[2]?.status).toBe('pending');
+        expect(plan.steps[2]?.status).toBe('completed');
+        expect(plan.steps[3]?.status).toBe('completed');
+        expect(plan.steps[4]?.status).toBe('pending');
+        expect(frozen.frozenResearchSummary?.selectedStrategyTitle).toBeTruthy();
         expect(buildExecutionQuery(frozen)).toContain('验收标准');
+    });
+
+    test('treats 以后 phrasing as a scheduled request instead of an immediate task', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '1 分钟以后，查询 minimax 的股价，给出深度分析',
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-20T09:17:12+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.schedule?.executeAt).toBe('2026-03-20T01:18:12.000Z');
+        expect(analyzed.tasks[0]?.objective).toBe('查询 minimax 的股价，给出深度分析');
     });
 
     test('marks ambiguous immediate follow-up requests for clarification before execution', () => {
@@ -273,12 +378,93 @@ describe('work request control plane', () => {
         expect(analyzed.mode).toBe('immediate_task');
         expect(analyzed.clarification.required).toBe(true);
         expect(analyzed.clarification.missingFields).toContain('task_scope');
+        expect(analyzed.missingInfo?.[0]).toMatchObject({
+            field: 'task_scope',
+            blocking: true,
+        });
+        expect(analyzed.userActionsRequired?.[0]).toMatchObject({
+            kind: 'clarify_input',
+            blocking: true,
+        });
 
         const frozen = freezeWorkRequest(analyzed);
         const plan = buildExecutionPlan(frozen);
-        expect(plan.steps[1]?.kind).toBe('clarification');
-        expect(plan.steps[1]?.status).toBe('blocked');
+        expect(analyzed.uncertaintyRegistry?.some((item) => item.status === 'blocking_unknown')).toBe(true);
+        expect(plan.steps[2]?.kind).toBe('uncertainty_resolution');
         expect(plan.steps[2]?.status).toBe('blocked');
+        expect(plan.steps[3]?.status).toBe('blocked');
+        expect(plan.steps[4]?.status).toBe('blocked');
+    });
+
+    test('plans artifact deliverables and checkpoints for report-like tasks', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '分析当前项目的长任务恢复设计，并输出一份总结报告',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.deliverables?.[0]).toMatchObject({
+            type: 'report_file',
+            path: expect.stringContaining('reports/'),
+            format: 'md',
+        });
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'pre_delivery')).toBe(true);
+        expect(analyzed.defaultingPolicy?.artifactDirectory).toBe('reports');
+        expect(analyzed.runtimeIsolationPolicy).toMatchObject({
+            connectorIsolationMode: 'deny_by_default',
+            filesystemMode: 'workspace_only',
+            allowedWorkspacePaths: ['/tmp/workspace'],
+            networkAccess: 'restricted',
+        });
+        expect(analyzed.researchQueries?.some((query) => query.source === 'workspace')).toBe(true);
+        expect(analyzed.knownRisks?.some((risk) => risk.includes('Best-practice assumptions'))).toBe(true);
+    });
+
+    test('assigns a blocking high-risk HITL plan review for code-change tasks', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '修复当前项目里的登录 bug，并直接修改代码完成实现',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: true,
+        });
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(true);
+    });
+
+    test('does not keep asking for plan confirmation after explicit user approval', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                '原始任务：修复当前项目里的登录 bug，并直接修改代码完成实现',
+                '用户补充：按这个方案继续执行',
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: false,
+        });
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(false);
+    });
+
+    test('creates blocking user action requests for login-dependent tasks', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '登录 X 后查看时间线并整理一份总结报告',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: true,
+        });
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(true);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(true);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'manual_action' && checkpoint.blocking)).toBe(true);
+        expect(analyzed.defaultingPolicy?.checkpointStrategy).toBe('manual_action');
+        expect(analyzed.uncertaintyRegistry?.some((item) => item.topic === 'manual_prerequisite' && item.status === 'inferred')).toBe(true);
     });
 
     test('reduces raw execution output into separate ui and tts payloads', () => {

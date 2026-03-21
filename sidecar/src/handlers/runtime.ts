@@ -1,5 +1,29 @@
 import type { ConfirmationPolicy, IpcCommand, IpcResponse } from '../protocol';
+import type { ArtifactContract } from '../agent/artifactContract';
+import type {
+    CheckpointContract,
+    DefaultingPolicy,
+    DeliverableContract,
+    FrozenWorkRequest,
+    HitlPolicy,
+    MissingInfoItem,
+    ResumeStrategy,
+    RuntimeIsolationPolicy,
+    UserActionRequest,
+} from '../orchestration/workRequestSchema';
+import {
+    snapshotFrozenWorkRequest,
+    type FrozenWorkRequestSnapshot,
+} from '../orchestration/workRequestSnapshot';
 import { parseInlineAttachmentContent } from '../llm/attachmentContent';
+import {
+    buildBlockingUserActionMessage,
+    buildPlanUpdatedPayload,
+    buildResearchUpdatedPayload,
+    buildWorkRequestPlanSummary,
+    getBlockingCheckpoint,
+    getBlockingUserAction,
+} from '../orchestration/workRequestRuntime';
 
 function respond(commandId: string, type: string, payload: Record<string, unknown>): IpcResponse {
     return {
@@ -35,6 +59,92 @@ export type RuntimeCommandDeps = {
         reason?: string;
         questions: string[];
         missingFields?: string[];
+    }) => Record<string, unknown>;
+    createTaskContractReopenedEvent: (taskId: string, payload: {
+        summary: string;
+        reason: string;
+        trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+        nextStepId?: string;
+    }) => Record<string, unknown>;
+    createTaskPlanReadyEvent: (taskId: string, payload: {
+        summary: string;
+        deliverables: DeliverableContract[];
+        checkpoints: Array<{
+            id: string;
+            title: string;
+            kind: 'review' | 'manual_action' | 'pre_delivery';
+            reason: string;
+            userMessage: string;
+            requiresUserConfirmation: boolean;
+            blocking: boolean;
+        }>;
+        userActionsRequired: Array<{
+            id: string;
+            title: string;
+            kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
+            description: string;
+            blocking: boolean;
+            questions: string[];
+            instructions: string[];
+            fulfillsCheckpointId?: string;
+        }>;
+        hitlPolicy?: HitlPolicy;
+        runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+        missingInfo: Array<{
+            field: string;
+            reason: string;
+            blocking: boolean;
+            question?: string;
+            defaultValue?: string;
+        }>;
+        defaultingPolicy?: {
+            outputLanguage: string;
+            uiFormat: 'chat_message' | 'table' | 'report' | 'artifact';
+            artifactDirectory: string;
+            checkpointStrategy: 'none' | 'review_before_completion' | 'manual_action';
+        };
+        resumeStrategy?: {
+            mode: 'continue_from_saved_context';
+            preserveDeliverables: boolean;
+            preserveCompletedSteps: boolean;
+            preserveArtifacts: boolean;
+        };
+    }) => Record<string, unknown>;
+    createTaskResearchUpdatedEvent: (taskId: string, payload: {
+        summary: string;
+        sourcesChecked: string[];
+        completedQueries: number;
+        pendingQueries: number;
+        blockingUnknowns: string[];
+        selectedStrategyTitle?: string;
+    }) => Record<string, unknown>;
+    createPlanUpdatedEvent: (taskId: string, payload: {
+        summary: string;
+        steps: Array<{
+            id: string;
+            description: string;
+            status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+        }>;
+        currentStepId?: string;
+    }) => Record<string, unknown>;
+    createTaskCheckpointReachedEvent: (taskId: string, payload: {
+        checkpointId: string;
+        title: string;
+        kind: 'review' | 'manual_action' | 'pre_delivery';
+        reason: string;
+        userMessage: string;
+        requiresUserConfirmation: boolean;
+        blocking: boolean;
+    }) => Record<string, unknown>;
+    createTaskUserActionRequiredEvent: (taskId: string, payload: {
+        actionId: string;
+        title: string;
+        kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
+        description: string;
+        blocking: boolean;
+        questions: string[];
+        instructions: string[];
+        fulfillsCheckpointId?: string;
     }) => Record<string, unknown>;
     createTaskStatusEvent: (taskId: string, payload: {
         status: 'running' | 'failed' | 'idle' | 'finished';
@@ -73,10 +183,14 @@ export type RuntimeCommandDeps = {
     };
     enqueueResumeMessage: (taskId: string, content: string, config?: Record<string, unknown>) => void;
     getTaskConfig: (taskId: string) => any;
+    applyFrozenWorkRequestSessionPolicy?: (taskId: string, frozenWorkRequest: FrozenWorkRequest, baseConfig?: any) => any;
+    getActivePreparedWorkRequest?: (taskId: string) => {
+        frozenWorkRequest: FrozenWorkRequest;
+    } | undefined;
     workspaceRoot: string;
     workRequestStore: any;
-    prepareWorkRequestContext: (input: any) => any;
-    buildArtifactContract: (query: string) => unknown;
+    prepareWorkRequestContext: (input: any) => Promise<any>;
+    buildArtifactContract: (query: string, deliverables?: DeliverableContract[]) => ArtifactContract;
     buildClarificationMessage: (frozenWorkRequest: any) => string;
     pushConversationMessage: (taskId: string, message: { role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }) => any;
     shouldUsePlanningFiles: (frozenWorkRequest: any) => boolean;
@@ -173,6 +287,113 @@ function getLatestMeaningfulUserMessage(
     return '';
 }
 
+function getLatestMeaningfulAssistantMessage(
+    conversation: Array<{ role?: string; content?: unknown }>
+): string {
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+        const message = conversation[index];
+        if (message?.role !== 'assistant') {
+            continue;
+        }
+
+        const text = extractMessageText(message.content);
+        if (!text) {
+            continue;
+        }
+
+        return text;
+    }
+
+    return '';
+}
+
+function shouldAugmentFollowUpPrompt(input: {
+    promptText: string;
+    previousUserMessage: string;
+    latestAssistantMessage: string;
+}): boolean {
+    const trimmed = input.promptText.trim();
+    if (!trimmed || trimmed.length >= 8) {
+        return false;
+    }
+
+    if (!input.previousUserMessage || !input.latestAssistantMessage) {
+        return false;
+    }
+
+    if (/^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i.test(trimmed)) {
+        return false;
+    }
+
+    const looksLikeCompactIdentifier = /^[A-Za-z0-9][A-Za-z0-9._\-\/]{0,31}$/.test(trimmed);
+    const assistantAskedForMoreInput =
+        /(请|provide|specify|exact|继续|补充|发我|给我|代码|code|ticker|symbol|which|what|股票|港股)/i
+            .test(input.latestAssistantMessage);
+
+    return looksLikeCompactIdentifier || assistantAskedForMoreInput;
+}
+
+function detectFollowUpLanguage(text: string): 'zh' | 'en' {
+    return /[\u4e00-\u9fff]/.test(text) ? 'zh' : 'en';
+}
+
+function buildCorrectionFollowUpSourceText(input: {
+    promptText: string;
+    previousContextText: string;
+}): string {
+    const previousContextText = input.previousContextText.trim();
+    const promptText = input.promptText.trim();
+    if (!previousContextText || !promptText) {
+        return input.promptText;
+    }
+
+    const language = detectFollowUpLanguage(`${previousContextText}\n${promptText}`);
+    if (language === 'zh') {
+        return [
+            `原始任务：${previousContextText}`,
+            `用户更正：${promptText}`,
+        ].join('\n');
+    }
+
+    return [
+        `Original task: ${previousContextText}`,
+        `User correction: ${promptText}`,
+    ].join('\n');
+}
+
+function buildFollowUpSourceText(input: {
+    promptText: string;
+    conversation: Array<{ role?: string; content?: unknown }>;
+    previousSnapshot?: FrozenWorkRequestSnapshot;
+}): string {
+    const previousUserMessage = getLatestMeaningfulUserMessage(input.conversation);
+    const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
+    const previousContextText =
+        input.previousSnapshot?.sourceText?.trim() ||
+        previousUserMessage;
+
+    if (hasCorrectionCue(input.promptText) && previousContextText) {
+        return buildCorrectionFollowUpSourceText({
+            promptText: input.promptText,
+            previousContextText,
+        });
+    }
+
+    if (!shouldAugmentFollowUpPrompt({
+        promptText: input.promptText,
+        previousUserMessage,
+        latestAssistantMessage,
+    })) {
+        return input.promptText;
+    }
+
+    return [
+        `原始任务：${previousUserMessage}`,
+        `需要补充：${latestAssistantMessage}`,
+        `用户补充：${input.promptText.trim()}`,
+    ].join('\n');
+}
+
 function buildExecutionQueryFromFrozenWorkRequest(request: {
     tasks?: Array<{
         objective?: string;
@@ -193,6 +414,214 @@ function buildExecutionQueryFromFrozenWorkRequest(request: {
         })
         .filter(Boolean)
         .join('\n\n');
+}
+
+function buildTaskPlanReadyPayload(frozenWorkRequest: {
+    tasks?: Array<{ objective?: string }>;
+    sourceText?: string;
+    deliverables?: DeliverableContract[];
+    checkpoints?: CheckpointContract[];
+    userActionsRequired?: UserActionRequest[];
+    hitlPolicy?: HitlPolicy;
+    runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    missingInfo?: MissingInfoItem[];
+    defaultingPolicy?: DefaultingPolicy;
+    resumeStrategy?: ResumeStrategy;
+}): {
+    summary: string;
+    deliverables: DeliverableContract[];
+    checkpoints: CheckpointContract[];
+    userActionsRequired: UserActionRequest[];
+    hitlPolicy?: HitlPolicy;
+    runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    missingInfo: MissingInfoItem[];
+    defaultingPolicy?: DefaultingPolicy;
+    resumeStrategy?: ResumeStrategy;
+} {
+    return {
+        summary: buildWorkRequestPlanSummary(frozenWorkRequest),
+        deliverables: frozenWorkRequest.deliverables ?? [],
+        checkpoints: frozenWorkRequest.checkpoints ?? [],
+        userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
+        hitlPolicy: frozenWorkRequest.hitlPolicy,
+        runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
+        missingInfo: frozenWorkRequest.missingInfo ?? [],
+        defaultingPolicy: frozenWorkRequest.defaultingPolicy,
+        resumeStrategy: frozenWorkRequest.resumeStrategy,
+    };
+}
+
+function buildTaskResearchUpdatedPayload(frozenWorkRequest: {
+    researchQueries?: FrozenWorkRequest['researchQueries'];
+    uncertaintyRegistry?: FrozenWorkRequest['uncertaintyRegistry'];
+    frozenResearchSummary?: FrozenWorkRequest['frozenResearchSummary'];
+}): {
+    summary: string;
+    sourcesChecked: string[];
+    completedQueries: number;
+    pendingQueries: number;
+    blockingUnknowns: string[];
+    selectedStrategyTitle?: string;
+} {
+    return buildResearchUpdatedPayload(frozenWorkRequest);
+}
+
+function emitBlockingCollaborationEvents(
+    taskId: string,
+    frozenWorkRequest: FrozenWorkRequest,
+    deps: Pick<
+        RuntimeCommandDeps,
+        | 'emit'
+        | 'createChatMessageEvent'
+        | 'createTaskCheckpointReachedEvent'
+        | 'createTaskUserActionRequiredEvent'
+        | 'createTaskStatusEvent'
+    >
+): { blocked: boolean; blockingUserAction?: UserActionRequest } {
+    const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
+    if (blockingCheckpoint) {
+        deps.emit(deps.createTaskCheckpointReachedEvent(taskId, {
+            checkpointId: blockingCheckpoint.id,
+            title: blockingCheckpoint.title,
+            kind: blockingCheckpoint.kind,
+            reason: blockingCheckpoint.reason,
+            userMessage: blockingCheckpoint.userMessage,
+            requiresUserConfirmation: blockingCheckpoint.requiresUserConfirmation,
+            blocking: blockingCheckpoint.blocking,
+        }));
+    }
+
+    const preferredActionKind = frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan';
+    const blockingUserAction =
+        getBlockingUserAction(frozenWorkRequest, preferredActionKind) ??
+        getBlockingUserAction(frozenWorkRequest);
+    if (blockingUserAction) {
+        deps.emit(deps.createTaskUserActionRequiredEvent(taskId, {
+            actionId: blockingUserAction.id,
+            title: blockingUserAction.title,
+            kind: blockingUserAction.kind,
+            description: blockingUserAction.description,
+            blocking: blockingUserAction.blocking,
+            questions: blockingUserAction.questions,
+            instructions: blockingUserAction.instructions,
+            fulfillsCheckpointId: blockingUserAction.fulfillsCheckpointId,
+        }));
+    }
+
+    if (frozenWorkRequest.clarification.required) {
+        return {
+            blocked: true,
+            blockingUserAction,
+        };
+    }
+
+    if (blockingUserAction?.blocking && blockingUserAction.kind === 'confirm_plan') {
+        deps.emit(deps.createChatMessageEvent(taskId, {
+            role: 'assistant',
+            content: buildBlockingUserActionMessage(blockingUserAction),
+        }));
+        deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+        return {
+            blocked: true,
+            blockingUserAction,
+        };
+    }
+
+    return {
+        blocked: false,
+        blockingUserAction,
+    };
+}
+
+function normalizeComparisonValue(value: string | undefined): string {
+    return (value || '')
+        .trim()
+        .replace(/^(original task|user correction)\s*:\s*/i, '')
+        .replace(/^(原始任务|用户更正)\s*[:：]\s*/i, '')
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+}
+
+function buildDeliverableFingerprint(request: FrozenWorkRequestSnapshot): string[] {
+    return request.deliverables
+        .map((deliverable) => [
+            deliverable.type,
+            deliverable.path ?? '',
+            deliverable.format ?? '',
+        ].join(':'))
+        .sort();
+}
+
+function buildResolvedTargetFingerprint(request: FrozenWorkRequestSnapshot): string[] {
+    return request.resolvedTargets;
+}
+
+function buildWorkflowFingerprint(request: FrozenWorkRequestSnapshot): string[] {
+    return request.preferredWorkflows;
+}
+
+function hasCorrectionCue(promptText: string): boolean {
+    return /(不是|改成|改为|更正|纠正|我指的是|actually|instead|correction|i meant|rather than|not .* but)/i.test(promptText);
+}
+
+function detectFollowUpContractReopen(input: {
+    promptText: string;
+    previous?: FrozenWorkRequestSnapshot;
+    next: FrozenWorkRequestSnapshot;
+}): {
+    summary: string;
+    reason: string;
+    trigger: 'new_scope_signal' | 'contradictory_evidence';
+} | null {
+    if (!input.previous) {
+        return null;
+    }
+
+    const reasons: string[] = [];
+    const previousObjective = normalizeComparisonValue(input.previous.primaryObjective || input.previous.sourceText);
+    const nextObjective = normalizeComparisonValue(input.next.primaryObjective || input.next.sourceText);
+    const previousDeliverables = buildDeliverableFingerprint(input.previous).join('|');
+    const nextDeliverables = buildDeliverableFingerprint(input.next).join('|');
+    const previousTargets = buildResolvedTargetFingerprint(input.previous).join('|');
+    const nextTargets = buildResolvedTargetFingerprint(input.next).join('|');
+    const previousWorkflows = buildWorkflowFingerprint(input.previous).join('|');
+    const nextWorkflows = buildWorkflowFingerprint(input.next).join('|');
+
+    if (input.previous.mode !== input.next.mode) {
+        reasons.push(`task mode changed from ${input.previous.mode} to ${input.next.mode}`);
+    }
+    if (previousDeliverables !== nextDeliverables) {
+        reasons.push('deliverables or output targets changed');
+    }
+    if (previousTargets !== nextTargets) {
+        reasons.push('execution targets changed');
+    }
+    if (previousWorkflows !== nextWorkflows) {
+        reasons.push('execution workflow changed');
+    }
+    if (
+        previousObjective !== nextObjective &&
+        normalizeComparisonValue(input.promptText).length >= 8
+    ) {
+        reasons.push('primary objective changed');
+    }
+
+    if (reasons.length === 0) {
+        return null;
+    }
+
+    const trigger = hasCorrectionCue(input.promptText)
+        ? 'contradictory_evidence'
+        : 'new_scope_signal';
+    const reasonPrefix = trigger === 'contradictory_evidence'
+        ? 'User follow-up corrected the previous contract'
+        : 'User follow-up introduced a new task scope';
+
+    return {
+        summary: `${reasonPrefix}: ${reasons[0]}.`,
+        reason: `${reasonPrefix}: ${reasons.join('; ')}.`,
+        trigger,
+    };
 }
 
 export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCommandDeps): Promise<boolean> {
@@ -296,6 +725,17 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (effectiveTaskConfig?.workspacePath as string | undefined) ||
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
+            const existingConversation = deps.taskSessionStore.getConversation(taskId);
+            const activePreparedWorkRequest = deps.getActivePreparedWorkRequest?.(taskId);
+            const previousFrozenSnapshot =
+                activePreparedWorkRequest?.frozenWorkRequest
+                    ? snapshotFrozenWorkRequest(activePreparedWorkRequest.frozenWorkRequest)
+                    : effectiveTaskConfig?.lastFrozenWorkRequestSnapshot;
+            const sourceTextForAnalysis = buildFollowUpSourceText({
+                promptText,
+                conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
+                previousSnapshot: previousFrozenSnapshot,
+            });
 
             deps.ensureTaskRuntimePersistence({
                 taskId,
@@ -303,17 +743,47 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 workspacePath,
             });
 
-            const preparedWorkRequest = deps.prepareWorkRequestContext({
-                sourceText: promptText,
+            const preparedWorkRequest = await deps.prepareWorkRequestContext({
+                sourceText: sourceTextForAnalysis,
                 workspacePath,
                 workRequestStore: deps.workRequestStore,
             });
             const { frozenWorkRequest } = preparedWorkRequest;
-            const artifactContract =
-                deps.taskSessionStore.getArtifactContract(taskId) ||
-                deps.buildArtifactContract(preparedWorkRequest.executionQuery || promptText);
+            const frozenSnapshot = snapshotFrozenWorkRequest(frozenWorkRequest);
+            const reopenSignal = detectFollowUpContractReopen({
+                promptText,
+                previous: previousFrozenSnapshot,
+                next: frozenSnapshot,
+            });
+            deps.taskSessionStore.setConfig(taskId, {
+                ...(effectiveTaskConfig ?? {}),
+                lastFrozenWorkRequestSnapshot: frozenSnapshot,
+            });
+            effectiveTaskConfig = deps.applyFrozenWorkRequestSessionPolicy?.(
+                taskId,
+                frozenWorkRequest,
+                deps.getTaskConfig(taskId)
+            ) ?? deps.getTaskConfig(taskId);
+            if (reopenSignal) {
+                deps.emit(deps.createTaskContractReopenedEvent(taskId, reopenSignal));
+            }
+            deps.emit(deps.createTaskResearchUpdatedEvent(taskId, buildTaskResearchUpdatedPayload(frozenWorkRequest)));
+            deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
+            deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
+            const artifactContract = reopenSignal
+                ? deps.buildArtifactContract(
+                    preparedWorkRequest.executionQuery || promptText,
+                    frozenWorkRequest.deliverables
+                )
+                : deps.taskSessionStore.getArtifactContract(taskId) ||
+                    deps.buildArtifactContract(
+                        preparedWorkRequest.executionQuery || promptText,
+                        frozenWorkRequest.deliverables
+                    );
 
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
+
+            const collaborationGate = emitBlockingCollaborationEvents(taskId, frozenWorkRequest, deps);
 
             if (frozenWorkRequest.clarification.required) {
                 const clarificationMessage = deps.buildClarificationMessage(frozenWorkRequest);
@@ -333,6 +803,19 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     deps.appendPlanningProgressEntry(
                         workspacePath,
                         `Clarification requested for work request ${frozenWorkRequest.id}: ${clarificationMessage}`
+                    );
+                }
+                return true;
+            }
+
+            if (collaborationGate.blocked && collaborationGate.blockingUserAction?.kind === 'confirm_plan') {
+                const confirmationMessage = buildBlockingUserActionMessage(collaborationGate.blockingUserAction);
+                deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
+                deps.pushConversationMessage(taskId, { role: 'assistant', content: confirmationMessage });
+                if (deps.shouldUsePlanningFiles(frozenWorkRequest)) {
+                    deps.appendPlanningProgressEntry(
+                        workspacePath,
+                        `Plan confirmation requested for work request ${frozenWorkRequest.id}: ${confirmationMessage}`
                     );
                 }
                 return true;
@@ -365,6 +848,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }
 
             deps.markWorkRequestExecutionStarted(preparedWorkRequest);
+            deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
             const explicitSkillIds =
                 (effectiveTaskConfig?.enabledClaudeSkills as string[] | undefined) ??
                 (effectiveTaskConfig?.enabledSkills as string[] | undefined) ??
@@ -443,17 +927,71 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     `Resume from the saved context, preserve completed work, and continue the original task without restarting from scratch.`,
             });
 
-            const preparedWorkRequest = deps.prepareWorkRequestContext({
+            const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: resumeQuery,
                 workspacePath,
                 workRequestStore: deps.workRequestStore,
             });
+            const resumedConfig = {
+                ...(effectiveTaskConfig ?? {}),
+                lastFrozenWorkRequestSnapshot: snapshotFrozenWorkRequest(preparedWorkRequest.frozenWorkRequest),
+            };
+            effectiveTaskConfig = deps.applyFrozenWorkRequestSessionPolicy?.(
+                taskId,
+                preparedWorkRequest.frozenWorkRequest,
+                resumedConfig
+            ) ?? (() => {
+                deps.taskSessionStore.setConfig(taskId, resumedConfig);
+                return deps.getTaskConfig(taskId);
+            })();
+            deps.emit(
+                deps.createTaskResearchUpdatedEvent(
+                    taskId,
+                    buildTaskResearchUpdatedPayload(preparedWorkRequest.frozenWorkRequest)
+                )
+            );
+            deps.emit(
+                deps.createTaskPlanReadyEvent(
+                    taskId,
+                    buildTaskPlanReadyPayload(preparedWorkRequest.frozenWorkRequest)
+                )
+            );
+            deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
             const artifactContract =
                 deps.taskSessionStore.getArtifactContract(taskId) ||
-                deps.buildArtifactContract(preparedWorkRequest.executionQuery || resumeQuery);
+                deps.buildArtifactContract(
+                    preparedWorkRequest.executionQuery || resumeQuery,
+                    preparedWorkRequest.frozenWorkRequest?.deliverables
+                );
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
 
+            const collaborationGate = emitBlockingCollaborationEvents(taskId, preparedWorkRequest.frozenWorkRequest, deps);
+
+            if (preparedWorkRequest.frozenWorkRequest.clarification.required) {
+                const clarificationMessage = deps.buildClarificationMessage(preparedWorkRequest.frozenWorkRequest);
+                deps.pushConversationMessage(taskId, {
+                    role: 'assistant',
+                    content: clarificationMessage,
+                });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: clarificationMessage,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
+
+            if (collaborationGate.blocked && collaborationGate.blockingUserAction?.kind === 'confirm_plan') {
+                const confirmationMessage = buildBlockingUserActionMessage(collaborationGate.blockingUserAction);
+                deps.pushConversationMessage(taskId, {
+                    role: 'assistant',
+                    content: confirmationMessage,
+                });
+                return true;
+            }
+
             deps.markWorkRequestExecutionStarted(preparedWorkRequest);
+            deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
             const explicitSkillIds =
                 (effectiveTaskConfig?.enabledClaudeSkills as string[] | undefined) ??
                 (effectiveTaskConfig?.enabledSkills as string[] | undefined) ??

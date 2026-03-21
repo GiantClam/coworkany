@@ -13,6 +13,8 @@ export type TaskUiState = {
     summary?: string;
     clarificationQuestions?: string[];
     planSummary?: string;
+    researchSummary?: string;
+    contractReopenReason?: string;
     planSteps: Array<{ id: string; description: string; status: string }>;
     toolCalls: Array<{ toolName: string; toolId: string; source: string }>;
     effects: Array<{ requestId: string; effectType: string; riskLevel: number; approved?: boolean }>;
@@ -56,6 +58,19 @@ export function applyTaskEvent(state: TaskUiState, event: TaskEvent): TaskUiStat
                 ...next,
                 planSummary: event.payload.summary,
                 planSteps: event.payload.steps,
+            };
+        case 'TASK_RESEARCH_UPDATED':
+            return {
+                ...next,
+                researchSummary: event.payload.summary,
+            };
+        case 'TASK_CONTRACT_REOPENED':
+            return {
+                ...next,
+                status: 'running',
+                summary: event.payload.summary,
+                contractReopenReason: event.payload.reason,
+                clarificationQuestions: undefined,
             };
         case 'TASK_FINISHED':
             return {

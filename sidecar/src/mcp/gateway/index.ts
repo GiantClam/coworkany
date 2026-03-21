@@ -2,6 +2,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import * as path from 'path';
 import {
     ToolpackManifestSchema,
     type ToolpackManifest,
@@ -43,6 +44,14 @@ type PolicyDecision = {
     };
 };
 
+export type McpSessionIsolationPolicy = {
+    allowedServerNames: string[];
+    allowedWorkspacePaths: string[];
+    writableWorkspacePaths: string[];
+    networkAccess: 'none' | 'restricted';
+    allowedDomains: string[];
+};
+
 // ============================================================================
 // MCP Gateway
 // ============================================================================
@@ -50,6 +59,7 @@ type PolicyDecision = {
 export class MCPGateway {
     private servers = new Map<string, MCPServer>();
     private toolRegistry = new Map<string, { server: string; tool: Tool }>();
+    private sessionPolicies = new Map<string, McpSessionIsolationPolicy>();
     private riskDatabase = new RiskDatabase();
     private auditLogger = new AuditLogger();
     private policyBridge: PolicyBridge | null = null;
@@ -59,6 +69,14 @@ export class MCPGateway {
      */
     setPolicyBridge(bridge: PolicyBridge): void {
         this.policyBridge = bridge;
+    }
+
+    setSessionPolicy(sessionId: string, policy: McpSessionIsolationPolicy): void {
+        this.sessionPolicies.set(sessionId, policy);
+    }
+
+    clearSessionPolicy(sessionId: string): void {
+        this.sessionPolicies.delete(sessionId);
     }
 
     // =========================================================================
@@ -209,8 +227,16 @@ export class MCPGateway {
         context: ToolCallContext,
         server: MCPServer
     ): Promise<PolicyDecision> {
+        const sessionPolicy = this.sessionPolicies.get(context.sessionId);
         if (server.healthStatus === 'down') {
             return { allow: false, reason: 'Server is down' };
+        }
+
+        if (sessionPolicy && !sessionPolicy.allowedServerNames.includes(server.name)) {
+            return {
+                allow: false,
+                reason: `Server ${server.name} is not enabled for this task session.`,
+            };
         }
 
         const effectType = context.effectType ?? this.inferEffectType(context.toolName, context.arguments);
@@ -221,6 +247,14 @@ export class MCPGateway {
             };
         }
 
+        const scopeViolationReason = this.validateSessionScope(context, effectType, sessionPolicy);
+        if (scopeViolationReason) {
+            return {
+                allow: false,
+                reason: scopeViolationReason,
+            };
+        }
+
         if (server.riskScore > 60) {
             this.auditLogger.logWarning(context, `High-risk tool call (score ${server.riskScore})`);
         }
@@ -228,7 +262,7 @@ export class MCPGateway {
         // If PolicyBridge is configured, delegate to Tauri PolicyEngine
         if (this.policyBridge && effectType) {
             try {
-                const effectRequest = this.buildEffectRequest(context, effectType, server);
+                const effectRequest = this.buildEffectRequest(context, effectType, server, sessionPolicy);
                 const response = await this.policyBridge.requestEffect(effectRequest);
 
                 if (!response.approved) {
@@ -244,7 +278,7 @@ export class MCPGateway {
                     scopeRestrictions: response.modifiedScope ? {
                         allowlist: response.modifiedScope.commandAllowlist,
                         denylist: response.modifiedScope.commandBlocklist,
-                    } : this.buildRestrictions(effectType),
+                    } : this.buildRestrictions(effectType, sessionPolicy),
                 };
             } catch (error) {
                 this.auditLogger.logError(context, error);
@@ -258,7 +292,7 @@ export class MCPGateway {
         // Fallback to local policy (when PolicyBridge not configured)
         return {
             allow: true,
-            scopeRestrictions: this.buildRestrictions(effectType),
+            scopeRestrictions: this.buildRestrictions(effectType, sessionPolicy),
         };
     }
 
@@ -268,7 +302,8 @@ export class MCPGateway {
     private buildEffectRequest(
         context: ToolCallContext,
         effectType: EffectType,
-        server: MCPServer
+        server: MCPServer,
+        sessionPolicy?: McpSessionIsolationPolicy
     ): EffectRequest {
         const id = crypto.randomUUID();
 
@@ -299,6 +334,14 @@ export class MCPGateway {
                 toolName: `${server.name}:${context.toolName}`,
                 reasoning: `MCP Toolpack ${server.name} invoked tool ${context.toolName}`,
             },
+            scope: sessionPolicy ? {
+                workspacePaths: effectType === 'filesystem:write'
+                    ? sessionPolicy.writableWorkspacePaths
+                    : sessionPolicy.allowedWorkspacePaths,
+                domainAllowlist: sessionPolicy.networkAccess === 'restricted'
+                    ? sessionPolicy.allowedDomains
+                    : undefined,
+            } : undefined,
         };
     }
 
@@ -319,11 +362,123 @@ export class MCPGateway {
         return undefined;
     }
 
-    private buildRestrictions(effectType: EffectType | undefined): PolicyDecision['scopeRestrictions'] {
+    private buildRestrictions(
+        effectType: EffectType | undefined,
+        sessionPolicy?: McpSessionIsolationPolicy
+    ): PolicyDecision['scopeRestrictions'] {
         if (!effectType) return undefined;
         return {
+            allowlist: effectType === 'network:outbound'
+                ? sessionPolicy?.allowedDomains
+                : undefined,
             redactPatterns: ['password', 'token', 'api_key', 'secret'],
         };
+    }
+
+    private validateSessionScope(
+        context: ToolCallContext,
+        effectType: EffectType | undefined,
+        sessionPolicy?: McpSessionIsolationPolicy
+    ): string | null {
+        if (!sessionPolicy || !effectType) {
+            return null;
+        }
+
+        if (effectType === 'network:outbound') {
+            if (sessionPolicy.networkAccess === 'none') {
+                return 'Network connectors are disabled for this task session.';
+            }
+
+            const targetUrl = this.extractFirstUrl(context.arguments);
+            if (!targetUrl) {
+                return null;
+            }
+
+            const hostname = this.toHostname(targetUrl);
+            if (!hostname) {
+                return `Invalid outbound URL: ${targetUrl}`;
+            }
+
+            if (sessionPolicy.allowedDomains.length > 0 && !sessionPolicy.allowedDomains.includes(hostname)) {
+                return `Domain ${hostname} is outside the task session allowlist.`;
+            }
+
+            return null;
+        }
+
+        const candidatePaths = this.extractCandidatePaths(context.arguments);
+        if (candidatePaths.length === 0) {
+            return null;
+        }
+
+        const allowedRoots = effectType === 'filesystem:write'
+            ? sessionPolicy.writableWorkspacePaths
+            : sessionPolicy.allowedWorkspacePaths;
+
+        for (const candidatePath of candidatePaths) {
+            const resolvedPath = path.resolve(candidatePath);
+            const insideAllowedRoot = allowedRoots.some((root) => {
+                const normalizedRoot = path.resolve(root);
+                return resolvedPath === normalizedRoot || resolvedPath.startsWith(`${normalizedRoot}${path.sep}`);
+            });
+            if (!insideAllowedRoot) {
+                return `Path ${resolvedPath} is outside the task session isolation roots.`;
+            }
+        }
+
+        return null;
+    }
+
+    private extractCandidatePaths(args: Record<string, unknown>): string[] {
+        const candidates: string[] = [];
+        const directKeys = ['path', 'cwd', 'source_path', 'destination_path'];
+        for (const key of directKeys) {
+            if (typeof args[key] === 'string' && args[key].trim().length > 0) {
+                candidates.push(args[key] as string);
+            }
+        }
+
+        if (Array.isArray(args.moves)) {
+            for (const move of args.moves) {
+                if (move && typeof move === 'object') {
+                    const record = move as Record<string, unknown>;
+                    if (typeof record.source_path === 'string') {
+                        candidates.push(record.source_path);
+                    }
+                    if (typeof record.destination_path === 'string') {
+                        candidates.push(record.destination_path);
+                    }
+                }
+            }
+        }
+
+        if (Array.isArray(args.deletes)) {
+            for (const deletion of args.deletes) {
+                if (deletion && typeof deletion === 'object') {
+                    const record = deletion as Record<string, unknown>;
+                    if (typeof record.path === 'string') {
+                        candidates.push(record.path);
+                    }
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    private extractFirstUrl(args: Record<string, unknown>): string | null {
+        if (typeof args.url === 'string' && args.url.trim().length > 0) {
+            return args.url;
+        }
+        return null;
+    }
+
+    private toHostname(candidate: string): string | null {
+        try {
+            return new URL(candidate).hostname;
+        } catch {
+            return null;
+        }
     }
 
     private sanitizeArguments(

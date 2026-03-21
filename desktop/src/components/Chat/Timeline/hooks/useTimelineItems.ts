@@ -56,6 +56,34 @@ function appendItem(cache: TimelineCache, item: TimelineItemType): number {
     return nextIndex;
 }
 
+function appendFinishedSummaryIfNeeded(
+    cache: TimelineCache,
+    event: TaskSession['events'][number],
+    summary: string | undefined
+): void {
+    const normalizedSummary = summary?.trim();
+    if (!normalizedSummary) {
+        return;
+    }
+
+    if (cache.currentDraftIndex !== null) {
+        return;
+    }
+
+    const lastItem = cache.items.at(-1);
+    if (lastItem?.type === 'assistant_message' && lastItem.content.trim() === normalizedSummary) {
+        return;
+    }
+
+    appendItem(cache, {
+        type: 'assistant_message',
+        id: `${event.id}-assistant`,
+        content: normalizedSummary,
+        timestamp: event.timestamp,
+        isStreaming: false,
+    });
+}
+
 function processEvent(cache: TimelineCache, event: TaskSession['events'][number]): void {
     const payload = event.payload as Record<string, any>;
 
@@ -232,6 +260,70 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
             });
             break;
 
+        case 'TASK_PLAN_READY':
+            appendItem(cache, {
+                type: 'system_event',
+                id: event.id,
+                content: payload.summary || 'Coworkany prepared an execution plan.',
+                timestamp: event.timestamp,
+            });
+            break;
+
+        case 'TASK_RESEARCH_UPDATED':
+            appendItem(cache, {
+                type: 'system_event',
+                id: event.id,
+                content: [
+                    payload.summary || 'Research updated.',
+                    Array.isArray(payload.sourcesChecked) && payload.sourcesChecked.length > 0
+                        ? `Sources: ${payload.sourcesChecked.join(', ')}`
+                        : null,
+                    Array.isArray(payload.blockingUnknowns) && payload.blockingUnknowns.length > 0
+                        ? `Blocking: ${payload.blockingUnknowns.join(', ')}`
+                        : null,
+                ].filter(Boolean).join('\n'),
+                timestamp: event.timestamp,
+            });
+            break;
+
+        case 'TASK_CONTRACT_REOPENED':
+            appendItem(cache, {
+                type: 'system_event',
+                id: event.id,
+                content: [
+                    payload.summary || 'Execution contract reopened.',
+                    payload.reason || null,
+                ].filter(Boolean).join('\n'),
+                timestamp: event.timestamp,
+            });
+            break;
+
+        case 'TASK_CHECKPOINT_REACHED':
+            appendItem(cache, {
+                type: 'system_event',
+                id: event.id,
+                content: payload.userMessage || payload.reason || 'Checkpoint reached.',
+                timestamp: event.timestamp,
+            });
+            break;
+
+        case 'TASK_USER_ACTION_REQUIRED':
+            appendItem(cache, {
+                type: 'system_event',
+                id: event.id,
+                content: [
+                    payload.description,
+                    ...(Array.isArray(payload.questions) ? payload.questions : []),
+                    ...(Array.isArray(payload.instructions) ? payload.instructions : []),
+                ].filter(Boolean).join('\n') || 'User action required.',
+                timestamp: event.timestamp,
+            });
+            break;
+
+        case 'TASK_FINISHED':
+            appendFinishedSummaryIfNeeded(cache, event, payload.summary);
+            break;
+
         default:
             break;
     }
@@ -278,6 +370,24 @@ function finalizeStreamingState(cache: TimelineCache, sessionStatus: TaskSession
     }
 
     return nextCache;
+}
+
+export function buildTimelineItems(
+    session: TaskSession,
+    maxRecentEvents?: number
+): TimelineItemsResult {
+    const sourceEvents = typeof maxRecentEvents === 'number' && maxRecentEvents > 0
+        ? session.events.slice(Math.max(0, session.events.length - maxRecentEvents))
+        : session.events;
+    const cache = finalizeStreamingState(
+        buildCache(session, sourceEvents, maxRecentEvents),
+        session.status
+    );
+
+    return {
+        items: cache.items,
+        hiddenEventCount: session.events.length - sourceEvents.length,
+    };
 }
 
 /**

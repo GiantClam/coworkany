@@ -1,5 +1,11 @@
 import * as path from 'path';
-import { type PreparedWorkRequestContext } from '../orchestration/workRequestRuntime';
+import {
+    markWorkRequestPresentationStarted,
+    markWorkRequestReductionStarted,
+    reopenPreparedWorkRequestForResearch,
+    type PreparedWorkRequestContext,
+} from '../orchestration/workRequestRuntime';
+import type { ReplanTrigger, RuntimeIsolationPolicy } from '../orchestration/workRequestSchema';
 import { type ToolDefinition } from '../tools/standard';
 import { type ExecutionResultReporter } from './resultReporter';
 import { type ExecutionSession } from './session';
@@ -14,6 +20,7 @@ export type ExecutionTaskConfig = {
     enabledToolpacks?: string[];
     enabledSkills?: string[];
     workspacePath?: string;
+    runtimeIsolationPolicy?: RuntimeIsolationPolicy;
 };
 
 export type ExecutionStreamOptions = {
@@ -50,6 +57,11 @@ type ArtifactEvaluationResult = {
 type DegradedOutputResult = {
     hasDegradedOutput: boolean;
     degradedArtifacts: string[];
+};
+
+type MarketplaceInstallIntent = {
+    marketplace: 'auto' | 'skillhub' | 'github' | 'clawhub';
+    source: string;
 };
 
 export type ExecutionRuntimeDeps = {
@@ -121,10 +133,44 @@ export type ExecutionRuntimeDeps = {
         request: PreparedWorkRequestContext['frozenWorkRequest'];
         artifacts?: string[];
     }) => { canonicalResult: string; uiSummary: string; ttsSummary: string; artifacts: string[] };
+    markWorkRequestExecutionStarted: (
+        prepared: PreparedWorkRequestContext
+    ) => void;
     markWorkRequestExecutionCompleted: (
         prepared: PreparedWorkRequestContext,
         summary: string
     ) => void;
+    refreezePreparedWorkRequestForResearch: (input: {
+        prepared: PreparedWorkRequestContext;
+        reason: string;
+        trigger: ReplanTrigger;
+    }) => Promise<PreparedWorkRequestContext>;
+    emitContractReopened: (
+        taskId: string,
+        payload: {
+            summary: string;
+            reason: string;
+            trigger: ReplanTrigger;
+            nextStepId?: string;
+        }
+    ) => void;
+    emitPreparedWorkRequestRefrozen: (
+        input: {
+            taskId: string;
+            prepared: PreparedWorkRequestContext;
+            reason: string;
+            trigger: ReplanTrigger;
+        }
+    ) => Promise<{
+        blocked: boolean;
+        summary?: string;
+    }> | {
+        blocked: boolean;
+        summary?: string;
+    };
+    emitPlanUpdated: (taskId: string, prepared: PreparedWorkRequestContext) => void;
+    activatePreparedWorkRequest: (taskId: string, prepared: PreparedWorkRequestContext) => void;
+    clearPreparedWorkRequest: (taskId: string) => void;
     markWorkRequestExecutionFailed: (
         prepared: PreparedWorkRequestContext,
         error: string
@@ -135,6 +181,190 @@ export type ExecutionRuntimeDeps = {
         severity: number
     ) => Promise<{ learned: boolean }>;
 };
+
+function extractMarketplaceInstallIntent(text: string): MarketplaceInstallIntent | null {
+    const trimmed = text.trim();
+    if (!trimmed || !/(安装|install)/i.test(trimmed)) {
+        return null;
+    }
+
+    const extractTrailingSource = (): string | null => {
+        const installMatch = trimmed.match(/(?:安装|install)/i);
+        if (!installMatch || typeof installMatch.index !== 'number') {
+            return null;
+        }
+
+        const tail = trimmed.slice(installMatch.index + installMatch[0].length)
+            .trim()
+            .replace(/^(?:(?:一个|一下|这个|该|技能|从|from|via|在|中|的|使用)\s+)*/i, '')
+            .replace(/^(?:skillhub|github|clawhub)(?:\s*(?:中|上|里|repo|仓库))?\s*/i, '')
+            .trim();
+
+        const tokenMatch = tail.match(/^([A-Za-z0-9._/-]+)/);
+        return tokenMatch?.[1] ?? null;
+    };
+
+    const githubMatch = trimmed.match(/(github:[^\s，。；,;]+|https?:\/\/github\.com\/[^\s，。；,;]+)/i);
+    if (githubMatch) {
+        return {
+            marketplace: 'github',
+            source: githubMatch[1],
+        };
+    }
+
+    if (/github/i.test(trimmed)) {
+        const source = extractTrailingSource();
+        if (source && source.includes('/')) {
+            return {
+                marketplace: 'github',
+                source,
+            };
+        }
+    }
+
+    const explicitClawhub = /clawhub/i.test(trimmed);
+    const explicitSkillhub = /skillhub/i.test(trimmed);
+    const explicitCoworkanySkill = /(coworkany|技能|skill|marketplace)/i.test(trimmed);
+    if (!explicitClawhub && !explicitSkillhub && !explicitCoworkanySkill) {
+        return null;
+    }
+
+    const source = extractTrailingSource();
+    if (!source) {
+        return null;
+    }
+
+    return {
+        marketplace: explicitClawhub ? 'clawhub' : explicitSkillhub ? 'skillhub' : 'auto',
+        source,
+    };
+}
+
+async function tryMarketplaceSkillInstallFastPath(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps): Promise<ExecutionRuntimeResult | null> {
+    const intent = extractMarketplaceInstallIntent(input.preparedWorkRequest.executionQuery);
+    if (!intent) {
+        return null;
+    }
+
+    const result = await deps.executeTool(
+        input.taskId,
+        'install_coworkany_skill_from_marketplace',
+        {
+            source: intent.source,
+            marketplace: intent.marketplace,
+        },
+        { workspacePath: input.workspacePath }
+    );
+
+    const message = typeof result?.message === 'string'
+        ? result.message
+        : typeof result?.error === 'string'
+            ? result.error
+            : 'Marketplace install completed.';
+
+    if (result?.needsClarification) {
+        deps.markWorkRequestExecutionCompleted(input.preparedWorkRequest, message);
+        deps.reporter.finished({
+            summary: message,
+            artifactsCreated: [],
+            duration: Date.now() - input.startedAt,
+        });
+        return {
+            success: true,
+            summary: message,
+            artifactsCreated: [],
+        };
+    }
+
+    if (result?.success) {
+        deps.markWorkRequestExecutionCompleted(input.preparedWorkRequest, message);
+        deps.reporter.finished({
+            summary: message,
+            artifactsCreated: [],
+            duration: Date.now() - input.startedAt,
+        });
+        return {
+            success: true,
+            summary: message,
+            artifactsCreated: [],
+        };
+    }
+
+    deps.markWorkRequestExecutionFailed(input.preparedWorkRequest, message);
+    deps.reporter.failed({
+        error: message,
+        errorCode: 'MARKETPLACE_INSTALL_FAILED',
+        recoverable: Boolean(result?.needsClarification),
+        suggestion: result?.needsClarification
+            ? 'Provide a specific marketplace slug or repository source.'
+            : undefined,
+    });
+    return {
+        success: false,
+        summary: message,
+        error: typeof result?.error === 'string' ? result.error : message,
+        artifactsCreated: [],
+    };
+}
+
+function canReopenForTrigger(
+    preparedWorkRequest: PreparedWorkRequestContext,
+    trigger: ReplanTrigger,
+    contractReopenAttempts: number,
+    maxContractReopenAttempts = 1
+): boolean {
+    return Boolean(
+        preparedWorkRequest.frozenWorkRequest.replanPolicy?.allowReturnToResearch === true &&
+        (preparedWorkRequest.frozenWorkRequest.replanPolicy?.triggers ?? []).includes(trigger) &&
+        contractReopenAttempts < maxContractReopenAttempts
+    );
+}
+
+async function reopenAndRefreezePreparedContract(input: {
+    taskId: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    reason: string;
+    trigger: ReplanTrigger;
+}, deps: ExecutionRuntimeDeps): Promise<{
+    reopenedSummary: string;
+    refrozenPrepared?: PreparedWorkRequestContext;
+    blockedSummary?: string;
+}> {
+    const reopenedPayload = reopenPreparedWorkRequestForResearch({
+        prepared: input.preparedWorkRequest,
+        reason: input.reason,
+        trigger: input.trigger,
+    });
+    deps.emitContractReopened(input.taskId, reopenedPayload);
+    deps.emitPlanUpdated(input.taskId, input.preparedWorkRequest);
+    const refrozenPrepared = await deps.refreezePreparedWorkRequestForResearch({
+        prepared: input.preparedWorkRequest,
+        reason: input.reason,
+        trigger: input.trigger,
+    });
+    const refrozenOutcome = await deps.emitPreparedWorkRequestRefrozen({
+        taskId: input.taskId,
+        prepared: refrozenPrepared,
+        reason: input.reason,
+        trigger: input.trigger,
+    });
+    if (refrozenOutcome.blocked) {
+        return {
+            reopenedSummary: reopenedPayload.summary,
+            blockedSummary: refrozenOutcome.summary || reopenedPayload.summary,
+        };
+    }
+    return {
+        reopenedSummary: reopenedPayload.summary,
+        refrozenPrepared,
+    };
+}
 
 export async function executePreparedTaskFlow(input: {
     taskId: string;
@@ -188,6 +418,7 @@ export async function executePreparedTaskFlow(input: {
         missingArtifactSuggestionPrefix: 'Expected file types not found. Generated files: {artifacts}',
         modelErrorCode: 'MODEL_STREAM_ERROR',
         learnOnArtifactFailure: true,
+        contractReopenAttempts: 0,
     }, deps);
 }
 
@@ -222,6 +453,7 @@ export async function continuePreparedAgentFlow(input: {
         missingArtifactSuggestionPrefix: 'Expected file types not found. Generated files: {artifacts}',
         modelErrorCode: 'MODEL_STREAM_ERROR',
         learnOnArtifactFailure: false,
+        contractReopenAttempts: 0,
     }, deps);
 }
 
@@ -318,6 +550,7 @@ async function runPreparedAgentExecution(input: {
     missingArtifactSuggestionPrefix: string;
     modelErrorCode: string;
     learnOnArtifactFailure: boolean;
+    contractReopenAttempts?: number;
 }, deps: ExecutionRuntimeDeps): Promise<ExecutionRuntimeResult> {
     const {
         taskId,
@@ -331,55 +564,69 @@ async function runPreparedAgentExecution(input: {
         artifactContract,
         startedAt,
         explicitSkillIds,
+        contractReopenAttempts = 0,
     } = input;
     const { frozenWorkRequest, executionQuery, preferredSkillIds } = preparedWorkRequest;
     const triggeredSkillIds = deps.getTriggeredSkillIds(userMessage);
     const enabledSkillIds = deps.mergeSkillIds(explicitSkillIds, triggeredSkillIds, preferredSkillIds);
 
-    const deterministicLocalWorkflowResult = await tryExecuteDeterministicLocalWorkflow({
-        taskId,
-        workspacePath,
-        preparedWorkRequest,
-        startedAt,
-        emitFinishedStatus: input.emitFinishedStatus,
-    }, deps);
-    if (deterministicLocalWorkflowResult) {
-        return deterministicLocalWorkflowResult;
-    }
-
-    if (input.allowPptFastPath) {
-        const pptGeneratorFastPathResult = await deps.tryPptGeneratorSkillFastPath(
-            taskId,
-            executionQuery,
-            workspacePath,
-            enabledSkillIds
-        );
-        if (pptGeneratorFastPathResult) {
-            deps.session.replaceKnownArtifacts(pptGeneratorFastPathResult.artifactsCreated);
-            deps.markWorkRequestExecutionCompleted(preparedWorkRequest, pptGeneratorFastPathResult.summary);
-            deps.reporter.finished({
-                summary: pptGeneratorFastPathResult.summary,
-                artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
-                duration: Date.now() - startedAt,
-            });
-            return {
-                success: true,
-                summary: pptGeneratorFastPathResult.summary,
-                artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
-            };
-        }
-    }
-
-    const systemPromptWithDirectives = deps.mergeSystemPrompt(
-        deps.buildSkillSystemPrompt(enabledSkillIds),
-        deps.getDirectivePromptAdditions?.(userMessage)
-    );
-    const systemPrompt = deps.mergeSystemPrompt(
-        systemPromptWithDirectives,
-        [workRequestExecutionPrompt, extraSystemPrompt].filter(Boolean).join('\n\n') || undefined
-    );
+    deps.activatePreparedWorkRequest(taskId, preparedWorkRequest);
 
     try {
+        const marketplaceInstallResult = await tryMarketplaceSkillInstallFastPath({
+            taskId,
+            workspacePath,
+            preparedWorkRequest,
+            startedAt,
+            emitFinishedStatus: input.emitFinishedStatus,
+        }, deps);
+        if (marketplaceInstallResult) {
+            return marketplaceInstallResult;
+        }
+
+        const deterministicLocalWorkflowResult = await tryExecuteDeterministicLocalWorkflow({
+            taskId,
+            workspacePath,
+            preparedWorkRequest,
+            startedAt,
+            emitFinishedStatus: input.emitFinishedStatus,
+        }, deps);
+        if (deterministicLocalWorkflowResult) {
+            return deterministicLocalWorkflowResult;
+        }
+
+        if (input.allowPptFastPath) {
+            const pptGeneratorFastPathResult = await deps.tryPptGeneratorSkillFastPath(
+                taskId,
+                executionQuery,
+                workspacePath,
+                enabledSkillIds
+            );
+            if (pptGeneratorFastPathResult) {
+                deps.session.replaceKnownArtifacts(pptGeneratorFastPathResult.artifactsCreated);
+                deps.markWorkRequestExecutionCompleted(preparedWorkRequest, pptGeneratorFastPathResult.summary);
+                deps.reporter.finished({
+                    summary: pptGeneratorFastPathResult.summary,
+                    artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
+                    duration: Date.now() - startedAt,
+                });
+                return {
+                    success: true,
+                    summary: pptGeneratorFastPathResult.summary,
+                    artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
+                };
+            }
+        }
+
+        const systemPromptWithDirectives = deps.mergeSystemPrompt(
+            deps.buildSkillSystemPrompt(enabledSkillIds),
+            deps.getDirectivePromptAdditions?.(userMessage)
+        );
+        const systemPrompt = deps.mergeSystemPrompt(
+            systemPromptWithDirectives,
+            [workRequestExecutionPrompt, extraSystemPrompt].filter(Boolean).join('\n\n') || undefined
+        );
+
         const options: ExecutionStreamOptions = {
             modelId: config?.modelId,
             maxTokens: config?.maxTokens,
@@ -406,13 +653,9 @@ async function runPreparedAgentExecution(input: {
         );
 
         if (!artifactEvaluation.passed) {
-            const unmetMessage = `Artifact contract unmet: ${artifactEvaluation.failed
-                .map((item) => `${item.description} (${item.reason})`)
-                .join('; ')}`;
-            deps.markWorkRequestExecutionFailed(preparedWorkRequest, unmetMessage);
-
             if (input.allowUserConfirmedDegrade && /CONFIRM_DEGRADE_TO_MD/i.test(userMessage) && degradedOutput.hasDegradedOutput) {
                 const summary = `Task completed with user-approved degraded output: ${degradedOutput.degradedArtifacts.join(', ')}`;
+                deps.markWorkRequestExecutionCompleted(preparedWorkRequest, summary);
                 if (input.emitFinishedStatus) {
                     deps.reporter.status('finished');
                 }
@@ -427,6 +670,46 @@ async function runPreparedAgentExecution(input: {
                     artifactsCreated: mergedArtifacts,
                 };
             }
+
+            const unmetMessage = `Artifact contract unmet: ${artifactEvaluation.failed
+                .map((item) => `${item.description} (${item.reason})`)
+                .join('; ')}`;
+            const canReopenContract = canReopenForTrigger(
+                preparedWorkRequest,
+                'execution_infeasible',
+                contractReopenAttempts
+            );
+
+            if (canReopenContract) {
+                const reopenOutcome = await reopenAndRefreezePreparedContract({
+                    taskId,
+                    preparedWorkRequest,
+                    reason: unmetMessage,
+                    trigger: 'execution_infeasible',
+                }, deps);
+                if (!reopenOutcome.refrozenPrepared) {
+                    return {
+                        success: false,
+                        summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
+                        error: unmetMessage,
+                        artifactsCreated: mergedArtifacts,
+                    };
+                }
+                const refrozenPrepared = reopenOutcome.refrozenPrepared;
+                deps.markWorkRequestExecutionStarted(refrozenPrepared);
+                deps.emitPlanUpdated(taskId, refrozenPrepared);
+                return runPreparedAgentExecution({
+                    ...input,
+                    preparedWorkRequest: refrozenPrepared,
+                    extraSystemPrompt: [
+                        extraSystemPrompt,
+                        `Previous execution attempt failed artifact validation and triggered contract reopen. Resolve this issue before final delivery: ${unmetMessage}`,
+                    ].filter(Boolean).join('\n\n'),
+                    contractReopenAttempts: contractReopenAttempts + 1,
+                }, deps);
+            }
+
+            deps.markWorkRequestExecutionFailed(preparedWorkRequest, unmetMessage);
 
             deps.reporter.failed({
                 error: unmetMessage,
@@ -460,12 +743,16 @@ async function runPreparedAgentExecution(input: {
         }
 
         const finalAssistantText = deps.session.getLatestAssistantResponseText() || 'Task completed';
+        markWorkRequestReductionStarted(preparedWorkRequest);
+        deps.emitPlanUpdated(taskId, preparedWorkRequest);
         const reducedPresentation = deps.reduceWorkResult({
             canonicalResult: finalAssistantText,
             request: frozenWorkRequest,
             artifacts: mergedArtifacts,
         });
         const finalSummary = reducedPresentation.uiSummary || reducedPresentation.canonicalResult || 'Task completed';
+        markWorkRequestPresentationStarted(preparedWorkRequest);
+        deps.emitPlanUpdated(taskId, preparedWorkRequest);
         deps.markWorkRequestExecutionCompleted(preparedWorkRequest, finalSummary);
         if (input.emitFinishedStatus) {
             deps.reporter.status('finished');
@@ -482,8 +769,45 @@ async function runPreparedAgentExecution(input: {
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        deps.markWorkRequestExecutionFailed(preparedWorkRequest, errorMessage);
         const isCancelled = error instanceof TaskCancelledError || errorMessage === 'task_cancelled';
+        const trigger = isCancelled
+            ? null
+            : classifyExecutionFailureReplanTrigger(errorMessage);
+        const canReopenContract = Boolean(
+            trigger &&
+            canReopenForTrigger(preparedWorkRequest, trigger, contractReopenAttempts)
+        );
+
+        if (trigger && canReopenContract) {
+            const reopenOutcome = await reopenAndRefreezePreparedContract({
+                taskId,
+                preparedWorkRequest,
+                reason: errorMessage,
+                trigger,
+            }, deps);
+            if (!reopenOutcome.refrozenPrepared) {
+                return {
+                    success: false,
+                    summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
+                    error: errorMessage,
+                    artifactsCreated: [],
+                };
+            }
+            const refrozenPrepared = reopenOutcome.refrozenPrepared;
+            deps.markWorkRequestExecutionStarted(refrozenPrepared);
+            deps.emitPlanUpdated(taskId, refrozenPrepared);
+            return runPreparedAgentExecution({
+                ...input,
+                preparedWorkRequest: refrozenPrepared,
+                extraSystemPrompt: [
+                    extraSystemPrompt,
+                    `Previous execution attempt failed and triggered contract reopen. Resolve this issue before final delivery: ${errorMessage}`,
+                ].filter(Boolean).join('\n\n'),
+                contractReopenAttempts: contractReopenAttempts + 1,
+            }, deps);
+        }
+
+        deps.markWorkRequestExecutionFailed(preparedWorkRequest, errorMessage);
         deps.reporter.failed({
             error: errorMessage,
             errorCode: isCancelled ? 'CANCELLED' : input.modelErrorCode,
@@ -503,6 +827,8 @@ async function runPreparedAgentExecution(input: {
             error: errorMessage,
             artifactsCreated: [],
         };
+    } finally {
+        deps.clearPreparedWorkRequest(taskId);
     }
 }
 
@@ -628,6 +954,13 @@ function buildListDirArgs(targetPath: string, traversalScope: LocalTaskPlanHint[
         : { path: targetPath };
 }
 
+function describeListDirFailure(result: unknown): string {
+    if (typeof (result as { error?: unknown })?.error === 'string' && (result as { error: string }).error.trim()) {
+        return `Failed to inspect the target folder: ${(result as { error: string }).error}`;
+    }
+    return 'Failed to inspect the target folder.';
+}
+
 async function tryExecuteDeterministicLocalWorkflow(input: {
     taskId: string;
     workspacePath: string;
@@ -672,7 +1005,7 @@ async function executeInspectFilesWorkflow(input: {
     );
 
     if (!Array.isArray(listing)) {
-        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+        return failDeterministicWorkflow(input, deps, describeListDirFailure(listing));
     }
 
     const matchingFiles = (listing as DirectoryEntry[])
@@ -703,7 +1036,7 @@ async function executeOrganizeFilesWorkflow(input: {
     );
 
     if (!Array.isArray(listing)) {
-        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+        return failDeterministicWorkflow(input, deps, describeListDirFailure(listing));
     }
 
     const matchingFiles = listTopLevelFilesByKind(listing as DirectoryEntry[], fileKind);
@@ -793,7 +1126,7 @@ async function executeDeduplicateFilesWorkflow(input: {
     );
 
     if (!Array.isArray(listing)) {
-        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+        return failDeterministicWorkflow(input, deps, describeListDirFailure(listing));
     }
 
     const matchingFiles = listTopLevelFilesByKind(listing as DirectoryEntry[], fileKind);
@@ -914,7 +1247,7 @@ async function executeDeleteFilesWorkflow(input: {
     );
 
     if (!Array.isArray(listing)) {
-        return failDeterministicWorkflow(input, deps, 'Failed to inspect the target folder.');
+        return failDeterministicWorkflow(input, deps, describeListDirFailure(listing));
     }
 
     const matchingFiles = listTopLevelFilesByKind(listing as DirectoryEntry[], fileKind);
@@ -994,9 +1327,45 @@ function completeDeterministicWorkflow(input: {
     };
 }
 
+function classifyExecutionFailureReplanTrigger(errorMessage: string): ReplanTrigger | null {
+    const normalized = errorMessage.toLowerCase();
+    if (
+        /(permission denied|not permitted|operation not permitted|eacces|eprem|requires host-folder access|access approval|required access|grant required)/i.test(normalized)
+    ) {
+        return 'permission_block';
+    }
+    if (
+        /(no such file|not found|does not exist|enoent|missing resource|missing folder|missing file|target folder.*not accessible)/i.test(normalized)
+    ) {
+        return 'missing_resource';
+    }
+    return null;
+}
+
 function failDeterministicWorkflow(input: {
+    taskId: string;
     preparedWorkRequest: PreparedWorkRequestContext;
-}, deps: ExecutionRuntimeDeps, errorMessage: string): ExecutionRuntimeResult {
+}, deps: ExecutionRuntimeDeps, errorMessage: string): ExecutionRuntimeResult | Promise<ExecutionRuntimeResult> {
+    const trigger = classifyExecutionFailureReplanTrigger(errorMessage);
+    const canReopenContract = Boolean(trigger && canReopenForTrigger(input.preparedWorkRequest, trigger, 0));
+
+    if (trigger && canReopenContract) {
+        return (async () => {
+            const reopenOutcome = await reopenAndRefreezePreparedContract({
+                taskId: input.taskId,
+                preparedWorkRequest: input.preparedWorkRequest,
+                reason: errorMessage,
+                trigger,
+            }, deps);
+            return {
+                success: false,
+                summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
+                error: errorMessage,
+                artifactsCreated: [],
+            };
+        })();
+    }
+
     deps.markWorkRequestExecutionFailed(input.preparedWorkRequest, errorMessage);
     deps.reporter.failed({
         error: errorMessage,

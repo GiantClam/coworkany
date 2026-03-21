@@ -274,7 +274,7 @@
     "tasks": "任务清单",
     "managedBy": "由统一核心技能管理",
     "inProgress": "进行中",
-    "noActiveTasks": "当前工作区还没有结构化任务。",
+    "noActiveTasks": "当前还没有结构化任务。",
     "history": "历史任务",
     "completed": "已完成"
   },

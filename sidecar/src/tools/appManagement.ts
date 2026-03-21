@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
+import type { ClawHubSkillInfo } from '../claude_skills/openclawCompat';
 import { BrowserService, type BrowserMode } from '../services/browserService';
 import { SkillStore, type ClaudeSkillManifest, type StoredSkill } from '../storage/skillStore';
 import type { Workspace, WorkspaceStore } from '../storage/workspaceStore';
@@ -68,6 +70,17 @@ export type AppManagementToolDeps = {
         inputPath: string,
         autoInstallDependencies?: boolean
     ) => Promise<SkillImportResponsePayload>;
+    downloadSkillFromGitHub?: (
+        source: string,
+        workspacePath: string
+    ) => Promise<{ success: boolean; path: string; filesDownloaded?: number; error?: string }>;
+    searchClawHubSkills?: (query: string, limit?: number) => Promise<ClawHubSkillInfo[]>;
+    installSkillFromClawHub?: (
+        skillName: string,
+        targetDir: string
+    ) => Promise<{ success: boolean; path?: string; error?: string }>;
+    getSkillhubExecutable?: () => string | undefined;
+    onSkillsUpdated?: () => void;
     applyLlmConfig?: (config: ManagedLlmConfig) => void;
 };
 
@@ -75,6 +88,16 @@ type ConfigLoadResult = {
     config: ManagedLlmConfig;
     configPath: string;
     source: 'app_data' | 'workspace' | 'default';
+};
+
+type MarketplaceKind = 'skillhub' | 'github' | 'clawhub';
+
+type MarketplaceSkillRecord = {
+    name: string;
+    description: string;
+    source: string;
+    path: string;
+    marketplace: MarketplaceKind;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -283,6 +306,188 @@ function importSkillDirectly(
         success: true,
         skillId: manifest.name,
     };
+}
+
+function normalizeGitHubSource(input: string): string {
+    const trimmed = input.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('github:')) return trimmed;
+
+    if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/.+)?$/.test(trimmed)) {
+        return `github:${trimmed}`;
+    }
+
+    const match = trimmed.match(/github\.com\/([^/]+)\/([^/]+)(?:\/tree\/[^/]+)?(?:\/(.*))?/i);
+    if (match) {
+        const [, owner, repo, repoPath] = match;
+        return repoPath ? `github:${owner}/${repo}/${repoPath}` : `github:${owner}/${repo}`;
+    }
+
+    return trimmed;
+}
+
+function isGitHubSource(input: string): boolean {
+    return input.startsWith('github:') || /github\.com\//i.test(input);
+}
+
+function normalizeClawHubSource(input: string): string {
+    return input.trim().replace(/^clawhub:/i, '').trim();
+}
+
+function isClawHubSource(input: string): boolean {
+    return input.startsWith('clawhub:');
+}
+
+function sanitizeSkillhubName(slug: string, rawName?: string): string {
+    const candidate = (rawName ?? '').trim();
+    if (!candidate || candidate.startsWith('description:')) {
+        return slug;
+    }
+    return candidate;
+}
+
+function runSkillhubCommand(
+    executable: string,
+    args: string[]
+): { success: boolean; stdout: string; stderr: string; error?: string } {
+    try {
+        const result = spawnSync(executable, args, {
+            encoding: 'utf-8',
+        });
+
+        if (result.error) {
+            return {
+                success: false,
+                stdout: result.stdout ?? '',
+                stderr: result.stderr ?? '',
+                error: result.error.message,
+            };
+        }
+
+        if ((result.status ?? 0) !== 0) {
+            return {
+                success: false,
+                stdout: result.stdout ?? '',
+                stderr: result.stderr ?? '',
+                error: (result.stderr || result.stdout || `skillhub exited with status ${result.status}`).trim(),
+            };
+        }
+
+        return {
+            success: true,
+            stdout: result.stdout ?? '',
+            stderr: result.stderr ?? '',
+        };
+    } catch (error) {
+        return {
+            success: false,
+            stdout: '',
+            stderr: '',
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+function searchSkillhubSkills(
+    executable: string,
+    query: string
+): { success: boolean; skills: MarketplaceSkillRecord[]; error?: string } {
+    const args = ['--skip-self-upgrade', 'search'];
+    const trimmed = query.trim();
+    if (trimmed) {
+        args.push(...trimmed.split(/\s+/));
+    }
+    args.push('--json');
+
+    const result = runSkillhubCommand(executable, args);
+    if (!result.success) {
+        return {
+            success: false,
+            skills: [],
+            error: result.error ?? 'Failed to query skillhub',
+        };
+    }
+
+    try {
+        const raw = JSON.parse(result.stdout) as { results?: Array<Record<string, unknown>> };
+        const skills: MarketplaceSkillRecord[] = [];
+        for (const entry of raw.results ?? []) {
+            const slug = String(entry.slug ?? '').trim();
+            if (!slug) {
+                continue;
+            }
+            skills.push({
+                name: sanitizeSkillhubName(slug, typeof entry.name === 'string' ? entry.name : undefined),
+                description: typeof entry.description === 'string'
+                    ? entry.description.trim()
+                    : typeof entry.summary === 'string'
+                        ? entry.summary.trim()
+                        : '',
+                source: `skillhub:${slug}`,
+                path: slug,
+                marketplace: 'skillhub',
+            });
+        }
+
+        return {
+            success: true,
+            skills,
+        };
+    } catch (error) {
+        return {
+            success: false,
+            skills: [],
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+function extractSkillUsageGuidance(skill: StoredSkill): string[] {
+    const guidance = [
+        `已安装并启用技能 \`${skill.manifest.name}\`。`,
+        `后续可以直接在聊天里提出与“${skill.manifest.name}”相关的任务，CoworkAny 会按触发词自动启用该技能。`,
+    ];
+
+    const triggers = (skill.manifest.triggers ?? []).filter(Boolean).slice(0, 5);
+    if (triggers.length > 0) {
+        guidance.push(`常见触发词：${triggers.join('、')}`);
+    }
+
+    if (skill.manifest.directory) {
+        guidance.push(`完整说明见：${path.join(skill.manifest.directory, 'SKILL.md')}`);
+    }
+
+    return guidance;
+}
+
+function mapClawHubSkills(skills: ClawHubSkillInfo[]): MarketplaceSkillRecord[] {
+    return skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        source: `clawhub:${skill.name}`,
+        path: skill.name,
+        marketplace: 'clawhub',
+    }));
+}
+
+function buildMarketplaceInstallMessage(input: {
+    skill: StoredSkill;
+    marketplace: MarketplaceKind;
+    source: string;
+    warnings?: string[];
+}): string {
+    const lines = [
+        `已从 ${input.marketplace} 安装并启用技能 \`${input.skill.manifest.name}\`。`,
+        `来源：${input.source}`,
+        `目录：${input.skill.manifest.directory}`,
+        ...extractSkillUsageGuidance(input.skill),
+    ];
+
+    if (input.warnings && input.warnings.length > 0) {
+        lines.push(`注意事项：${input.warnings.join('；')}`);
+    }
+
+    return lines.join('\n');
 }
 
 export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefinition[] {
@@ -555,7 +760,362 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     ? await deps.importSkillFromDirectory(args.path, args.auto_install_dependencies ?? true)
                     : importSkillDirectly(deps.skillStore, args.path);
 
+                if (result.success && result.skillId) {
+                    deps.skillStore.setEnabled(result.skillId, true);
+                    deps.onSkillsUpdated?.();
+                }
+
                 return result;
+            },
+        },
+        {
+            name: 'search_coworkany_skill_marketplace',
+            description: 'Search CoworkAny-supported skill marketplace sources. Skillhub and ClawHub support keyword search; GitHub sources must be provided directly as github:owner/repo or a GitHub URL.',
+            effects: ['network:outbound', 'process:spawn', 'filesystem:read'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'Keyword, slug, clawhub:skill source, github:owner/repo source, or GitHub URL.',
+                    },
+                    marketplace: {
+                        type: 'string',
+                        description: 'Optional marketplace selector: auto, skillhub, clawhub, or github.',
+                    },
+                },
+                required: ['query'],
+            },
+            handler: async (args: { query: string; marketplace?: 'auto' | MarketplaceKind }) => {
+                const query = args.query.trim();
+                const marketplace = args.marketplace ?? 'auto';
+
+                if (!query) {
+                    return {
+                        success: false,
+                        error: 'missing_query',
+                        skills: [],
+                    };
+                }
+
+                if (marketplace === 'github' || isGitHubSource(query)) {
+                    const normalized = normalizeGitHubSource(query);
+                    return {
+                        success: true,
+                        marketplace: 'github',
+                        skills: [{
+                            name: normalized.replace(/^github:/, ''),
+                            description: 'GitHub skill source',
+                            source: normalized,
+                            path: normalized.replace(/^github:/, ''),
+                            marketplace: 'github',
+                        }],
+                    };
+                }
+
+                if (marketplace === 'clawhub' || isClawHubSource(query)) {
+                    const clawHubQuery = normalizeClawHubSource(query);
+                    const skills = deps.searchClawHubSkills
+                        ? await deps.searchClawHubSkills(clawHubQuery)
+                        : [];
+                    return {
+                        success: true,
+                        marketplace: 'clawhub',
+                        skills: mapClawHubSkills(skills),
+                    };
+                }
+
+                const executable = deps.getSkillhubExecutable?.() ?? 'skillhub';
+                const result = searchSkillhubSkills(executable, query);
+                return {
+                    success: result.success,
+                    marketplace: 'skillhub',
+                    skills: result.skills,
+                    error: result.error,
+                };
+            },
+        },
+        {
+            name: 'install_coworkany_skill_from_marketplace',
+            description: 'Install and enable a CoworkAny skill from a supported marketplace source. Supports GitHub sources, Skillhub queries/slugs, and ClawHub skill names.',
+            effects: ['filesystem:read', 'filesystem:write', 'process:spawn', 'network:outbound'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    source: {
+                        type: 'string',
+                        description: 'A Skillhub slug/keyword, ClawHub skill name, clawhub:skill source, github:owner/repo source, or GitHub URL.',
+                    },
+                    marketplace: {
+                        type: 'string',
+                        description: 'Optional marketplace selector: auto, skillhub, clawhub, or github.',
+                    },
+                    auto_install_dependencies: {
+                        type: 'boolean',
+                        description: 'Whether to auto-install declared skill dependencies while importing.',
+                    },
+                },
+                required: ['source'],
+            },
+            handler: async (args: {
+                source: string;
+                marketplace?: 'auto' | MarketplaceKind;
+                auto_install_dependencies?: boolean;
+            }) => {
+                const source = args.source.trim();
+                const marketplace = args.marketplace ?? 'auto';
+                const autoInstallDependencies = args.auto_install_dependencies ?? true;
+
+                if (!source) {
+                    return {
+                        success: false,
+                        error: 'missing_source',
+                        message: '缺少 marketplace 来源。',
+                    };
+                }
+
+                if (marketplace === 'github' || isGitHubSource(source)) {
+                    if (!deps.downloadSkillFromGitHub) {
+                        return {
+                            success: false,
+                            error: 'github_install_unavailable',
+                            message: '当前运行环境未启用 GitHub skill 安装能力。',
+                        };
+                    }
+
+                    const normalizedSource = normalizeGitHubSource(source);
+                    const downloadResult = await deps.downloadSkillFromGitHub(normalizedSource, deps.workspaceRoot);
+                    if (!downloadResult.success) {
+                        return {
+                            success: false,
+                            error: downloadResult.error ?? 'github_download_failed',
+                            message: `GitHub 安装失败：${downloadResult.error ?? 'unknown error'}`,
+                        };
+                    }
+
+                    const importResult = deps.importSkillFromDirectory
+                        ? await deps.importSkillFromDirectory(downloadResult.path, autoInstallDependencies)
+                        : importSkillDirectly(deps.skillStore, downloadResult.path);
+
+                    if (!importResult.success || !importResult.skillId) {
+                        return {
+                            success: false,
+                            error: importResult.error ?? 'skill_import_failed',
+                            message: `GitHub 资源已下载，但技能导入失败：${importResult.error ?? 'unknown error'}`,
+                            importResult,
+                        };
+                    }
+
+                    deps.skillStore.setEnabled(importResult.skillId, true);
+                    deps.onSkillsUpdated?.();
+                    const installedSkill = deps.skillStore.get(importResult.skillId);
+                    if (!installedSkill) {
+                        return {
+                            success: false,
+                            error: 'installed_skill_not_found',
+                            message: `技能已导入，但无法在技能仓库中找到 ${importResult.skillId}。`,
+                        };
+                    }
+
+                    return {
+                        success: true,
+                        marketplace: 'github',
+                        source: normalizedSource,
+                        skillId: importResult.skillId,
+                        enabled: true,
+                        skill: toSkillSummary(installedSkill as StoredSkill),
+                        usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill),
+                        importResult,
+                        message: buildMarketplaceInstallMessage({
+                            skill: installedSkill as StoredSkill,
+                            marketplace: 'github',
+                            source: normalizedSource,
+                            warnings: importResult.warnings,
+                        }),
+                    };
+                }
+
+                if (marketplace === 'clawhub' || isClawHubSource(source)) {
+                    if (!deps.installSkillFromClawHub || !deps.searchClawHubSkills) {
+                        return {
+                            success: false,
+                            error: 'clawhub_install_unavailable',
+                            message: '当前运行环境未启用 ClawHub skill 安装能力。',
+                        };
+                    }
+
+                    const normalizedSource = normalizeClawHubSource(source);
+                    const searchResult = mapClawHubSkills(await deps.searchClawHubSkills(normalizedSource));
+                    const sourceLower = normalizedSource.toLowerCase();
+                    const exact = searchResult.find((skill) =>
+                        skill.path.toLowerCase() === sourceLower || skill.name.toLowerCase() === sourceLower
+                    );
+                    const selectedSkill = exact ?? (searchResult.length === 1 ? searchResult[0] : undefined);
+
+                    if (!selectedSkill) {
+                        const candidates = searchResult.slice(0, 5).map((skill) => skill.path);
+                        return {
+                            success: false,
+                            needsClarification: true,
+                            error: 'clawhub_ambiguous',
+                            candidates,
+                            marketplace: 'clawhub',
+                            message: candidates.length > 0
+                                ? `ClawHub 找到多个候选技能：${candidates.join('、')}。请明确要安装的技能名。`
+                                : `ClawHub 中没有找到与 “${normalizedSource}” 匹配的技能。`,
+                        };
+                    }
+
+                    const installRoot = path.join(deps.workspaceRoot, '.coworkany', 'skills');
+                    fs.mkdirSync(installRoot, { recursive: true });
+                    const installResult = await deps.installSkillFromClawHub(selectedSkill.path, installRoot);
+                    if (!installResult.success || !installResult.path) {
+                        return {
+                            success: false,
+                            error: installResult.error ?? 'clawhub_install_failed',
+                            message: `ClawHub 安装失败：${installResult.error ?? 'unknown error'}`,
+                        };
+                    }
+
+                    const importResult = deps.importSkillFromDirectory
+                        ? await deps.importSkillFromDirectory(installResult.path, autoInstallDependencies)
+                        : importSkillDirectly(deps.skillStore, installResult.path);
+
+                    if (!importResult.success || !importResult.skillId) {
+                        return {
+                            success: false,
+                            error: importResult.error ?? 'skill_import_failed',
+                            message: `ClawHub 资源已下载，但技能导入失败：${importResult.error ?? 'unknown error'}`,
+                            importResult,
+                        };
+                    }
+
+                    deps.skillStore.setEnabled(importResult.skillId, true);
+                    deps.onSkillsUpdated?.();
+                    const installedSkill = deps.skillStore.get(importResult.skillId);
+                    if (!installedSkill) {
+                        return {
+                            success: false,
+                            error: 'installed_skill_not_found',
+                            message: `技能已导入，但无法在技能仓库中找到 ${importResult.skillId}。`,
+                        };
+                    }
+
+                    return {
+                        success: true,
+                        marketplace: 'clawhub',
+                        source: selectedSkill.source,
+                        skillId: importResult.skillId,
+                        enabled: true,
+                        skill: toSkillSummary(installedSkill as StoredSkill),
+                        usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill),
+                        importResult,
+                        message: buildMarketplaceInstallMessage({
+                            skill: installedSkill as StoredSkill,
+                            marketplace: 'clawhub',
+                            source: selectedSkill.source,
+                            warnings: importResult.warnings,
+                        }),
+                    };
+                }
+
+                const executable = deps.getSkillhubExecutable?.() ?? 'skillhub';
+                const searchResult = searchSkillhubSkills(executable, source);
+                if (!searchResult.success) {
+                    return {
+                        success: false,
+                        error: searchResult.error ?? 'skillhub_search_failed',
+                        message: `Skillhub 检索失败：${searchResult.error ?? 'unknown error'}`,
+                    };
+                }
+
+                const sourceLower = source.toLowerCase();
+                const exact = searchResult.skills.find((skill) =>
+                    skill.path.toLowerCase() === sourceLower || skill.name.toLowerCase() === sourceLower
+                );
+                const selectedSkill = exact ?? (searchResult.skills.length === 1 ? searchResult.skills[0] : undefined);
+
+                if (!selectedSkill) {
+                    const candidates = searchResult.skills.slice(0, 5).map((skill) => skill.path);
+                    return {
+                        success: false,
+                        needsClarification: true,
+                        error: 'skillhub_ambiguous',
+                        candidates,
+                        marketplace: 'skillhub',
+                        message: candidates.length > 0
+                            ? `Skillhub 找到多个候选技能：${candidates.join('、')}。请明确要安装的 slug。`
+                            : `Skillhub 中没有找到与 “${source}” 匹配的技能。`,
+                    };
+                }
+
+                const installRoot = path.join(deps.workspaceRoot, '.coworkany', 'skills');
+                fs.mkdirSync(installRoot, { recursive: true });
+                const installResult = runSkillhubCommand(executable, [
+                    '--skip-self-upgrade',
+                    '--dir',
+                    installRoot,
+                    'install',
+                    selectedSkill.path,
+                ]);
+
+                if (!installResult.success) {
+                    return {
+                        success: false,
+                        error: installResult.error ?? 'skillhub_install_failed',
+                        message: `Skillhub 安装失败：${installResult.error ?? 'unknown error'}`,
+                    };
+                }
+
+                const skillPath = path.join(installRoot, selectedSkill.path);
+                if (!fs.existsSync(skillPath)) {
+                    return {
+                        success: false,
+                        error: 'skillhub_installed_path_missing',
+                        message: `Skillhub 报告安装成功，但未找到技能目录：${skillPath}`,
+                    };
+                }
+
+                const importResult = deps.importSkillFromDirectory
+                    ? await deps.importSkillFromDirectory(skillPath, autoInstallDependencies)
+                    : importSkillDirectly(deps.skillStore, skillPath);
+
+                if (!importResult.success || !importResult.skillId) {
+                    return {
+                        success: false,
+                        error: importResult.error ?? 'skill_import_failed',
+                        message: `Skillhub 资源已下载，但技能导入失败：${importResult.error ?? 'unknown error'}`,
+                        importResult,
+                    };
+                }
+
+                deps.skillStore.setEnabled(importResult.skillId, true);
+                deps.onSkillsUpdated?.();
+                const installedSkill = deps.skillStore.get(importResult.skillId);
+                if (!installedSkill) {
+                    return {
+                        success: false,
+                        error: 'installed_skill_not_found',
+                        message: `技能已导入，但无法在技能仓库中找到 ${importResult.skillId}。`,
+                    };
+                }
+
+                return {
+                    success: true,
+                    marketplace: 'skillhub',
+                    source: selectedSkill.source,
+                    skillId: importResult.skillId,
+                    enabled: true,
+                    skill: toSkillSummary(installedSkill as StoredSkill),
+                    usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill),
+                    importResult,
+                    message: buildMarketplaceInstallMessage({
+                        skill: installedSkill as StoredSkill,
+                        marketplace: 'skillhub',
+                        source: selectedSkill.source,
+                        warnings: importResult.warnings,
+                    }),
+                };
             },
         },
         {

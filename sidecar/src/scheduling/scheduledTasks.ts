@@ -196,7 +196,7 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
         return result;
     }
 
-    const chineseMatch = expression.trim().match(/^([零〇一二两兩三四五六七八九十百\d]+)\s*(秒钟?|分钟?|分|小时|个小时|天)后$/);
+    const chineseMatch = expression.trim().match(/^([零〇一二两兩三四五六七八九十百\d]+)\s*(秒钟?|分钟?|分|小时|个小时|天)(?:以?后)$/);
     if (chineseMatch) {
         const amount = parseChineseNumber(chineseMatch[1]);
         const unit = chineseMatch[2];
@@ -286,7 +286,7 @@ export function detectScheduledIntent(query: string, now: Date = new Date()): Pa
     const trimmed = query.trim();
     if (!trimmed) return null;
 
-    const chineseMatch = trimmed.match(/^(?:请)?(?:在)?([零〇一二两兩三四五六七八九十百\d]+\s*(?:秒钟?|分钟?|分|小时|个小时|天)后)[，,、\s]*(.+)$/u);
+    const chineseMatch = trimmed.match(/^(?:请)?(?:在)?([零〇一二两兩三四五六七八九十百\d]+\s*(?:秒钟?|分钟?|分|小时|个小时|天)(?:以?后))[，,、\s]*(.+)$/u);
     if (chineseMatch) {
         const originalTimeExpression = chineseMatch[1].replace(/\s+/g, '');
         const executeAt = parseScheduledTimeExpression(originalTimeExpression, now);

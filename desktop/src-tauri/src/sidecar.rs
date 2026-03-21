@@ -276,6 +276,13 @@ impl SidecarManager {
         )
     }
 
+    fn running_from_app_bundle() -> bool {
+        std::env::current_exe()
+            .ok()
+            .map(|path| path.to_string_lossy().contains(".app/Contents/MacOS/"))
+            .unwrap_or(false)
+    }
+
     pub fn new() -> Self {
         Self {
             child: None,
@@ -300,8 +307,9 @@ impl SidecarManager {
         let app_dir = resolve_app_dir();
         let app_data_dir = resolve_app_data_dir(&app_handle);
         let force_development = Self::force_development_sidecar();
+        let prefer_packaged = Self::running_from_app_bundle();
         let mut launch_mode = "development".to_string();
-        let packaged = if force_development {
+        let packaged = if force_development || !prefer_packaged {
             None
         } else {
             Self::resolve_packaged_sidecar(&app_handle)
@@ -319,6 +327,8 @@ impl SidecarManager {
         } else {
             if force_development {
                 info!("COWORKANY_FORCE_DEVELOPMENT_SIDECAR enabled; skipping packaged sidecar");
+            } else if !prefer_packaged {
+                info!("Running outside app bundle; using development sidecar");
             }
             Self::spawn_development_sidecar(&app_dir, &app_data_dir)?
         };

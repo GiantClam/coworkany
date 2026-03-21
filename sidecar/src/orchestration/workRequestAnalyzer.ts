@@ -1,12 +1,27 @@
+import * as path from 'path';
 import { randomUUID } from 'crypto';
 import {
     type ExecutionPlan,
     type ClarificationDecision,
+    type CheckpointContract,
+    type DefaultingPolicy,
+    type DeliverableContract,
     type FrozenWorkRequest,
+    type GoalFrame,
+    type HitlPolicy,
+    type MissingInfoItem,
     type NormalizedWorkRequest,
     type PresentationPayload,
     type PresentationContract,
+    type ReplanPolicy,
+    type ResearchEvidence,
+    type ResearchQuery,
+    type ResumeStrategy,
+    type RuntimeIsolationPolicy,
+    type StrategyOption,
     type TaskDefinition,
+    type UncertaintyItem,
+    type UserActionRequest,
 } from './workRequestSchema';
 import { detectScheduledIntent } from '../scheduling/scheduledTasks';
 import { cleanScheduledTaskResultText, normalizeScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
@@ -35,8 +50,900 @@ function isComplexPlanningTask(text: string, mode: NormalizedWorkRequest['mode']
     return /(计划|规划|拆分|分解|设计|方案|架构|实现|多步|multi-step|plan|break down|decompose|workflow|research)/i.test(text);
 }
 
+function normalizeOutputSlug(text: string): string {
+    const normalized = text
+        .toLowerCase()
+        .replace(/[\u4e00-\u9fff]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return normalized || 'task-output';
+}
+
+function inferUiFormat(text: string): PresentationContract['uiFormat'] {
+    if (/(ppt|slides|deck|演示|幻灯片|汇报)/i.test(text)) {
+        return 'artifact';
+    }
+    if (/(报告|report|总结|summary|分析|analysis|方案)/i.test(text)) {
+        return 'report';
+    }
+    if (/(表格|table|清单|list)/i.test(text)) {
+        return 'table';
+    }
+    return 'chat_message';
+}
+
+function inferArtifactDirectory(text: string): string {
+    if (/(报告|report|总结|summary|分析|analysis|方案)/i.test(text)) {
+        return 'reports';
+    }
+    return 'artifacts';
+}
+
+const EXPLICIT_OUTPUT_PATH_PATTERNS: RegExp[] = [
+    /(?:保存到|写入到|写到|输出到|导出到|导出为|生成到)\s*[:："]?\s*([A-Za-z0-9_./~:\\\-\u4e00-\u9fa5]+\.[A-Za-z0-9]+)/ig,
+    /(?:save(?: it)? to|write(?: it)? to|output(?: it)? to|export(?: it)? to|export as)\s*[:"]?\s*([A-Za-z0-9_./~:\\\-\u4e00-\u9fa5]+\.[A-Za-z0-9]+)/ig,
+];
+
+function sanitizeExplicitOutputPath(value: string): string {
+    return value
+        .trim()
+        .replace(/^['"]+|['"]+$/g, '')
+        .replace(/[，。；;,]+$/g, '');
+}
+
+function extractExplicitOutputTargetPath(text: string): string | null {
+    let matchedPath: string | null = null;
+    for (const pattern of EXPLICIT_OUTPUT_PATH_PATTERNS) {
+        const matches = text.matchAll(pattern);
+        for (const match of matches) {
+            if (match[1]) {
+                matchedPath = sanitizeExplicitOutputPath(match[1]);
+            }
+        }
+    }
+    return matchedPath;
+}
+
+function inferFormatFromPath(filePath: string): string {
+    const extension = path.extname(filePath).replace(/^\./, '').toLowerCase();
+    return extension || 'md';
+}
+
+function inferArtifactFormat(text: string): string {
+    const explicitOutputTargetPath = extractExplicitOutputTargetPath(text);
+    if (explicitOutputTargetPath) {
+        return inferFormatFromPath(explicitOutputTargetPath);
+    }
+    if (/(ppt|slides|deck|演示|幻灯片|汇报)/i.test(text)) {
+        return 'pptx';
+    }
+    if (/(json)/i.test(text)) {
+        return 'json';
+    }
+    return 'md';
+}
+
+function isArtifactProducingTask(text: string): boolean {
+    return /(保存|save|写入|write|生成文件|输出到|导出|报告|report|总结|summary|分析|analysis|ppt|slides|deck|文档|markdown|md\b)/i
+        .test(text);
+}
+
+function isCodeChangeTask(text: string): boolean {
+    if (/(方案|plan|规划|拆分|设计|architecture|验收标准)/i.test(text) && !/(代码|code|refactor|修复|fix|实现功能|实现代码)/i.test(text)) {
+        return false;
+    }
+
+    return /(代码|code|refactor|修复|fix|实现功能|实现代码|实现一个.*功能|改这个 bug|修这个 bug)/i.test(text);
+}
+
+function requiresExternalAuthOrManualAction(text: string): boolean {
+    return /(登录|login|sign in|验证码|2fa|upload|上传|approve|审批|人工操作|手动操作|confirm plan|确认方案|授权)/i
+        .test(text);
+}
+
+function buildDefaultingPolicy(input: {
+    text: string;
+    language: string;
+    presentation: PresentationContract;
+    hasManualAction: boolean;
+}): DefaultingPolicy {
+    return {
+        outputLanguage: input.language,
+        uiFormat: input.presentation.uiFormat,
+        artifactDirectory: inferArtifactDirectory(input.text),
+        checkpointStrategy: input.hasManualAction
+            ? 'manual_action'
+            : isComplexPlanningTask(input.text, 'immediate_task') || input.presentation.uiFormat !== 'chat_message'
+                ? 'review_before_completion'
+                : 'none',
+    };
+}
+
+function hasPlanApprovalCue(text: string): boolean {
+    return /(按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续执行|开始执行|go ahead|proceed|approved?|ship it|looks good,? continue)/i
+        .test(text);
+}
+
+function buildHitlPolicy(input: {
+    text: string;
+    taskDefinition: TaskDefinition;
+    hasManualAction: boolean;
+}): HitlPolicy {
+    const reasons: string[] = [];
+    let riskTier: HitlPolicy['riskTier'] = 'low';
+
+    if (input.hasManualAction) {
+        reasons.push('Execution depends on a manual or authentication-gated step.');
+        riskTier = 'high';
+    }
+
+    if (input.taskDefinition.localPlanHint?.requiresHostAccessGrant) {
+        reasons.push('Execution needs host-folder access outside the workspace sandbox.');
+        riskTier = 'high';
+    }
+
+    if (isCodeChangeTask(input.text)) {
+        reasons.push('Execution is expected to modify code or workspace state.');
+        riskTier = 'high';
+    }
+
+    if (isCoworkanySelfManagementTask(input.text)) {
+        reasons.push('Execution changes Coworkany-managed configuration or extensions.');
+        riskTier = 'high';
+    }
+
+    if (
+        riskTier === 'low' &&
+        /(browser|playwright|网页|网站|页面|timeline|时间线|click|点击|填写|form|登录后查看)/i.test(input.text)
+    ) {
+        reasons.push('Execution likely involves browser navigation or UI interaction.');
+        riskTier = 'medium';
+    }
+
+    return {
+        riskTier,
+        requiresPlanConfirmation: riskTier !== 'low' && !hasPlanApprovalCue(input.text),
+        reasons,
+    };
+}
+
+function dedupePaths(paths: Array<string | undefined>): string[] {
+    return Array.from(new Set(paths.filter((value): value is string => typeof value === 'string' && value.length > 0)));
+}
+
+function buildRuntimeIsolationPolicy(input: {
+    workspacePath: string;
+    text: string;
+    taskDefinition: TaskDefinition;
+    goalFrame: GoalFrame;
+}): RuntimeIsolationPolicy {
+    const resolvedTargets = (input.taskDefinition.resolvedTargets ?? []).map((target) => target.resolvedPath);
+    const includesExternalTargets = resolvedTargets.some((target) => !target.startsWith(input.workspacePath));
+    const allowedWorkspacePaths = dedupePaths([
+        input.workspacePath,
+        ...resolvedTargets,
+    ]);
+
+    const writableWorkspacePaths = input.taskDefinition.localPlanHint?.requiredAccess?.some((access) =>
+        access === 'write' || access === 'move' || access === 'delete'
+    ) || isCodeChangeTask(input.text)
+        ? allowedWorkspacePaths
+        : [input.workspacePath];
+
+    const notes = [
+        'Connector/toolpack access is denied by default unless explicitly enabled for the task session.',
+    ];
+
+    if (includesExternalTargets) {
+        notes.push('Filesystem access is restricted to the workspace plus the explicitly resolved host targets in the frozen contract.');
+    } else {
+        notes.push('Filesystem access is restricted to the current workspace by default.');
+    }
+
+    if (input.goalFrame.taskCategory === 'research' || input.goalFrame.taskCategory === 'browser' || input.goalFrame.taskCategory === 'mixed') {
+        notes.push('External network connectors require explicit domain allowlisting before MCP toolpacks can reach them.');
+    }
+
+    return {
+        connectorIsolationMode: 'deny_by_default',
+        filesystemMode: includesExternalTargets ? 'workspace_plus_resolved_targets' : 'workspace_only',
+        allowedWorkspacePaths,
+        writableWorkspacePaths,
+        networkAccess:
+            input.goalFrame.taskCategory === 'research' || input.goalFrame.taskCategory === 'browser' || input.goalFrame.taskCategory === 'mixed'
+                ? 'restricted'
+                : 'none',
+        allowedDomains: [],
+        notes,
+    };
+}
+
+function buildMissingInfo(clarification: ClarificationDecision): MissingInfoItem[] {
+    return clarification.missingFields.map((field, index) => ({
+        field,
+        reason: clarification.reason || 'Additional information is required before safe execution.',
+        blocking: clarification.required,
+        question: clarification.questions[index] || clarification.questions[0],
+    }));
+}
+
+function buildDeliverables(input: {
+    text: string;
+    workspacePath: string;
+    presentation: PresentationContract;
+    localPlanWorkflow?: string;
+    localPlanRequiresHostAccess?: boolean;
+}): DeliverableContract[] {
+    const deliverables: DeliverableContract[] = [];
+    const slug = normalizeOutputSlug(input.text);
+    const artifactDir = inferArtifactDirectory(input.text);
+    const explicitOutputTargetPath = extractExplicitOutputTargetPath(input.text);
+
+    if (
+        input.localPlanWorkflow &&
+        /(organize|deduplicate|delete)/i.test(input.localPlanWorkflow) &&
+        /downloads|host-folder|explicit-path/i.test(input.localPlanWorkflow) &&
+        input.localPlanRequiresHostAccess
+    ) {
+        deliverables.push({
+            id: randomUUID(),
+            title: 'Workspace changes applied',
+            type: 'workspace_change',
+            description: 'Apply the planned workspace/file-system changes and summarize what changed.',
+            required: true,
+        });
+    }
+
+    if (isCodeChangeTask(input.text)) {
+        deliverables.push({
+            id: randomUUID(),
+            title: 'Code changes',
+            type: 'code_change',
+            description: 'Produce the required code changes and explain the outcome against the acceptance criteria.',
+            required: true,
+        });
+    }
+
+    if (explicitOutputTargetPath) {
+        const format = inferFormatFromPath(explicitOutputTargetPath);
+        const type = format === 'md' ? 'report_file' : 'artifact_file';
+        deliverables.push({
+            id: randomUUID(),
+            title: 'Explicit output artifact',
+            type,
+            description: 'Create the requested output and save it to the explicit path provided by the user.',
+            required: true,
+            path: explicitOutputTargetPath,
+            format,
+        });
+    } else if (isArtifactProducingTask(input.text)) {
+        const format = inferArtifactFormat(input.text);
+        const type = format === 'md' ? 'report_file' : 'artifact_file';
+        deliverables.push({
+            id: randomUUID(),
+            title: format === 'pptx' ? 'Presentation artifact' : 'Planned output artifact',
+            type,
+            description: 'Create a concrete output artifact and save it into the workspace.',
+            required: true,
+            path: `${artifactDir}/${slug}.${format}`,
+            format,
+        });
+    }
+
+    if (
+        deliverables.length === 0 &&
+        isComplexPlanningTask(input.text, 'immediate_task') &&
+        !isCodeChangeTask(input.text)
+    ) {
+        deliverables.push({
+            id: randomUUID(),
+            title: 'Planned execution report',
+            type: 'report_file',
+            description: 'Produce a structured execution report or plan and save it into the workspace.',
+            required: true,
+            path: `${artifactDir}/${slug}.md`,
+            format: 'md',
+        });
+    }
+
+    if (deliverables.length === 0) {
+        deliverables.push({
+            id: randomUUID(),
+            title: 'Final response',
+            type: 'chat_reply',
+            description: 'Return a final user-facing result that addresses the task objective.',
+            required: true,
+            format: input.presentation.uiFormat,
+        });
+    }
+
+    return deliverables;
+}
+
+function buildCheckpoints(input: {
+    text: string;
+    mode: NormalizedWorkRequest['mode'];
+    deliverables: DeliverableContract[];
+    hasManualAction: boolean;
+    hitlPolicy: HitlPolicy;
+    clarification: ClarificationDecision;
+}): CheckpointContract[] {
+    const checkpoints: CheckpointContract[] = [];
+
+    if (input.hitlPolicy.requiresPlanConfirmation && !input.clarification.required) {
+        checkpoints.push({
+            id: randomUUID(),
+            title: 'Review execution plan',
+            kind: 'review',
+            reason: `Execution risk tier is ${input.hitlPolicy.riskTier} and requires explicit user approval before continuing.`,
+            userMessage: 'Review the planned execution and wait for the user to confirm before starting execution.',
+            requiresUserConfirmation: true,
+            blocking: true,
+        });
+    }
+
+    if (input.hasManualAction) {
+        checkpoints.push({
+            id: randomUUID(),
+            title: 'User action required',
+            kind: 'manual_action',
+            reason: 'Execution depends on a manual step the user must complete.',
+            userMessage: 'Pause and ask the user to complete the required manual action before continuing.',
+            requiresUserConfirmation: true,
+            blocking: true,
+        });
+    }
+
+    if (
+        isComplexPlanningTask(input.text, input.mode) ||
+        input.deliverables.some((deliverable) => deliverable.type === 'report_file' || deliverable.type === 'artifact_file')
+    ) {
+        checkpoints.push({
+            id: randomUUID(),
+            title: 'Checkpoint before final delivery',
+            kind: 'pre_delivery',
+            reason: 'Summarize progress and verify the planned deliverables before final handoff.',
+            userMessage: 'Provide a checkpoint summary before final delivery and request input only if a blocker or decision remains.',
+            requiresUserConfirmation: false,
+            blocking: false,
+        });
+    }
+
+    return checkpoints;
+}
+
+function buildUserActionsRequired(input: {
+    clarification: ClarificationDecision;
+    missingInfo: MissingInfoItem[];
+    checkpoints: CheckpointContract[];
+    hasManualAction: boolean;
+    hitlPolicy: HitlPolicy;
+    sourceText: string;
+}): UserActionRequest[] {
+    const actions: UserActionRequest[] = [];
+
+    if (input.clarification.required) {
+        actions.push({
+            id: randomUUID(),
+            title: 'Provide missing task details',
+            kind: 'clarify_input',
+            description: input.clarification.reason || 'Coworkany needs more information before it can safely execute the task.',
+            blocking: true,
+            questions: input.clarification.questions,
+            instructions: input.missingInfo.map((item) => item.field),
+        });
+    }
+
+    if (input.hitlPolicy.requiresPlanConfirmation && !input.clarification.required) {
+        const reviewCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'review');
+        actions.push({
+            id: randomUUID(),
+            title: 'Confirm the execution plan',
+            kind: 'confirm_plan',
+            description: `This ${input.hitlPolicy.riskTier}-risk task needs explicit approval before Coworkany starts execution.`,
+            blocking: true,
+            questions: [
+                'Confirm whether Coworkany should proceed with the current execution plan.',
+            ],
+            instructions: [
+                'Reply with approval to continue, or provide changes that should be applied before execution starts.',
+            ],
+            fulfillsCheckpointId: reviewCheckpoint?.id,
+        });
+    }
+
+    if (input.hasManualAction) {
+        const manualCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'manual_action');
+        actions.push({
+            id: randomUUID(),
+            title: 'Complete required manual action',
+            kind: /登录|login|sign in|2fa|验证码/i.test(input.sourceText)
+                ? 'external_auth'
+                : 'manual_step',
+            description: 'A manual or external step is required before Coworkany can continue the task.',
+            blocking: true,
+            questions: [],
+            instructions: ['Complete the manual step in the UI or external system, then resume the task.'],
+            fulfillsCheckpointId: manualCheckpoint?.id,
+        });
+    }
+
+    return actions;
+}
+
+function buildResumeStrategy(): ResumeStrategy {
+    return {
+        mode: 'continue_from_saved_context',
+        preserveDeliverables: true,
+        preserveCompletedSteps: true,
+        preserveArtifacts: true,
+    };
+}
+
+function detectTaskCategory(input: {
+    text: string;
+    taskDefinition: TaskDefinition;
+}): GoalFrame['taskCategory'] {
+    const { text, taskDefinition } = input;
+
+    if (taskDefinition.localPlanHint) {
+        return 'workspace';
+    }
+    if (isCodeChangeTask(text)) {
+        return 'coding';
+    }
+    if (/(browser|playwright|网页|网站|页面|登录|timeline|时间线)/i.test(text)) {
+        return 'browser';
+    }
+    if (isCoworkanySelfManagementTask(text)) {
+        return 'app_management';
+    }
+    if (/(研究|research|调研|分析|best practice|最佳实践|方案)/i.test(text)) {
+        return 'research';
+    }
+    if (/(以及|and|同时|across|multi)/i.test(text)) {
+        return 'mixed';
+    }
+    return 'mixed';
+}
+
+function extractPreferences(text: string): string[] {
+    const preferences: string[] = [];
+
+    if (/(最优|optimal|best practice|最佳实践)/i.test(text)) {
+        preferences.push('Prefer best-practice or high-quality approaches.');
+    }
+    if (/(简洁|concise|简明)/i.test(text)) {
+        preferences.push('Prefer concise output.');
+    }
+    if (/(详细|深入|deep|深度)/i.test(text)) {
+        preferences.push('Prefer deeper analysis when useful.');
+    }
+    if (/(中文|zh|汉语)/i.test(text)) {
+        preferences.push('Prefer Chinese output.');
+    }
+
+    return preferences;
+}
+
+function buildContextSignals(input: {
+    text: string;
+    mode: NormalizedWorkRequest['mode'];
+    taskDefinition: TaskDefinition;
+}): string[] {
+    const signals = new Set<string>([`mode:${input.mode}`]);
+
+    if (/(当前项目|当前仓库|现有流程|workspace|repo|repository|代码库)/i.test(input.text)) {
+        signals.add('references_current_project');
+    }
+    if (/(继续|resume|follow-up|接着|刚才|上面的)/i.test(input.text)) {
+        signals.add('references_existing_conversation');
+    }
+    if (input.taskDefinition.localPlanHint?.targetFolder) {
+        signals.add(`resolved_target:${input.taskDefinition.localPlanHint.targetFolder.resolvedPath}`);
+    }
+    if (input.taskDefinition.preferredWorkflow) {
+        signals.add(`workflow:${input.taskDefinition.preferredWorkflow}`);
+    }
+
+    return Array.from(signals);
+}
+
+function buildGoalFrame(input: {
+    text: string;
+    mode: NormalizedWorkRequest['mode'];
+    taskDefinition: TaskDefinition;
+    deliverables: DeliverableContract[];
+}): GoalFrame {
+    return {
+        objective: input.taskDefinition.objective,
+        constraints: input.taskDefinition.constraints,
+        preferences: extractPreferences(input.text),
+        contextSignals: buildContextSignals(input),
+        successHypothesis: input.deliverables.map((deliverable) => deliverable.description),
+        taskCategory: detectTaskCategory({
+            text: input.text,
+            taskDefinition: input.taskDefinition,
+        }),
+    };
+}
+
+function appendResearchQuery(
+    queries: ResearchQuery[],
+    seen: Set<string>,
+    query: Omit<ResearchQuery, 'id'>
+): void {
+    const key = `${query.kind}:${query.source}:${query.objective}`;
+    if (seen.has(key)) {
+        return;
+    }
+    seen.add(key);
+    queries.push({
+        id: randomUUID(),
+        ...query,
+    });
+}
+
+function buildResearchQueries(input: {
+    text: string;
+    mode: NormalizedWorkRequest['mode'];
+    taskDefinition: TaskDefinition;
+    hasManualAction: boolean;
+}): ResearchQuery[] {
+    const queries: ResearchQuery[] = [];
+    const seen = new Set<string>();
+    const normalizedText = input.text.trim();
+
+    if (/(当前项目|当前仓库|现有流程|workspace|repo|repository|代码库)/i.test(normalizedText)) {
+        appendResearchQuery(queries, seen, {
+            kind: 'context_research',
+            source: 'workspace',
+            objective: 'Inspect the current project state, existing flows, and relevant local files.',
+            required: true,
+            status: 'pending',
+        });
+    }
+
+    if (/(继续|resume|follow-up|接着|刚才|上面的)/i.test(normalizedText)) {
+        appendResearchQuery(queries, seen, {
+            kind: 'context_research',
+            source: 'conversation',
+            objective: 'Review prior conversation context before finalizing execution.',
+            required: true,
+            status: 'pending',
+        });
+        appendResearchQuery(queries, seen, {
+            kind: 'context_research',
+            source: 'memory',
+            objective: 'Check prior saved task context or templates related to this follow-up.',
+            required: false,
+            status: 'pending',
+        });
+    }
+
+    if (isComplexPlanningTask(normalizedText, input.mode) || /(最佳实践|best practice|调研|research|架构|方案|设计)/i.test(normalizedText)) {
+        appendResearchQuery(queries, seen, {
+            kind: 'domain_research',
+            source: 'web',
+            objective: 'Research relevant best practices and current domain approaches before freezing the contract.',
+            required: true,
+            status: 'pending',
+        });
+        appendResearchQuery(queries, seen, {
+            kind: 'context_research',
+            source: 'template',
+            objective: 'Look for similar historical tasks or templates to bootstrap the contract.',
+            required: false,
+            status: 'pending',
+        });
+    }
+
+    if (input.taskDefinition.localPlanHint) {
+        appendResearchQuery(queries, seen, {
+            kind: 'feasibility_research',
+            source: 'workspace',
+            objective: 'Validate that the planned local workflow can run with the current workspace and folder resolution.',
+            required: true,
+            status: 'pending',
+        });
+    }
+
+    if (input.hasManualAction) {
+        appendResearchQuery(queries, seen, {
+            kind: 'feasibility_research',
+            source: 'connected_app',
+            objective: 'Verify auth state, manual prerequisites, and tool feasibility before execution.',
+            required: true,
+            status: 'pending',
+        });
+    }
+
+    if (queries.length === 0 && input.mode === 'immediate_task') {
+        appendResearchQuery(queries, seen, {
+            kind: 'context_research',
+            source: 'conversation',
+            objective: 'Confirm the normalized user objective against the current conversation context.',
+            required: false,
+            status: 'pending',
+        });
+    }
+
+    return queries;
+}
+
+function buildResearchEvidence(input: {
+    sourceText: string;
+    taskDefinition: TaskDefinition;
+    deliverables: DeliverableContract[];
+    defaultingPolicy: DefaultingPolicy;
+}): ResearchEvidence[] {
+    const collectedAt = new Date().toISOString();
+    const evidence: ResearchEvidence[] = [
+        {
+            id: randomUUID(),
+            kind: 'context_research',
+            source: 'conversation',
+            summary: `Parsed user request "${input.sourceText.slice(0, 120)}" into objective: ${input.taskDefinition.objective}`,
+            confidence: 0.98,
+            collectedAt,
+        },
+        {
+            id: randomUUID(),
+            kind: 'feasibility_research',
+            source: 'template',
+            summary: `Planned ${input.deliverables.length} deliverable(s) with default UI format ${input.defaultingPolicy.uiFormat}.`,
+            confidence: 0.82,
+            collectedAt,
+        },
+    ];
+
+    if (input.taskDefinition.localPlanHint?.targetFolder) {
+        evidence.push({
+            id: randomUUID(),
+            kind: 'feasibility_research',
+            source: 'workspace',
+            summary: `Resolved target folder to ${input.taskDefinition.localPlanHint.targetFolder.resolvedPath}.`,
+            confidence: input.taskDefinition.localPlanHint.targetFolder.confidence ?? 0.9,
+            collectedAt,
+        });
+    }
+
+    return evidence;
+}
+
+function buildUncertaintyRegistry(input: {
+    clarification: ClarificationDecision;
+    taskDefinition: TaskDefinition;
+    defaultingPolicy: DefaultingPolicy;
+    hasManualAction: boolean;
+    evidence: ResearchEvidence[];
+}): UncertaintyItem[] {
+    const evidenceIds = input.evidence.map((item) => item.id);
+    const registry: UncertaintyItem[] = input.clarification.missingFields.map((field, index) => ({
+        id: randomUUID(),
+        topic: field,
+        status: 'blocking_unknown',
+        statement: input.clarification.reason || 'Required task detail is still missing.',
+        whyItMatters: 'Coworkany cannot safely freeze the execution contract until this is clarified.',
+        question: input.clarification.questions[index] || input.clarification.questions[0],
+        supportingEvidenceIds: evidenceIds,
+    }));
+
+    registry.push({
+        id: randomUUID(),
+        topic: 'output_language',
+        status: 'defaultable',
+        statement: `Default output language is ${input.defaultingPolicy.outputLanguage}.`,
+        whyItMatters: 'Presentation format should be explicit even when the user does not specify it.',
+        defaultValue: input.defaultingPolicy.outputLanguage,
+        supportingEvidenceIds: evidenceIds,
+    });
+
+    registry.push({
+        id: randomUUID(),
+        topic: 'ui_format',
+        status: 'defaultable',
+        statement: `Default UI format is ${input.defaultingPolicy.uiFormat}.`,
+        whyItMatters: 'The execution contract should define how results are returned.',
+        defaultValue: input.defaultingPolicy.uiFormat,
+        supportingEvidenceIds: evidenceIds,
+    });
+
+    registry.push({
+        id: randomUUID(),
+        topic: 'artifact_directory',
+        status: 'defaultable',
+        statement: `Default artifact directory is ${input.defaultingPolicy.artifactDirectory}.`,
+        whyItMatters: 'Artifact-producing tasks need a stable output location.',
+        defaultValue: input.defaultingPolicy.artifactDirectory,
+        supportingEvidenceIds: evidenceIds,
+    });
+
+    if (input.taskDefinition.localPlanHint?.targetFolder) {
+        registry.push({
+            id: randomUUID(),
+            topic: 'execution_target',
+            status: 'confirmed',
+            statement: `Execution target resolved to ${input.taskDefinition.localPlanHint.targetFolder.resolvedPath}.`,
+            whyItMatters: 'The contract should record the resolved target before execution.',
+            supportingEvidenceIds: evidenceIds,
+        });
+    }
+
+    if (input.hasManualAction) {
+        registry.push({
+            id: randomUUID(),
+            topic: 'manual_prerequisite',
+            status: 'inferred',
+            statement: 'A manual or external-auth step is likely required before Coworkany can continue.',
+            whyItMatters: 'Execution may need to pause for user action even when the task scope is understood.',
+            supportingEvidenceIds: evidenceIds,
+        });
+    }
+
+    return registry;
+}
+
+function buildStrategyOptions(input: {
+    text: string;
+    taskDefinition: TaskDefinition;
+    deliverables: DeliverableContract[];
+    evidence: ResearchEvidence[];
+}): { strategyOptions: StrategyOption[]; selectedStrategyId: string } {
+    const evidenceIds = input.evidence.map((item) => item.id);
+    const strategyOptions: StrategyOption[] = [];
+
+    if (input.taskDefinition.localPlanHint?.preferredWorkflow) {
+        const selectedId = randomUUID();
+        strategyOptions.push({
+            id: selectedId,
+            title: 'Deterministic local workflow',
+            description: `Use ${input.taskDefinition.localPlanHint.preferredWorkflow} to drive execution with explicit tool choices.`,
+            pros: ['Matches the detected filesystem intent.', 'Keeps host-folder execution predictable.'],
+            cons: ['May still require host access approval or manual confirmation.'],
+            feasibility: 'high',
+            supportingEvidenceIds: evidenceIds,
+            selected: true,
+        });
+        strategyOptions.push({
+            id: randomUUID(),
+            title: 'General-purpose task execution',
+            description: 'Let the agent improvise a generic workflow after contract freeze.',
+            pros: ['Flexible when the deterministic workflow does not fit.'],
+            cons: ['Less predictable and harder to govern.'],
+            feasibility: 'medium',
+            supportingEvidenceIds: evidenceIds,
+            selected: false,
+            rejectionReason: 'Deterministic workflow is safer for this local execution task.',
+        });
+        return { strategyOptions, selectedStrategyId: selectedId };
+    }
+
+    if (isCodeChangeTask(input.text)) {
+        const selectedId = randomUUID();
+        strategyOptions.push({
+            id: selectedId,
+            title: 'Implement and verify',
+            description: 'Inspect the codebase, make the required changes, and verify against acceptance criteria.',
+            pros: ['Aligns with code-change deliverables.', 'Builds verification into execution.'],
+            cons: ['May take longer than a report-only response.'],
+            feasibility: 'high',
+            supportingEvidenceIds: evidenceIds,
+            selected: true,
+        });
+        strategyOptions.push({
+            id: randomUUID(),
+            title: 'Report-only recommendation',
+            description: 'Produce an implementation recommendation without changing code.',
+            pros: ['Lower execution risk.'],
+            cons: ['Does not satisfy the code-change objective.'],
+            feasibility: 'medium',
+            supportingEvidenceIds: evidenceIds,
+            selected: false,
+            rejectionReason: 'The requested deliverables include code changes.',
+        });
+        return { strategyOptions, selectedStrategyId: selectedId };
+    }
+
+    if (input.deliverables.some((deliverable) => deliverable.type === 'report_file' || deliverable.type === 'artifact_file')) {
+        const selectedId = randomUUID();
+        strategyOptions.push({
+            id: selectedId,
+            title: 'Research-backed artifact delivery',
+            description: 'Gather enough domain and project context, then produce the planned artifact.',
+            pros: ['Fits report and artifact tasks.', 'Supports explicit checkpoints before delivery.'],
+            cons: ['Needs stronger context gathering before execution.'],
+            feasibility: 'high',
+            supportingEvidenceIds: evidenceIds,
+            selected: true,
+        });
+        strategyOptions.push({
+            id: randomUUID(),
+            title: 'Chat-only summary',
+            description: 'Respond directly in chat without producing a workspace artifact.',
+            pros: ['Lower latency.'],
+            cons: ['Drops the requested artifact deliverable.'],
+            feasibility: 'low',
+            supportingEvidenceIds: evidenceIds,
+            selected: false,
+            rejectionReason: 'The frozen contract already commits to an artifact deliverable.',
+        });
+        return { strategyOptions, selectedStrategyId: selectedId };
+    }
+
+    const selectedId = randomUUID();
+    strategyOptions.push({
+        id: selectedId,
+        title: 'Direct governed execution',
+        description: 'Proceed with the minimal governed execution path and return the required result.',
+        pros: ['Low overhead.', 'Keeps the task aligned with the existing runtime.'],
+        cons: ['Less room for deep research before execution.'],
+        feasibility: 'high',
+        supportingEvidenceIds: evidenceIds,
+        selected: true,
+    });
+    strategyOptions.push({
+        id: randomUUID(),
+        title: 'Report-first planning pass',
+        description: 'Pause execution and produce a richer planning report before acting.',
+        pros: ['More explicit reasoning artifact.'],
+        cons: ['Unnecessary for straightforward tasks.'],
+        feasibility: 'medium',
+        supportingEvidenceIds: evidenceIds,
+        selected: false,
+        rejectionReason: 'Direct execution is sufficient for the current task shape.',
+    });
+
+    return { strategyOptions, selectedStrategyId: selectedId };
+}
+
+function buildKnownRisks(input: {
+    clarification: ClarificationDecision;
+    taskDefinition: TaskDefinition;
+    hasManualAction: boolean;
+    researchQueries: ResearchQuery[];
+}): string[] {
+    const risks: string[] = [];
+
+    if (input.clarification.required) {
+        risks.push('Blocking task details are still unresolved.');
+    }
+    if (input.hasManualAction) {
+        risks.push('Execution may pause for a manual or authentication-dependent step.');
+    }
+    if (input.taskDefinition.localPlanHint?.requiresHostAccessGrant) {
+        risks.push('Host-folder access approval is required before filesystem changes can proceed.');
+    }
+    if (input.researchQueries.some((query) => query.kind === 'domain_research')) {
+        risks.push('Best-practice assumptions may change after deeper domain research is performed.');
+    }
+
+    return risks;
+}
+
+function buildReplanPolicy(): ReplanPolicy {
+    return {
+        allowReturnToResearch: true,
+        triggers: [
+            'new_scope_signal',
+            'missing_resource',
+            'permission_block',
+            'contradictory_evidence',
+            'execution_infeasible',
+        ],
+    };
+}
+
+function isCoworkanySelfManagementTask(text: string): boolean {
+    return /(coworkany|skillhub|clawhub|github:|github\.com|serper key|api key|工作区|workspace|配置|config|技能|skill)/i.test(text)
+        && /(安装|install|启用|enable|禁用|disable|删除|remove|卸载|uninstall|查看|inspect|列出|list|配置|config)/i.test(text);
+}
+
 function inferPreferredSkills(text: string, mode: NormalizedWorkRequest['mode']): string[] {
     const skills = ['task-orchestrator'];
+    if (isCoworkanySelfManagementTask(text)) {
+        skills.push('coworkany-self-management');
+    }
     if (isComplexPlanningTask(text, mode)) {
         skills.push('superpowers-workflow', 'planning-with-files');
     }
@@ -67,7 +974,7 @@ function buildClarificationDecision(input: {
     const trimmed = input.executableText.trim();
     const language = detectLanguage(input.sourceText);
     const ambiguousReference =
-        /(?:^|\b)(继续|接着|按刚才|照上面|这个|那个|这些|上面的|刚才的|that|those|it|them|continue|resume|same as above)\b/i.test(trimmed);
+        isAmbiguousReferenceRequest(trimmed);
     const tooShortToAct = trimmed.length > 0 && trimmed.length < 8;
 
     if (ambiguousReference || tooShortToAct) {
@@ -97,6 +1004,21 @@ function splitSegments(text: string): string[] {
         .split(/[\n。！？!?]+/)
         .map((segment) => segment.trim())
         .filter(Boolean);
+}
+
+function isAmbiguousReferenceRequest(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const ambiguousPatterns = [
+        /^(?:继续|接着|按刚才|照上面|continue|resume|follow up|same as above)(?:\s+(?:处理|做|看|handle|work on))?(?:\s+(?:这个|那个|这些|上面的|刚才的|this|that|those|it|them))?[.!?？。!]*$/i,
+        /^(?:这个|那个|这些|上面的|刚才的|this|that|those|it|them|same as above)[.!?？。!]*$/i,
+        /^(?:继续处理|继续做|continue with|resume with|handle|work on)\s*(?:这个|那个|this|that|it|them)[.!?？。!]*$/i,
+    ];
+
+    return ambiguousPatterns.some((pattern) => pattern.test(trimmed));
 }
 
 function buildTaskDefinition(
@@ -134,7 +1056,7 @@ function buildTaskDefinition(
 
 function buildPresentationContract(text: string, ttsEnabled: boolean): PresentationContract {
     return {
-        uiFormat: 'chat_message',
+        uiFormat: inferUiFormat(text),
         ttsEnabled,
         ttsMode: 'full',
         ttsMaxChars: 0,
@@ -156,10 +1078,92 @@ export function analyzeWorkRequest(input: {
         : isLikelyChat(executableText)
             ? 'chat'
             : 'immediate_task';
+    const language = detectLanguage(sourceText);
     const clarification = buildClarificationDecision({
         sourceText,
         executableText,
         mode,
+    });
+    const presentation = buildPresentationContract(executableText, scheduledIntent?.speakResult ?? false);
+    const taskDefinition = buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext);
+    const hasManualAction = requiresExternalAuthOrManualAction(executableText);
+    const hitlPolicy = buildHitlPolicy({
+        text: executableText,
+        taskDefinition,
+        hasManualAction,
+    });
+    const defaultingPolicy = buildDefaultingPolicy({
+        text: executableText,
+        language,
+        presentation,
+        hasManualAction,
+    });
+    const deliverables = buildDeliverables({
+        text: executableText,
+        workspacePath: input.workspacePath,
+        presentation,
+        localPlanWorkflow: taskDefinition.preferredWorkflow,
+        localPlanRequiresHostAccess: taskDefinition.localPlanHint?.requiresHostAccessGrant,
+    });
+    const checkpoints = buildCheckpoints({
+        text: executableText,
+        mode,
+        deliverables,
+        hasManualAction,
+        hitlPolicy,
+        clarification,
+    });
+    const missingInfo = buildMissingInfo(clarification);
+    const userActionsRequired = buildUserActionsRequired({
+        clarification,
+        missingInfo,
+        checkpoints,
+        hasManualAction,
+        hitlPolicy,
+        sourceText: executableText,
+    });
+    const goalFrame = buildGoalFrame({
+        text: executableText,
+        mode,
+        taskDefinition,
+        deliverables,
+    });
+    const runtimeIsolationPolicy = buildRuntimeIsolationPolicy({
+        workspacePath: input.workspacePath,
+        text: executableText,
+        taskDefinition,
+        goalFrame,
+    });
+    const researchQueries = buildResearchQueries({
+        text: executableText,
+        mode,
+        taskDefinition,
+        hasManualAction,
+    });
+    const researchEvidence = buildResearchEvidence({
+        sourceText,
+        taskDefinition,
+        deliverables,
+        defaultingPolicy,
+    });
+    const uncertaintyRegistry = buildUncertaintyRegistry({
+        clarification,
+        taskDefinition,
+        defaultingPolicy,
+        hasManualAction,
+        evidence: researchEvidence,
+    });
+    const { strategyOptions, selectedStrategyId } = buildStrategyOptions({
+        text: executableText,
+        taskDefinition,
+        deliverables,
+        evidence: researchEvidence,
+    });
+    const knownRisks = buildKnownRisks({
+        clarification,
+        taskDefinition,
+        hasManualAction,
+        researchQueries,
     });
 
     return {
@@ -174,52 +1178,109 @@ export function analyzeWorkRequest(input: {
                 recurrence: null,
             }
             : undefined,
-        tasks: [buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext)],
+        tasks: [taskDefinition],
         clarification: {
             ...clarification,
             assumptions: [
                 ...clarification.assumptions,
+                `Coworkany owns task decomposition, deliverable planning, and user-collaboration requests.`,
+                `Default UI format: ${defaultingPolicy.uiFormat}.`,
+                `Default artifact directory: ${defaultingPolicy.artifactDirectory}.`,
                 ...(scheduledIntent ? ['Scheduled requests are frozen before background execution.'] : []),
             ],
         },
-        presentation: buildPresentationContract(executableText, scheduledIntent?.speakResult ?? false),
+        presentation,
+        deliverables,
+        checkpoints,
+        userActionsRequired,
+        hitlPolicy,
+        runtimeIsolationPolicy,
+        missingInfo,
+        defaultingPolicy,
+        resumeStrategy: buildResumeStrategy(),
+        goalFrame,
+        researchQueries,
+        researchEvidence,
+        uncertaintyRegistry,
+        strategyOptions,
+        selectedStrategyId,
+        knownRisks: Array.from(new Set([...knownRisks, ...hitlPolicy.reasons])),
+        replanPolicy: buildReplanPolicy(),
         createdAt: new Date().toISOString(),
     };
 }
 
 export function freezeWorkRequest(request: NormalizedWorkRequest): FrozenWorkRequest {
+    const selectedStrategy = request.strategyOptions?.find((option) => option.id === request.selectedStrategyId);
+    const sourcesChecked = Array.from(new Set((request.researchEvidence ?? []).map((evidence) => evidence.source)));
+    const blockingUnknownCount = (request.uncertaintyRegistry ?? [])
+        .filter((item) => item.status === 'blocking_unknown')
+        .length;
+
     return {
         ...request,
         id: randomUUID(),
         frozenAt: new Date().toISOString(),
+        frozenResearchSummary: {
+            evidenceCount: request.researchEvidence?.length ?? 0,
+            sourcesChecked,
+            blockingUnknownCount,
+            selectedStrategyTitle: selectedStrategy?.title,
+        },
     };
 }
 
 export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
     const steps: ExecutionPlan['steps'] = [];
-    const analysisStepId = randomUUID();
-    const clarificationStepId = randomUUID();
+    const goalFramingStepId = randomUUID();
+    const researchStepId = randomUUID();
+    const uncertaintyStepId = randomUUID();
+    const contractFreezeStepId = randomUUID();
+    const hasBlockingUnknowns = (request.uncertaintyRegistry ?? [])
+        .some((item) => item.status === 'blocking_unknown');
+    const completedResearchCount = (request.researchEvidence ?? []).length;
+    const researchQueryCount = request.researchQueries?.length ?? 0;
 
     steps.push({
-        stepId: analysisStepId,
-        kind: 'analysis',
-        title: 'Analyze user request',
-        description: 'Normalize the raw user input into a structured work request.',
+        stepId: goalFramingStepId,
+        kind: 'goal_framing',
+        title: 'Frame user goal',
+        description: 'Normalize the raw user input into a goal frame with constraints, preferences, and target outcomes.',
         status: 'completed',
         dependencies: [],
     });
     steps.push({
-        stepId: clarificationStepId,
-        kind: 'clarification',
-        title: request.clarification.required ? 'Clarify missing inputs' : 'Freeze structured request',
-        description: request.clarification.required
-            ? request.clarification.questions.join(' ')
+        stepId: researchStepId,
+        kind: 'research',
+        title: 'Prepare research agenda',
+        description: researchQueryCount > 0
+            ? `Prepared ${researchQueryCount} research query${researchQueryCount === 1 ? '' : 'ies'} and seeded ${completedResearchCount} evidence item${completedResearchCount === 1 ? '' : 's'}.`
+            : 'No additional pre-freeze research was required for this request.',
+        status: 'completed',
+        dependencies: [goalFramingStepId],
+    });
+    steps.push({
+        stepId: uncertaintyStepId,
+        kind: 'uncertainty_resolution',
+        title: hasBlockingUnknowns ? 'Resolve blocking uncertainty' : 'Resolve uncertainty',
+        description: hasBlockingUnknowns
+            ? request.clarification.questions.join(' ') || 'Blocking uncertainty remains before execution can safely continue.'
+            : 'Confirmed facts, inferred facts, and defaultable items have been classified for contract freeze.',
+        status: hasBlockingUnknowns ? 'blocked' : 'completed',
+        dependencies: [researchStepId],
+    });
+    steps.push({
+        stepId: contractFreezeStepId,
+        kind: 'contract_freeze',
+        title: hasBlockingUnknowns ? 'Await contract freeze' : 'Freeze execution contract',
+        description: hasBlockingUnknowns
+            ? 'The execution contract is waiting on blocking clarification before final freeze.'
             : 'The request has been frozen and is ready for execution.',
-        status: request.clarification.required ? 'blocked' : 'completed',
-        dependencies: [analysisStepId],
+        status: hasBlockingUnknowns ? 'blocked' : 'completed',
+        dependencies: [uncertaintyStepId],
     });
 
-    const executionDependencies = [clarificationStepId];
+    const executionDependencies = [contractFreezeStepId];
     const executionStepIds: string[] = [];
     for (const task of request.tasks) {
         const stepId = randomUUID();
@@ -230,7 +1291,7 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
             kind: 'execution',
             title: task.title,
             description: task.objective,
-            status: request.clarification.required ? 'blocked' : 'pending',
+            status: hasBlockingUnknowns ? 'blocked' : 'pending',
             dependencies: [...executionDependencies, ...task.dependencies],
         });
     }
@@ -241,7 +1302,7 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
         kind: 'reduction',
         title: 'Reduce execution output',
         description: 'Condense raw execution output into canonical, UI, and TTS payloads.',
-        status: request.clarification.required ? 'blocked' : 'pending',
+        status: hasBlockingUnknowns ? 'blocked' : 'pending',
         dependencies: executionStepIds,
     });
 
@@ -250,7 +1311,7 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
         kind: 'presentation',
         title: 'Present final result',
         description: 'Present the reduced result to the user through the appropriate channels.',
-        status: request.clarification.required ? 'blocked' : 'pending',
+        status: hasBlockingUnknowns ? 'blocked' : 'pending',
         dependencies: [reductionStepId],
     });
 
@@ -270,6 +1331,18 @@ export function buildExecutionQuery(request: FrozenWorkRequest): string {
             }
             if (task.acceptanceCriteria.length > 0) {
                 parts.push(`验收标准：${task.acceptanceCriteria.join('；')}`);
+            }
+            if ((request.deliverables?.length ?? 0) > 0) {
+                const deliverableLine = request.deliverables!
+                    .map((deliverable) => deliverable.path
+                        ? `${deliverable.title} (${deliverable.path})`
+                        : deliverable.title)
+                    .join('；');
+                parts.push(`交付物：${deliverableLine}`);
+            }
+            if ((request.checkpoints?.length ?? 0) > 0) {
+                const checkpointLine = request.checkpoints!.map((checkpoint) => checkpoint.title).join('；');
+                parts.push(`检查点：${checkpointLine}`);
             }
             return parts.join('\n');
         })

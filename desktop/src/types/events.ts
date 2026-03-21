@@ -28,6 +28,11 @@ export type TaskEventType =
     | 'TASK_SUSPENDED'
     | 'TASK_RESUMED'
     | 'TASK_CLARIFICATION_REQUIRED'
+    | 'TASK_RESEARCH_UPDATED'
+    | 'TASK_CONTRACT_REOPENED'
+    | 'TASK_PLAN_READY'
+    | 'TASK_CHECKPOINT_REACHED'
+    | 'TASK_USER_ACTION_REQUIRED'
     | 'TASK_HISTORY_CLEARED'
     | 'PLAN_UPDATED'
     | 'CHAT_MESSAGE'
@@ -56,7 +61,60 @@ export type TaskStatus = 'idle' | 'running' | 'finished' | 'failed';
 export interface PlanStep {
     id: string;
     description: string;
-    status: 'pending' | 'in_progress' | 'complete' | 'skipped' | 'failed';
+    status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+}
+
+export interface PlannedDeliverable {
+    id: string;
+    title: string;
+    type: 'chat_reply' | 'report_file' | 'artifact_file' | 'workspace_change' | 'code_change';
+    description: string;
+    required: boolean;
+    path?: string;
+    format?: string;
+}
+
+export interface PlannedCheckpoint {
+    id: string;
+    title: string;
+    kind: 'review' | 'manual_action' | 'pre_delivery';
+    reason: string;
+    userMessage: string;
+    requiresUserConfirmation: boolean;
+    blocking: boolean;
+}
+
+export interface PlannedUserAction {
+    id: string;
+    title: string;
+    kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
+    description: string;
+    blocking: boolean;
+    questions: string[];
+    instructions: string[];
+    fulfillsCheckpointId?: string;
+}
+
+export interface MissingInfoItem {
+    field: string;
+    reason: string;
+    blocking: boolean;
+    question?: string;
+    defaultValue?: string;
+}
+
+export interface DefaultingPolicy {
+    outputLanguage: string;
+    uiFormat: 'chat_message' | 'table' | 'report' | 'artifact';
+    artifactDirectory: string;
+    checkpointStrategy: 'none' | 'review_before_completion' | 'manual_action';
+}
+
+export interface ResumeStrategy {
+    mode: 'continue_from_saved_context';
+    preserveDeliverables: boolean;
+    preserveCompletedSteps: boolean;
+    preserveArtifacts: boolean;
 }
 
 export interface ToolCall {
@@ -129,6 +187,20 @@ export interface TaskSession {
     };
     clarificationQuestions?: string[];
     planSummary?: string;
+    researchSummary?: string;
+    researchSourcesChecked?: string[];
+    researchBlockingUnknowns?: string[];
+    selectedStrategyTitle?: string;
+    contractReopenReason?: string;
+    contractReopenCount?: number;
+    plannedDeliverables?: PlannedDeliverable[];
+    plannedCheckpoints?: PlannedCheckpoint[];
+    plannedUserActions?: PlannedUserAction[];
+    missingInfo?: MissingInfoItem[];
+    defaultingPolicy?: DefaultingPolicy;
+    resumeStrategy?: ResumeStrategy;
+    currentCheckpoint?: PlannedCheckpoint;
+    currentUserAction?: PlannedUserAction;
     planSteps: PlanStep[];
     toolCalls: ToolCall[];
     effects: Effect[];
@@ -226,6 +298,37 @@ export interface TaskClarificationRequiredPayload {
     reason?: string;
     questions: string[];
     missingFields?: string[];
+}
+
+export interface TaskPlanReadyPayload {
+    summary: string;
+    deliverables: PlannedDeliverable[];
+    checkpoints: PlannedCheckpoint[];
+    userActionsRequired: PlannedUserAction[];
+    missingInfo: MissingInfoItem[];
+    defaultingPolicy?: DefaultingPolicy;
+    resumeStrategy?: ResumeStrategy;
+}
+
+export interface TaskCheckpointReachedPayload {
+    checkpointId: string;
+    title: string;
+    kind: PlannedCheckpoint['kind'];
+    reason: string;
+    userMessage: string;
+    requiresUserConfirmation: boolean;
+    blocking: boolean;
+}
+
+export interface TaskUserActionRequiredPayload {
+    actionId: string;
+    title: string;
+    kind: PlannedUserAction['kind'];
+    description: string;
+    blocking: boolean;
+    questions: string[];
+    instructions: string[];
+    fulfillsCheckpointId?: string;
 }
 
 export interface TextDeltaPayload {

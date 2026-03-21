@@ -36,4 +36,17 @@ describe('scheduled task intent parsing', () => {
         expect(parsed?.taskQuery).toBe('整理 3 篇 Reddit 内容。每篇只保留标题和一句启发。');
         expect(parsed?.speakResult).toBe(true);
     });
+
+    test('supports chinese time expressions ending with 以后', () => {
+        const parsed = detectScheduledIntent(
+            '1 分钟以后，查询 minimax 的股价，给出深度分析',
+            new Date('2026-03-20T09:17:12+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('查询 minimax 的股价，给出深度分析');
+        expect(parsed?.speakResult).toBe(false);
+        expect(parsed?.originalTimeExpression).toBe('1分钟以后');
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-20T01:18:12.000Z');
+    });
 });

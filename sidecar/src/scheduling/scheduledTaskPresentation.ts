@@ -114,6 +114,10 @@ export function buildScheduledTaskCompletionMessage(_title: string, resultText: 
     return cleanScheduledTaskResultText(resultText) || '定时任务已完成。';
 }
 
+export function buildScheduledTaskStartedMessage(title: string): string {
+    return `定时任务“${title}”已开始执行。`;
+}
+
 export function buildScheduledTaskFailureMessage(title: string, errorText: string): string {
     return `定时任务“${title}”执行失败：${errorText}`;
 }

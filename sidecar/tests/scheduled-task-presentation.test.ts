@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
     buildScheduledTaskCompletionMessage,
     buildScheduledTaskFailureMessage,
+    buildScheduledTaskStartedMessage,
     buildScheduledTaskSpokenText,
     cleanScheduledTaskResultText,
     normalizeScheduledTaskResultText,
@@ -16,6 +17,11 @@ describe('scheduledTaskPresentation', () => {
     test('builds completion message for the original task session', () => {
         const message = buildScheduledTaskCompletionMessage('整理 Reddit', '这里是最终结果');
         expect(message).toBe('这里是最终结果');
+    });
+
+    test('builds start message for the original task session', () => {
+        const message = buildScheduledTaskStartedMessage('查询 minimax 的股价，给出深度分析');
+        expect(message).toBe('定时任务“查询 minimax 的股价，给出深度分析”已开始执行。');
     });
 
     test('drops clarification-heavy boilerplate from scheduled task results', () => {

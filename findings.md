@@ -1,8 +1,245 @@
 # Findings
 
-- Current TTS is sidecar built-in via `voice_speak` in `sidecar/src/tools/core/voice.ts`.
-- Current ASR entrypoint is desktop hook `desktop/src/hooks/useVoiceInput.ts`, with fallback to Tauri command `transcribe_audio`.
-- Installed skills declare `allowedTools`, but there is no existing extension point for registering ASR/TTS providers.
-- Implemented a minimal speech provider contract through `skill.manifest.metadata.voice.asr|tts`.
-- Custom providers are only considered when the backing tool actually exists in the runtime tool registry.
-- Desktop now asks sidecar for voice provider status before choosing between system-native recognition and recorded-audio transcription.
+## 2026-03-20
+
+- Current `NormalizedWorkRequest` is too thin for agent-led orchestration. It has `tasks`, `clarification`, and `presentation`, but no explicit `deliverables`, `checkpoints`, `userActionsRequired`, or `resumeStrategy`.
+- Current clarification logic in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts` only blocks on very short or ambiguous immediate-task prompts. It does not model “blocking but defaultable” vs “must ask user”.
+- Current execution plan is generic: `analysis -> clarification -> execution -> reduction -> presentation`. It does not expose planner-owned collaboration checkpoints.
+- `executeFreshTask` already has a useful gate: if `clarification.required` is true, execution stops and the user is asked. This is the right insertion point for stronger planner-owned collaboration.
+- Existing focused tests live in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts`
+- Product role target is clear: Coworkany should infer plan structure and request user help only for unresolved blockers or required manual actions.
+- Added contract fields to planner output:
+  - `deliverables`
+  - `checkpoints`
+  - `userActionsRequired`
+  - `missingInfo`
+  - `defaultingPolicy`
+  - `resumeStrategy`
+- Updated execution prompt generation so Coworkany is explicitly framed as the primary task owner, with planned deliverables/checkpoints/user actions embedded in the frozen execution prompt.
+- Runtime now passes planned deliverables into artifact contract generation, so planner-selected output files begin to constrain execution instead of remaining UI-only metadata.
+- Planner contract was still invisible at runtime/UI boundaries after the first slice. The missing pieces were explicit protocol events and session state for:
+  - frozen plan readiness
+  - currently active checkpoint
+  - currently required user action
+- The cleanest insertion points were:
+  - immediately after `prepareWorkRequestContext(...)` in fresh/follow-up/resume flows
+  - existing `TASK_SUSPENDED` runtime branch for true blocking manual actions
+- Desktop already had enough structure to absorb this without a new screen. `TaskSession`, the task reducer, timeline mapping, and `ChatInterface` were sufficient for a first plan card plus current-action banner.
+- The remaining gap after the first planner-event slice was that `TASK_CHECKPOINT_REACHED` and `TASK_USER_ACTION_REQUIRED` were independent from `PLAN_UPDATED`. The UI could know “a checkpoint happened” but not whether execution had actually moved to `blocked`, `reduction`, or `presentation`.
+- The cleanest fix was not a second state machine. Reusing the existing `ExecutionPlan` as the single source of truth worked once sidecar started:
+  - mutating in-memory plan steps during execution
+  - emitting `PLAN_UPDATED` at each major transition
+  - updating runtime suspension/resume through an active prepared-work-request registry keyed by `taskId`
+- `PLAN_UPDATED` had an old status vocabulary (`complete`) that did not match execution-plan reality (`completed`, `blocked`). Extending the shared types to accept `blocked` and `completed` was necessary to make the state model coherent end-to-end.
+
+## 2026-03-20 Marketplace Install Fix
+
+- `从 skillhub 中安装 skill-vetter` was already frozen as an executable task; the bad follow-up came from execution-time model behavior, not control-plane clarification.
+- Sidecar self-management tools only supported local-folder skill installs before this change.
+- Desktop marketplace code already had separate Skillhub search/install and GitHub install paths; chat execution lacked a bridge to them.
+- Current product marketplace skill sources are Skillhub keyword/slug installs and GitHub repository installs.
+- The implemented fix adds marketplace-aware self-management tools, explicit self-management tagging in work-request analysis, and a deterministic marketplace install fast path in execution runtime.
+- Verification evidence:
+  - `bun test tests/app-management-tools.test.ts tests/execution-runtime.test.ts tests/work-request-control-plane.test.ts` → 37 pass, 0 fail
+  - `bun run typecheck` → exit code 0
+
+## 2026-03-20 ClawHub Marketplace Follow-Up
+
+- `sidecar/src/claude_skills/openclawCompat.ts` already included reusable ClawHub primitives: `searchClawHub`, `getClawHubSkill`, and `installFromClawHub`.
+- The missing piece was integration: the marketplace tool layer, self-management prompts/triggers, and execution fast path did not treat `clawhub` as a first-class marketplace source.
+- The implemented fix extends the marketplace toolchain and runtime intent parsing to `clawhub`, reusing the existing OpenClaw compatibility installer.
+- A separate TypeScript mismatch in `sidecar/src/handlers/runtime.ts` surfaced during verification because `buildArtifactContract` was typed too loosely as `unknown[]`; tightening it to `DeliverableContract[]` restored type safety and passing typecheck.
+- Verification evidence:
+  - `bun test tests/app-management-tools.test.ts tests/execution-runtime.test.ts tests/work-request-control-plane.test.ts` → 42 pass, 0 fail
+  - `bun run typecheck` → exit code 0
+
+## 2026-03-21 Deep Research Control Plane Hardening
+
+- The first reopen/refreeze slice still had a safety bug: after refreeze, execution would continue even if the newly frozen contract introduced blocking clarification or manual collaboration.
+- The cleanest fix was to keep decision-making in `main.ts`: execution runtime asks for refreeze, then `main` emits the refreshed research/plan events and decides whether the task is blocked or can auto-resume.
+- `currentExecutingTaskId` was previously only cleared on `TASK_FINISHED` and `TASK_FAILED`. That left stale “currently executing” state behind for clarification, contract-reopen, and other idle transitions, which could confuse browser/runtime coordination.
+- Desktop session state did not yet consume `TASK_RESEARCH_UPDATED` or `TASK_CONTRACT_REOPENED`, so users could not reliably see why Coworkany had gone back into research or what evidence had changed.
+- Desktop task-event persistence treated research/contract-reopen/user-action events as normal debounce writes. For beta quality, these should persist quickly because they encode collaboration-critical state.
+- Deterministic local workflows were another release-critical reopen gap. Their filesystem/tool failures bypassed the model execution loop entirely, so `permission_block` and `missing_resource` never had a chance to reopen the contract.
+- Preserving raw tool error text for `list_dir` failures was necessary; otherwise everything collapsed into the same generic “Failed to inspect the target folder” message and trigger classification became unreliable.
+- Generic agent-loop exceptions were still a second reopen gap after the deterministic fix. If `runAgentLoop(...)` threw `permission denied` or `no such file`, execution still skipped straight to `TASK_FAILED`.
+- The safest fix was not a second catch-specific branch with custom behavior. Reusing one execution-failure classifier and one reopen/refreeze helper keeps artifact failures, deterministic workflows, and generic agent-loop failures aligned on:
+  - trigger selection
+  - replan-policy gating
+  - refreeze event emission
+  - blocked-vs-retry decision making
+- Broad GUI smoke surfaced another real blocker in the planner/artifact boundary: explicit save targets like `/.../.coworkany/test-workspace/gui_test.js` were being truncated at the first dotted directory segment, so the frozen contract required `/.../.coworkany` instead of the actual `.js` file.
+- The root cause was the same in both planner and artifact parsing: explicit-path regexes used shortest-match semantics (`+?`) and stopped at the first extension-looking substring. Greedy matching to the final extension fixed the path freeze and the artifact requirement simultaneously.
+- This bug was invisible to earlier focused tests because they used simple paths like `/tmp/gui-test.js` without dotted parent directories. Keeping one regression with a dotted parent directory is necessary to prevent reintroducing the bug.
+- `new_scope_signal` and `contradictory_evidence` were still inert after the earlier runtime work. The execution runtime knew those triggers existed, but the follow-up command path never emitted them, so user corrections looked like silent replans instead of governed contract reopens.
+- The real hidden bug in that path was artifact reuse: `send_task_message` always preferred the previous `artifactContract` from the session, even if the newly prepared frozen request changed deliverables, output path, or target folder. That made reopened contracts visually update while validation silently stayed on the old scope.
+- Comparing the previous active frozen request with the newly prepared frozen request is sufficient for a first governed version. The highest-signal differences were:
+  - deliverables / output path changes
+  - resolved target changes
+  - workflow changes
+  - mode changes
+  - explicit objective changes in non-trivial follow-ups
+- Correction-language cues such as `改成`, `更正`, `actually`, and `instead` are a practical first discriminator for `contradictory_evidence`; the remaining material contract shifts can route to `new_scope_signal`.
+- Desktop state already had most of the right primitives, but without a regression around the full reopen sequence it was still easy to regress into “old plan + new blocker” mixed state. The important invariant is overwrite semantics:
+  - `TASK_CONTRACT_REOPENED` clears the active checkpoint/user action
+  - the next `TASK_PLAN_READY` replaces planned deliverables/checkpoints/actions
+  - the next blocking action becomes the sole current blocker
+- Hydration also matters for beta quality: a reopened idle session must preserve `contractReopenReason`, `contractReopenCount`, replanned deliverables, and the current blocking action across app restart.
+- State-level regressions were not enough for the user-visible path. The timeline is the compact narrative users actually read during reopen, so it needed a direct assertion that the sequence renders in the expected order:
+  - contract reopened
+  - research updated
+  - replanned contract ready
+  - user action required
+- The cleanest way to test that without introducing brittle DOM assertions was to export a pure `buildTimelineItems(...)` helper from the hook module and test the transformed system-event content directly.
+- Follow-up reopen comparison still had one hidden dependency on liveness: it only worked while `activePreparedWorkRequest` existed. Once execution had finished or returned idle and that registry entry was cleared, the same correction message no longer had a previous contract to compare against.
+- The smallest safe fix is to persist a comparison-oriented snapshot, not the whole frozen request. The reopen path only needs:
+  - mode
+  - source text / primary objective
+  - preferred workflows
+  - resolved targets
+  - deliverable type/path/format
+- `TaskSessionConfig` is already persisted with runtime records, so it is the right place to store the last frozen-contract snapshot without inventing a new persistence channel.
+- The snapshot needs to be refreshed at every contract-freeze boundary, not just fresh-task start:
+  - fresh start
+  - follow-up replan
+  - interrupted-task resume
+  - execution-time contract refreeze
+- A GUI-level smoke for “finish task, then correct output path” is not stable yet because the pre-freeze research phase can block for a long time on unauthenticated SearXNG fallback. That is a research-adapter latency problem, not a reopen-state correctness problem.
+- The right fix for that latency problem is not to remove web research, but to give external resolvers explicit budgets. Contract freeze can accept “web research timed out” as feasibility evidence plus a known risk and continue.
+- `runPreFreezeResearchLoop(...)` was sequential and synchronous across external resolvers, so even one hung web lookup delayed the entire planner. Adding timeout wrappers around web and connected-app resolvers is enough to bound that risk without redesigning the loop yet.
+- There was a second persistence gap behind the follow-up reopen fix: even with `lastFrozenWorkRequestSnapshot` in `TaskSessionConfig`, finished tasks still lost that config after sidecar restart because runtime persistence deleted finished/failed sessions entirely.
+- `TASK_STATUS: idle` also mattered more than it looked. Without syncing that event into the runtime record, a task that was merely waiting for user clarification could still be persisted as `running` and be misclassified as interrupted on restart.
+- The smallest durable fix is to treat `idle` / `finished` / `failed` as first-class persisted runtime statuses:
+  - `restorePersistedTasks()` hydrates their session/config/artifact state
+  - restart recovery does not emit interruption/failure for them
+  - follow-up messages can later recreate active runtime state via `ensureTaskRuntimePersistence(...)`
+- Once finished/failed sessions started persisting, retention became part of correctness. Without pruning, the runtime store would accumulate terminal task context indefinitely even though only the most recent archived sessions are valuable for follow-up continuity.
+- The safe pruning boundary is terminal archived work only:
+  - prune oldest `finished`
+  - prune oldest `failed`
+  - keep `running` / `suspended` / `interrupted` / `idle`
+  so active recovery paths and blocked collaboration state are never dropped for space reasons.
+- A real cross-process smoke is now in place for `finished task -> sidecar restart bootstrap -> follow-up correction -> contract reopen -> replan`, using a spawned sidecar process plus persisted runtime seed data. That closes a more realistic gap than another pure unit test would.
+- Desktop still had one mixed-blocker bug after reopen: if `TASK_USER_ACTION_REQUIRED` arrived before `TASK_CLARIFICATION_REQUIRED`, the reducer preserved the old `currentUserAction` and `currentCheckpoint`, so the plan card could show stale manual-action UI alongside new clarification questions.
+- `TASK_CLARIFICATION_REQUIRED` should win as the current blocker in desktop session state. Replanned deliverables and research context should remain, but stale action/checkpoint state should be cleared so the user sees one active ask at a time.
+- The cross-process restart smoke surfaced a deeper control-plane issue: correction-style follow-ups such as `Actually, save it to ... instead` were still being analyzed as standalone prompts after restart, so the original task objective was lost even though the frozen snapshot had been restored.
+- The first fix for that was not enough on its own because clarification heuristics were too broad. Matching `it` or `that` anywhere in a sentence misclassified normal instructions like `save it to /tmp/hello.ts` as ambiguous scope.
+- Explicit-path extraction had a parallel gap: it recognized `save to` but not the common phrasing `save it to`, which let corrected file targets fall back to default markdown artifacts instead of freezing the requested path.
+- The robust combination is:
+  - merge corrective follow-ups with the prior frozen request snapshot before analysis
+  - restrict ambiguity detection to genuinely reference-only follow-ups
+  - recognize `save it to` / `write it to` in explicit-path extraction
+  Together, these changes make “path correction after restart” behave like a governed contract update instead of a vague new request.
+
+## 2026-03-21 Control-Plane Eval Harness
+
+- The repo already has strong control-plane building blocks, but they are split across focused tests and runtime code rather than one replayable eval surface:
+  - planner/analyzer in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - research loop in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/researchLoop.ts`
+  - runtime prep in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts`
+  - artifact validation in `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/artifactContract.ts`
+- That means the smallest useful harness is not a new planner abstraction. It is a runner that invokes the existing production path and compares stage outputs against JSONL expectations.
+- The natural stage breakdown already exists in code and aligns with the roadmap:
+  - analyze
+  - research/freeze
+  - execution plan
+  - artifact contract evaluation
+- `sidecar/tests/work-request-control-plane.test.ts` already contains high-signal examples for:
+  - clarification minimization
+  - contract path correctness
+  - strategy selection presence
+  - local workflow/tool exposure inference
+  Those scenarios can seed the first gold dataset instead of inventing synthetic cases from scratch.
+- The first P0 harness does not need an LLM judge. Existing planner outputs are structured enough to score deterministically:
+  - `clarification.required`
+  - missing fields
+  - deliverable types/paths/formats
+  - checkpoint kinds
+  - research sources/status
+  - plan step kinds/statuses
+  - artifact evaluation pass/fail and failed requirement kinds
+- `sidecar/package.json` currently has no eval runner script, so adding a first-class command is part of making the harness usable outside the test suite.
+- The current roadmap mentions production log replay and dashboards, but those should not block the first slice. The critical gap is the absence of a stable case schema and stage-metric aggregation layer.
+- The landed harness in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts` now replays real control-plane stages end-to-end:
+  - `analyzeWorkRequest`
+  - `runPreFreezeResearchLoop`
+  - `freezeWorkRequest`
+  - `buildExecutionPlan`
+  - `buildArtifactContract` / `evaluateArtifactContract`
+- The case format is intentionally simple and repo-native:
+  - JSONL rows in `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/gold.jsonl`
+  - optional seeded workspace files/directories
+  - optional stubbed `webSearch` / `connectedAppStatus` research responses
+  - stage-specific expectations instead of one monolithic pass/fail
+- The first seed suite covers six high-signal scenarios:
+  - chat baseline
+  - complex planning/report contract freeze
+  - explicit-path artifact success
+  - explicit-path artifact failure detection
+  - minimal-blocking clarification for ambiguous follow-up
+  - research-heavy request with workspace/web/template/connected-app evidence
+- The current runner already emits the core P0 metrics needed to unblock later doctor/HITL/policy work:
+  - clarification rate
+  - unnecessary clarification rate
+  - freeze expectation pass rate
+  - artifact expectation pass rate
+  - artifact satisfaction rate
+- Running `bun run eval:control-plane` against the seed suite currently reports:
+  - 6/6 cases passed against expectations
+  - clarification rate: 16.7%
+  - unnecessary clarification rate: 0.0%
+  - artifact satisfaction rate: 50.0%
+- The next integration step landed cleanly inside the same runner instead of branching the design:
+  - added a `runtimeReplay` stage to the control-plane eval schema
+  - runtime replay writes persisted runtime records into a temp `task-runtime.json`
+  - it then launches a real sidecar process, sends `bootstrap_runtime_context`, sends a real follow-up command, and validates emitted `TaskEventSchema` events
+- This is materially better than a fake event fixture because it tests the actual reopen path across:
+  - persisted runtime state restoration
+  - follow-up request analysis
+  - contract reopen detection
+  - re-research and plan re-emission
+- The first integrated runtime replay case is the highest-signal reopen scenario already proven important elsewhere in the repo:
+  - finished task persisted
+  - follow-up output-path correction
+  - `TASK_CONTRACT_REOPENED`
+  - `TASK_RESEARCH_UPDATED`
+  - `TASK_PLAN_READY`
+  - no `TASK_CLARIFICATION_REQUIRED`
+- With that case added, the seed suite now covers both static contract quality and dynamic governed replay:
+  - 7/7 cases passed
+  - runtime replay pass rate: 100.0%
+- The next missing integration also landed inside the same system rather than beside it:
+  - `runtimeReplay` can now read saved `TaskEvent` JSONL logs directly
+  - those log-replay cases use the same expectation model as live sidecar replay
+  - `release-readiness` now runs `eval:control-plane`, persists the JSON summary, and surfaces key control-plane metrics in the readiness report
+- That matters because it closes the architecture loop:
+  - one runner for static planner checks
+  - one runner for live reopen replay
+  - one runner for recorded-production replay
+  - one release report consuming the same summary artifact
+- The seed suite now includes both dynamic replay modes:
+  - `runtime-followup-reopen` for live sidecar replay
+  - `runtime-followup-reopen-log` for saved event-log replay
+- After these additions, the suite reports:
+  - 8/8 cases passed
+  - runtime replay pass rate: 100.0%
+- The remaining practical gap was ingestion ergonomics: without an importer, turning real canary or beta event logs into `production_replay` cases would still be manual and error-prone.
+- The landed importer in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEventLogImporter.ts` closes that gap by:
+  - validating `TaskEvent` JSONL with `TaskEventSchema`
+  - inferring runtime replay expectations from observed events
+  - templating absolute paths into `{{workspace}}` and `{{sidecarRoot}}`
+  - producing a case object compatible with the existing eval runner
+- The CLI wrapper in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/import-control-plane-event-log.ts` means the workflow is now:
+  - capture a real event log
+  - run one import command
+  - append the generated line into the dataset
+  rather than hand-authoring replay JSONL.
+- The importer is now operationally useful rather than just generative:
+  - it can `upsert` directly into a dataset file by `case id`
+  - repeated imports update an existing replay case instead of duplicating lines
+- `release-readiness` also moved from observability-only to actual control-plane gating:
+  - control-plane eval metrics are now checked against explicit default thresholds
+  - if the eval command passes but the metrics violate thresholds, the `control-plane-eval` readiness stage is still marked failed
+  - this avoids the common trap where a report shows bad metrics but rollout logic ignores them

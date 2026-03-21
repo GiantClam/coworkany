@@ -304,4 +304,5 @@ describe('CoworkAny GUI 完整流程测试', () => {
         
         expect(validation.passed || fileCreated).toBe(true);
     }, 180000);
+
 });

@@ -1,0 +1,35 @@
+{
+  "defaultProfile": "beta",
+  "profiles": {
+    "canary": {
+      "maxUnnecessaryClarificationRate": 0.1,
+      "minFreezeExpectationPassRate": 0.95,
+      "minArtifactExpectationPassRate": 0.95,
+      "minRuntimeReplayPassRate": 0.95,
+      "requireZeroFailedCases": true,
+      "minProductionReplayCasesBySource": {
+        "canary": 1
+      }
+    },
+    "beta": {
+      "maxUnnecessaryClarificationRate": 0.05,
+      "minFreezeExpectationPassRate": 1,
+      "minArtifactExpectationPassRate": 1,
+      "minRuntimeReplayPassRate": 1,
+      "requireZeroFailedCases": true,
+      "minProductionReplayCasesBySource": {
+        "canary": 1
+      }
+    },
+    "ga": {
+      "maxUnnecessaryClarificationRate": 0.02,
+      "minFreezeExpectationPassRate": 1,
+      "minArtifactExpectationPassRate": 1,
+      "minRuntimeReplayPassRate": 1,
+      "requireZeroFailedCases": true,
+      "minProductionReplayCasesBySource": {
+        "canary": 1
+      }
+    }
+  }
+}

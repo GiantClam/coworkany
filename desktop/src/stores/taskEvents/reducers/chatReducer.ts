@@ -6,6 +6,14 @@
 
 import type { TaskSession, TaskEvent } from '../../../types';
 
+function summarizeUserTitle(content: string): string {
+    const normalized = content.replace(/\s+/g, ' ').trim();
+    if (!normalized || normalized.startsWith('[RESUME_REQUESTED]')) {
+        return '';
+    }
+    return normalized.length > 80 ? `${normalized.slice(0, 79)}…` : normalized;
+}
+
 export function applyChatEvent(session: TaskSession, event: TaskEvent): TaskSession {
     const payload = event.payload as Record<string, unknown>;
 
@@ -13,8 +21,10 @@ export function applyChatEvent(session: TaskSession, event: TaskEvent): TaskSess
         case 'CHAT_MESSAGE': {
             const role = (payload.role as 'user' | 'assistant' | 'system') ?? 'system';
             const content = (payload.content as string) ?? '';
+            const nextTitle = role === 'user' ? summarizeUserTitle(content) : '';
             return {
                 ...session,
+                title: nextTitle || session.title,
                 messages: [
                     ...session.messages,
                     {

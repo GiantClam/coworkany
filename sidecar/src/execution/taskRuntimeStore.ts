@@ -2,7 +2,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { type TaskSessionConfig } from './taskSessionStore';
 
-export type PersistedTaskRuntimeStatus = 'running' | 'suspended' | 'interrupted';
+const MAX_ARCHIVED_TERMINAL_RECORDS = 100;
+
+export type PersistedTaskRuntimeStatus =
+    | 'running'
+    | 'suspended'
+    | 'interrupted'
+    | 'idle'
+    | 'finished'
+    | 'failed';
 
 export type PersistedTaskSuspension = {
     reason: string;
@@ -26,6 +34,10 @@ export type PersistedTaskRuntimeRecord = {
     suspension?: PersistedTaskSuspension;
 };
 
+function isArchivedTerminalStatus(status: PersistedTaskRuntimeStatus): boolean {
+    return status === 'finished' || status === 'failed';
+}
+
 function isRecord(value: unknown): value is PersistedTaskRuntimeRecord {
     if (!value || typeof value !== 'object') {
         return false;
@@ -40,7 +52,10 @@ function isRecord(value: unknown): value is PersistedTaskRuntimeRecord {
         typeof candidate.updatedAt === 'string' &&
         (candidate.status === 'running' ||
             candidate.status === 'suspended' ||
-            candidate.status === 'interrupted') &&
+            candidate.status === 'interrupted' ||
+            candidate.status === 'idle' ||
+            candidate.status === 'finished' ||
+            candidate.status === 'failed') &&
         Array.isArray(candidate.conversation) &&
         typeof candidate.historyLimit === 'number' &&
         Array.isArray(candidate.artifactsCreated)
@@ -123,6 +138,7 @@ export class TaskRuntimeStore {
             suspension: record.suspension ? { ...record.suspension } : undefined,
         };
         this.records.set(record.taskId, normalized);
+        this.pruneArchivedTerminalRecords();
         this.save();
         return normalized;
     }
@@ -150,9 +166,25 @@ export class TaskRuntimeStore {
             this.records = new Map(
                 normalizeRecords(parsed).map((record) => [record.taskId, record])
             );
+            this.pruneArchivedTerminalRecords();
         } catch (error) {
             console.error('[TaskRuntimeStore] Failed to load runtime store:', error);
             this.records = new Map();
+        }
+    }
+
+    private pruneArchivedTerminalRecords(): void {
+        const archivedTerminalRecords = Array.from(this.records.values())
+            .filter((record) => isArchivedTerminalStatus(record.status))
+            .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+
+        const overflow = archivedTerminalRecords.length - MAX_ARCHIVED_TERMINAL_RECORDS;
+        if (overflow <= 0) {
+            return;
+        }
+
+        for (const record of archivedTerminalRecords.slice(0, overflow)) {
+            this.records.delete(record.taskId);
         }
     }
 

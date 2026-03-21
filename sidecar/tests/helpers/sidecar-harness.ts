@@ -103,6 +103,30 @@ export function buildSendTaskMessageCommand(opts: {
     });
 }
 
+export function buildBootstrapRuntimeContextCommand(opts: {
+    appDataDir: string;
+    appDir?: string;
+    shell?: string;
+}): string {
+    return JSON.stringify({
+        type: 'bootstrap_runtime_context',
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        payload: {
+            runtimeContext: {
+                platform: process.platform,
+                arch: process.arch,
+                appDir: opts.appDir || process.cwd(),
+                appDataDir: opts.appDataDir,
+                shell: opts.shell || process.env.SHELL || '/bin/zsh',
+                python: { available: false },
+                skillhub: { available: false },
+                managedServices: [],
+            },
+        },
+    });
+}
+
 // ============================================================================
 // Generic Event Collector
 // ============================================================================
@@ -250,9 +274,22 @@ export class SidecarProcess {
     collector: EventCollector;
     private stdoutBuffer = '';
     private allStderr = '';
+    private readonly cwd: string;
+    private readonly env: NodeJS.ProcessEnv;
 
-    constructor(collector?: EventCollector) {
+    constructor(
+        collector?: EventCollector,
+        options?: {
+            cwd?: string;
+            env?: NodeJS.ProcessEnv;
+        }
+    ) {
         this.collector = collector || new EventCollector();
+        this.cwd = options?.cwd || process.cwd();
+        this.env = {
+            ...process.env,
+            ...(options?.env || {}),
+        };
     }
 
     async start(): Promise<void> {
@@ -260,7 +297,8 @@ export class SidecarProcess {
 
         this.proc = spawn({
             cmd: ['bun', 'run', 'src/main.ts'],
-            cwd: process.cwd(),
+            cwd: this.cwd,
+            env: this.env,
             stdin: 'pipe',
             stdout: 'pipe',
             stderr: 'pipe',

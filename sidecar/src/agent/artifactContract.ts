@@ -1,3 +1,5 @@
+import type { DeliverableContract } from '../orchestration/workRequestSchema';
+
 export type ArtifactKind =
     | 'file'
     | 'format'
@@ -70,10 +72,10 @@ const FILE_RULES: Array<{ pattern: RegExp; extension: string; description: strin
 ];
 
 const SECTION_HINTS: string[] = ['包含', '需要包含', 'include', 'must include', '目录'];
-const EXPLICIT_FILE_PATH_PATTERN = /([A-Za-z0-9_./\-\u4e00-\u9fa5]+?\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig;
+const EXPLICIT_FILE_PATH_PATTERN = /([A-Za-z0-9_./\-\u4e00-\u9fa5]+\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig;
 const EXPLICIT_OUTPUT_TARGET_PATTERNS: RegExp[] = [
-    /(?:保存到|写入到|写到|输出到|导出到|导出为|生成到)\s*[:："]?\s*([A-Za-z0-9_./\-\u4e00-\u9fa5]+?\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig,
-    /(?:save to|write to|output to|export to|export as)\s*[:"]?\s*([A-Za-z0-9_./\-\u4e00-\u9fa5]+?\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig,
+    /(?:保存到|写入到|写到|输出到|导出到|导出为|生成到)\s*[:："]?\s*([A-Za-z0-9_./\-\u4e00-\u9fa5]+\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig,
+    /(?:save to|write to|output to|export to|export as)\s*[:"]?\s*([A-Za-z0-9_./\-\u4e00-\u9fa5]+\.(?:md|txt|docx|pptx|pdf|xlsx|json))/ig,
 ];
 const EXTENSION_TO_DESCRIPTION: Record<string, string> = {
     '.md': '需要Markdown文件',
@@ -243,7 +245,49 @@ function extractToolCallRequirements(query: string): ArtifactRequirement[] {
     return requirements;
 }
 
-export function buildArtifactContract(query: string): ArtifactContract {
+function extractPlannedDeliverableRequirements(
+    deliverables: DeliverableContract[] | undefined
+): ArtifactRequirement[] {
+    if (!deliverables || deliverables.length === 0) {
+        return [];
+    }
+
+    const requirements: ArtifactRequirement[] = [];
+
+    for (const deliverable of deliverables) {
+        const normalizedPath = normalizePath(deliverable.path);
+        const extension = normalizedPath
+            ? normalizeExtensionFromPath(normalizedPath)
+            : typeof deliverable.format === 'string' && deliverable.format.trim().length > 0
+                ? `.${deliverable.format.trim().toLowerCase()}`
+                : null;
+
+        if (!extension || extension === '.chat_message') {
+            continue;
+        }
+
+        requirements.push({
+            id: `planned-file-${deliverable.id}`,
+            kind: 'file',
+            description: deliverable.path
+                ? `需要按计划产出文件：${deliverable.path}`
+                : `需要按计划产出 ${extension} 文件`,
+            strictness: deliverable.required ? 'hard' : 'soft',
+            payload: {
+                extension,
+                path: normalizedPath ?? undefined,
+                source: 'planned_deliverable',
+            },
+        });
+    }
+
+    return requirements;
+}
+
+export function buildArtifactContract(
+    query: string,
+    deliverables?: DeliverableContract[]
+): ArtifactContract {
     const requirements: ArtifactRequirement[] = [];
     const explicitPathMentions = query.match(EXPLICIT_FILE_PATH_PATTERN) || [];
     const explicitExtensions = extractExplicitOutputArtifactExtensions(query);
@@ -283,6 +327,7 @@ export function buildArtifactContract(query: string): ArtifactContract {
     requirements.push(...extractLengthRequirement(query));
     requirements.push(...extractKeywordRequirements(query));
     requirements.push(...extractToolCallRequirements(query));
+    requirements.push(...extractPlannedDeliverableRequirements(deliverables));
 
     return {
         sourceQuery: query,

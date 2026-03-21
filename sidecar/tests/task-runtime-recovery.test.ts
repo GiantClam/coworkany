@@ -81,4 +81,19 @@ describe('task runtime recovery', () => {
 
         expect(recovery.type).toBe('interrupt_running');
     });
+
+    test('hydrates finished runtimes without triggering restart failure handling', () => {
+        const recovery = planTaskRuntimeRecovery(makeRecord({
+            status: 'finished',
+            conversation: [{ role: 'assistant', content: 'done' }],
+        }));
+
+        expect(recovery).toEqual({
+            type: 'hydrate_only',
+            record: expect.objectContaining({
+                taskId: 'task-1',
+                status: 'finished',
+            }),
+        });
+    });
 });

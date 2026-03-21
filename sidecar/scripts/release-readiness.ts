@@ -3,9 +3,16 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
+    applyControlPlaneThresholdUpdateSuggestion,
+    buildControlPlaneThresholdUpdateSuggestion,
+    evaluateControlPlaneEvalReadiness,
     createDefaultCanaryChecklist,
     inspectObservability,
+    loadControlPlaneEvalThresholds,
+    recommendProductionReplayThresholds,
     renderReleaseReadinessMarkdown,
+    summarizeControlPlaneEvalSummary,
+    summarizeProductionReplayImportSummary,
     type ReleaseReadinessReport,
     type ReleaseStageResult,
 } from '../src/release/readiness';
@@ -17,6 +24,11 @@ type CliOptions = {
     startupProfile?: string;
     artifactTelemetryPath?: string;
     outputDir: string;
+    controlPlaneThresholdsPath?: string;
+    controlPlaneThresholdProfile?: string;
+    syncProductionReplays: boolean;
+    productionReplayImportRoots: string[];
+    productionReplayDatasetPath?: string;
 };
 
 function bin(name: string): string {
@@ -31,6 +43,11 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
         startupProfile: process.env.COWORKANY_STARTUP_PROFILE || undefined,
         artifactTelemetryPath: process.env.COWORKANY_ARTIFACT_TELEMETRY_PATH || undefined,
         outputDir: path.join(repositoryRoot, 'artifacts', 'release-readiness'),
+        controlPlaneThresholdsPath: process.env.COWORKANY_CONTROL_PLANE_THRESHOLDS || undefined,
+        controlPlaneThresholdProfile: process.env.COWORKANY_CONTROL_PLANE_THRESHOLD_PROFILE || undefined,
+        syncProductionReplays: false,
+        productionReplayImportRoots: [],
+        productionReplayDatasetPath: process.env.COWORKANY_PRODUCTION_REPLAY_DATASET || undefined,
     };
 
     for (let index = 0; index < argv.length; index += 1) {
@@ -56,6 +73,25 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
                 break;
             case '--output-dir':
                 options.outputDir = path.resolve(argv[index + 1]);
+                index += 1;
+                break;
+            case '--control-plane-thresholds':
+                options.controlPlaneThresholdsPath = argv[index + 1];
+                index += 1;
+                break;
+            case '--control-plane-threshold-profile':
+                options.controlPlaneThresholdProfile = argv[index + 1];
+                index += 1;
+                break;
+            case '--sync-production-replays':
+                options.syncProductionReplays = true;
+                break;
+            case '--production-replay-import-root':
+                options.productionReplayImportRoots.push(argv[index + 1]);
+                index += 1;
+                break;
+            case '--production-replay-dataset':
+                options.productionReplayDatasetPath = path.resolve(argv[index + 1]);
                 index += 1;
                 break;
             default:
@@ -109,8 +145,55 @@ async function main(): Promise<void> {
     const repositoryRoot = path.resolve(sidecarDir, '..');
     const desktopDir = path.join(repositoryRoot, 'desktop');
     const options = parseArgs(process.argv.slice(2), repositoryRoot);
+    fs.mkdirSync(options.outputDir, { recursive: true });
+    const controlPlaneEvalSummaryPath = path.join(options.outputDir, 'control-plane-eval-summary.json');
+    const productionReplayImportSummaryPath = path.join(options.outputDir, 'production-replay-import-summary.json');
+    const controlPlaneEvalInputs: string[] = [];
+    const controlPlaneThresholdsPath = path.resolve(
+        options.controlPlaneThresholdsPath
+            ?? path.join(sidecarDir, 'evals', 'control-plane', 'readiness-thresholds.json')
+    );
+    const controlPlaneEvalThresholds = loadControlPlaneEvalThresholds(
+        controlPlaneThresholdsPath,
+        options.controlPlaneThresholdProfile,
+    );
 
-    const stages: ReleaseStageResult[] = [
+    const stages: ReleaseStageResult[] = [];
+
+    if (options.syncProductionReplays) {
+        const syncArgs = ['run', 'eval:control-plane:sync-replays', '--', '--summary-out', productionReplayImportSummaryPath];
+        if (options.productionReplayImportRoots.length > 0) {
+            syncArgs.push('--replace-input-roots');
+        }
+        for (const inputRoot of options.productionReplayImportRoots) {
+            syncArgs.push('--input-root', path.resolve(inputRoot));
+        }
+        if (options.productionReplayDatasetPath) {
+            syncArgs.push('--dataset', options.productionReplayDatasetPath);
+        }
+
+        stages.push(runStage({
+            id: 'production-replay-sync',
+            label: 'Production replay sync',
+            cwd: sidecarDir,
+            command: bin('bun'),
+            args: syncArgs,
+        }));
+    }
+
+    if (options.productionReplayDatasetPath) {
+        controlPlaneEvalInputs.push(path.join(sidecarDir, 'evals', 'control-plane'));
+        controlPlaneEvalInputs.push(options.productionReplayDatasetPath);
+    }
+
+    stages.push(
+        runStage({
+            id: 'control-plane-eval',
+            label: 'Control-plane eval suite',
+            cwd: sidecarDir,
+            command: bin('bun'),
+            args: ['run', 'eval:control-plane', ...controlPlaneEvalInputs, '--out', controlPlaneEvalSummaryPath],
+        }),
         runStage({
             id: 'sidecar-typecheck',
             label: 'Sidecar typecheck',
@@ -157,7 +240,7 @@ async function main(): Promise<void> {
             command: bin('npm'),
             args: ['test'],
         }),
-    ];
+    );
 
     if (options.buildDesktop) {
         stages.push(runStage({
@@ -192,6 +275,60 @@ async function main(): Promise<void> {
         startupProfile: options.startupProfile,
         artifactTelemetryPath: options.artifactTelemetryPath,
     });
+    const productionReplayImport = options.syncProductionReplays
+        ? summarizeProductionReplayImportSummary(productionReplayImportSummaryPath)
+        : undefined;
+    const controlPlaneEval = summarizeControlPlaneEvalSummary(controlPlaneEvalSummaryPath);
+    const controlPlaneEvalGate = evaluateControlPlaneEvalReadiness(
+        controlPlaneEval,
+        controlPlaneEvalThresholds.thresholds,
+        controlPlaneEvalThresholds.sourcePath,
+        controlPlaneEvalThresholds.profile,
+    );
+    const controlPlaneEvalStage = stages.find((stage) => stage.id === 'control-plane-eval');
+    if (controlPlaneEvalStage && !controlPlaneEvalGate.passed) {
+        controlPlaneEvalStage.status = 'failed';
+        controlPlaneEvalStage.note = controlPlaneEvalGate.findings.join(' | ');
+        controlPlaneEvalStage.exitCode = controlPlaneEvalStage.exitCode === 0 ? 1 : controlPlaneEvalStage.exitCode;
+    }
+    const productionReplayThresholdRecommendations = recommendProductionReplayThresholds(
+        productionReplayImport,
+        controlPlaneEval,
+        controlPlaneEvalGate,
+    );
+    const controlPlaneThresholdUpdateSuggestion = buildControlPlaneThresholdUpdateSuggestion(
+        controlPlaneEvalGate,
+        productionReplayThresholdRecommendations,
+    );
+    let controlPlaneThresholdUpdateSuggestionPath: string | undefined;
+    let controlPlaneThresholdCandidateConfigPath: string | undefined;
+    if (controlPlaneThresholdUpdateSuggestion) {
+        controlPlaneThresholdUpdateSuggestionPath = path.join(
+            options.outputDir,
+            'control-plane-threshold-update-suggestion.json',
+        );
+        fs.writeFileSync(
+            controlPlaneThresholdUpdateSuggestionPath,
+            JSON.stringify(controlPlaneThresholdUpdateSuggestion, null, 2),
+            'utf-8',
+        );
+        controlPlaneThresholdCandidateConfigPath = path.join(
+            options.outputDir,
+            'control-plane-thresholds.candidate.json',
+        );
+        fs.writeFileSync(
+            controlPlaneThresholdCandidateConfigPath,
+            `${JSON.stringify(
+                applyControlPlaneThresholdUpdateSuggestion(
+                    JSON.parse(fs.readFileSync(controlPlaneEvalThresholds.sourcePath, 'utf-8')),
+                    controlPlaneThresholdUpdateSuggestion,
+                ),
+                null,
+                2,
+            )}\n`,
+            'utf-8',
+        );
+    }
 
     const report: ReleaseReadinessReport = {
         generatedAt: new Date().toISOString(),
@@ -201,13 +338,32 @@ async function main(): Promise<void> {
             realE2E: options.realE2E,
             appDataDir: options.appDataDir,
             startupProfile: options.startupProfile,
+            controlPlaneThresholdsPath: controlPlaneEvalThresholds.sourcePath,
+            controlPlaneThresholdProfile: controlPlaneEvalThresholds.profile,
+            syncProductionReplays: options.syncProductionReplays,
+            productionReplayDatasetPath: options.productionReplayDatasetPath,
         },
         stages,
+        productionReplayImport,
+        productionReplayThresholdRecommendations,
+        controlPlaneThresholdUpdateSuggestion: controlPlaneThresholdUpdateSuggestion && controlPlaneThresholdUpdateSuggestionPath
+            ? {
+                path: controlPlaneThresholdUpdateSuggestionPath,
+                suggestion: controlPlaneThresholdUpdateSuggestion,
+            }
+            : undefined,
+        controlPlaneThresholdCandidateConfig: controlPlaneThresholdCandidateConfigPath
+            ? {
+                path: controlPlaneThresholdCandidateConfigPath,
+                baseConfigPath: controlPlaneEvalThresholds.sourcePath,
+            }
+            : undefined,
+        controlPlaneEval,
+        controlPlaneEvalGate,
         observability,
         checklist: createDefaultCanaryChecklist(),
     };
 
-    fs.mkdirSync(options.outputDir, { recursive: true });
     const jsonPath = path.join(options.outputDir, 'report.json');
     const markdownPath = path.join(options.outputDir, 'report.md');
     fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf-8');

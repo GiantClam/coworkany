@@ -134,7 +134,14 @@ function makeDeps(overrides: Partial<ExecutionRuntimeDeps> = {}): ExecutionRunti
             ttsSummary: 'reduced summary',
             artifacts: artifacts ?? [],
         }),
+        markWorkRequestExecutionStarted: () => undefined,
         markWorkRequestExecutionCompleted: () => undefined,
+        refreezePreparedWorkRequestForResearch: async ({ prepared }) => prepared,
+        emitContractReopened: () => undefined,
+        emitPreparedWorkRequestRefrozen: () => ({ blocked: false }),
+        emitPlanUpdated: () => undefined,
+        activatePreparedWorkRequest: () => undefined,
+        clearPreparedWorkRequest: () => undefined,
         markWorkRequestExecutionFailed: () => undefined,
         quickLearnFromError: async () => ({ learned: true }),
         ...overrides,
@@ -441,6 +448,485 @@ describe('execution runtime', () => {
         expect(failurePayloads).toHaveLength(0);
     });
 
+    test('continuePreparedAgentFlow auto-refreezes and retries once when artifact validation fails and replanning is allowed', async () => {
+        const failurePayloads: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const reopenedPayloads: Array<{
+            summary: string;
+            reason: string;
+            trigger: string;
+            nextStepId?: string;
+        }> = [];
+        const refrozenTaskIds: string[] = [];
+        const emittedPlanSnapshots: Array<Array<{ kind: string; status: string }>> = [];
+        let clearedPreparedWorkRequest = 0;
+        let markedFailed = false;
+        let executionStartedCount = 0;
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: true,
+            triggers: ['execution_infeasible'],
+        };
+        prepared.executionPlan.steps = [
+            { stepId: 'goal', kind: 'goal_framing', title: 'Goal framing', description: 'Frame goal', status: 'completed', dependencies: [] },
+            { stepId: 'research', kind: 'research', title: 'Research', description: 'Research context', status: 'completed', dependencies: ['goal'] },
+            { stepId: 'uncertainty', kind: 'uncertainty_resolution', title: 'Resolve uncertainty', description: 'Resolve blockers', status: 'completed', dependencies: ['research'] },
+            { stepId: 'freeze', kind: 'contract_freeze', title: 'Freeze contract', description: 'Freeze contract', status: 'completed', dependencies: ['uncertainty'] },
+            { stepId: 'execution', kind: 'execution', title: 'Execute', description: 'Run task', status: 'running', dependencies: ['freeze'] },
+            { stepId: 'reduction', kind: 'reduction', title: 'Reduce', description: 'Reduce result', status: 'pending', dependencies: ['execution'] },
+            { stepId: 'presentation', kind: 'presentation', title: 'Present', description: 'Present result', status: 'pending', dependencies: ['reduction'] },
+        ];
+        let agentLoopCount = 0;
+        let evaluationCount = 0;
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-reopen',
+            userMessage: 'retry the export',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            session: new ExecutionSession({
+                taskId: 'task-reopen',
+                conversationReader: {
+                    buildConversationText: () => 'conversation text',
+                    getLatestAssistantResponseText: () => 'final assistant text after refreeze',
+                },
+                initialArtifacts: ['/tmp/report.md'],
+            }),
+            runAgentLoop: async () => {
+                agentLoopCount += 1;
+                return {
+                    artifactsCreated: agentLoopCount === 1 ? ['/tmp/report.md'] : ['/tmp/report.pptx'],
+                    toolsUsed: ['write_to_file'],
+                };
+            },
+            evaluateArtifactContract: () => {
+                evaluationCount += 1;
+                if (evaluationCount === 1) {
+                    return {
+                        passed: false,
+                        failed: [{ description: 'expected pptx output', reason: 'generated markdown only' }],
+                    };
+                }
+                return {
+                    passed: true,
+                    failed: [],
+                };
+            },
+            detectDegradedOutputs: () => ({
+                hasDegradedOutput: false,
+                degradedArtifacts: [],
+            }),
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared, reason }) => {
+                reopenedPrepared.frozenWorkRequest.knownRisks = Array.from(
+                    new Set([...(reopenedPrepared.frozenWorkRequest.knownRisks ?? []), reason])
+                );
+                reopenedPrepared.executionPlan.steps = [
+                    { stepId: 'goal', kind: 'goal_framing', title: 'Goal framing', description: 'Frame goal', status: 'completed', dependencies: [] },
+                    { stepId: 'research', kind: 'research', title: 'Research', description: 'Research context', status: 'completed', dependencies: ['goal'] },
+                    { stepId: 'uncertainty', kind: 'uncertainty_resolution', title: 'Resolve uncertainty', description: 'Resolve blockers', status: 'completed', dependencies: ['research'] },
+                    { stepId: 'freeze', kind: 'contract_freeze', title: 'Freeze contract', description: 'Freeze contract', status: 'completed', dependencies: ['uncertainty'] },
+                    { stepId: 'execution', kind: 'execution', title: 'Execute', description: 'Run task', status: 'pending', dependencies: ['freeze'] },
+                    { stepId: 'reduction', kind: 'reduction', title: 'Reduce', description: 'Reduce result', status: 'pending', dependencies: ['execution'] },
+                    { stepId: 'presentation', kind: 'presentation', title: 'Present', description: 'Present result', status: 'pending', dependencies: ['reduction'] },
+                ];
+                return reopenedPrepared;
+            },
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push(payload);
+            },
+            emitPreparedWorkRequestRefrozen: ({ taskId }) => {
+                refrozenTaskIds.push(taskId);
+                return { blocked: false };
+            },
+            emitPlanUpdated: (_taskId, preparedWorkRequest) => {
+                emittedPlanSnapshots.push(
+                    preparedWorkRequest.executionPlan.steps.map((step) => ({
+                        kind: step.kind,
+                        status: step.status,
+                    }))
+                );
+            },
+            clearPreparedWorkRequest: () => {
+                clearedPreparedWorkRequest += 1;
+            },
+            markWorkRequestExecutionStarted: () => {
+                executionStartedCount += 1;
+            },
+            markWorkRequestExecutionFailed: () => {
+                markedFailed = true;
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failurePayloads.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(result.summary).toBe('reduced summary');
+        expect(result.artifactsCreated).toEqual(['/tmp/report.md', '/tmp/report.pptx']);
+        expect(agentLoopCount).toBe(2);
+        expect(evaluationCount).toBe(2);
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(reopenedPayloads[0]?.trigger).toBe('execution_infeasible');
+        expect(reopenedPayloads[0]?.nextStepId).toBe('research');
+        expect(refrozenTaskIds).toEqual(['task-reopen']);
+        expect(failurePayloads).toHaveLength(0);
+        expect(markedFailed).toBe(false);
+        expect(executionStartedCount).toBe(1);
+        expect(clearedPreparedWorkRequest).toBe(2);
+        expect(prepared.frozenWorkRequest.knownRisks).toContain(
+            'Artifact contract unmet: expected pptx output (generated markdown only)'
+        );
+        expect(emittedPlanSnapshots.at(-1)).toEqual([
+            { kind: 'goal_framing', status: 'completed' },
+            { kind: 'research', status: 'completed' },
+            { kind: 'uncertainty_resolution', status: 'completed' },
+            { kind: 'contract_freeze', status: 'completed' },
+            { kind: 'execution', status: 'completed' },
+            { kind: 'reduction', status: 'completed' },
+            { kind: 'presentation', status: 'running' },
+        ]);
+    });
+
+    test('continuePreparedAgentFlow stops after refreeze when the reopened contract needs clarification', async () => {
+        const reopenedPayloads: Array<{ summary: string; reason: string; trigger: string; nextStepId?: string }> = [];
+        const refrozenTaskIds: string[] = [];
+        let agentLoopCount = 0;
+        let executionStartedCount = 0;
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: true,
+            triggers: ['execution_infeasible'],
+        };
+        prepared.executionPlan.steps = [
+            { stepId: 'goal', kind: 'goal_framing', title: 'Goal framing', description: 'Frame goal', status: 'completed', dependencies: [] },
+            { stepId: 'research', kind: 'research', title: 'Research', description: 'Research context', status: 'completed', dependencies: ['goal'] },
+            { stepId: 'uncertainty', kind: 'uncertainty_resolution', title: 'Resolve uncertainty', description: 'Resolve blockers', status: 'completed', dependencies: ['research'] },
+            { stepId: 'freeze', kind: 'contract_freeze', title: 'Freeze contract', description: 'Freeze contract', status: 'completed', dependencies: ['uncertainty'] },
+            { stepId: 'execution', kind: 'execution', title: 'Execute', description: 'Run task', status: 'running', dependencies: ['freeze'] },
+            { stepId: 'reduction', kind: 'reduction', title: 'Reduce', description: 'Reduce result', status: 'pending', dependencies: ['execution'] },
+            { stepId: 'presentation', kind: 'presentation', title: 'Present', description: 'Present result', status: 'pending', dependencies: ['reduction'] },
+        ];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-reopen-blocked',
+            userMessage: 'retry the export',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => {
+                agentLoopCount += 1;
+                return {
+                    artifactsCreated: ['/tmp/report.md'],
+                    toolsUsed: ['write_to_file'],
+                };
+            },
+            evaluateArtifactContract: () => ({
+                passed: false,
+                failed: [{ description: 'expected pptx output', reason: 'generated markdown only' }],
+            }),
+            detectDegradedOutputs: () => ({
+                hasDegradedOutput: false,
+                degradedArtifacts: [],
+            }),
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared }) => reopenedPrepared,
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push(payload);
+            },
+            emitPreparedWorkRequestRefrozen: ({ taskId }) => {
+                refrozenTaskIds.push(taskId);
+                return {
+                    blocked: true,
+                    summary: 'Need clarification after refreeze.',
+                };
+            },
+            markWorkRequestExecutionStarted: () => {
+                executionStartedCount += 1;
+            },
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.summary).toBe('Need clarification after refreeze.');
+        expect(result.error).toContain('Artifact contract unmet');
+        expect(agentLoopCount).toBe(1);
+        expect(executionStartedCount).toBe(0);
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(refrozenTaskIds).toEqual(['task-reopen-blocked']);
+    });
+
+    test('executePreparedTaskFlow reopens deterministic local workflow failures caused by permission blocks', async () => {
+        const reopenedPayloads: Array<{ summary: string; reason: string; trigger: string; nextStepId?: string }> = [];
+        const refrozenCalls: Array<{ taskId: string; reason: string; trigger: string }> = [];
+        const failurePayloads: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        let markedFailed = false;
+
+        const prepared = makeLocalPreparedWorkRequest('organize-downloads-images');
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: true,
+            triggers: ['permission_block', 'missing_resource', 'execution_infeasible'],
+        };
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-local-permission',
+            userQuery: '整理 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName) => {
+                if (toolName === 'list_dir') {
+                    return [
+                        { name: 'a.png', path: 'a.png', isDir: false },
+                    ];
+                }
+                if (toolName === 'create_directory') {
+                    return { error: 'permission denied' };
+                }
+                return {};
+            },
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push(payload);
+            },
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared }) => reopenedPrepared,
+            emitPreparedWorkRequestRefrozen: ({ taskId, reason, trigger }) => {
+                refrozenCalls.push({ taskId, reason, trigger });
+                return {
+                    blocked: true,
+                    summary: 'Grant the required host-folder access, then continue.',
+                };
+            },
+            markWorkRequestExecutionFailed: () => {
+                markedFailed = true;
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failurePayloads.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.summary).toBe('Grant the required host-folder access, then continue.');
+        expect(result.error).toContain('permission denied');
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(reopenedPayloads[0]?.trigger).toBe('permission_block');
+        expect(refrozenCalls).toEqual([{
+            taskId: 'task-local-permission',
+            reason: 'Failed to create destination folder for PNG: permission denied',
+            trigger: 'permission_block',
+        }]);
+        expect(markedFailed).toBe(false);
+        expect(failurePayloads).toHaveLength(0);
+    });
+
+    test('executePreparedTaskFlow reopens deterministic local workflow failures caused by missing resources', async () => {
+        const reopenedPayloads: Array<{ summary: string; reason: string; trigger: string; nextStepId?: string }> = [];
+        const refrozenCalls: Array<{ taskId: string; reason: string; trigger: string }> = [];
+        const failurePayloads: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        let markedFailed = false;
+
+        const prepared = makeLocalPreparedWorkRequest('inspect-downloads-images');
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: true,
+            triggers: ['permission_block', 'missing_resource', 'execution_infeasible'],
+        };
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-local-missing',
+            userQuery: '检查 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName) => {
+                if (toolName === 'list_dir') {
+                    return { error: 'no such file or directory' };
+                }
+                return {};
+            },
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push(payload);
+            },
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared }) => reopenedPrepared,
+            emitPreparedWorkRequestRefrozen: ({ taskId, reason, trigger }) => {
+                refrozenCalls.push({ taskId, reason, trigger });
+                return {
+                    blocked: true,
+                    summary: 'Resolve the missing folder or file, then continue.',
+                };
+            },
+            markWorkRequestExecutionFailed: () => {
+                markedFailed = true;
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failurePayloads.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.summary).toBe('Resolve the missing folder or file, then continue.');
+        expect(result.error).toContain('no such file or directory');
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(reopenedPayloads[0]?.trigger).toBe('missing_resource');
+        expect(refrozenCalls).toEqual([{
+            taskId: 'task-local-missing',
+            reason: 'Failed to inspect the target folder: no such file or directory',
+            trigger: 'missing_resource',
+        }]);
+        expect(markedFailed).toBe(false);
+        expect(failurePayloads).toHaveLength(0);
+    });
+
+    test('continuePreparedAgentFlow reopens agent execution failures caused by permission blocks', async () => {
+        const reopenedPayloads: Array<{ summary: string; reason: string; trigger: string; nextStepId?: string }> = [];
+        const refrozenCalls: Array<{ taskId: string; reason: string; trigger: string }> = [];
+        const failurePayloads: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        let markedFailed = false;
+
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: true,
+            triggers: ['permission_block', 'missing_resource', 'execution_infeasible'],
+        };
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-agent-permission',
+            userMessage: 'continue the task',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => {
+                throw new Error('permission denied while writing artifact');
+            },
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push(payload);
+            },
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared }) => reopenedPrepared,
+            emitPreparedWorkRequestRefrozen: ({ taskId, reason, trigger }) => {
+                refrozenCalls.push({ taskId, reason, trigger });
+                return {
+                    blocked: true,
+                    summary: 'Grant write access, then continue.',
+                };
+            },
+            markWorkRequestExecutionFailed: () => {
+                markedFailed = true;
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failurePayloads.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.summary).toBe('Grant write access, then continue.');
+        expect(result.error).toBe('permission denied while writing artifact');
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(reopenedPayloads[0]?.trigger).toBe('permission_block');
+        expect(refrozenCalls).toEqual([{
+            taskId: 'task-agent-permission',
+            reason: 'permission denied while writing artifact',
+            trigger: 'permission_block',
+        }]);
+        expect(markedFailed).toBe(false);
+        expect(failurePayloads).toHaveLength(0);
+    });
+
+    test('continuePreparedAgentFlow reopens agent execution failures caused by missing resources', async () => {
+        const reopenedPayloads: Array<{ summary: string; reason: string; trigger: string; nextStepId?: string }> = [];
+        const refrozenCalls: Array<{ taskId: string; reason: string; trigger: string }> = [];
+        const failurePayloads: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        let markedFailed = false;
+
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: true,
+            triggers: ['permission_block', 'missing_resource', 'execution_infeasible'],
+        };
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-agent-missing',
+            userMessage: 'continue the task',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => {
+                throw new Error('no such file or directory: /tmp/workspace/input.csv');
+            },
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push(payload);
+            },
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared }) => reopenedPrepared,
+            emitPreparedWorkRequestRefrozen: ({ taskId, reason, trigger }) => {
+                refrozenCalls.push({ taskId, reason, trigger });
+                return {
+                    blocked: true,
+                    summary: 'Restore the missing input, then continue.',
+                };
+            },
+            markWorkRequestExecutionFailed: () => {
+                markedFailed = true;
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failurePayloads.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.summary).toBe('Restore the missing input, then continue.');
+        expect(result.error).toBe('no such file or directory: /tmp/workspace/input.csv');
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(reopenedPayloads[0]?.trigger).toBe('missing_resource');
+        expect(refrozenCalls).toEqual([{
+            taskId: 'task-agent-missing',
+            reason: 'no such file or directory: /tmp/workspace/input.csv',
+            trigger: 'missing_resource',
+        }]);
+        expect(markedFailed).toBe(false);
+        expect(failurePayloads).toHaveLength(0);
+    });
+
     test('continuePreparedAgentFlow merges user directives into system prompt', async () => {
         let capturedSystemPrompt: string | { skills: string } | undefined;
 
@@ -523,6 +1009,139 @@ describe('execution runtime', () => {
         expect(capturedToolNames).toContain('get_coworkany_config');
         expect(capturedToolNames).toContain('update_coworkany_config');
         expect(capturedToolNames).toContain('list_coworkany_skills');
+    });
+
+    test('executePreparedTaskFlow uses marketplace install fast path for skillhub install requests', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+        const summaries: string[] = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '从 skillhub 中安装 skill-vetter';
+        prepared.frozenWorkRequest.sourceText = '从 skillhub 中安装 skill-vetter';
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-marketplace-fastpath',
+            userQuery: '从 skillhub 中安装 skill-vetter',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push({ toolName, args });
+                return {
+                    success: true,
+                    message: '已从 skillhub 安装并启用技能 `skill-vetter`。',
+                };
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: ({ summary }) => {
+                    summaries.push(summary);
+                },
+                onFailed: () => undefined,
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(agentLoopCalled).toBe(false);
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]?.toolName).toBe('install_coworkany_skill_from_marketplace');
+        expect(toolCalls[0]?.args).toMatchObject({
+            source: 'skill-vetter',
+            marketplace: 'skillhub',
+        });
+        expect(summaries[0]).toContain('skill-vetter');
+    });
+
+    test('executePreparedTaskFlow uses marketplace install fast path for GitHub install requests', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '从 github 安装 openai/repo-skill';
+        prepared.frozenWorkRequest.sourceText = '从 github 安装 openai/repo-skill';
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-marketplace-github-fastpath',
+            userQuery: '从 github 安装 openai/repo-skill',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push({ toolName, args });
+                return {
+                    success: true,
+                    message: '已从 github 安装并启用技能 `Repo Skill`。',
+                };
+            },
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(agentLoopCalled).toBe(false);
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]?.toolName).toBe('install_coworkany_skill_from_marketplace');
+        expect(toolCalls[0]?.args).toMatchObject({
+            source: 'openai/repo-skill',
+            marketplace: 'github',
+        });
+    });
+
+    test('executePreparedTaskFlow uses marketplace install fast path for ClawHub install requests', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '从 clawhub 安装 claw-vetter';
+        prepared.frozenWorkRequest.sourceText = '从 clawhub 安装 claw-vetter';
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-marketplace-clawhub-fastpath',
+            userQuery: '从 clawhub 安装 claw-vetter',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push({ toolName, args });
+                return {
+                    success: true,
+                    message: '已从 clawhub 安装并启用技能 `Claw Vetter`。',
+                };
+            },
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: [] };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(agentLoopCalled).toBe(false);
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]?.toolName).toBe('install_coworkany_skill_from_marketplace');
+        expect(toolCalls[0]?.args).toMatchObject({
+            source: 'claw-vetter',
+            marketplace: 'clawhub',
+        });
     });
 
     test('executePreparedTaskFlow uses deterministic local workflow for downloads image inspection', async () => {

@@ -21,6 +21,35 @@ function appendSystemMessage(session: TaskSession, event: TaskEvent, content: st
     };
 }
 
+function shouldAppendFinishedAssistantMessage(session: TaskSession, summary: string | undefined): boolean {
+    const normalizedSummary = summary?.trim();
+    if (!normalizedSummary) {
+        return false;
+    }
+
+    const latestAssistantMessage = [...session.messages]
+        .reverse()
+        .find((message) => message.role === 'assistant' && message.content.trim().length > 0);
+
+    if (!latestAssistantMessage) {
+        return true;
+    }
+
+    if (latestAssistantMessage.content.trim() === normalizedSummary) {
+        return false;
+    }
+
+    const latestUserMessage = [...session.messages]
+        .reverse()
+        .find((message) => message.role === 'user' && message.content.trim().length > 0);
+
+    if (!latestUserMessage) {
+        return false;
+    }
+
+    return latestAssistantMessage.timestamp < latestUserMessage.timestamp;
+}
+
 export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSession {
     const payload = event.payload as Record<string, unknown>;
 
@@ -32,6 +61,12 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 title: payload.title as string,
                 failure: undefined,
                 clarificationQuestions: undefined,
+                researchSummary: undefined,
+                researchSourcesChecked: undefined,
+                researchBlockingUnknowns: undefined,
+                selectedStrategyTitle: undefined,
+                contractReopenReason: undefined,
+                contractReopenCount: 0,
                 workspacePath: (payload.context as Record<string, unknown>)?.workspacePath as string,
                 messages: [
                     ...session.messages,
@@ -54,16 +89,113 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 planSteps: (payload.steps as PlanStep[]) || [],
             };
 
-        case 'TASK_FINISHED':
+        case 'TASK_RESEARCH_UPDATED':
             return {
+                ...session,
+                researchSummary: (payload.summary as string | undefined) ?? session.researchSummary,
+                researchSourcesChecked: ((payload.sourcesChecked as string[] | undefined) ?? []).filter(Boolean),
+                researchBlockingUnknowns: ((payload.blockingUnknowns as string[] | undefined) ?? []).filter(Boolean),
+                selectedStrategyTitle:
+                    typeof payload.selectedStrategyTitle === 'string'
+                        ? payload.selectedStrategyTitle
+                        : session.selectedStrategyTitle,
+            };
+
+        case 'TASK_CONTRACT_REOPENED':
+            return appendSystemMessage({
+                ...session,
+                status: 'running',
+                summary: (payload.summary as string | undefined) ?? session.summary,
+                contractReopenReason: String(payload.reason ?? ''),
+                contractReopenCount: (session.contractReopenCount ?? 0) + 1,
+                currentCheckpoint: undefined,
+                currentUserAction: undefined,
+                clarificationQuestions: undefined,
+            }, event, [
+                'Execution contract reopened.',
+                String(payload.reason ?? ''),
+            ].filter(Boolean).join('\n'));
+
+        case 'TASK_PLAN_READY':
+            return {
+                ...session,
+                planSummary: (payload.summary as string | undefined) ?? session.planSummary,
+                plannedDeliverables: ((payload.deliverables as TaskSession['plannedDeliverables']) ?? []).slice(),
+                plannedCheckpoints: ((payload.checkpoints as TaskSession['plannedCheckpoints']) ?? []).slice(),
+                plannedUserActions: ((payload.userActionsRequired as TaskSession['plannedUserActions']) ?? []).slice(),
+                missingInfo: ((payload.missingInfo as TaskSession['missingInfo']) ?? []).slice(),
+                defaultingPolicy: payload.defaultingPolicy as TaskSession['defaultingPolicy'],
+                resumeStrategy: payload.resumeStrategy as TaskSession['resumeStrategy'],
+            };
+
+        case 'TASK_CHECKPOINT_REACHED': {
+            const currentCheckpoint: NonNullable<TaskSession['currentCheckpoint']> = {
+                id: String(payload.checkpointId ?? ''),
+                title: String(payload.title ?? ''),
+                kind: (payload.kind as NonNullable<TaskSession['currentCheckpoint']>['kind']) ?? 'review',
+                reason: String(payload.reason ?? ''),
+                userMessage: String(payload.userMessage ?? ''),
+                requiresUserConfirmation: Boolean(payload.requiresUserConfirmation),
+                blocking: Boolean(payload.blocking),
+            };
+            return appendSystemMessage({
+                ...session,
+                currentCheckpoint,
+            }, event, currentCheckpoint.userMessage || currentCheckpoint.reason || 'Checkpoint reached');
+        }
+
+        case 'TASK_USER_ACTION_REQUIRED': {
+            const currentUserAction: NonNullable<TaskSession['currentUserAction']> = {
+                id: String(payload.actionId ?? ''),
+                title: String(payload.title ?? ''),
+                kind: (payload.kind as NonNullable<TaskSession['currentUserAction']>['kind']) ?? 'manual_step',
+                description: String(payload.description ?? ''),
+                blocking: Boolean(payload.blocking),
+                questions: ((payload.questions as string[] | undefined) ?? []).filter(Boolean),
+                instructions: ((payload.instructions as string[] | undefined) ?? []).filter(Boolean),
+                fulfillsCheckpointId:
+                    typeof payload.fulfillsCheckpointId === 'string' ? payload.fulfillsCheckpointId : undefined,
+            };
+            return appendSystemMessage({
+                ...session,
+                status: currentUserAction.blocking ? 'idle' : session.status,
+                currentUserAction,
+            }, event, [
+                currentUserAction.description,
+                ...currentUserAction.questions,
+                ...currentUserAction.instructions,
+            ].filter(Boolean).join('\n'));
+        }
+
+        case 'TASK_FINISHED':
+        {
+            const nextSession: TaskSession = {
                 ...session,
                 status: 'finished',
                 summary: payload.summary as string,
                 failure: undefined,
                 suspension: undefined,
                 clarificationQuestions: undefined,
+                currentCheckpoint: undefined,
+                currentUserAction: undefined,
                 assistantDraft: undefined,
             };
+            if (!shouldAppendFinishedAssistantMessage(nextSession, payload.summary as string | undefined)) {
+                return nextSession;
+            }
+            return {
+                ...nextSession,
+                messages: [
+                    ...nextSession.messages,
+                    {
+                        id: `${event.id}-assistant`,
+                        role: 'assistant',
+                        content: String(payload.summary ?? ''),
+                        timestamp: event.timestamp,
+                    },
+                ],
+            };
+        }
 
         case 'TASK_FAILED':
             return appendSystemMessage({
@@ -78,6 +210,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 },
                 suspension: undefined,
                 clarificationQuestions: undefined,
+                currentCheckpoint: undefined,
+                currentUserAction: undefined,
                 assistantDraft: undefined,
             }, event, [
                 `Task failed: ${(payload.error as string) ?? 'Unknown error'}`,
@@ -92,6 +226,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 ...session,
                 status: status ?? session.status,
                 failure: status === 'running' ? undefined : session.failure,
+                currentCheckpoint: status === 'running' ? undefined : session.currentCheckpoint,
+                currentUserAction: status === 'running' ? undefined : session.currentUserAction,
                 assistantDraft: status === 'running' ? session.assistantDraft : undefined,
             };
         }
@@ -104,6 +240,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 failure: undefined,
                 suspension: undefined,
                 clarificationQuestions: ((payload.questions as string[] | undefined) ?? []).filter(Boolean),
+                currentCheckpoint: undefined,
+                currentUserAction: undefined,
                 assistantDraft: undefined,
             };
 
@@ -149,6 +287,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 status: 'running',
                 failure: undefined,
                 suspension: undefined,
+                currentCheckpoint: undefined,
+                currentUserAction: undefined,
             }, event, 'Task resumed');
 
         case 'TASK_HISTORY_CLEARED': {

@@ -26,6 +26,11 @@ function makeTempDir(prefix: string): string {
 function buildTools(options?: {
     applyLlmConfig?: (config: Record<string, unknown>) => void;
     importSkillFromDirectory?: (inputPath: string, autoInstallDependencies?: boolean) => Promise<any>;
+    downloadSkillFromGitHub?: (source: string, workspacePath: string) => Promise<any>;
+    searchClawHubSkills?: (query: string, limit?: number) => Promise<any>;
+    installSkillFromClawHub?: (skillName: string, targetDir: string) => Promise<any>;
+    getSkillhubExecutable?: () => string | undefined;
+    onSkillsUpdated?: () => void;
 }) {
     const workspaceRoot = makeTempDir('coworkany-app-tools-workspace-');
     const appDataRoot = makeTempDir('coworkany-app-tools-data-');
@@ -38,6 +43,11 @@ function buildTools(options?: {
         workspaceStore,
         applyLlmConfig: options?.applyLlmConfig as any,
         importSkillFromDirectory: options?.importSkillFromDirectory,
+        downloadSkillFromGitHub: options?.downloadSkillFromGitHub,
+        searchClawHubSkills: options?.searchClawHubSkills,
+        installSkillFromClawHub: options?.installSkillFromClawHub,
+        getSkillhubExecutable: options?.getSkillhubExecutable,
+        onSkillsUpdated: options?.onSkillsUpdated,
     });
 
     return {
@@ -47,6 +57,50 @@ function buildTools(options?: {
         workspaceStore,
         tools,
     };
+}
+
+function createFakeSkillhubCli(slug = 'skill-vetter'): string {
+    const cliDir = makeTempDir('coworkany-fake-skillhub-');
+    const cliPath = path.join(cliDir, 'skillhub');
+    fs.writeFileSync(
+        cliPath,
+        `#!/bin/sh
+set -eu
+if [ "$1" = "--skip-self-upgrade" ]; then
+  shift
+fi
+if [ "$1" = "search" ]; then
+  echo '{"results":[{"slug":"${slug}","name":"${slug}","description":"Vet installed skills"}]}'
+  exit 0
+fi
+if [ "$1" = "--dir" ]; then
+  INSTALL_DIR="$2"
+  shift 2
+fi
+if [ "$1" = "install" ]; then
+  TARGET="$2"
+  mkdir -p "$INSTALL_DIR/$TARGET"
+  cat > "$INSTALL_DIR/$TARGET/SKILL.md" <<'EOF'
+---
+name: ${slug}
+version: 1.0.0
+description: Vet installed skills
+triggers:
+  - vet skill
+  - check skills
+---
+
+# ${slug}
+EOF
+  exit 0
+fi
+echo "unsupported" >&2
+exit 1
+`,
+        'utf-8'
+    );
+    fs.chmodSync(cliPath, 0o755);
+    return cliPath;
 }
 
 function getTool(tools: ReturnType<typeof buildTools>['tools'], name: string) {
@@ -172,5 +226,127 @@ description: Demo managed skill
         expect(removed.success).toBe(true);
         expect(removed.filesDeleted).toBe(true);
         expect(fs.existsSync(skillDir)).toBe(false);
+    });
+
+    test('marketplace install tool installs and enables a skill from GitHub source', async () => {
+        const fixture = buildTools({
+            downloadSkillFromGitHub: async (_source, workspacePath) => {
+                const skillDir = path.join(workspacePath, '.coworkany', 'skills', 'repo-skill');
+                fs.mkdirSync(skillDir, { recursive: true });
+                fs.writeFileSync(
+                    path.join(skillDir, 'SKILL.md'),
+                    `---
+name: Repo Skill
+version: 1.0.0
+description: Repo managed skill
+triggers:
+  - repo skill
+---
+
+# Repo Skill
+`,
+                    'utf-8'
+                );
+                return {
+                    success: true,
+                    path: skillDir,
+                    filesDownloaded: 1,
+                };
+            },
+        });
+
+        const tool = getTool(fixture.tools, 'install_coworkany_skill_from_marketplace');
+        const response = await tool.handler(
+            {
+                source: 'openai/repo-skill',
+                marketplace: 'github',
+            },
+            TOOL_CONTEXT
+        );
+
+        expect(response.success).toBe(true);
+        expect(response.marketplace).toBe('github');
+        expect(response.skillId).toBe('Repo Skill');
+        expect(response.enabled).toBe(true);
+        expect(response.source).toBe('github:openai/repo-skill');
+        expect(response.message).toContain('已从 github 安装并启用技能');
+    });
+
+    test('marketplace install tool searches skillhub, installs the selected skill, and returns usage guidance', async () => {
+        const fixture = buildTools({
+            getSkillhubExecutable: () => createFakeSkillhubCli(),
+        });
+
+        const tool = getTool(fixture.tools, 'install_coworkany_skill_from_marketplace');
+        const response = await tool.handler(
+            {
+                source: 'skill-vetter',
+                marketplace: 'skillhub',
+            },
+            TOOL_CONTEXT
+        );
+
+        expect(response.success).toBe(true);
+        expect(response.marketplace).toBe('skillhub');
+        expect(response.skillId).toBe('skill-vetter');
+        expect(response.enabled).toBe(true);
+        expect(Array.isArray(response.usageGuidance)).toBe(true);
+        expect(response.message).toContain('skillhub');
+        expect(response.message).toContain('SKILL.md');
+    });
+
+    test('marketplace install tool searches clawhub, installs the selected skill, and returns usage guidance', async () => {
+        const fixture = buildTools({
+            searchClawHubSkills: async () => [{
+                name: 'claw-vetter',
+                description: 'Vet OpenClaw skills',
+                author: 'OpenClaw Community',
+                version: '1.0.0',
+                downloads: 42,
+                stars: 7,
+                tags: ['vet'],
+                repoUrl: 'https://example.com/openclaw/claw-vetter',
+                files: ['SKILL.md'],
+            }],
+            installSkillFromClawHub: async (skillName, targetDir) => {
+                const skillDir = path.join(targetDir, skillName);
+                fs.mkdirSync(skillDir, { recursive: true });
+                fs.writeFileSync(
+                    path.join(skillDir, 'SKILL.md'),
+                    `---
+name: Claw Vetter
+version: 1.0.0
+description: Vet clawhub skills
+triggers:
+  - claw vet
+---
+
+# Claw Vetter
+`,
+                    'utf-8'
+                );
+                return {
+                    success: true,
+                    path: skillDir,
+                };
+            },
+        });
+
+        const tool = getTool(fixture.tools, 'install_coworkany_skill_from_marketplace');
+        const response = await tool.handler(
+            {
+                source: 'claw-vetter',
+                marketplace: 'clawhub',
+            },
+            TOOL_CONTEXT
+        );
+
+        expect(response.success).toBe(true);
+        expect(response.marketplace).toBe('clawhub');
+        expect(response.skillId).toBe('Claw Vetter');
+        expect(response.enabled).toBe(true);
+        expect(Array.isArray(response.usageGuidance)).toBe(true);
+        expect(response.message).toContain('clawhub');
+        expect(response.message).toContain('SKILL.md');
     });
 });

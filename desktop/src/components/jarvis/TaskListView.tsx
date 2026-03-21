@@ -2,7 +2,6 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
-import { useWorkspace } from '../../hooks/useWorkspace';
 import { useTaskEventStore, type TaskSession } from '../../stores/useTaskEventStore';
 import type { TaskStatus } from '../../types';
 import './TaskListView.css';
@@ -21,10 +20,6 @@ type BoardTask = {
     updatedAt: string;
 };
 
-function normalizePath(value: string | undefined): string {
-    return (value ?? '').replace(/[\\/]+$/, '');
-}
-
 function compactText(value: string | undefined, maxLength = 220): string {
     const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
     if (!normalized) {
@@ -33,10 +28,14 @@ function compactText(value: string | undefined, maxLength = 220): string {
     return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
+function getUserMessages(session: TaskSession) {
+    return session.messages.filter((message) => message.role === 'user' && message.content.trim().length > 0);
+}
+
 function deriveUserPrompt(session: TaskSession): string {
-    const firstUserMessage = session.messages.find((message) => message.role === 'user' && message.content.trim().length > 0);
-    if (firstUserMessage) {
-        return firstUserMessage.content;
+    const latestUserMessage = [...getUserMessages(session)].pop();
+    if (latestUserMessage) {
+        return latestUserMessage.content;
     }
 
     const taskStartedEvent = session.events.find((event) => event.type === 'TASK_STARTED');
@@ -45,6 +44,10 @@ function deriveUserPrompt(session: TaskSession): string {
 }
 
 function deriveResult(session: TaskSession): string {
+    if ((session.status === 'finished' || session.status === 'failed') && session.summary?.trim().length) {
+        return compactText(session.summary, 260);
+    }
+
     const latestRenderableMessage = [...session.messages]
         .reverse()
         .find((message) => (message.role === 'assistant' || message.role === 'system') && message.content.trim().length > 0);
@@ -54,13 +57,17 @@ function deriveResult(session: TaskSession): string {
 
 function deriveTitle(session: TaskSession): string {
     const sessionTitle = compactText(session.title, 80);
+    const latestUserPrompt = compactText(deriveUserPrompt(session), 80);
+    if (latestUserPrompt && getUserMessages(session).length > 1) {
+        return latestUserPrompt;
+    }
+
     if (sessionTitle && sessionTitle.toLowerCase() !== 'hi') {
         return sessionTitle;
     }
 
-    const promptTitle = compactText(deriveUserPrompt(session), 80);
-    if (promptTitle) {
-        return promptTitle;
+    if (latestUserPrompt) {
+        return latestUserPrompt;
     }
 
     return `Task ${session.taskId.slice(0, 8)}`;
@@ -93,9 +100,21 @@ function formatUpdatedAt(timestamp: string): string {
     });
 }
 
+export function buildBoardTasks(sessions: Iterable<TaskSession>): BoardTask[] {
+    return Array.from(sessions)
+        .map((session) => ({
+            id: session.taskId,
+            title: deriveTitle(session),
+            description: compactText(deriveUserPrompt(session), 180),
+            result: deriveResult(session),
+            status: session.status,
+            updatedAt: session.updatedAt,
+        }))
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
 export const TaskListView: React.FC = () => {
     const { t } = useTranslation();
-    const { activeWorkspace } = useWorkspace();
     const { voiceState, stopPlayback, isStopping, error: stopVoiceError } = useVoicePlayback();
     const sessions = useTaskEventStore((state) => state.sessions);
     const hydrate = useTaskEventStore((state) => state.hydrate);
@@ -128,33 +147,9 @@ export const TaskListView: React.FC = () => {
         await stopPlayback();
     }, [stopPlayback]);
 
-    const workspacePath = normalizePath(activeWorkspace?.path);
     const tasks = React.useMemo<BoardTask[]>(() => {
-        return Array.from(sessions.values())
-            .filter((session) => {
-                if (!workspacePath) {
-                    return true;
-                }
-                return normalizePath(session.workspacePath) === workspacePath;
-            })
-            .map((session) => ({
-                id: session.taskId,
-                title: deriveTitle(session),
-                description: compactText(deriveUserPrompt(session), 180),
-                result: deriveResult(session),
-                status: session.status,
-                updatedAt: session.updatedAt,
-            }))
-            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    }, [sessions, workspacePath]);
-
-    if (!activeWorkspace) {
-        return (
-            <div className="task-list-empty-shell">
-                <div className="task-list-empty-card">{t('dashboard.selectWorkspace')}</div>
-            </div>
-        );
-    }
+        return buildBoardTasks(sessions.values());
+    }, [sessions]);
 
     if (isLoading && tasks.length === 0) {
         return (

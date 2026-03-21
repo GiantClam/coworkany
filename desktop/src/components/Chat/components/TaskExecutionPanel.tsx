@@ -14,7 +14,9 @@ type TaskSummary = {
 function summarizeProgress(session: TaskSession): number {
     const total = session.planSteps.length;
     if (total === 0) return session.status === 'finished' ? 100 : 0;
-    const done = session.planSteps.filter((step) => step.status === 'complete' || step.status === 'skipped').length;
+    const done = session.planSteps.filter((step) =>
+        step.status === 'complete' || step.status === 'completed' || step.status === 'skipped'
+    ).length;
     return Math.round((done / total) * 100);
 }
 
@@ -25,6 +27,16 @@ function describeEvent(event: TaskEvent): string {
             return 'Task started';
         case 'PLAN_UPDATED':
             return 'Plan updated';
+        case 'TASK_RESEARCH_UPDATED':
+            return String(payload.summary ?? 'Research updated');
+        case 'TASK_CONTRACT_REOPENED':
+            return String(payload.summary ?? payload.reason ?? 'Execution contract reopened');
+        case 'TASK_PLAN_READY':
+            return 'Coworkany prepared the execution contract';
+        case 'TASK_CHECKPOINT_REACHED':
+            return String(payload.userMessage ?? payload.reason ?? 'Checkpoint reached');
+        case 'TASK_USER_ACTION_REQUIRED':
+            return String(payload.description ?? 'User action required');
         case 'TASK_STATUS':
             return `Status: ${String(payload.status ?? 'unknown')}`;
         case 'TOOL_CALLED':

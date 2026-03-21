@@ -128,4 +128,54 @@ describe('artifact contract', () => {
         expect(evaluation.passed).toBe(true);
         expect(contract.requirements.some(r => r.kind === 'file')).toBe(false);
     });
+
+    test('adds planned deliverable file requirements from planner contract', () => {
+        const contract = buildArtifactContract('帮我分析项目并输出结论', [
+            {
+                id: 'deliverable-1',
+                title: 'Final report',
+                type: 'report_file',
+                description: 'Write the final report to a markdown file.',
+                required: true,
+                path: 'reports/final-report.md',
+                format: 'md',
+            },
+        ]);
+
+        expect(contract.requirements.some((requirement) =>
+            requirement.kind === 'file' &&
+            String(requirement.payload.extension) === '.md' &&
+            String(requirement.payload.source) === 'planned_deliverable'
+        )).toBe(true);
+    });
+
+    test('accepts planned explicit code-file deliverables without inventing markdown output', () => {
+        const contract = buildArtifactContract('写一个简单的 Hello World 程序，保存到 /tmp/.coworkany/gui-test.js', [
+            {
+                id: 'deliverable-1',
+                title: 'Hello World script',
+                type: 'artifact_file',
+                description: 'Write the requested JavaScript file to the explicit path.',
+                required: true,
+                path: '/tmp/.coworkany/gui-test.js',
+                format: 'js',
+            },
+        ]);
+        const evaluation = evaluateArtifactContract(contract, {
+            files: ['/tmp/.coworkany/gui-test.js'],
+            toolsUsed: ['write_to_file'],
+            outputText: 'console.log("Hello World");',
+        });
+
+        expect(contract.requirements.some((requirement) =>
+            requirement.kind === 'file' &&
+            String(requirement.payload.extension) === '.js' &&
+            String(requirement.payload.source) === 'planned_deliverable'
+        )).toBe(true);
+        expect(contract.requirements.some((requirement) =>
+            requirement.kind === 'file' &&
+            String(requirement.payload.extension) === '.md'
+        )).toBe(false);
+        expect(evaluation.passed).toBe(true);
+    });
 });

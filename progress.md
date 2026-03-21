@@ -1,11 +1,514 @@
-# Progress
+# Progress Log
 
-- 2026-03-19: Started voice provider architecture change.
-- Inspected current voice TTS and ASR implementations.
-- Identified missing provider registry abstraction for custom skill/tool overrides.
-- Added `sidecar/src/tools/core/speechProviders.ts` and sidecar tests for provider selection.
-- Wired sidecar runtime commands for provider status and custom ASR transcription.
-- Wired desktop/Tauri to prefer custom ASR when installed, otherwise keep the built-in system path.
-- Added persisted `voiceProviderMode` settings (`auto/system/custom`) in desktop settings.
-- Propagated `voiceProviderMode` through task config, ASR status checks, transcription IPC, and sidecar TTS selection.
-- Verification completed with sidecar typecheck, sidecar tests, desktop tests, desktop build, and Rust Tauri tests.
+## 2026-03-20
+
+- Read current planner/runtime/UI code to confirm why user-authored execution scripts are effectively required today.
+- Wrote implementation plan to `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-20-coworkany-agent-led-task-orchestration.md`.
+- Started implementation slice for Task 1 + Task 2: schema and analyzer only.
+- Implemented planner execution-contract fields in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestSchema.ts`.
+- Implemented deliverable/checkpoint/user-action/defaulting inference in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts`.
+- Updated frozen execution prompt generation in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts`.
+- Updated artifact contract generation to consume planned deliverables in `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/artifactContract.ts`.
+- Added/updated focused tests in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/__tests__/artifactContract.test.ts`
+- Verification run:
+  - `bun test sidecar/src/agent/__tests__/artifactContract.test.ts sidecar/tests/runtime-commands.test.ts sidecar/tests/work-request-control-plane.test.ts sidecar/tests/work-request-runtime.test.ts`
+  - `cd sidecar && bun run typecheck`
+- Added first-class planner/collaboration events in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/protocol/events.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskEventBus.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+- Added planner summary/checkpoint helpers in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts`.
+- Updated desktop session state and UI surfaces to render Coworkany-owned plans and current collaboration requirements:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/types/events.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/stores/taskEvents/reducers/taskReducer.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/ChatInterface.tsx`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/ChatInterface.css`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/components/TaskExecutionPanel.tsx`
+- Added focused regression coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts`
+- Verification run:
+  - `bun test sidecar/tests/runtime-commands.test.ts sidecar/tests/work-request-runtime.test.ts sidecar/tests/work-request-control-plane.test.ts sidecar/src/agent/__tests__/artifactContract.test.ts`
+  - `cd sidecar && bun run typecheck`
+  - `cd desktop && bun test tests/task-reducer-suspension.test.ts tests/task-event-store-hydration.test.ts`
+  - `cd desktop && npx tsc --noEmit`
+- Wired planner checkpoints to execution plan step state:
+  - `PLAN_UPDATED` is now emitted from sidecar as a real execution-progress source.
+  - execution steps now move through `in_progress -> blocked -> in_progress -> reduction -> presentation -> completed`.
+  - runtime suspension/resume updates the active execution plan via a per-task prepared-context registry.
+- Updated plan-state helpers in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskEventBus.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`
+- Updated desktop progress compatibility for `blocked/completed` plan-step statuses in:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/types/events.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/components/TaskExecutionPanel.tsx`
+- Added verification coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/planning-files.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-list-view.test.ts`
+- Verification run:
+  - `bun test sidecar/tests/runtime-commands.test.ts sidecar/tests/work-request-runtime.test.ts sidecar/tests/execution-runtime.test.ts sidecar/tests/planning-files.test.ts`
+  - `cd sidecar && bun run typecheck`
+  - `cd desktop && bun test tests/task-reducer-suspension.test.ts tests/task-list-view.test.ts tests/task-event-store-hydration.test.ts`
+  - `cd desktop && npx tsc --noEmit`
+
+## 2026-03-20 Marketplace Install Fix
+
+- Inspected desktop and sidecar logs to confirm the Skillhub install request was not blocked by control-plane clarification.
+- Added marketplace-aware skill-management tools in `/Users/beihuang/Documents/github/coworkany/sidecar/src/tools/appManagement.ts`.
+- Added Skillhub/GitHub install routing, install result messaging, and usage guidance.
+- Updated self-management skill instructions/triggers in `/Users/beihuang/Documents/github/coworkany/sidecar/src/data/defaults.ts`.
+- Added self-management preference tagging in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts`.
+- Added deterministic marketplace install fast path in `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts`.
+- Added focused tests in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/app-management-tools.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+- Verification:
+  - `bun test tests/app-management-tools.test.ts tests/execution-runtime.test.ts tests/work-request-control-plane.test.ts` passed with 37/37 tests.
+  - `bun run typecheck` completed successfully.
+
+## 2026-03-20 ClawHub Marketplace Follow-Up
+
+- Reused the existing OpenClaw compatibility layer in `/Users/beihuang/Documents/github/coworkany/sidecar/src/claude_skills/openclawCompat.ts` to support ClawHub search and install from the chat marketplace flow.
+- Extended marketplace source handling in `/Users/beihuang/Documents/github/coworkany/sidecar/src/tools/appManagement.ts` to cover `clawhub`, including search, install, enablement, and usage guidance.
+- Wired main runtime dependencies in `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts` so app-management tools can call ClawHub helpers.
+- Extended install intent parsing in `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts` and self-management detection/triggers in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/data/defaults.ts`
+- Added focused ClawHub coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/app-management-tools.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+- Fixed a surfaced type mismatch in `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts` for `buildArtifactContract`.
+- Verification:
+  - `bun test tests/app-management-tools.test.ts tests/execution-runtime.test.ts tests/work-request-control-plane.test.ts` passed with 42/42 tests.
+  - `bun run typecheck` completed successfully.
+
+## 2026-03-21 Deep Research Control Plane Hardening
+
+- Added refreeze support in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts` so a prepared work request can be re-researched and re-frozen while preserving its persistent work-request id.
+- Upgraded `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts` so `artifact contract unmet` can trigger:
+  - `TASK_CONTRACT_REOPENED`
+  - auto-refreeze
+  - at most one automatic retry
+  - safe stop when the refrozen contract now requires blocking clarification or manual collaboration
+- Updated `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts` so refrozen contracts emit fresh research/plan events, can halt on blocking user collaboration, and keep `currentExecutingTaskId` synchronized with `TASK_STATUS` / `TASK_RESUMED`.
+- Extended desktop state consumption in:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/stores/taskEvents/reducers/taskReducer.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/ChatInterface.tsx`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/components/TaskExecutionPanel.tsx`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/stores/taskEvents/index.ts`
+- Added focused regression coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts`
+- Verification:
+  - `bun test sidecar/tests/execution-runtime.test.ts sidecar/tests/work-request-runtime.test.ts sidecar/tests/runtime-commands.test.ts desktop/tests/task-reducer-suspension.test.ts desktop/tests/task-event-store-hydration.test.ts desktop/tests/task-list-view.test.ts`
+  - `bun x tsc -p sidecar/tsconfig.json --noEmit && bun x tsc -p desktop/tsconfig.json --noEmit`
+
+- Extended deterministic local workflows in `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts` so filesystem failures can reopen the contract with:
+  - `permission_block`
+  - `missing_resource`
+- Added trigger classification based on raw tool failures and preserved `list_dir` error details so missing-resource vs permission-block routing remains visible.
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts` for:
+  - local workflow permission-block reopen
+  - local workflow missing-resource reopen
+- Verification:
+  - `bun test sidecar/tests/execution-runtime.test.ts sidecar/tests/work-request-runtime.test.ts sidecar/tests/runtime-commands.test.ts`
+  - `bun x tsc -p sidecar/tsconfig.json --noEmit`
+
+- Extended generic agent-loop failure handling in `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts` so thrown execution errors can also reopen/refreeze the contract when they classify as:
+  - `permission_block`
+  - `missing_resource`
+- Consolidated runtime reopen logic behind shared helpers for:
+  - trigger gating via `replanPolicy`
+  - contract reopen + refreeze emission
+  - blocked-vs-auto-retry behavior
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts` for:
+  - agent-loop permission-block reopen
+  - agent-loop missing-resource reopen
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Fixed explicit output-path freezing in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts` so requests like `保存到 /.../.coworkany/test-workspace/gui_test.js` preserve the full target path and extension instead of defaulting back to `artifacts/*.md`.
+- Hardened explicit path parsing in `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/artifactContract.ts` to avoid truncating paths at dotted parent directories.
+- Tightened the brittle spawn-order regression in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/command-sandbox.test.ts` so it inspects the `run_command` handler rather than the first `spawn(` in the file.
+- Added/updated focused regression coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/__tests__/artifactContract.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/command-sandbox.test.ts`
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/src/agent/__tests__/artifactContract.test.ts`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/command-sandbox.test.ts`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/gui-simulation.test.ts --test-name-pattern "GUI-03"`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Added governed follow-up reopen detection in `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`:
+  - user corrections now emit `TASK_CONTRACT_REOPENED` with `contradictory_evidence`
+  - materially different follow-ups now emit `TASK_CONTRACT_REOPENED` with `new_scope_signal`
+  - reopened follow-ups rebuild the session artifact contract instead of reusing stale validation state
+- Wired the active prepared-work-request lookup into `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts` so follow-up scope detection can compare previous and next frozen contracts.
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts` for:
+  - contradictory-evidence reopen on corrected deliverables
+  - new-scope reopen on changed execution targets
+  - artifact-contract rebuild on reopened follow-up
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Added desktop regressions for reopened follow-up state in:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-event-store-hydration.test.ts`
+- Coverage now verifies:
+  - reopened plan state is replaced, not merged with stale deliverables/checkpoints
+  - reopened research summary and selected strategy survive into the replanned contract
+  - hydrated idle sessions preserve reopen metadata and the current blocking action
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-event-store-hydration.test.ts`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-event-store-hydration.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit && bun x tsc -p /Users/beihuang/Documents/github/coworkany/desktop/tsconfig.json --noEmit`
+
+- Exported a pure timeline transformer in `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` for deterministic UI-visible regressions.
+- Added `/Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts` to verify:
+  - reopened follow-up sequences render as ordered system events
+  - recent-event truncation still reports hidden counts correctly
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-event-store-hydration.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/desktop/tsconfig.json --noEmit`
+
+- Added minimal frozen-contract snapshot persistence in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestSnapshot.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskSessionStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`
+- Follow-up reopen detection now falls back to the persisted snapshot when `activePreparedWorkRequest` has already been cleared after finish/idle, so user corrections can still trigger `TASK_CONTRACT_REOPENED` and artifact-contract rebuild.
+- Refreshed the stored snapshot at all current freeze points:
+  - fresh task start
+  - follow-up task replan
+  - interrupted-task resume
+  - execution-time contract refreeze
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts` for reopen detection from stored frozen snapshot after the active prepared request is gone.
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+- Attempted a GUI-level follow-up reopen smoke in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/gui-simulation.test.ts`, but removed it before landing because unauthenticated SearXNG fallback made pre-freeze research too slow and flaky for CI. Logged that as a separate beta-hardening risk instead of baking the instability into the suite.
+
+- Added explicit research-adapter timeout budgets in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/researchLoop.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts`
+- `runPreFreezeResearchLoop(...)` now bounds:
+  - web research
+  - connected-app research
+  so slow adapters degrade into failed evidence plus `knownRisks` instead of stalling contract freeze indefinitely.
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts` to verify a hanging web resolver times out quickly and the contract still freezes.
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+
+## 2026-03-21 Control-Plane Readiness Threshold Config
+
+- Externalized control-plane release thresholds into `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json`.
+- Added JSON config loading and default merging in `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`.
+- Updated `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts` to load thresholds from the repo config by default, allow `--control-plane-thresholds <path>` overrides, and record the active thresholds path in the readiness report.
+- Extended `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts` to cover config loading and markdown/report rendering for threshold source visibility.
+- Upgraded the threshold config to support rollout profiles (`canary`, `beta`, `ga`) and added CLI/env selection for the active profile in release-readiness.
+- Added `productionReplaySource` labeling, replay-coverage aggregation in the eval summary, importer support for source labels, and readiness gates for minimum replay sample counts by source.
+- Extended the event-log importer with batch directory ingestion, stable derived case ids/descriptions, and bulk dataset upsert so production replay coverage can be grown operationally.
+- Added conservative replay-source auto-detection from directory names (`canary`/`beta`/`ga`) plus batch import summaries, so ops can point the importer at saved rollout log folders with less manual metadata.
+- Added a dedicated `eval:control-plane:sync-replays` entrypoint that syncs rollout source folders into `production-replay.jsonl` and writes an aggregate import report artifact.
+- Extended `release-readiness` with an optional `production-replay-sync` stage and report section so replay import evidence can travel with the readiness artifact.
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Extended persisted runtime session semantics in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskRuntimeStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskRuntimeRecovery.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+- Runtime persistence now keeps control-plane context for `idle`, `finished`, and `failed` tasks instead of deleting it immediately, and restart recovery hydrates those sessions without misclassifying them as interrupted.
+- Synced `TASK_STATUS: idle` into persisted runtime state so blocked clarification/manual-collaboration tasks no longer reboot as stale `running`.
+- Added focused regression coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-store.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-recovery.test.ts`
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-store.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-recovery.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Added bounded retention for archived terminal runtime sessions in `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskRuntimeStore.ts`.
+- The runtime store now prunes only the oldest archived terminal records (`finished` / `failed`) and preserves all active or blocked states (`running` / `suspended` / `interrupted` / `idle`).
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-store.test.ts` to verify pruning removes only the oldest archived terminal tasks while keeping active sessions.
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-store.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/task-runtime-recovery.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Added a real cross-process restart smoke in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/restart-followup-reopen.test.ts`.
+- Extended `/Users/beihuang/Documents/github/coworkany/sidecar/tests/helpers/sidecar-harness.ts` with configurable `cwd` / `env` plus a `bootstrap_runtime_context` command builder so the smoke can launch a real sidecar process against seeded persisted runtime state.
+- The restart smoke now verifies:
+  - finished-task context restores after bootstrap
+  - follow-up correction triggers `TASK_CONTRACT_REOPENED`
+  - sidecar emits fresh `TASK_RESEARCH_UPDATED` and `TASK_PLAN_READY` after reopen
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/restart-followup-reopen.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Fixed a desktop mixed-blocker bug in `/Users/beihuang/Documents/github/coworkany/desktop/src/stores/taskEvents/reducers/taskReducer.ts`.
+- `TASK_CLARIFICATION_REQUIRED` now clears stale `currentCheckpoint` and `currentUserAction`, so reopened tasks no longer show an old manual-action card alongside fresh clarification questions.
+- Added regression coverage in `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts` for the sequence:
+  - `TASK_CHECKPOINT_REACHED`
+  - `TASK_USER_ACTION_REQUIRED`
+  - `TASK_CLARIFICATION_REQUIRED`
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-event-store-hydration.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts /Users/beihuang/Documents/github/coworkany/desktop/tests/task-list-view.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/desktop/tsconfig.json --noEmit`
+
+- Tightened corrective follow-up analysis in `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`.
+- `send_task_message` now merges correction-style follow-ups with the prior frozen-contract snapshot before analysis, instead of analyzing `Actually, save it to ... instead` as a fresh standalone request.
+- Narrowed ambiguous-follow-up detection in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts` so normal instructions containing pronouns (for example `save it to /tmp/hello.ts`) no longer trigger `task_scope` clarification.
+- Expanded explicit-path extraction in `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts` to recognize `save it to` / `write it to` as explicit artifact targets.
+- Added regression coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/restart-followup-reopen.test.ts`
+- The upgraded cross-process smoke now asserts that:
+  - restart restores finished-task context
+  - correction follow-up emits `TASK_CONTRACT_REOPENED`
+  - research + plan events are re-emitted
+  - no `TASK_CLARIFICATION_REQUIRED` is emitted for a pure output-path correction
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/restart-followup-reopen.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Wrote a commercialization gap and sequencing document in `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-21-coworkany-commercialization-roadmap-v2.md`.
+- The roadmap merges:
+  - official agent best-practice gaps
+  - Coworkany-specific control-plane gaps
+  - additional production hardening lessons from OpenClaw and nanobot
+- The resulting workstreams are:
+  - eval-driven control plane
+  - risk-tiered HITL
+  - safe-by-default runtime and connector isolation
+  - extension and supply-chain governance
+  - session/memory/tenant isolation
+  - operability / doctor / incident recovery
+  - user-visible contract diff and governance UX
+
+- Started the P0 control-plane eval harness slice.
+- Discovery completed against:
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-21-coworkany-commercialization-roadmap-v2.md`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/researchLoop.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestRuntime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/artifactContract.ts`
+- Chosen implementation shape:
+  - add `sidecar/src/evals/controlPlaneEvalRunner.ts`
+  - add JSONL seed cases under `sidecar/evals/control-plane/`
+  - add focused regression coverage plus a package script to run the eval harness
+- Rationale:
+  - reuse the production control-plane path instead of inventing eval-only logic
+  - keep first metrics deterministic and stage-scoped
+  - defer dashboard UI and reopen replay until the dataset contract is stable
+
+- Implemented the first control-plane eval harness in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts`.
+- Added the first in-repo gold dataset at `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/gold.jsonl`.
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`.
+- Added a package entrypoint in `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`:
+  - `bun run eval:control-plane`
+- The runner now:
+  - loads JSONL eval cases from file or directory
+  - seeds per-case temporary workspaces
+  - optionally stubs web and connected-app research adapters
+  - replays analyze -> research/freeze -> plan -> artifact stages
+  - emits suite summary metrics and optional JSON output via `--out`
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+- Current seed-suite metrics:
+  - cases: `6/6` passed
+  - clarification rate: `16.7%`
+  - unnecessary clarification rate: `0.0%`
+  - freeze expectation pass rate: `100.0%`
+  - artifact expectation pass rate: `100.0%`
+  - artifact satisfaction rate: `50.0%`
+
+- Extended the same eval runner in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts` with a `runtimeReplay` stage.
+- Runtime replay now:
+  - writes persisted runtime records into a temp app-data directory
+  - launches a real sidecar subprocess
+  - sends `bootstrap_runtime_context`
+  - sends a real `send_task_message`
+  - validates emitted protocol events with `TaskEventSchema`
+- Added a governed reopen replay case to `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/gold.jsonl` for:
+  - finished-task context restore
+  - follow-up output-path correction
+  - `TASK_CONTRACT_REOPENED -> TASK_RESEARCH_UPDATED -> TASK_PLAN_READY`
+  - no `TASK_CLARIFICATION_REQUIRED`
+- Updated `/Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts` to assert the runtime replay stage and suite metrics.
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+- Updated seed-suite metrics:
+  - cases: `7/7` passed
+  - clarification rate: `16.7%`
+  - unnecessary clarification rate: `0.0%`
+  - freeze expectation pass rate: `100.0%`
+  - artifact expectation pass rate: `100.0%`
+  - artifact satisfaction rate: `50.0%`
+  - runtime replay pass rate: `100.0%`
+
+- Extended `runtimeReplay` in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts` to support saved event-log replay in addition to live sidecar replay.
+- Added a saved protocol-event fixture at `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/event-logs/runtime-followup-reopen.jsonl`.
+- Added a `production_replay` seed case to `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/gold.jsonl` that replays the saved event log through the same runtime expectation model.
+- Wired control-plane eval into `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts` and `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`:
+  - release readiness now runs `bun run eval:control-plane --out ...`
+  - report JSON/Markdown now include control-plane eval counts and key metrics
+- Added release-readiness regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts` for:
+  - eval-summary ingestion
+  - markdown rendering of control-plane metrics
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+- Updated seed-suite metrics:
+  - cases: `8/8` passed
+  - clarification rate: `16.7%`
+  - unnecessary clarification rate: `0.0%`
+  - freeze expectation pass rate: `100.0%`
+  - artifact expectation pass rate: `100.0%`
+  - artifact satisfaction rate: `50.0%`
+  - runtime replay pass rate: `100.0%`
+
+- Added a control-plane event-log importer in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEventLogImporter.ts`.
+- Added a CLI wrapper in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/import-control-plane-event-log.ts` and exposed it via:
+  - `bun run eval:control-plane:import-log`
+- The importer now:
+  - reads saved `TaskEvent` JSONL
+  - validates events against protocol schema
+  - infers runtime replay expectations
+  - templates absolute paths into `{{workspace}}` / `{{sidecarRoot}}`
+  - emits a `production_replay` case compatible with the existing eval suite
+- Added regression coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts`.
+- Verified CLI output against the saved replay fixture:
+  - `bun run eval:control-plane:import-log -- --input evals/control-plane/event-logs/runtime-followup-reopen.jsonl --case-id imported-runtime-followup-reopen --description "Imported from saved event log" --workspace-path /tmp --source-text "Actually, save it to /tmp/hello.ts instead." --sidecar-root .`
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Hardened `release-readiness` replay-sync integration in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`:
+  - explicit `--production-replay-import-root` values now force `--replace-input-roots`
+  - new `--production-replay-dataset <path>` keeps sync runs from mutating the repo dataset
+  - the same synced dataset is now passed into the control-plane eval stage so replay evidence actually reaches the gate
+- Added replay-threshold recommendation output in `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts` and `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`.
+- Readiness markdown now emits:
+  - the active production replay dataset path
+  - `Production Replay Threshold Recommendations` when a previously-unrequired source has imported evidence
+- Removed the accidental verification artifact `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/production-replay.jsonl` so temp-path replay cases are no longer present in the repo.
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts --output-dir <tmp> --sync-production-replays --production-replay-import-root <tmp>/canary --production-replay-import-root <tmp>/beta --production-replay-dataset <tmp>/production-replay.jsonl`
+
+- Added a machine-readable threshold governance artifact to release readiness:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
+- `release-readiness` now writes `control-plane-threshold-update-suggestion.json` when replay evidence supports raising a previously-unrequired source minimum, and markdown links the same recommendation.
+- Verified the suggestion artifact end-to-end:
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts --output-dir <tmp> --sync-production-replays --production-replay-import-root <tmp>/canary --production-replay-import-root <tmp>/beta --production-replay-dataset <tmp>/production-replay.jsonl`
+  - generated suggestion content:
+    - profile `beta`
+    - recommended min production replay cases `{ canary: 1, beta: 1 }`
+
+- Added an explicit threshold-apply step for governance:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/apply-control-plane-threshold-suggestion.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
+- The new CLI `bun run eval:control-plane:apply-threshold-suggestion`:
+  - loads `control-plane-threshold-update-suggestion.json`
+  - merges only `minProductionReplayCasesBySource` for the target profile
+  - supports preview to stdout, `--out <path>`, or explicit in-place `--write`
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/scripts/apply-control-plane-threshold-suggestion.ts --suggestion <tmp>/control-plane-threshold-update-suggestion.json --config /Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json --out <tmp>/updated-thresholds.json`
+
+- `release-readiness` now also writes a candidate config artifact `control-plane-thresholds.candidate.json` beside the suggestion JSON, using the same merge logic as the standalone apply CLI.
+- Verified readiness output bundle now contains:
+  - `control-plane-eval-summary.json`
+  - `production-replay-import-summary.json`
+  - `control-plane-threshold-update-suggestion.json`
+  - `control-plane-thresholds.candidate.json`
+  - `report.json`
+  - `report.md`
+
+- Started Workstream 6 with a first operator-facing doctor command:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/doctor/sidecarDoctor.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/sidecar-doctor.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+- `bun run doctor` now performs one-command preflight across:
+  - runtime-store integrity and stale-task detection
+  - latest release-readiness / control-plane gate posture
+  - startup-metrics and artifact-telemetry coverage
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run doctor --output-dir <tmp>`
+
+- Added first-class incident replay tooling for Workstream 6:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/doctor/controlPlaneIncidentReplay.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/replay-control-plane-incident.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-incident-replay.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+- `bun run doctor:replay-incident` now:
+  - imports a saved TaskEvent JSONL into a single `production_replay` case
+  - runs that case through the same control-plane eval harness
+  - emits a compact artifact bundle with case JSON/JSONL and eval summary JSON/TXT
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-incident-replay.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run doctor:replay-incident --event-log /Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/event-logs/runtime-followup-reopen.jsonl --production-replay-source canary --output-dir <tmp>`
+
+- Extended `/Users/beihuang/Documents/github/coworkany/sidecar/src/doctor/sidecarDoctor.ts` with anomaly detection over:
+  - saved incident event logs (`TASK_CONTRACT_REOPENED`, `TASK_CLARIFICATION_REQUIRED`)
+  - artifact telemetry entries that show repeated degraded output signals (`file` / `format` failures)
+- Updated `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/sidecar-doctor.ts` to accept `--incident-log` / `--incident-log-root`.
+- Expanded `/Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts` to cover both a clean anomaly-free environment and a blocked environment with repeated reopen plus degraded telemetry.
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-incident-replay.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+- Extended the importer so it can update datasets directly by case id:
+  - `upsertImportedRuntimeReplayCase(...)` in `/Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEventLogImporter.ts`
+  - `--dataset <path>` in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/import-control-plane-event-log.ts`
+- Verified dataset upsert flow end-to-end:
+  - `bun run eval:control-plane:import-log -- --input evals/control-plane/event-logs/runtime-followup-reopen.jsonl --case-id imported-runtime-followup-reopen --description "Imported from saved event log" --workspace-path /tmp --source-text "Actually, save it to /tmp/hello.ts instead." --sidecar-root . --dataset "$tmpdir/dataset.jsonl"`
+- Added explicit control-plane eval thresholds and gate evaluation in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`
+- Release readiness now fails the `control-plane-eval` stage if:
+  - failed cases are non-zero
+  - unnecessary clarification rate exceeds threshold
+  - freeze expectation pass rate drops below threshold
+  - artifact expectation pass rate drops below threshold
+  - runtime replay pass rate drops below threshold
+- Added regression coverage for:
+  - importer dataset upsert
+  - control-plane eval threshold gate failures
+- Verification:
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`

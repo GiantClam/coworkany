@@ -18,6 +18,10 @@ export type TaskRuntimeRecoveryAction =
         type: 'interrupt_running';
         record: PersistedTaskRuntimeRecord;
         failure: TaskFailedPayload;
+    }
+    | {
+        type: 'hydrate_only';
+        record: PersistedTaskRuntimeRecord;
     };
 
 export function createRestartInterruptedFailure(): TaskFailedPayload {
@@ -32,6 +36,13 @@ export function createRestartInterruptedFailure(): TaskFailedPayload {
 export function planTaskRuntimeRecovery(
     record: PersistedTaskRuntimeRecord
 ): TaskRuntimeRecoveryAction {
+    if (record.status === 'idle' || record.status === 'finished' || record.status === 'failed') {
+        return {
+            type: 'hydrate_only',
+            record,
+        };
+    }
+
     if (record.status === 'suspended' && record.suspension) {
         return {
             type: 'restore_suspended',

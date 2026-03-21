@@ -12,6 +12,12 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         createTaskFailedEvent: (taskId, payload) => ({ type: 'TASK_FAILED', taskId, payload }),
         createChatMessageEvent: (taskId, payload) => ({ type: 'CHAT_MESSAGE', taskId, payload }),
         createTaskClarificationRequiredEvent: (taskId, payload) => ({ type: 'TASK_CLARIFICATION_REQUIRED', taskId, payload }),
+        createTaskContractReopenedEvent: (taskId, payload) => ({ type: 'TASK_CONTRACT_REOPENED', taskId, payload }),
+        createTaskPlanReadyEvent: (taskId, payload) => ({ type: 'TASK_PLAN_READY', taskId, payload }),
+        createTaskResearchUpdatedEvent: (taskId, payload) => ({ type: 'TASK_RESEARCH_UPDATED', taskId, payload }),
+        createPlanUpdatedEvent: (taskId, payload) => ({ type: 'PLAN_UPDATED', taskId, payload }),
+        createTaskCheckpointReachedEvent: (taskId, payload) => ({ type: 'TASK_CHECKPOINT_REACHED', taskId, payload }),
+        createTaskUserActionRequiredEvent: (taskId, payload) => ({ type: 'TASK_USER_ACTION_REQUIRED', taskId, payload }),
         createTaskStatusEvent: (taskId, payload) => ({ type: 'TASK_STATUS', taskId, payload }),
         createTaskResumedEvent: (taskId, payload) => ({ type: 'TASK_RESUMED', taskId, payload }),
         createTaskFinishedEvent: (taskId, payload) => ({ type: 'TASK_FINISHED', taskId, payload }),
@@ -39,12 +45,35 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         },
         enqueueResumeMessage: () => {},
         getTaskConfig: () => undefined,
+        getActivePreparedWorkRequest: () => undefined,
         workspaceRoot: '/tmp/workspace',
         workRequestStore: {},
-        prepareWorkRequestContext: () => ({
+        prepareWorkRequestContext: async () => ({
             frozenWorkRequest: {
                 clarification: { required: false },
                 mode: 'immediate_task',
+            },
+            executionPlan: {
+                workRequestId: 'wr-default',
+                runMode: 'single',
+                steps: [
+                    {
+                        stepId: 'step-analysis',
+                        kind: 'analysis',
+                        title: 'Analyze',
+                        description: 'Analyze the request',
+                        status: 'completed',
+                        dependencies: [],
+                    },
+                    {
+                        stepId: 'step-execution',
+                        kind: 'execution',
+                        title: 'Execute',
+                        description: 'Execute the task',
+                        status: 'pending',
+                        dependencies: ['step-analysis'],
+                    },
+                ],
             },
             executionQuery: 'run task',
             workRequestExecutionPrompt: 'prompt',
@@ -242,8 +271,777 @@ describe('runtime commands handler', () => {
         expect(pushed).toHaveLength(1);
         expect(emitted.map((message) => message.type)).toEqual([
             'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'PLAN_UPDATED',
         ]);
         expect(continued).toBe(true);
+    });
+
+    test('emits contradictory-evidence reopen and rebuilds artifact contract when a follow-up corrects deliverables', async () => {
+        const emitted: any[] = [];
+        const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-old',
+                    mode: 'immediate_task',
+                    sourceText: '写一个总结，保存到 /tmp/report.md',
+                    tasks: [{ objective: '写一个总结' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-old',
+                        title: 'Old report',
+                        type: 'report_file',
+                        description: 'Save the report to markdown.',
+                        required: true,
+                        path: '/tmp/report.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [],
+                getArtifactContract: () => ({ type: 'old-artifact-contract' }),
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-new',
+                    mode: 'immediate_task',
+                    sourceText: 'Actually, save it to /tmp/report.pdf instead.',
+                    tasks: [{ objective: '写一个总结' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-new',
+                        title: 'Updated report',
+                        type: 'artifact_file',
+                        description: 'Save the report to PDF.',
+                        required: true,
+                        path: '/tmp/report.pdf',
+                        format: 'pdf',
+                    }],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-new',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze corrected request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute corrected plan',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: 'Actually, save it to /tmp/report.pdf instead.',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+            buildArtifactContract: (query, deliverables) => {
+                artifactContractCalls.push({ query, deliverables });
+                return { type: 'rebuilt-artifact-contract' };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-reopen-correction',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-reopen-correction',
+                content: 'Actually, save it to /tmp/report.pdf instead.',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_CONTRACT_REOPENED',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'PLAN_UPDATED',
+        ]);
+        expect(emitted[1]?.payload?.trigger).toBe('contradictory_evidence');
+        expect(emitted[1]?.payload?.reason).toContain('deliverables or output targets changed');
+        expect(artifactContractCalls).toEqual([{
+            query: 'Actually, save it to /tmp/report.pdf instead.',
+            deliverables: [
+                expect.objectContaining({
+                    path: '/tmp/report.pdf',
+                    format: 'pdf',
+                }),
+            ],
+        }]);
+    });
+
+    test('falls back to the stored frozen snapshot for reopen detection after the active prepared request is cleared', async () => {
+        const emitted: any[] = [];
+        const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: '写一个总结，保存到 /tmp/report.md',
+                    primaryObjective: '写一个总结',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [{
+                        type: 'report_file',
+                        path: '/tmp/report.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            getActivePreparedWorkRequest: () => undefined,
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [],
+                getArtifactContract: () => ({ type: 'old-artifact-contract' }),
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-new-from-snapshot',
+                    mode: 'immediate_task',
+                    sourceText: 'Actually, save it to /tmp/report.pdf instead.',
+                    tasks: [{ objective: '写一个总结' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-new',
+                        title: 'Updated report',
+                        type: 'artifact_file',
+                        description: 'Save the report to PDF.',
+                        required: true,
+                        path: '/tmp/report.pdf',
+                        format: 'pdf',
+                    }],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-new-from-snapshot',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze corrected request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute corrected plan',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: 'Actually, save it to /tmp/report.pdf instead.',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+            buildArtifactContract: (query, deliverables) => {
+                artifactContractCalls.push({ query, deliverables });
+                return { type: 'rebuilt-artifact-contract' };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-reopen-from-snapshot',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-reopen-from-snapshot',
+                content: 'Actually, save it to /tmp/report.pdf instead.',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_CONTRACT_REOPENED',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'PLAN_UPDATED',
+        ]);
+        expect(emitted[1]?.payload?.trigger).toBe('contradictory_evidence');
+        expect(artifactContractCalls).toEqual([{
+            query: 'Actually, save it to /tmp/report.pdf instead.',
+            deliverables: [
+                expect.objectContaining({
+                    path: '/tmp/report.pdf',
+                    format: 'pdf',
+                }),
+            ],
+        }]);
+    });
+
+    test('emits new-scope reopen when a follow-up changes the execution target', async () => {
+        const emitted: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-old-target',
+                    mode: 'immediate_task',
+                    sourceText: '整理 /tmp/inbox-a 里的图片',
+                    tasks: [{
+                        objective: '整理 /tmp/inbox-a 里的图片',
+                        preferredWorkflow: 'organize-host-folder-files',
+                        resolvedTargets: [{
+                            kind: 'explicit_path',
+                            sourcePhrase: '/tmp/inbox-a',
+                            resolvedPath: '/tmp/inbox-a',
+                            os: 'macos',
+                            confidence: 0.99,
+                        }],
+                    }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-old-target',
+                        title: 'Workspace changes',
+                        type: 'workspace_change',
+                        description: 'Apply file moves.',
+                        required: true,
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-new-target',
+                    mode: 'immediate_task',
+                    sourceText: '整理 /tmp/inbox-b 里的图片',
+                    tasks: [{
+                        objective: '整理 /tmp/inbox-b 里的图片',
+                        preferredWorkflow: 'organize-host-folder-files',
+                        resolvedTargets: [{
+                            kind: 'explicit_path',
+                            sourcePhrase: '/tmp/inbox-b',
+                            resolvedPath: '/tmp/inbox-b',
+                            os: 'macos',
+                            confidence: 0.99,
+                        }],
+                    }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-new-target',
+                        title: 'Workspace changes',
+                        type: 'workspace_change',
+                        description: 'Apply file moves.',
+                        required: true,
+                    }],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-new-target',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze new target',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute new target plan',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: '整理 /tmp/inbox-b 里的图片',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-reopen-scope',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-reopen-scope',
+                content: '整理 /tmp/inbox-b 里的图片',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted[1]?.type).toBe('TASK_CONTRACT_REOPENED');
+        expect(emitted[1]?.payload?.trigger).toBe('new_scope_signal');
+        expect(emitted[1]?.payload?.reason).toContain('execution targets changed');
+    });
+
+    test('merges short follow-up input with prior conversation before analysis', async () => {
+        const preparedInputs: any[] = [];
+        const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '基于过去一个月的股价波动走势，预测未来最佳买入时间点' },
+                    { role: 'assistant', content: '你只要发我：股票代码（港股数字代码）。' },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                        deliverables: [
+                            {
+                                id: 'deliverable-1',
+                                title: 'Summary report',
+                                type: 'report_file',
+                                description: 'Save a report to the workspace.',
+                                required: true,
+                                path: 'reports/summary.md',
+                                format: 'md',
+                            },
+                        ],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-contextual',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze follow-up context',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Continue execution',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            buildArtifactContract: (query, deliverables) => {
+                artifactContractCalls.push({ query, deliverables });
+                return { type: 'artifact' };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-contextual',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-3b',
+                content: '00100',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：基于过去一个月的股价波动走势，预测未来最佳买入时间点');
+        expect(preparedInputs[0]?.sourceText).toContain('需要补充：你只要发我：股票代码（港股数字代码）。');
+        expect(preparedInputs[0]?.sourceText).toContain('用户补充：00100');
+        expect(continued).toBe(true);
+        expect(artifactContractCalls[0]?.deliverables).toEqual([
+            expect.objectContaining({
+                path: 'reports/summary.md',
+                type: 'report_file',
+            }),
+        ]);
+    });
+
+    test('merges corrective follow-up input with the previous frozen contract context before analysis', async () => {
+        const preparedInputs: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: 'Write a simple Hello World program and save it to /tmp/workspace/hello.js',
+                    primaryObjective: 'Write a simple Hello World program',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'artifact_file',
+                            path: '/tmp/workspace/hello.js',
+                            format: 'js',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: 'Write a simple Hello World program and save it to /tmp/workspace/hello.js' },
+                    { role: 'assistant', content: 'Done.' },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                        deliverables: [
+                            {
+                                id: 'deliverable-ts',
+                                title: 'TypeScript file',
+                                type: 'artifact_file',
+                                description: 'Save the program to the corrected TypeScript path.',
+                                required: true,
+                                path: '/tmp/workspace/hello.ts',
+                                format: 'ts',
+                            },
+                        ],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-corrective-follow-up',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze corrected request',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Execute corrected request',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-corrective-context',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-corrective-context',
+                content: 'Actually, save it to /tmp/workspace/hello.ts instead.',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('Original task: Write a simple Hello World program and save it to /tmp/workspace/hello.js');
+        expect(preparedInputs[0]?.sourceText).toContain('User correction: Actually, save it to /tmp/workspace/hello.ts instead.');
+    });
+
+    test('emits plan and blocking collaboration events before clarification on follow-up', async () => {
+        const emitted: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '继续处理这个' },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-clarify',
+                    sourceText: '继续处理这个',
+                    tasks: [
+                        {
+                            objective: '继续处理这个',
+                        },
+                    ],
+                    clarification: {
+                        required: true,
+                        reason: 'Need the missing object',
+                        questions: ['你要继续处理哪个对象？'],
+                        missingFields: ['subject'],
+                        assumptions: [],
+                    },
+                    deliverables: [
+                        {
+                            id: 'deliverable-1',
+                            title: 'Final report',
+                            type: 'report_file',
+                            description: 'Save the final report.',
+                            required: true,
+                            path: 'reports/final.md',
+                        },
+                    ],
+                    checkpoints: [
+                        {
+                            id: 'checkpoint-1',
+                            title: 'Clarify target',
+                            kind: 'manual_action',
+                            reason: 'Need the concrete target before execution.',
+                            userMessage: 'Please tell Coworkany what should be continued.',
+                            requiresUserConfirmation: true,
+                            blocking: true,
+                        },
+                    ],
+                    userActionsRequired: [
+                        {
+                            id: 'action-1',
+                            title: 'Clarify the target',
+                            kind: 'clarify_input',
+                            description: 'Coworkany needs the exact object to continue.',
+                            blocking: true,
+                            questions: ['你要继续处理哪个对象？'],
+                            instructions: ['Reply with the exact object or file.'],
+                            fulfillsCheckpointId: 'checkpoint-1',
+                        },
+                    ],
+                    missingInfo: [
+                        {
+                            field: 'subject',
+                            reason: 'No concrete target provided.',
+                            blocking: true,
+                            question: '你要继续处理哪个对象？',
+                        },
+                    ],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-clarify',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-clarification',
+                            kind: 'clarification',
+                            title: 'Clarify missing inputs',
+                            description: 'Need the concrete target.',
+                            status: 'blocked',
+                            dependencies: [],
+                        },
+                    ],
+                },
+                executionQuery: '继续处理这个',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+            buildClarificationMessage: () => '你要继续处理哪个对象？',
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-clarify-plan',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-clarify',
+                content: '继续处理这个',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'TASK_CHECKPOINT_REACHED',
+            'TASK_USER_ACTION_REQUIRED',
+            'CHAT_MESSAGE',
+            'TASK_CLARIFICATION_REQUIRED',
+            'TASK_STATUS',
+        ]);
+        expect(emitted[2]?.payload?.deliverables?.[0]?.path).toBe('reports/final.md');
+        expect(emitted[3]?.payload?.steps?.some((step: any) => step.status === 'blocked')).toBe(true);
+        expect(emitted[4]?.payload?.checkpointId).toBe('checkpoint-1');
+        expect(emitted[5]?.payload?.actionId).toBe('action-1');
+    });
+
+    test('blocks high-risk follow-up execution until the user confirms the plan', async () => {
+        const emitted: any[] = [];
+        const pushed: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            pushConversationMessage: (taskId, message) => {
+                pushed.push({ taskId, message });
+                return [];
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-confirm',
+                    sourceText: '修复当前项目里的登录 bug，并直接修改代码完成实现',
+                    mode: 'immediate_task',
+                    tasks: [
+                        {
+                            objective: '修复当前项目里的登录 bug，并直接修改代码完成实现',
+                        },
+                    ],
+                    clarification: {
+                        required: false,
+                        questions: [],
+                        missingFields: [],
+                        assumptions: [],
+                        canDefault: true,
+                    },
+                    hitlPolicy: {
+                        riskTier: 'high',
+                        requiresPlanConfirmation: true,
+                        reasons: ['Execution is expected to modify code or workspace state.'],
+                    },
+                    runtimeIsolationPolicy: {
+                        connectorIsolationMode: 'deny_by_default',
+                        filesystemMode: 'workspace_only',
+                        allowedWorkspacePaths: ['/tmp/workspace'],
+                        writableWorkspacePaths: ['/tmp/workspace'],
+                        networkAccess: 'none',
+                        allowedDomains: [],
+                        notes: ['Connector/toolpack access is denied by default unless explicitly enabled for the task session.'],
+                    },
+                    checkpoints: [
+                        {
+                            id: 'checkpoint-review',
+                            title: 'Review execution plan',
+                            kind: 'review',
+                            reason: 'Execution risk tier is high and requires explicit user approval before continuing.',
+                            userMessage: 'Review the planned execution and wait for the user to confirm before starting execution.',
+                            requiresUserConfirmation: true,
+                            blocking: true,
+                        },
+                    ],
+                    userActionsRequired: [
+                        {
+                            id: 'action-confirm',
+                            title: 'Confirm the execution plan',
+                            kind: 'confirm_plan',
+                            description: 'This high-risk task needs explicit approval before Coworkany starts execution.',
+                            blocking: true,
+                            questions: ['Confirm whether Coworkany should proceed with the current execution plan.'],
+                            instructions: ['Reply with approval to continue, or provide changes that should be applied before execution starts.'],
+                            fulfillsCheckpointId: 'checkpoint-review',
+                        },
+                    ],
+                    deliverables: [
+                        {
+                            id: 'deliverable-code',
+                            title: 'Code changes',
+                            type: 'code_change',
+                            description: 'Produce the required code changes and explain the outcome against the acceptance criteria.',
+                            required: true,
+                        },
+                    ],
+                    missingInfo: [],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-confirm',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze the request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute the task',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: '修复当前项目里的登录 bug，并直接修改代码完成实现',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-confirm-plan',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-confirm',
+                content: '修复当前项目里的登录 bug，并直接修改代码完成实现',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(continued).toBe(false);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'TASK_CHECKPOINT_REACHED',
+            'TASK_USER_ACTION_REQUIRED',
+            'CHAT_MESSAGE',
+            'TASK_STATUS',
+        ]);
+        expect(emitted[2]?.payload?.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: true,
+        });
+        expect(emitted[2]?.payload?.runtimeIsolationPolicy).toMatchObject({
+            connectorIsolationMode: 'deny_by_default',
+            filesystemMode: 'workspace_only',
+        });
+        expect(emitted[5]?.payload?.kind).toBe('confirm_plan');
+        expect(emitted[7]?.payload?.status).toBe('idle');
+        expect(pushed[pushed.length - 1]?.message?.role).toBe('assistant');
     });
 
     test('handles send_task_message scheduled follow-up path without continuing agent flow', async () => {
@@ -257,7 +1055,7 @@ describe('runtime commands handler', () => {
                 pushed.push({ taskId, message });
                 return [];
             },
-            prepareWorkRequestContext: () => ({
+            prepareWorkRequestContext: async () => ({
                 frozenWorkRequest: {
                     id: 'wr-1',
                     mode: 'scheduled_task',
@@ -270,6 +1068,20 @@ describe('runtime commands handler', () => {
                         acceptanceCriteria: ['每篇只保留标题和简要介绍'],
                     }],
                     clarification: { required: false },
+                },
+                executionPlan: {
+                    workRequestId: 'wr-1',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze scheduled request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                    ],
                 },
                 executionQuery: 'ignored',
                 workRequestExecutionPrompt: undefined,
@@ -298,6 +1110,9 @@ describe('runtime commands handler', () => {
         expect(scheduledCalls[0]?.speakResult).toBe(true);
         expect(emitted.map((message) => message.type)).toEqual([
             'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
             'CHAT_MESSAGE',
             'TASK_FINISHED',
         ]);
@@ -335,12 +1150,34 @@ describe('runtime commands handler', () => {
                 pushed.push({ taskId, message });
                 return [{ role: 'user', content: 'existing' }, message];
             },
-            prepareWorkRequestContext: (input) => {
+            prepareWorkRequestContext: async (input) => {
                 preparedInputs.push(input);
                 return {
                     frozenWorkRequest: {
                         clarification: { required: false },
                         mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-resume',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze resume request',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Resume execution',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
                     },
                     executionQuery: input.sourceText,
                     workRequestExecutionPrompt: 'resume prompt',
@@ -365,6 +1202,10 @@ describe('runtime commands handler', () => {
             'resume_interrupted_task_response',
             'TASK_STATUS',
             'TASK_RESUMED',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'PLAN_UPDATED',
         ]);
         expect(pushed[0]?.message?.content).toContain('[RESUME_REQUESTED]');
         expect(preparedInputs[0]?.sourceText).toBe('Post to Xiaohongshu with the saved draft');

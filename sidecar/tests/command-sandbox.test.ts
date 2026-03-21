@@ -100,9 +100,12 @@ describe('Command Sandbox Integration', () => {
             path.resolve(__dirname, '../src/tools/standard.ts'),
             'utf-8'
         );
-        // checkCommand should appear before spawn in the run_command handler
-        const checkIdx = content.indexOf('checkCommand(');
-        const spawnIdx = content.indexOf('spawn(');
+        const handlerStart = content.indexOf("name: 'run_command'");
+        expect(handlerStart).toBeGreaterThan(-1);
+        const handlerContent = content.slice(handlerStart);
+        // checkCommand should appear before the execution spawn inside the run_command handler
+        const checkIdx = handlerContent.indexOf('checkCommand(');
+        const spawnIdx = handlerContent.lastIndexOf('spawn(');
         expect(checkIdx).toBeGreaterThan(-1);
         expect(spawnIdx).toBeGreaterThan(-1);
         expect(checkIdx).toBeLessThan(spawnIdx);

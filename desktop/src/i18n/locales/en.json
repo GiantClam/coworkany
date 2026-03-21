@@ -276,7 +276,7 @@
     "tasks": "Task Board",
     "managedBy": "Managed by Unified Core Skills",
     "inProgress": "In Progress",
-    "noActiveTasks": "No structured tasks in this workspace yet.",
+    "noActiveTasks": "No structured tasks yet.",
     "history": "History",
     "completed": "Completed"
   },
