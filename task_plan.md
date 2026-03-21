@@ -173,3 +173,26 @@ Implement the first commercial-grade control-plane eval harness so Coworkany can
 | TypeScript treated optional artifact-stage payloads as possibly undefined inside the eval runner. | 1 | Narrowed the artifact stage type to `NonNullable<...>` and kept the callsite guard in `runControlPlaneEvalCase(...)`. |
 | `import.meta.main` is not part of the project's TypeScript typing surface. | 1 | Replaced it with an explicit `isMainModule()` helper based on `process.argv[1]` and `import.meta.url`. |
 | The runtime replay case exceeded Bun test's default 5-second timeout once it started a real sidecar process. | 1 | Increased the focused eval test timeout to 30 seconds and reduced per-case replay delays in the seed dataset. |
+
+## 2026-03-21 Session / Memory / Tenant Isolation
+
+### Goal
+Extend the safe-by-default isolation work into a first productized Workstream 5 slice: formal contract fields, task-session runtime enforcement, and eval/doctor evidence for session, memory, and tenant boundaries.
+
+### Phases
+- Discovery and scope cut: complete
+- Contract and runtime policy wiring: complete
+- Memory/tenant enforcement: complete
+- Verification and evidence chain: complete
+
+### Decisions
+- Reuse the existing control-plane pattern: analyzer-owned contract fields, task-session config persistence, and runtime registry enforcement keyed by `taskId`.
+- Keep session isolation narrow in the first slice: same-task/same-workspace continuity only, no workspace override through follow-up or resume config.
+- Treat vault/RAG memory as the primary cross-session isolation surface; keep workspace-local `memory.json` as workspace-scoped storage rather than inventing a second global store migration in this slice.
+- Model memory access explicitly by scope (`task`, `workspace`, `user_preference`, `system`) and enforce those scopes at read/write time for vault-backed memory operations.
+- Encode tenant safety through workspace and local-user boundaries, with runtime-resolved tenant keys rather than making the analyzer guess local identity values.
+
+### Verification
+- `bun x tsc -p sidecar/tsconfig.json --noEmit`
+- `bun test sidecar/tests/work-request-control-plane.test.ts sidecar/tests/runtime-commands.test.ts sidecar/tests/mcp-gateway-runtime-isolation.test.ts sidecar/tests/sidecar-doctor.test.ts sidecar/tests/control-plane-incident-replay.test.ts sidecar/tests/release-readiness.test.ts sidecar/tests/control-plane-event-log-importer.test.ts sidecar/tests/control-plane-evals.test.ts sidecar/tests/task-isolation-policy-store.test.ts`
+- `bun run sidecar/src/evals/controlPlaneEvalRunner.ts`

@@ -5,9 +5,12 @@ import type {
     DefaultingPolicy,
     DeliverableContract,
     HitlPolicy,
+    MemoryIsolationPolicy,
     MissingInfoItem,
     ResumeStrategy,
     RuntimeIsolationPolicy,
+    SessionIsolationPolicy,
+    TenantIsolationPolicy,
     UserActionRequest,
 } from '../orchestration/workRequestSchema';
 
@@ -61,6 +64,15 @@ export type TaskContractReopenedPayload = {
     summary: string;
     reason: string;
     trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+    reasons?: string[];
+    diff?: {
+        changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+        modeChanged?: { before: string; after: string };
+        objectiveChanged?: { before: string; after: string };
+        deliverablesChanged?: { before: string[]; after: string[] };
+        targetsChanged?: { before: string[]; after: string[] };
+        workflowsChanged?: { before: string[]; after: string[] };
+    };
     nextStepId?: string;
 };
 
@@ -88,6 +100,9 @@ export type TaskPlanReadyPayload = {
     userActionsRequired: UserActionRequest[];
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    sessionIsolationPolicy?: SessionIsolationPolicy;
+    memoryIsolationPolicy?: MemoryIsolationPolicy;
+    tenantIsolationPolicy?: TenantIsolationPolicy;
     missingInfo: MissingInfoItem[];
     defaultingPolicy?: DefaultingPolicy;
     resumeStrategy?: ResumeStrategy;
@@ -99,6 +114,8 @@ export type TaskCheckpointReachedPayload = {
     kind: CheckpointContract['kind'];
     reason: string;
     userMessage: string;
+    riskTier: CheckpointContract['riskTier'];
+    executionPolicy: CheckpointContract['executionPolicy'];
     requiresUserConfirmation: boolean;
     blocking: boolean;
 };
@@ -108,6 +125,8 @@ export type TaskUserActionRequiredPayload = {
     title: string;
     kind: UserActionRequest['kind'];
     description: string;
+    riskTier: UserActionRequest['riskTier'];
+    executionPolicy: UserActionRequest['executionPolicy'];
     blocking: boolean;
     questions: string[];
     instructions: string[];

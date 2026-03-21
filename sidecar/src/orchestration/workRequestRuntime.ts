@@ -50,6 +50,15 @@ export type ContractReopenedPayload = {
     summary: string;
     reason: string;
     trigger: ReplanTrigger;
+    reasons?: string[];
+    diff?: {
+        changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+        modeChanged?: { before: string; after: string };
+        objectiveChanged?: { before: string; after: string };
+        deliverablesChanged?: { before: string[]; after: string[] };
+        targetsChanged?: { before: string[]; after: string[] };
+        workflowsChanged?: { before: string[]; after: string[] };
+    };
     nextStepId?: string;
 };
 
@@ -331,6 +340,7 @@ export function reopenPreparedWorkRequestForResearch(input: {
         summary,
         reason,
         trigger,
+        reasons: [reason],
         nextStepId,
     };
 }

@@ -107,6 +107,16 @@ pub struct ResumeInterruptedTaskInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorPreflightInput {
+    pub startup_profile: Option<String>,
+    pub readiness_report_path: Option<String>,
+    pub control_plane_threshold_profile: Option<String>,
+    pub incident_log_paths: Option<Vec<String>>,
+    pub output_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ListToolpacksInput {
     #[serde(rename = "includeDisabled")]
     pub include_disabled: Option<bool>,
@@ -126,6 +136,8 @@ pub struct InstallToolpackInput {
     #[serde(rename = "allowUnsigned")]
     pub allow_unsigned: Option<bool>,
     pub overwrite: Option<bool>,
+    #[serde(rename = "approvePermissionExpansion")]
+    pub approve_permission_expansion: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -163,6 +175,8 @@ pub struct ImportClaudeSkillInput {
     pub overwrite: Option<bool>,
     #[serde(rename = "autoInstallDependencies")]
     pub auto_install_dependencies: Option<bool>,
+    #[serde(rename = "approvePermissionExpansion")]
+    pub approve_permission_expansion: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -466,6 +480,16 @@ fn build_command(command_type: &str, payload: Value) -> Value {
         "timestamp": now_timestamp(),
         "type": command_type,
         "payload": prune_nulls(payload)
+    })
+}
+
+fn build_doctor_preflight_payload(input: Option<&DoctorPreflightInput>) -> Value {
+    json!({
+        "startupProfile": input.and_then(|value| value.startup_profile.clone()),
+        "readinessReportPath": input.and_then(|value| value.readiness_report_path.clone()),
+        "controlPlaneThresholdProfile": input.and_then(|value| value.control_plane_threshold_profile.clone()),
+        "incidentLogPaths": input.and_then(|value| value.incident_log_paths.clone()),
+        "outputDir": input.and_then(|value| value.output_dir.clone()),
     })
 }
 
@@ -1062,6 +1086,27 @@ pub async fn get_tasks(
     })
 }
 
+#[tauri::command]
+pub async fn run_doctor_preflight(
+    input: Option<DoctorPreflightInput>,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    ensure_sidecar_running(&state, &app_handle).await?;
+    let command = build_command("doctor_preflight", build_doctor_preflight_payload(input.as_ref()));
+    let response = send_command_and_wait(&state, command, 120000).await?;
+    let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
+    let success = inner_payload
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    Ok(GenericIpcResult {
+        success,
+        payload: inner_payload,
+    })
+}
+
 /// Get current voice playback state from sidecar
 #[tauri::command]
 pub async fn get_voice_state(
@@ -1399,7 +1444,10 @@ pub async fn transcribe_audio(
 
 #[cfg(test)]
 mod tests {
-    use super::select_transcription_model_from_catalog;
+    use super::{
+        build_doctor_preflight_payload, select_transcription_model_from_catalog, DoctorPreflightInput,
+    };
+    use serde_json::json;
 
     #[test]
     fn prefers_openai_realtime_transcription_models_over_whisper() {
@@ -1422,6 +1470,43 @@ mod tests {
         ];
 
         assert_eq!(select_transcription_model_from_catalog(&models), None);
+    }
+
+    #[test]
+    fn build_doctor_preflight_payload_maps_all_fields() {
+        let payload = build_doctor_preflight_payload(Some(&DoctorPreflightInput {
+            startup_profile: Some("beta".to_string()),
+            readiness_report_path: Some("/tmp/readiness.json".to_string()),
+            control_plane_threshold_profile: Some("ga".to_string()),
+            incident_log_paths: Some(vec!["/tmp/incidents".to_string()]),
+            output_dir: Some("/tmp/doctor".to_string()),
+        }));
+
+        assert_eq!(
+            payload,
+            json!({
+                "startupProfile": "beta",
+                "readinessReportPath": "/tmp/readiness.json",
+                "controlPlaneThresholdProfile": "ga",
+                "incidentLogPaths": ["/tmp/incidents"],
+                "outputDir": "/tmp/doctor",
+            })
+        );
+    }
+
+    #[test]
+    fn build_doctor_preflight_payload_allows_empty_input() {
+        let payload = build_doctor_preflight_payload(None);
+        assert_eq!(
+            payload,
+            json!({
+                "startupProfile": null,
+                "readinessReportPath": null,
+                "controlPlaneThresholdProfile": null,
+                "incidentLogPaths": null,
+                "outputDir": null,
+            })
+        );
     }
 }
 
@@ -2118,6 +2203,7 @@ pub async fn install_toolpack(
         "url": input.url,
         "allowUnsigned": input.allow_unsigned.unwrap_or(false),
         "overwrite": input.overwrite.unwrap_or(false),
+        "approvePermissionExpansion": input.approve_permission_expansion.unwrap_or(false),
     });
     let command = build_command("install_toolpack", payload);
     let response = send_command_and_wait(&state, command, 5000).await?;
@@ -2214,6 +2300,7 @@ pub async fn import_claude_skill(
         "url": input.url,
         "overwrite": input.overwrite.unwrap_or(false),
         "autoInstallDependencies": input.auto_install_dependencies.unwrap_or(true),
+        "approvePermissionExpansion": input.approve_permission_expansion.unwrap_or(false),
     });
     let command = build_command("import_claude_skill", payload);
     let response = send_command_and_wait(&state, command, 5000).await?;
@@ -2357,6 +2444,8 @@ pub struct InstallFromGitHubInput {
     pub source: String,
     #[serde(rename = "targetType")]
     pub target_type: String, // "skill" | "mcp"
+    #[serde(rename = "approvePermissionExpansion")]
+    pub approve_permission_expansion: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2471,6 +2560,7 @@ pub async fn install_from_github(
         "workspacePath": input.workspace_path,
         "source": input.source,
         "targetType": input.target_type,
+        "approvePermissionExpansion": input.approve_permission_expansion.unwrap_or(false),
     });
     let command = build_command("install_from_github", payload);
     // GitHub downloads may take a while

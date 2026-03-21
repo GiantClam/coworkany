@@ -51,6 +51,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20, description="Number of results")
     filter_category: Optional[str] = Field(default=None, description="Filter by category")
     include_content: bool = Field(default=True, description="Include full content in results")
+    metadata_filters: Optional[dict] = Field(default=None, description="Exact-match metadata filters")
 
 
 class SearchResult(BaseModel):
@@ -266,9 +267,14 @@ async def search_vault(request: SearchRequest):
         query_embedding = state.embedder.encode(request.query)
 
         # Build where filter
-        where_filter = None
+        where_filter = {}
         if request.filter_category:
-            where_filter = {"category": request.filter_category}
+            where_filter["category"] = request.filter_category
+        if request.metadata_filters:
+            for key, value in request.metadata_filters.items():
+                where_filter[key] = value
+        if not where_filter:
+            where_filter = None
 
         # Search
         results = state.collection.query(

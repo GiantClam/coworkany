@@ -219,6 +219,47 @@
 - Verification:
   - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-runtime.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
 
+## 2026-03-21 Session / Memory / Tenant Isolation
+
+- Inspected the current isolation path across:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestSchema.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mcp/gateway/index.ts`
+- Confirmed Workstream 5 should productize:
+  - task/session continuity boundaries
+  - memory class separation
+  - per-workspace/per-user tenant boundaries
+- Identified the first enforceable gaps:
+  - `send_task_message` and `resume_interrupted_task` still accept config merges that can override `workspacePath`
+  - vault/RAG memory tools do not carry scope or tenant metadata
+  - RAG search cannot filter by metadata today, only category
+- Added formal control-plane contract fields for:
+  - `sessionIsolationPolicy`
+  - `memoryIsolationPolicy`
+  - `tenantIsolationPolicy`
+  and threaded them through `TASK_PLAN_READY`, task session config, and persisted runtime restoration.
+- Added task-scoped runtime enforcement in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/taskIsolationPolicyStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts`
+- Follow-up/resume now deny `workspacePath` overrides once a task session is frozen.
+- Vault/RAG memory writes now stamp scope + tenant metadata and write into scope-specific prefixes; searches now filter by scope-aware metadata via:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/memory/isolation.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/memory/ragBridge.ts`
+  - `/Users/beihuang/Documents/github/coworkany/rag-service/main.py`
+- Added evidence coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/task-isolation-policy-store.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts`
+- Verification:
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/mcp-gateway-runtime-isolation.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-incident-replay.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/task-isolation-policy-store.test.ts`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts`
+
 ## 2026-03-21 Control-Plane Readiness Threshold Config
 
 - Externalized control-plane release thresholds into `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json`.
@@ -406,6 +447,46 @@
 - Verification:
   - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
   - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+- Closed the remaining agent-side memory isolation gaps:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/knowledgeUpdater.ts` now writes and searches through task-scoped memory isolation when a tool context is present.
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/reactLoop.ts` now retrieves reasoning memory through task-aware isolation instead of global memory context.
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/autonomousAgent.ts` now reads and writes memory with session task scope and workspace binding.
+- Tightened autonomous task/session alignment:
+  - `startTask(...)` now accepts `sessionTaskId` and `workspacePath`, so autonomous status/events/memory writes stay keyed to the real runtime task session instead of an internal random id.
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/runtime.ts` and `/Users/beihuang/Documents/github/coworkany/sidecar/src/execution/runtime.ts` now pass that context through.
+- Added regression evidence:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/agent-memory-isolation.test.ts`
+  - updated `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+- Verification:
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/agent-memory-isolation.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/mcp-gateway-runtime-isolation.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-incident-replay.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/task-isolation-policy-store.test.ts`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts`
+- Removed the last dead global-memory helpers from `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`:
+  - `getRelevantMemoryContext(...)`
+  - `saveToMemoryVault(...)`
+- Added a doctor-level source guard in `/Users/beihuang/Documents/github/coworkany/sidecar/src/doctor/sidecarDoctor.ts`:
+  - new check id: `memory-source-guards`
+  - scans guarded runtime source files for known bare global-memory patterns such as `getMemoryContext(...)` in agent loops and reintroduction of legacy helpers in `main.ts`
+- Updated `/Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts` to prove:
+  - healthy fixtures stay green when guarded files are clean
+  - blocked fixtures fail when a banned legacy helper reappears
+- Additional verification:
+  - `rg -n "getRelevantMemoryContext\\(|saveToMemoryVault\\(|\\bgetMemoryContext\\(" sidecar/src/main.ts sidecar/src/agent/reactLoop.ts sidecar/src/agent/autonomousAgent.ts`
+    - no matches
+  - fuller suite remains `73 pass, 0 fail`
+  - control-plane eval remains `8/8 passed`, runtime replay `100%`
+- Closed an additional runtime-isolation gap in autonomous subtask execution:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts` `AutonomousLlmAdapter.executeSubtask(...)` no longer executes tools under synthetic subtask ids plus global cwd.
+  - It now resolves the parent session task id/workspace from subtask ids (e.g. `${taskId}_sub_${n}` / `${taskId}_recovery_${n}`) and executes tools using that parent session context.
+  - This keeps MCP/policy enforcement keyed to the actual task session instead of an untracked synthetic id.
+- Extended source guards and tests:
+  - Added guard pattern in `/Users/beihuang/Documents/github/coworkany/sidecar/src/doctor/sidecarDoctor.ts` to fail if `const taskId = \`subtask_${subtask.id}\`` reappears.
+  - Added regression in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts` (`fails guarded sources when autonomous subtask execution synthesizes task ids`).
+- Verification:
+  - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+  - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/agent-memory-isolation.test.ts`
+  - fuller suite now `74 pass, 0 fail`
+  - `bun run /Users/beihuang/Documents/github/coworkany/sidecar/src/evals/controlPlaneEvalRunner.ts` still `8/8 passed` with runtime replay `100%`
 
 - Hardened `release-readiness` replay-sync integration in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`:
   - explicit `--production-replay-import-root` values now force `--replace-input-roots`

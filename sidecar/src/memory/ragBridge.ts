@@ -27,6 +27,7 @@ export interface SearchRequest {
     topK?: number;
     filterCategory?: string;
     includeContent?: boolean;
+    metadataFilters?: Record<string, string | number | boolean>;
 }
 
 export interface SearchResult {
@@ -135,6 +136,7 @@ export class RagBridge {
                 top_k: request.topK ?? 5,
                 filter_category: request.filterCategory,
                 include_content: request.includeContent ?? true,
+                metadata_filters: request.metadataFilters,
             }),
         });
 
@@ -162,6 +164,7 @@ export class RagBridge {
             topK?: number;
             filterCategory?: string;
             maxChars?: number;
+            metadataFilters?: Record<string, string | number | boolean>;
         }
     ): Promise<string> {
         const results = await this.search({
@@ -169,6 +172,7 @@ export class RagBridge {
             topK: options?.topK ?? 3,
             filterCategory: options?.filterCategory,
             includeContent: true,
+            metadataFilters: options?.metadataFilters,
         });
 
         if (results.results.length === 0) {
@@ -341,10 +345,22 @@ export function initRagBridge(baseUrl?: string, timeout?: number): RagBridge {
 /**
  * Quick search for relevant memories
  */
-export async function searchMemory(query: string, topK: number = 5): Promise<SearchResult[]> {
+export async function searchMemory(
+    query: string,
+    topK: number = 5,
+    options?: {
+        filterCategory?: string;
+        metadataFilters?: Record<string, string | number | boolean>;
+    }
+): Promise<SearchResult[]> {
     try {
         const bridge = getRagBridge();
-        const response = await bridge.search({ query, topK });
+        const response = await bridge.search({
+            query,
+            topK,
+            filterCategory: options?.filterCategory,
+            metadataFilters: options?.metadataFilters,
+        });
         return response.results;
     } catch (error) {
         console.error('[RagBridge] Search failed:', error);
@@ -375,7 +391,12 @@ export async function indexDocument(
  */
 export async function getMemoryContext(
     query: string,
-    options?: { topK?: number; maxChars?: number }
+    options?: {
+        topK?: number;
+        maxChars?: number;
+        filterCategory?: string;
+        metadataFilters?: Record<string, string | number | boolean>;
+    }
 ): Promise<string> {
     try {
         const bridge = getRagBridge();

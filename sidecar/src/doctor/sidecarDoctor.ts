@@ -4,6 +4,7 @@ import { inspectObservability, loadControlPlaneEvalThresholds, type ReleaseReadi
 import { planTaskRuntimeRecovery } from '../execution/taskRuntimeRecovery';
 import type { PersistedTaskRuntimeRecord, PersistedTaskRuntimeStatus } from '../execution/taskRuntimeStore';
 import { collectEventLogFiles, loadTaskEventsFromJsonl } from '../evals/controlPlaneEventLogImporter';
+import { ExtensionGovernanceStore, type ExtensionGovernanceState } from '../extensions/governanceStore';
 
 export type DoctorCheckStatus = 'pass' | 'warn' | 'fail';
 export type SidecarDoctorOverallStatus = 'healthy' | 'degraded' | 'blocked';
@@ -45,6 +46,58 @@ type RawRuntimeRecord = Partial<PersistedTaskRuntimeRecord>;
 
 const DEFAULT_STALE_RUNNING_THRESHOLD_MS = 20 * 60 * 1000;
 const DEFAULT_STALE_BLOCKED_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+const MEMORY_SOURCE_GUARDS: Array<{
+    relativePath: string;
+    patterns: Array<{
+        regex: RegExp;
+        description: string;
+    }>;
+}> = [
+    {
+        relativePath: path.join('sidecar', 'src', 'agent', 'reactLoop.ts'),
+        patterns: [
+            {
+                regex: /\bgetMemoryContext\s*\(/,
+                description: 'ReAct memory reads must go through getIsolatedMemoryContext(...)',
+            },
+            {
+                regex: /\bsearchMemory\s*\(/,
+                description: 'ReAct memory searches must stay task-scoped',
+            },
+        ],
+    },
+    {
+        relativePath: path.join('sidecar', 'src', 'agent', 'autonomousAgent.ts'),
+        patterns: [
+            {
+                regex: /\bgetMemoryContext\s*\(/,
+                description: 'Autonomous memory reads must go through task-scoped isolation helpers',
+            },
+            {
+                regex: /\bsearchMemory\s*\(/,
+                description: 'Autonomous memory searches must stay task-scoped',
+            },
+        ],
+    },
+    {
+        relativePath: path.join('sidecar', 'src', 'main.ts'),
+        patterns: [
+            {
+                regex: /\basync function getRelevantMemoryContext\s*\(/,
+                description: 'Legacy global memory context helper must stay removed',
+            },
+            {
+                regex: /\basync function saveToMemoryVault\s*\(/,
+                description: 'Legacy global memory write helper must stay removed',
+            },
+            {
+                regex: /const taskId = `subtask_\$\{subtask\.id\}`;/,
+                description: 'Autonomous subtask execution must not synthesize standalone task ids',
+            },
+        ],
+    },
+];
 
 function getAppDataDir(repositoryRoot: string, appDataDir?: string): string {
     return appDataDir?.trim() || process.env.COWORKANY_APP_DATA_DIR?.trim() || path.join(repositoryRoot, '.coworkany');
@@ -223,6 +276,92 @@ function inspectRuntimeStore(input: {
         status,
         summary,
         details,
+    };
+}
+
+function inspectIsolationContracts(filePath: string): DoctorCheck {
+    if (!fs.existsSync(filePath)) {
+        return {
+            id: 'isolation-contracts',
+            label: 'Session/memory/tenant isolation posture',
+            status: 'warn',
+            summary: `Runtime store not found at ${filePath}`,
+            details: [
+                'No persisted task sessions available to verify isolation contract coverage.',
+            ],
+        };
+    }
+
+    let raw: unknown;
+    try {
+        raw = readJsonFile(filePath);
+    } catch (error) {
+        return {
+            id: 'isolation-contracts',
+            label: 'Session/memory/tenant isolation posture',
+            status: 'fail',
+            summary: `Runtime store is not valid JSON: ${filePath}`,
+            details: [String(error)],
+        };
+    }
+
+    if (!Array.isArray(raw)) {
+        return {
+            id: 'isolation-contracts',
+            label: 'Session/memory/tenant isolation posture',
+            status: 'fail',
+            summary: 'Runtime store root must be an array of task records.',
+            details: [`Path: ${filePath}`],
+        };
+    }
+
+    const validRecords = raw.filter(isRuntimeRecord);
+    const missingContracts = validRecords
+        .filter((record) => {
+            const config = (record.config ?? {}) as Record<string, unknown>;
+            return !config.sessionIsolationPolicy || !config.memoryIsolationPolicy || !config.tenantIsolationPolicy;
+        })
+        .map((record) => record.taskId);
+
+    const unsafeOverrides = validRecords
+        .filter((record) => {
+            const config = (record.config ?? {}) as {
+                sessionIsolationPolicy?: { allowWorkspaceOverride?: boolean };
+                tenantIsolationPolicy?: { allowCrossWorkspaceFollowUp?: boolean; allowCrossWorkspaceMemory?: boolean; allowCrossUserMemory?: boolean };
+            };
+            return config.sessionIsolationPolicy?.allowWorkspaceOverride === true
+                || config.tenantIsolationPolicy?.allowCrossWorkspaceFollowUp === true
+                || config.tenantIsolationPolicy?.allowCrossWorkspaceMemory === true
+                || config.tenantIsolationPolicy?.allowCrossUserMemory === true;
+        })
+        .map((record) => record.taskId);
+
+    if (unsafeOverrides.length > 0) {
+        return {
+            id: 'isolation-contracts',
+            label: 'Session/memory/tenant isolation posture',
+            status: 'fail',
+            summary: `Found ${unsafeOverrides.length} task session(s) with unsafe isolation overrides.`,
+            details: [`Unsafe task ids: ${unsafeOverrides.join(', ')}`],
+        };
+    }
+
+    if (missingContracts.length > 0) {
+        return {
+            id: 'isolation-contracts',
+            label: 'Session/memory/tenant isolation posture',
+            status: 'warn',
+            summary: `Found ${missingContracts.length} task session(s) without full isolation contract coverage.`,
+            details: [`Missing contract task ids: ${missingContracts.join(', ')}`],
+        };
+    }
+
+    return {
+        id: 'isolation-contracts',
+        label: 'Session/memory/tenant isolation posture',
+        status: 'pass',
+        summary: `All ${validRecords.length} persisted task session(s) carry isolation contracts without unsafe overrides.`,
+        details: [],
     };
 }
 
@@ -460,6 +599,211 @@ function inspectAnomalySignals(input: {
     };
 }
 
+function inspectMemoryIsolationSources(repositoryRoot: string): DoctorCheck {
+    const findings: string[] = [];
+    const scannedFiles: string[] = [];
+
+    for (const guard of MEMORY_SOURCE_GUARDS) {
+        const filePath = path.join(repositoryRoot, guard.relativePath);
+        if (!fs.existsSync(filePath)) {
+            continue;
+        }
+
+        scannedFiles.push(guard.relativePath);
+        const source = fs.readFileSync(filePath, 'utf-8');
+        const lines = source.split(/\r?\n/);
+
+        for (const pattern of guard.patterns) {
+            for (let index = 0; index < lines.length; index++) {
+                if (pattern.regex.test(lines[index])) {
+                    findings.push(`${guard.relativePath}:${index + 1} ${pattern.description}`);
+                }
+            }
+        }
+    }
+
+    if (findings.length > 0) {
+        return {
+            id: 'memory-source-guards',
+            label: 'Runtime memory source guards',
+            status: 'fail',
+            summary: `Detected ${findings.length} global memory access anti-pattern(s) in guarded runtime sources.`,
+            details: findings,
+        };
+    }
+
+    return {
+        id: 'memory-source-guards',
+        label: 'Runtime memory source guards',
+        status: 'pass',
+        summary: scannedFiles.length > 0
+            ? `Guarded runtime sources are free of known global memory bypass patterns (${scannedFiles.length} file(s) scanned).`
+            : 'No guarded runtime source files were present in this repository snapshot.',
+        details: scannedFiles.length > 0 ? [`Scanned files: ${scannedFiles.join(', ')}`] : [],
+    };
+}
+
+function readEnabledSkillIds(repositoryRoot: string): Set<string> {
+    const filePath = path.join(repositoryRoot, '.coworkany', 'skills.json');
+    if (!fs.existsSync(filePath)) {
+        return new Set();
+    }
+
+    const raw = readJsonFile(filePath);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error(`Invalid skills store format: ${filePath}`);
+    }
+
+    const enabled = new Set<string>();
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object') {
+            continue;
+        }
+        const record = value as {
+            enabled?: boolean;
+            manifest?: { name?: string };
+        };
+        if (record.enabled !== true) {
+            continue;
+        }
+        const name = typeof record.manifest?.name === 'string' && record.manifest.name.length > 0
+            ? record.manifest.name
+            : key;
+        enabled.add(name);
+    }
+    return enabled;
+}
+
+function readEnabledToolpackIds(repositoryRoot: string): Set<string> {
+    const filePath = path.join(repositoryRoot, '.coworkany', 'toolpacks.json');
+    if (!fs.existsSync(filePath)) {
+        return new Set();
+    }
+
+    const raw = readJsonFile(filePath);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error(`Invalid toolpack store format: ${filePath}`);
+    }
+
+    const enabled = new Set<string>();
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object') {
+            continue;
+        }
+        const record = value as {
+            enabled?: boolean;
+            manifest?: { id?: string; name?: string };
+        };
+        if (record.enabled !== true) {
+            continue;
+        }
+        const id = typeof record.manifest?.id === 'string' && record.manifest.id.length > 0
+            ? record.manifest.id
+            : (typeof record.manifest?.name === 'string' && record.manifest.name.length > 0
+                ? record.manifest.name
+                : key);
+        enabled.add(id);
+    }
+    return enabled;
+}
+
+function isGovernancePendingAndEnabled(
+    state: ExtensionGovernanceState,
+    enabledSkillIds: Set<string>,
+    enabledToolpackIds: Set<string>,
+): boolean {
+    if (!state.pendingReview) {
+        return false;
+    }
+    if (state.extensionType === 'skill') {
+        return enabledSkillIds.has(state.extensionId);
+    }
+    return enabledToolpackIds.has(state.extensionId);
+}
+
+function inspectExtensionGovernance(input: {
+    repositoryRoot: string;
+    appDataDir: string;
+}): DoctorCheck {
+    const governancePath = path.join(input.appDataDir, 'extension-governance.json');
+    if (!fs.existsSync(governancePath)) {
+        return {
+            id: 'extension-governance',
+            label: 'Extension governance posture',
+            status: 'warn',
+            summary: `Extension governance store not found at ${governancePath}`,
+            details: [
+                'No persisted extension governance evidence found. First-install review and update-delta audit history is unavailable.',
+            ],
+        };
+    }
+
+    let states: ExtensionGovernanceState[];
+    let enabledSkillIds: Set<string>;
+    let enabledToolpackIds: Set<string>;
+    try {
+        states = new ExtensionGovernanceStore(governancePath).list();
+        enabledSkillIds = readEnabledSkillIds(input.repositoryRoot);
+        enabledToolpackIds = readEnabledToolpackIds(input.repositoryRoot);
+    } catch (error) {
+        return {
+            id: 'extension-governance',
+            label: 'Extension governance posture',
+            status: 'fail',
+            summary: 'Failed to load extension governance evidence or extension registries.',
+            details: [String(error)],
+        };
+    }
+
+    const pendingStates = states.filter((state) => state.pendingReview);
+    const pendingAndEnabled = pendingStates.filter((state) =>
+        isGovernancePendingAndEnabled(state, enabledSkillIds, enabledToolpackIds)
+    );
+
+    const details = [
+        `Governance records: ${states.length}`,
+        `Pending reviews: ${pendingStates.length}`,
+    ];
+    if (pendingStates.length > 0) {
+        details.push(
+            `Pending extension ids: ${pendingStates.map((state) => `${state.extensionType}:${state.extensionId}`).join(', ')}`
+        );
+    }
+    if (pendingAndEnabled.length > 0) {
+        details.push(
+            `Pending and enabled: ${pendingAndEnabled.map((state) => `${state.extensionType}:${state.extensionId}`).join(', ')}`
+        );
+    }
+
+    if (pendingAndEnabled.length > 0) {
+        return {
+            id: 'extension-governance',
+            label: 'Extension governance posture',
+            status: 'fail',
+            summary: `Detected ${pendingAndEnabled.length} extension(s) with pending governance review still enabled.`,
+            details,
+        };
+    }
+
+    if (pendingStates.length > 0) {
+        return {
+            id: 'extension-governance',
+            label: 'Extension governance posture',
+            status: 'warn',
+            summary: `Detected ${pendingStates.length} extension(s) pending governance review.`,
+            details,
+        };
+    }
+
+    return {
+        id: 'extension-governance',
+        label: 'Extension governance posture',
+        status: 'pass',
+        summary: `All ${states.length} extension governance record(s) are approved.`,
+        details,
+    };
+}
+
 function deriveOverallStatus(checks: DoctorCheck[]): SidecarDoctorOverallStatus {
     if (checks.some((check) => check.status === 'fail')) {
         return 'blocked';
@@ -497,14 +841,21 @@ export function runSidecarDoctor(input: RunSidecarDoctorInput): SidecarDoctorRep
     const readinessReportPath = getReadinessReportPath(repositoryRoot, input.readinessReportPath);
     const controlPlaneThresholdsPath = getThresholdsPath(repositoryRoot, input.controlPlaneThresholdsPath);
     const now = input.now ?? new Date();
+    const runtimeStorePath = path.join(appDataDir, 'task-runtime.json');
 
     const checks: DoctorCheck[] = [
         inspectRuntimeStore({
-            filePath: path.join(appDataDir, 'task-runtime.json'),
+            filePath: runtimeStorePath,
             now,
             staleRunningThresholdMs: input.staleRunningThresholdMs ?? DEFAULT_STALE_RUNNING_THRESHOLD_MS,
             staleBlockedThresholdMs: input.staleBlockedThresholdMs ?? DEFAULT_STALE_BLOCKED_THRESHOLD_MS,
         }),
+        inspectIsolationContracts(runtimeStorePath),
+        inspectExtensionGovernance({
+            repositoryRoot,
+            appDataDir,
+        }),
+        inspectMemoryIsolationSources(repositoryRoot),
         inspectControlPlaneReadiness({
             reportPath: readinessReportPath,
             thresholdsPath: controlPlaneThresholdsPath,

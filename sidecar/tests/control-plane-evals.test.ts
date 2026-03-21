@@ -56,10 +56,13 @@ describe('control-plane eval runner', () => {
         });
         expect(summary.caseResults.find((result) => result.id === 'runtime-followup-reopen')?.stages.runtimeReplay?.actual).toMatchObject({
             reopenTrigger: 'contradictory_evidence',
+            planReadySessionFollowUpScope: 'same_task_only',
+            planReadyMemoryDefaultWriteScope: 'workspace',
         });
         expect(summary.caseResults.find((result) => result.id === 'runtime-followup-reopen-log')?.stages.runtimeReplay?.actual).toMatchObject({
             source: 'event_log',
             finalStatus: 'idle',
+            planReadyTenantWorkspaceBoundaryMode: 'same_workspace_only',
         });
 
         const rendered = formatControlPlaneEvalSummary(summary);

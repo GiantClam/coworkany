@@ -99,6 +99,112 @@
     max-width: 85%;
 }
 
+.systemContentBubble {
+    background: rgba(38, 60, 86, 0.42) !important;
+    border-color: rgba(147, 197, 253, 0.28) !important;
+}
+
+.statusContentBubble {
+    background: rgba(11, 38, 52, 0.58) !important;
+    border-color: rgba(52, 211, 153, 0.26) !important;
+}
+
+.taskCardMessage {
+    background:
+        linear-gradient(180deg, rgba(10, 27, 48, 0.78), rgba(7, 18, 35, 0.9)),
+        rgba(18, 26, 42, 0.72) !important;
+    border-color: rgba(96, 165, 250, 0.2) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.taskCardHeader {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.taskCardKicker,
+.taskCardSectionLabel {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.taskCardKicker {
+    color: #bfdbfe;
+}
+
+.taskCardTitle {
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+.taskCardSubtitle {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.taskCardSections {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.taskCardSection {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.taskCardSectionLabel {
+    color: var(--text-muted);
+}
+
+.taskCardSectionLines {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.taskCardSectionLines span {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    padding-left: 12px;
+    border-left: 2px solid rgba(96, 165, 250, 0.16);
+}
+
+.taskCardActions {
+    margin-top: 12px;
+    display: flex;
+    justify-content: flex-start;
+}
+
+.taskCardActionButton {
+    border: 1px solid rgba(59, 130, 246, 0.34);
+    background: rgba(30, 64, 175, 0.2);
+    color: #dbeafe;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.taskCardActionButton:hover:not(:disabled) {
+    background: rgba(37, 99, 235, 0.3);
+}
+
+.taskCardActionButton:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .contentBubble {
     font-size: 15px;
     line-height: 1.7;

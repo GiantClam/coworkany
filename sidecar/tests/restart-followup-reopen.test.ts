@@ -136,6 +136,8 @@ describe('sidecar restart follow-up reopen', () => {
         expect(reopened).toBeTruthy();
         expect(reopened?.payload?.trigger).toBe('contradictory_evidence');
         expect(String(reopened?.payload?.reason ?? '')).toContain('corrected the previous contract');
+        expect(reopened?.payload?.diff?.changedFields).toContain('deliverables');
+        expect(String(reopened?.payload?.diff?.deliverablesChanged?.after?.join('|') ?? '')).toContain(correctedPath);
         expect(planReady).toBeTruthy();
         expect(collector.events.some((event) => event.type === 'TASK_RESEARCH_UPDATED')).toBe(true);
         expect(clarificationRequired).toBeUndefined();

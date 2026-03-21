@@ -60,6 +60,18 @@ describe('work request control plane', () => {
         expect(analyzed.goalFrame).toMatchObject({
             taskCategory: 'research',
         });
+        expect(analyzed.sessionIsolationPolicy).toMatchObject({
+            followUpScope: 'same_task_only',
+            allowWorkspaceOverride: false,
+        });
+        expect(analyzed.memoryIsolationPolicy).toMatchObject({
+            defaultWriteScope: 'workspace',
+            readScopes: expect.arrayContaining(['task', 'workspace', 'user_preference']),
+        });
+        expect(analyzed.tenantIsolationPolicy).toMatchObject({
+            workspaceBoundaryMode: 'same_workspace_only',
+            allowCrossWorkspaceFollowUp: false,
+        });
         expect(analyzed.researchQueries?.some((query) => query.kind === 'domain_research')).toBe(true);
         expect(analyzed.strategyOptions?.some((option) => option.selected)).toBe(true);
     });
@@ -164,6 +176,10 @@ describe('work request control plane', () => {
             allowedWorkspacePaths: expect.arrayContaining(['/tmp/workspace', '/Users/tester/Downloads']),
             writableWorkspacePaths: expect.arrayContaining(['/tmp/workspace', '/Users/tester/Downloads']),
             networkAccess: 'none',
+        });
+        expect(analyzed.memoryIsolationPolicy).toMatchObject({
+            defaultWriteScope: 'workspace',
+            writeScopes: expect.arrayContaining(['task', 'workspace']),
         });
         expect(analyzed.researchQueries?.some((query) => query.kind === 'feasibility_research')).toBe(true);
         expect(analyzed.uncertaintyRegistry?.some((item) => item.topic === 'execution_target' && item.status === 'confirmed')).toBe(true);

@@ -8,6 +8,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ToolDefinition, ToolContext } from './standard';
+import type { MemoryScope } from '../orchestration/workRequestSchema';
+import { getIsolatedMemoryContext, resolveMemoryWriteTarget, searchIsolatedMemory } from '../memory/isolation';
 import { voiceSpeakTool } from './core/voice';
 import { taskCreateTool, taskListTool, taskUpdateTool } from './core/tasks';
 import { systemStatusTool } from './core/system';
@@ -1223,19 +1225,34 @@ export const saveToVaultTool: ToolDefinition = {
                 items: { type: 'string' },
                 description: 'Optional tags for better searchability.',
             },
+            scope: {
+                type: 'string',
+                enum: ['task', 'workspace', 'user_preference', 'system'],
+                description: 'Optional memory scope override. If omitted, the task session default is used.',
+            },
         },
         required: ['title', 'content'],
     },
-    handler: async (args: { title: string; content: string; category?: string; tags?: string[] }, context: ToolContext) => {
+    handler: async (
+        args: { title: string; content: string; category?: string; tags?: string[]; scope?: MemoryScope },
+        context: ToolContext
+    ) => {
         try {
             // Dynamic import to avoid circular dependencies
             const { getVaultManager } = await import('../memory');
             const vault = getVaultManager();
 
             const category = (args.category || 'learnings') as 'learnings' | 'preferences' | 'projects';
+            const writeTarget = resolveMemoryWriteTarget({
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
+                requestedScope: args.scope,
+            });
             const relativePath = await vault.saveMemory(args.title, args.content, {
                 category,
                 tags: args.tags,
+                relativePathPrefix: writeTarget.relativePathPrefix,
+                metadata: writeTarget.metadata,
             });
 
             return {
@@ -1243,6 +1260,7 @@ export const saveToVaultTool: ToolDefinition = {
                 path: relativePath,
                 title: args.title,
                 category,
+                scope: writeTarget.scope,
                 message: `Saved to memory vault: ${relativePath}`,
             };
         } catch (error) {
@@ -1273,10 +1291,21 @@ export const searchVaultTool: ToolDefinition = {
                 type: 'string',
                 description: 'Optional category filter.',
             },
+            scopes: {
+                type: 'array',
+                items: {
+                    type: 'string',
+                    enum: ['task', 'workspace', 'user_preference', 'system'],
+                },
+                description: 'Optional memory scopes to search. If omitted, the task session read policy is used.',
+            },
         },
         required: ['query'],
     },
-    handler: async (args: { query: string; top_k?: number; category?: string }) => {
+    handler: async (
+        args: { query: string; top_k?: number; category?: string; scopes?: MemoryScope[] },
+        context: ToolContext
+    ) => {
         try {
             // Dynamic import to avoid circular dependencies
             const { getRagBridge } = await import('../memory');
@@ -1291,18 +1320,30 @@ export const searchVaultTool: ToolDefinition = {
                 };
             }
 
-            const response = await bridge.search({
+            const results = await searchIsolatedMemory({
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
                 query: args.query,
                 topK: Math.min(args.top_k || 5, 10),
-                filterCategory: args.category,
-                includeContent: true,
+                category: args.category,
+                scopes: args.scopes,
+            });
+            const contextPreview = await getIsolatedMemoryContext({
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
+                query: args.query,
+                topK: Math.min(args.top_k || 5, 10),
+                maxChars: 400,
+                category: args.category,
+                scopes: args.scopes,
             });
 
             return {
                 success: true,
                 query: args.query,
-                totalIndexed: response.totalIndexed,
-                results: response.results.map(r => ({
+                totalIndexed: results.length,
+                contextPreview,
+                results: results.map(r => ({
                     title: r.title,
                     path: r.path,
                     category: r.category,

@@ -8,7 +8,8 @@
  * - Continuous task queue processing
  */
 
-import { getVaultManager, getMemoryContext, searchMemory } from '../memory';
+import { getVaultManager } from '../memory';
+import { getIsolatedMemoryContext, resolveMemoryWriteTarget } from '../memory/isolation';
 
 // ============================================================================
 // Types
@@ -43,6 +44,7 @@ export interface AutonomousTask {
         evidence: string;
         confidence: number;
     };
+    workspacePath?: string;
 }
 
 export interface TaskDecomposition {
@@ -88,6 +90,23 @@ export interface AutonomousEvent {
 }
 
 export type AutonomousEventCallback = (event: AutonomousEvent) => void;
+
+type AutonomousMemoryContextProvider = (input: {
+    taskId: string;
+    workspacePath: string;
+    query: string;
+    topK?: number;
+    maxChars?: number;
+}) => Promise<string>;
+
+type AutonomousMemorySaver = (input: {
+    taskId: string;
+    workspacePath: string;
+    title: string;
+    content: string;
+    category: 'learnings' | 'preferences' | 'projects';
+    tags?: string[];
+}) => Promise<string>;
 
 // ============================================================================
 // LLM Interface for Autonomous Operations
@@ -195,6 +214,8 @@ export class AutonomousAgentController {
     private isProcessing: boolean = false;
     private maxConcurrentTasks: number = 1;
     private autoSaveMemory: boolean = true;
+    private getMemoryContextForTask: AutonomousMemoryContextProvider;
+    private saveMemoryForTask: AutonomousMemorySaver;
 
     private getAvailableTools?: () => Promise<any[]>;
 
@@ -204,12 +225,40 @@ export class AutonomousAgentController {
         maxConcurrentTasks?: number;
         autoSaveMemory?: boolean;
         onEvent?: AutonomousEventCallback;
+        getMemoryContext?: AutonomousMemoryContextProvider;
+        saveMemory?: AutonomousMemorySaver;
     }) {
         this.llm = options.llm;
         this.getAvailableTools = options.getAvailableTools;
         this.maxConcurrentTasks = options.maxConcurrentTasks ?? 1;
         this.autoSaveMemory = options.autoSaveMemory ?? true;
         this.eventCallback = options.onEvent;
+        this.getMemoryContextForTask =
+            options.getMemoryContext ||
+            (async (input) =>
+                getIsolatedMemoryContext({
+                    taskId: input.taskId,
+                    workspacePath: input.workspacePath,
+                    query: input.query,
+                    topK: input.topK,
+                    maxChars: input.maxChars,
+                }));
+        this.saveMemoryForTask =
+            options.saveMemory ||
+            (async (input) => {
+                const vault = getVaultManager();
+                const memoryTarget = resolveMemoryWriteTarget({
+                    taskId: input.taskId,
+                    workspacePath: input.workspacePath,
+                });
+
+                return vault.saveMemory(input.title, input.content, {
+                    category: input.category,
+                    tags: input.tags,
+                    metadata: memoryTarget.metadata,
+                    relativePathPrefix: memoryTarget.relativePathPrefix,
+                });
+            });
     }
 
     /**
@@ -237,9 +286,11 @@ export class AutonomousAgentController {
             autoSaveMemory?: boolean;
             notifyOnComplete?: boolean;
             runInBackground?: boolean;
+            sessionTaskId?: string;
+            workspacePath?: string;
         }
     ): Promise<AutonomousTask> {
-        const taskId = this.generateTaskId();
+        const taskId = options?.sessionTaskId?.trim() || this.generateTaskId();
 
         const task: AutonomousTask = {
             id: taskId,
@@ -249,6 +300,7 @@ export class AutonomousAgentController {
             autoSaveMemory: options?.autoSaveMemory ?? this.autoSaveMemory,
             notifyOnComplete: options?.notifyOnComplete ?? true,
             createdAt: new Date().toISOString(),
+            workspacePath: options?.workspacePath,
         };
 
         this.activeTasks.set(taskId, task);
@@ -296,10 +348,15 @@ export class AutonomousAgentController {
 
         try {
             // 1. Get relevant memory context
-            const memoryContext = await getMemoryContext(task.originalQuery, {
-                topK: 5,
-                maxChars: 3000,
-            });
+            const memoryContext = task.workspacePath
+                ? await this.getMemoryContextForTask({
+                    taskId: task.id,
+                    workspacePath: task.workspacePath,
+                    query: task.originalQuery,
+                    topK: 5,
+                    maxChars: 3000,
+                })
+                : '';
 
             // 2. Decompose task into subtasks
             const decomposition = await this.llm.decomposeTask(
@@ -625,8 +682,10 @@ export class AutonomousAgentController {
                 data: { factCount: extraction.facts.length },
             });
 
-            const vault = getVaultManager();
             const savedPaths: string[] = [];
+            if (!task.workspacePath) {
+                return;
+            }
 
             for (const fact of extraction.facts) {
                 if (fact.confidence >= 0.7) {
@@ -637,7 +696,11 @@ export class AutonomousAgentController {
                             : 'projects';
 
                     const title = fact.content.slice(0, 50).replace(/[^a-zA-Z0-9\s]/g, '');
-                    const path = await vault.saveMemory(title, fact.content, {
+                    const path = await this.saveMemoryForTask({
+                        taskId: task.id,
+                        workspacePath: task.workspacePath,
+                        title,
+                        content: fact.content,
                         category,
                         tags: ['auto-extracted', `task-${task.id}`],
                     });
@@ -725,6 +788,8 @@ export function createAutonomousAgent(options: {
     maxConcurrentTasks?: number;
     autoSaveMemory?: boolean;
     onEvent?: AutonomousEventCallback;
+    getMemoryContext?: AutonomousMemoryContextProvider;
+    saveMemory?: AutonomousMemorySaver;
 }): AutonomousAgentController {
     return new AutonomousAgentController(options);
 }

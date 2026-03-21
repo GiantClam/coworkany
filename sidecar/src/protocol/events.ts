@@ -31,6 +31,8 @@ const CheckpointContractSchema = z.object({
     kind: z.enum(['review', 'manual_action', 'pre_delivery']),
     reason: z.string(),
     userMessage: z.string(),
+    riskTier: z.enum(['low', 'medium', 'high']).optional(),
+    executionPolicy: z.enum(['auto', 'review_required', 'hard_block']).optional(),
     requiresUserConfirmation: z.boolean(),
     blocking: z.boolean(),
 });
@@ -40,6 +42,8 @@ const UserActionRequestSchema = z.object({
     title: z.string(),
     kind: z.enum(['clarify_input', 'confirm_plan', 'manual_step', 'external_auth']),
     description: z.string(),
+    riskTier: z.enum(['low', 'medium', 'high']).optional(),
+    executionPolicy: z.enum(['auto', 'review_required', 'hard_block']).optional(),
     blocking: z.boolean(),
     questions: z.array(z.string()),
     instructions: z.array(z.string()),
@@ -60,6 +64,56 @@ const RuntimeIsolationPolicySchema = z.object({
     networkAccess: z.enum(['none', 'restricted']),
     allowedDomains: z.array(z.string()),
     notes: z.array(z.string()),
+});
+
+const SessionIsolationPolicySchema = z.object({
+    workspaceBindingMode: z.literal('frozen_workspace_only'),
+    followUpScope: z.literal('same_task_only'),
+    allowWorkspaceOverride: z.boolean(),
+    supersededContractHandling: z.literal('tombstone_prior_contracts'),
+    staleEvidenceHandling: z.literal('evict_on_refreeze'),
+    notes: z.array(z.string()),
+});
+
+const MemoryIsolationPolicySchema = z.object({
+    classificationMode: z.literal('scope_tagged'),
+    readScopes: z.array(z.enum(['task', 'workspace', 'user_preference', 'system'])),
+    writeScopes: z.array(z.enum(['task', 'workspace', 'user_preference', 'system'])),
+    defaultWriteScope: z.enum(['task', 'workspace', 'user_preference', 'system']),
+    notes: z.array(z.string()),
+});
+
+const TenantIsolationPolicySchema = z.object({
+    workspaceBoundaryMode: z.literal('same_workspace_only'),
+    userBoundaryMode: z.literal('current_local_user_only'),
+    allowCrossWorkspaceMemory: z.boolean(),
+    allowCrossWorkspaceFollowUp: z.boolean(),
+    allowCrossUserMemory: z.boolean(),
+    notes: z.array(z.string()),
+});
+
+const ContractReopenDiffSchema = z.object({
+    changedFields: z.array(z.enum(['mode', 'objective', 'deliverables', 'execution_targets', 'workflow'])),
+    modeChanged: z.object({
+        before: z.string(),
+        after: z.string(),
+    }).optional(),
+    objectiveChanged: z.object({
+        before: z.string(),
+        after: z.string(),
+    }).optional(),
+    deliverablesChanged: z.object({
+        before: z.array(z.string()),
+        after: z.array(z.string()),
+    }).optional(),
+    targetsChanged: z.object({
+        before: z.array(z.string()),
+        after: z.array(z.string()),
+    }).optional(),
+    workflowsChanged: z.object({
+        before: z.array(z.string()),
+        after: z.array(z.string()),
+    }).optional(),
 });
 
 const MissingInfoItemSchema = z.object({
@@ -164,6 +218,8 @@ export const TaskContractReopenedEventSchema = BaseEventSchema.extend({
             'contradictory_evidence',
             'execution_infeasible',
         ]),
+        reasons: z.array(z.string()).optional(),
+        diff: ContractReopenDiffSchema.optional(),
         nextStepId: z.string().optional(),
     }),
 });
@@ -180,6 +236,9 @@ export const TaskPlanReadyEventSchema = BaseEventSchema.extend({
         userActionsRequired: z.array(UserActionRequestSchema),
         hitlPolicy: HitlPolicySchema.optional(),
         runtimeIsolationPolicy: RuntimeIsolationPolicySchema.optional(),
+        sessionIsolationPolicy: SessionIsolationPolicySchema.optional(),
+        memoryIsolationPolicy: MemoryIsolationPolicySchema.optional(),
+        tenantIsolationPolicy: TenantIsolationPolicySchema.optional(),
         missingInfo: z.array(MissingInfoItemSchema),
         defaultingPolicy: DefaultingPolicySchema.optional(),
         resumeStrategy: ResumeStrategySchema.optional(),
@@ -197,6 +256,8 @@ export const TaskCheckpointReachedEventSchema = BaseEventSchema.extend({
         kind: z.enum(['review', 'manual_action', 'pre_delivery']),
         reason: z.string(),
         userMessage: z.string(),
+        riskTier: z.enum(['low', 'medium', 'high']).optional(),
+        executionPolicy: z.enum(['auto', 'review_required', 'hard_block']).optional(),
         requiresUserConfirmation: z.boolean(),
         blocking: z.boolean(),
     }),
@@ -212,6 +273,8 @@ export const TaskUserActionRequiredEventSchema = BaseEventSchema.extend({
         title: z.string(),
         kind: z.enum(['clarify_input', 'confirm_plan', 'manual_step', 'external_auth']),
         description: z.string(),
+        riskTier: z.enum(['low', 'medium', 'high']).optional(),
+        executionPolicy: z.enum(['auto', 'review_required', 'hard_block']).optional(),
         blocking: z.boolean(),
         questions: z.array(z.string()),
         instructions: z.array(z.string()),

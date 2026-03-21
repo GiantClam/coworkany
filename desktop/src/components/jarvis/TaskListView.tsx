@@ -20,6 +20,8 @@ type BoardTask = {
     updatedAt: string;
 };
 
+const UNKNOWN_TASK_ID = 'unknown-task';
+
 function compactText(value: string | undefined, maxLength = 220): string {
     const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
     if (!normalized) {
@@ -28,8 +30,23 @@ function compactText(value: string | undefined, maxLength = 220): string {
     return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
+function getSessionMessages(session: TaskSession): TaskSession['messages'] {
+    return Array.isArray(session.messages) ? session.messages : [];
+}
+
+function getSessionEvents(session: TaskSession): TaskSession['events'] {
+    return Array.isArray(session.events) ? session.events : [];
+}
+
+function getSessionTaskId(session: TaskSession): string {
+    if (typeof session.taskId === 'string' && session.taskId.trim().length > 0) {
+        return session.taskId;
+    }
+    return UNKNOWN_TASK_ID;
+}
+
 function getUserMessages(session: TaskSession) {
-    return session.messages.filter((message) => message.role === 'user' && message.content.trim().length > 0);
+    return getSessionMessages(session).filter((message) => message.role === 'user' && message.content.trim().length > 0);
 }
 
 function deriveUserPrompt(session: TaskSession): string {
@@ -38,7 +55,7 @@ function deriveUserPrompt(session: TaskSession): string {
         return latestUserMessage.content;
     }
 
-    const taskStartedEvent = session.events.find((event) => event.type === 'TASK_STARTED');
+    const taskStartedEvent = getSessionEvents(session).find((event) => event.type === 'TASK_STARTED');
     const context = (taskStartedEvent?.payload.context as Record<string, unknown> | undefined) ?? {};
     return typeof context.userQuery === 'string' ? context.userQuery : '';
 }
@@ -48,7 +65,7 @@ function deriveResult(session: TaskSession): string {
         return compactText(session.summary, 260);
     }
 
-    const latestRenderableMessage = [...session.messages]
+    const latestRenderableMessage = [...getSessionMessages(session)]
         .reverse()
         .find((message) => (message.role === 'assistant' || message.role === 'system') && message.content.trim().length > 0);
 
@@ -70,7 +87,7 @@ function deriveTitle(session: TaskSession): string {
         return latestUserPrompt;
     }
 
-    return `Task ${session.taskId.slice(0, 8)}`;
+    return `Task ${getSessionTaskId(session).slice(0, 8)}`;
 }
 
 function formatStatus(status: TaskStatus): string {
@@ -92,7 +109,12 @@ function formatUpdatedAt(timestamp: string): string {
         return '';
     }
 
-    return new Date(timestamp).toLocaleString([], {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return date.toLocaleString([], {
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
@@ -102,15 +124,22 @@ function formatUpdatedAt(timestamp: string): string {
 
 export function buildBoardTasks(sessions: Iterable<TaskSession>): BoardTask[] {
     return Array.from(sessions)
+        .filter((session): session is TaskSession => Boolean(session && typeof session === 'object'))
         .map((session) => ({
-            id: session.taskId,
+            id: getSessionTaskId(session),
             title: deriveTitle(session),
             description: compactText(deriveUserPrompt(session), 180),
             result: deriveResult(session),
             status: session.status,
-            updatedAt: session.updatedAt,
+            updatedAt: session.updatedAt || session.createdAt || '',
         }))
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        .sort((a, b) => {
+            const aTime = new Date(a.updatedAt).getTime();
+            const bTime = new Date(b.updatedAt).getTime();
+            const safeA = Number.isNaN(aTime) ? 0 : aTime;
+            const safeB = Number.isNaN(bTime) ? 0 : bTime;
+            return safeB - safeA;
+        });
 }
 
 export const TaskListView: React.FC = () => {

@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import { handleRuntimeCommand, handleRuntimeResponse, type RuntimeCommandDeps, type RuntimeResponseDeps } from '../src/handlers/runtime';
+import { setTaskIsolationPolicy } from '../src/execution/taskIsolationPolicyStore';
 
 function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): RuntimeCommandDeps {
     return {
         emit: () => {},
         onBootstrapRuntimeContext: () => {},
         restorePersistedTasks: () => {},
+        runDoctorPreflight: () => ({
+            report: { overallStatus: 'healthy' },
+            markdown: '# Doctor Report',
+        }),
         executeFreshTask: async () => {},
         ensureTaskRuntimePersistence: () => {},
         cancelTaskExecution: async () => ({ success: true }),
@@ -147,6 +152,49 @@ describe('runtime commands handler', () => {
         expect(emitted[0]?.type).toBe('bootstrap_runtime_context_response');
     });
 
+    test('handles doctor_preflight and emits a structured report response', async () => {
+        const emitted: any[] = [];
+        const calls: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            runDoctorPreflight: (input) => {
+                calls.push(input);
+                return {
+                    report: {
+                        overallStatus: 'healthy',
+                        checks: [],
+                    },
+                    markdown: '# Sidecar doctor report',
+                    reportPath: '/tmp/doctor/report.json',
+                    markdownPath: '/tmp/doctor/report.md',
+                };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-doctor-preflight',
+            type: 'doctor_preflight',
+            payload: {
+                startupProfile: 'development',
+                outputDir: '/tmp/doctor',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(calls).toEqual([
+            {
+                startupProfile: 'development',
+                outputDir: '/tmp/doctor',
+            },
+        ]);
+        expect(emitted[0]?.type).toBe('doctor_preflight_response');
+        expect(emitted[0]?.payload).toMatchObject({
+            success: true,
+            reportPath: '/tmp/doctor/report.json',
+            markdownPath: '/tmp/doctor/report.md',
+        });
+    });
+
     test('handles cancel_task by delegating to cancelTaskExecution and emitting response', async () => {
         const emitted: any[] = [];
         const cancelled: Array<{ taskId: string; reason?: string }> = [];
@@ -170,6 +218,54 @@ describe('runtime commands handler', () => {
         expect(handled).toBe(true);
         expect(cancelled).toEqual([{ taskId: 'task-cancel', reason: 'User cancelled' }]);
         expect(emitted[0]?.type).toBe('cancel_task_response');
+    });
+
+    test('passes session task isolation context into autonomous task starts', async () => {
+        const startCalls: any[] = [];
+        const emitted: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getTaskConfig: () => ({ workspacePath: '/tmp/task-workspace' }),
+            getAutonomousAgent: () => ({
+                startTask: async (_query, options) => {
+                    startCalls.push(options);
+                    return {
+                        createdAt: new Date().toISOString(),
+                        summary: 'done',
+                        decomposedTasks: [],
+                        verificationResult: { goalMet: true },
+                    };
+                },
+                getTask: () => null,
+                pauseTask: () => true,
+                resumeTask: async () => {},
+                cancelTask: () => true,
+                getAllTasks: () => [],
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-autonomous',
+            type: 'start_autonomous_task',
+            payload: {
+                taskId: 'task-autonomous',
+                query: 'verify isolation',
+                autoSaveMemory: true,
+                runInBackground: false,
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(startCalls).toEqual([
+            {
+                autoSaveMemory: true,
+                notifyOnComplete: true,
+                runInBackground: false,
+                sessionTaskId: 'task-autonomous',
+                workspacePath: '/tmp/task-workspace',
+            },
+        ]);
+        expect(emitted[0]?.type).toBe('start_autonomous_task_response');
     });
 
     test('handles start_task by emitting response and delegating to executeFreshTask', async () => {
@@ -380,6 +476,9 @@ describe('runtime commands handler', () => {
         ]);
         expect(emitted[1]?.payload?.trigger).toBe('contradictory_evidence');
         expect(emitted[1]?.payload?.reason).toContain('deliverables or output targets changed');
+        expect(emitted[1]?.payload?.reasons).toContain('deliverables or output targets changed');
+        expect(emitted[1]?.payload?.diff?.changedFields).toContain('deliverables');
+        expect(emitted[1]?.payload?.diff?.deliverablesChanged?.after?.join('|')).toContain('/tmp/report.pdf');
         expect(artifactContractCalls).toEqual([{
             query: 'Actually, save it to /tmp/report.pdf instead.',
             deliverables: [
@@ -489,6 +588,7 @@ describe('runtime commands handler', () => {
             'PLAN_UPDATED',
         ]);
         expect(emitted[1]?.payload?.trigger).toBe('contradictory_evidence');
+        expect(emitted[1]?.payload?.diff?.changedFields).toContain('deliverables');
         expect(artifactContractCalls).toEqual([{
             query: 'Actually, save it to /tmp/report.pdf instead.',
             deliverables: [
@@ -595,6 +695,8 @@ describe('runtime commands handler', () => {
         expect(emitted[1]?.type).toBe('TASK_CONTRACT_REOPENED');
         expect(emitted[1]?.payload?.trigger).toBe('new_scope_signal');
         expect(emitted[1]?.payload?.reason).toContain('execution targets changed');
+        expect(emitted[1]?.payload?.diff?.changedFields).toContain('execution_targets');
+        expect(emitted[1]?.payload?.diff?.targetsChanged?.after?.join('|')).toContain('/tmp/inbox-b');
     });
 
     test('merges short follow-up input with prior conversation before analysis', async () => {
@@ -833,6 +935,8 @@ describe('runtime commands handler', () => {
                             kind: 'manual_action',
                             reason: 'Need the concrete target before execution.',
                             userMessage: 'Please tell Coworkany what should be continued.',
+                            riskTier: 'high',
+                            executionPolicy: 'hard_block',
                             requiresUserConfirmation: true,
                             blocking: true,
                         },
@@ -843,6 +947,8 @@ describe('runtime commands handler', () => {
                             title: 'Clarify the target',
                             kind: 'clarify_input',
                             description: 'Coworkany needs the exact object to continue.',
+                            riskTier: 'high',
+                            executionPolicy: 'hard_block',
                             blocking: true,
                             questions: ['你要继续处理哪个对象？'],
                             instructions: ['Reply with the exact object or file.'],
@@ -902,7 +1008,11 @@ describe('runtime commands handler', () => {
         expect(emitted[2]?.payload?.deliverables?.[0]?.path).toBe('reports/final.md');
         expect(emitted[3]?.payload?.steps?.some((step: any) => step.status === 'blocked')).toBe(true);
         expect(emitted[4]?.payload?.checkpointId).toBe('checkpoint-1');
+        expect(emitted[4]?.payload?.executionPolicy).toBe('hard_block');
+        expect(emitted[4]?.payload?.riskTier).toBe('high');
         expect(emitted[5]?.payload?.actionId).toBe('action-1');
+        expect(emitted[5]?.payload?.executionPolicy).toBe('hard_block');
+        expect(emitted[5]?.payload?.riskTier).toBe('high');
     });
 
     test('blocks high-risk follow-up execution until the user confirms the plan', async () => {
@@ -946,6 +1056,29 @@ describe('runtime commands handler', () => {
                         allowedDomains: [],
                         notes: ['Connector/toolpack access is denied by default unless explicitly enabled for the task session.'],
                     },
+                    sessionIsolationPolicy: {
+                        workspaceBindingMode: 'frozen_workspace_only',
+                        followUpScope: 'same_task_only',
+                        allowWorkspaceOverride: false,
+                        supersededContractHandling: 'tombstone_prior_contracts',
+                        staleEvidenceHandling: 'evict_on_refreeze',
+                        notes: ['Follow-up and resume execution stay bound to the original task session.'],
+                    },
+                    memoryIsolationPolicy: {
+                        classificationMode: 'scope_tagged',
+                        readScopes: ['task', 'workspace', 'user_preference'],
+                        writeScopes: ['task', 'workspace'],
+                        defaultWriteScope: 'workspace',
+                        notes: ['Memory reads and writes must be tagged by scope before they can enter long-term storage or prompt context.'],
+                    },
+                    tenantIsolationPolicy: {
+                        workspaceBoundaryMode: 'same_workspace_only',
+                        userBoundaryMode: 'current_local_user_only',
+                        allowCrossWorkspaceMemory: false,
+                        allowCrossWorkspaceFollowUp: false,
+                        allowCrossUserMemory: false,
+                        notes: ['Task continuity is restricted to the same workspace boundary.'],
+                    },
                     checkpoints: [
                         {
                             id: 'checkpoint-review',
@@ -953,6 +1086,8 @@ describe('runtime commands handler', () => {
                             kind: 'review',
                             reason: 'Execution risk tier is high and requires explicit user approval before continuing.',
                             userMessage: 'Review the planned execution and wait for the user to confirm before starting execution.',
+                            riskTier: 'high',
+                            executionPolicy: 'review_required',
                             requiresUserConfirmation: true,
                             blocking: true,
                         },
@@ -963,6 +1098,8 @@ describe('runtime commands handler', () => {
                             title: 'Confirm the execution plan',
                             kind: 'confirm_plan',
                             description: 'This high-risk task needs explicit approval before Coworkany starts execution.',
+                            riskTier: 'high',
+                            executionPolicy: 'review_required',
                             blocking: true,
                             questions: ['Confirm whether Coworkany should proceed with the current execution plan.'],
                             instructions: ['Reply with approval to continue, or provide changes that should be applied before execution starts.'],
@@ -1039,9 +1176,69 @@ describe('runtime commands handler', () => {
             connectorIsolationMode: 'deny_by_default',
             filesystemMode: 'workspace_only',
         });
+        expect(emitted[2]?.payload?.sessionIsolationPolicy).toMatchObject({
+            followUpScope: 'same_task_only',
+            allowWorkspaceOverride: false,
+        });
+        expect(emitted[2]?.payload?.memoryIsolationPolicy).toMatchObject({
+            defaultWriteScope: 'workspace',
+        });
+        expect(emitted[2]?.payload?.tenantIsolationPolicy).toMatchObject({
+            workspaceBoundaryMode: 'same_workspace_only',
+        });
         expect(emitted[5]?.payload?.kind).toBe('confirm_plan');
+        expect(emitted[5]?.payload?.executionPolicy).toBe('review_required');
+        expect(emitted[5]?.payload?.riskTier).toBe('high');
         expect(emitted[7]?.payload?.status).toBe('idle');
         expect(pushed[pushed.length - 1]?.message?.role).toBe('assistant');
+    });
+
+    test('denies follow-up workspace overrides once the task session is frozen', async () => {
+        const emitted: any[] = [];
+        setTaskIsolationPolicy({
+            taskId: 'task-boundary',
+            workspacePath: '/tmp/workspace',
+            sessionIsolationPolicy: {
+                workspaceBindingMode: 'frozen_workspace_only',
+                followUpScope: 'same_task_only',
+                allowWorkspaceOverride: false,
+                supersededContractHandling: 'tombstone_prior_contracts',
+                staleEvidenceHandling: 'evict_on_refreeze',
+                notes: [],
+            },
+        });
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-workspace-override',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-boundary',
+                content: '继续刚才的任务',
+                config: {
+                    workspacePath: '/tmp/other-workspace',
+                },
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'CHAT_MESSAGE',
+            'TASK_STATUS',
+        ]);
+        expect(emitted[0]?.payload).toMatchObject({
+            success: false,
+            taskId: 'task-boundary',
+            error: 'session_workspace_override_denied',
+        });
+        expect(emitted[1]?.payload?.content).toContain('/tmp/workspace');
+        expect(emitted[2]?.payload?.status).toBe('idle');
     });
 
     test('handles send_task_message scheduled follow-up path without continuing agent flow', async () => {

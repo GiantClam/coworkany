@@ -5,8 +5,10 @@
  * Implements OpenClaw-style "Memory Writing" capability.
  */
 
+import * as path from 'path';
 import type { ToolDefinition, ToolContext, ToolEffect } from '../tools/standard';
 import { getVaultManager, getRagBridge, VaultManager } from '../memory';
+import { resolveMemoryWriteTarget, searchIsolatedMemory } from '../memory/isolation';
 
 // ============================================================================
 // Types
@@ -62,6 +64,16 @@ export interface LearningExtraction {
     summary?: string;
 }
 
+export interface KnowledgeIsolationContext {
+    taskId: string;
+    workspacePath: string;
+}
+
+type KnowledgeUpdaterOptions = {
+    vaultManager?: VaultManager;
+    isolation?: KnowledgeIsolationContext;
+};
+
 // ============================================================================
 // Category Mapping
 // ============================================================================
@@ -82,9 +94,16 @@ const CATEGORY_TO_VAULT_PATH: Record<KnowledgeCategory, string> = {
 
 export class KnowledgeUpdater {
     private vaultManager: VaultManager;
+    private isolation?: KnowledgeIsolationContext;
 
-    constructor(vaultManager?: VaultManager) {
-        this.vaultManager = vaultManager || getVaultManager();
+    constructor(options?: VaultManager | KnowledgeUpdaterOptions) {
+        if (options instanceof VaultManager) {
+            this.vaultManager = options;
+            return;
+        }
+
+        this.vaultManager = options?.vaultManager || getVaultManager();
+        this.isolation = options?.isolation;
     }
 
     /**
@@ -98,35 +117,31 @@ export class KnowledgeUpdater {
         try {
             const categoryPath = CATEGORY_TO_VAULT_PATH[entry.category] || 'learnings';
             const filename = this.sanitizeFilename(entry.title);
-            const relativePath = `${categoryPath}/${filename}.md`;
+            const memoryTarget = this.isolation
+                ? resolveMemoryWriteTarget({
+                    taskId: this.isolation.taskId,
+                    workspacePath: this.isolation.workspacePath,
+                })
+                : null;
+            const relativePath = memoryTarget
+                ? path.join(memoryTarget.relativePathPrefix, categoryPath, `${filename}.md`)
+                : `${categoryPath}/${filename}.md`;
 
             // Format content as markdown
             const markdown = this.formatAsMarkdown(entry);
 
             // Save to vault
-            await this.vaultManager.writeDocument(relativePath, markdown);
-
-            // Try to index in RAG
-            try {
-                const ragBridge = getRagBridge();
-                if (await ragBridge.isAvailable()) {
-                    await ragBridge.indexDocument({
-                        path: relativePath,
-                        content: entry.content,
-                        metadata: {
-                            title: entry.title,
-                            category: entry.category,
-                            tags: entry.tags,
-                            confidence: entry.confidence,
-                            source: entry.source,
-                            ...entry.metadata,
-                        },
-                    });
-                }
-            } catch (ragError) {
-                console.warn('[KnowledgeUpdater] RAG indexing failed:', ragError);
-                // Continue even if RAG fails
-            }
+            await this.vaultManager.writeDocument(relativePath, markdown, {
+                metadata: {
+                    title: entry.title,
+                    category: entry.category,
+                    tags: entry.tags,
+                    confidence: entry.confidence,
+                    source: entry.source,
+                    ...(memoryTarget?.metadata || {}),
+                    ...entry.metadata,
+                },
+            });
 
             return { success: true, path: relativePath };
         } catch (error) {
@@ -225,6 +240,33 @@ ${pattern.applicableTo.map((item) => `- ${item}`).join('\n')}
         error?: string;
     }> {
         try {
+            if (this.isolation) {
+                const ragBridge = getRagBridge();
+                if (!(await ragBridge.isAvailable())) {
+                    return {
+                        results: [],
+                        error: 'Scoped knowledge search is unavailable because the RAG service is offline.',
+                    };
+                }
+
+                const results = await searchIsolatedMemory({
+                    taskId: this.isolation.taskId,
+                    workspacePath: this.isolation.workspacePath,
+                    query,
+                    topK: 5,
+                    category,
+                });
+
+                return {
+                    results: results.map((r) => ({
+                        path: r.path,
+                        title: r.title,
+                        content: r.content,
+                        score: r.score,
+                    })),
+                };
+            }
+
             const ragBridge = getRagBridge();
             if (!(await ragBridge.isAvailable())) {
                 // Fallback to vault search (returns SearchResponse)
@@ -358,7 +400,12 @@ The knowledge will be searchable in future conversations.`,
         },
         context: ToolContext
     ) => {
-        const updater = new KnowledgeUpdater();
+        const updater = new KnowledgeUpdater({
+            isolation: {
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
+            },
+        });
         const result = await updater.saveKnowledge({
             title: args.title,
             content: args.content,
@@ -439,7 +486,12 @@ This helps improve future performance on similar tasks.`,
         },
         context: ToolContext
     ) => {
-        const updater = new KnowledgeUpdater();
+        const updater = new KnowledgeUpdater({
+            isolation: {
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
+            },
+        });
         const results: string[] = [];
 
         for (const learning of args.learnings) {
@@ -518,7 +570,12 @@ This helps avoid repeating past mistakes and leverage previous learnings.`,
         },
         context: ToolContext
     ) => {
-        const updater = new KnowledgeUpdater();
+        const updater = new KnowledgeUpdater({
+            isolation: {
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
+            },
+        });
         const category = args.category === 'all' ? undefined : args.category;
 
         const { results, error } = await updater.searchSimilar(args.query, category);

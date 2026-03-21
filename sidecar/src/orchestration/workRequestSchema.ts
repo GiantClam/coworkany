@@ -31,6 +31,8 @@ export type CheckpointContract = {
     kind: 'review' | 'manual_action' | 'pre_delivery';
     reason: string;
     userMessage: string;
+    riskTier: HitlRiskTier;
+    executionPolicy: HitlExecutionPolicy;
     requiresUserConfirmation: boolean;
     blocking: boolean;
 };
@@ -40,6 +42,8 @@ export type UserActionRequest = {
     title: string;
     kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
     description: string;
+    riskTier: HitlRiskTier;
+    executionPolicy: HitlExecutionPolicy;
     blocking: boolean;
     questions: string[];
     instructions: string[];
@@ -47,6 +51,7 @@ export type UserActionRequest = {
 };
 
 export type HitlRiskTier = 'low' | 'medium' | 'high';
+export type HitlExecutionPolicy = 'auto' | 'review_required' | 'hard_block';
 
 export type HitlPolicy = {
     riskTier: HitlRiskTier;
@@ -61,6 +66,34 @@ export type RuntimeIsolationPolicy = {
     writableWorkspacePaths: string[];
     networkAccess: 'none' | 'restricted';
     allowedDomains: string[];
+    notes: string[];
+};
+
+export type SessionIsolationPolicy = {
+    workspaceBindingMode: 'frozen_workspace_only';
+    followUpScope: 'same_task_only';
+    allowWorkspaceOverride: boolean;
+    supersededContractHandling: 'tombstone_prior_contracts';
+    staleEvidenceHandling: 'evict_on_refreeze';
+    notes: string[];
+};
+
+export type MemoryScope = 'task' | 'workspace' | 'user_preference' | 'system';
+
+export type MemoryIsolationPolicy = {
+    classificationMode: 'scope_tagged';
+    readScopes: MemoryScope[];
+    writeScopes: MemoryScope[];
+    defaultWriteScope: MemoryScope;
+    notes: string[];
+};
+
+export type TenantIsolationPolicy = {
+    workspaceBoundaryMode: 'same_workspace_only';
+    userBoundaryMode: 'current_local_user_only';
+    allowCrossWorkspaceMemory: boolean;
+    allowCrossWorkspaceFollowUp: boolean;
+    allowCrossUserMemory: boolean;
     notes: string[];
 };
 
@@ -210,6 +243,9 @@ export type NormalizedWorkRequest = {
     userActionsRequired?: UserActionRequest[];
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    sessionIsolationPolicy?: SessionIsolationPolicy;
+    memoryIsolationPolicy?: MemoryIsolationPolicy;
+    tenantIsolationPolicy?: TenantIsolationPolicy;
     missingInfo?: MissingInfoItem[];
     defaultingPolicy?: DefaultingPolicy;
     resumeStrategy?: ResumeStrategy;

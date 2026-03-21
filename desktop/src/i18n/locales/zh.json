@@ -188,7 +188,7 @@
     "disableNewShell": "禁用新 UI 壳层",
     "newShellTitle": "UI 壳层",
     "newShellHint": "切换新的统一壳层体验；如布局表现异常，建议重启应用后生效。",
-    "exportDiagnostics": "导出 UI 诊断信息"
+    "exportDiagnostics": "导出诊断信息"
   },
 
   "chat": {
@@ -629,7 +629,7 @@
 
   "diagnostics": {
     "title": "诊断信息已导出",
-    "description": "诊断内容已复制到剪贴板并输出到控制台。",
+    "description": "UI 诊断与 sidecar doctor 预检结果已复制到剪贴板并输出到控制台。",
     "failedTitle": "导出诊断失败",
     "failedDescription": "当前无法导出诊断信息。"
   }

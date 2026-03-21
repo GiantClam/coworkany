@@ -96,6 +96,15 @@ function createEmptySession(taskId: string): TaskSession {
     };
 }
 
+function normalizeTaskId(value: unknown): string | null {
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
 function createInterruptedFailureState(): NonNullable<TaskSession['failure']> {
     return {
         error: 'Task interrupted by app restart',
@@ -252,18 +261,30 @@ function applyEventsBatch(
     let needsPersist = false;
 
     for (const event of events) {
-        const existing = sessions.get(event.taskId) ?? createEmptySession(event.taskId);
-        if (hasSeenEvent(event.taskId, event.id, existing)) {
+        const taskId = normalizeTaskId(event.taskId);
+        if (!taskId) {
+            console.warn('[TaskEventStore] Ignored task event without a valid taskId:', event);
             continue;
         }
 
-        const updated = applyEvent(existing, event);
-        sessions.set(event.taskId, updated);
-        rememberEvent(event.taskId, event.id, updated);
+        if (typeof event.id !== 'string' || event.id.trim().length === 0) {
+            console.warn('[TaskEventStore] Ignored task event without a valid id:', event);
+            continue;
+        }
+
+        const normalizedEvent = taskId === event.taskId ? event : { ...event, taskId };
+        const existing = sessions.get(taskId) ?? createEmptySession(taskId);
+        if (hasSeenEvent(taskId, normalizedEvent.id, existing)) {
+            continue;
+        }
+
+        const updated = applyEvent(existing, normalizedEvent);
+        sessions.set(taskId, updated);
+        rememberEvent(taskId, normalizedEvent.id, updated);
         changed = true;
 
-        if (shouldPersistEvent(event)) {
-            const nextDelayMs = getPersistDelayMs(event);
+        if (shouldPersistEvent(normalizedEvent)) {
+            const nextDelayMs = getPersistDelayMs(normalizedEvent);
             persistDelayMs = persistDelayMs === undefined ? nextDelayMs : Math.min(persistDelayMs, nextDelayMs);
             needsPersist = true;
         }
@@ -519,26 +540,38 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
         hydrate: (snapshot: SessionsSnapshot) => {
             sessionEventIds.clear();
             const map = new Map<string, TaskSession>();
+            let droppedSessions = 0;
             for (const session of snapshot.sessions) {
+                const taskId = normalizeTaskId(session?.taskId);
+                if (!taskId) {
+                    droppedSessions += 1;
+                    console.warn('[TaskEventStore] Dropped persisted session without a valid taskId:', session);
+                    continue;
+                }
+
+                const normalizedSession = { ...session, taskId };
                 // Fix stale 'running' status from previous sessions
                 // When app restarts, any 'running' task is actually interrupted/failed
-                const cleanedSession = session.status === 'running' && !session.suspension
+                const cleanedSession = normalizedSession.status === 'running' && !normalizedSession.suspension
                     ? {
-                        ...session,
+                        ...normalizedSession,
                         status: 'failed' as TaskStatus,
                         summary: 'Task interrupted by app restart. Resume the task to continue from the saved context.',
-                        failure: session.failure ?? createInterruptedFailureState(),
+                        failure: normalizedSession.failure ?? createInterruptedFailureState(),
                     }
-                    : session;
+                    : normalizedSession;
                 map.set(cleanedSession.taskId, {
                     ...cleanedSession,
                     title: deriveLatestUserFacingTitle(cleanedSession),
                 });
                 getOrCreateEventIdSet(cleanedSession.taskId, cleanedSession);
             }
-            let activeTaskId = snapshot.activeTaskId ?? null;
-            if (!activeTaskId && snapshot.sessions.length > 0) {
-                const sorted = [...snapshot.sessions].sort(
+            let activeTaskId = normalizeTaskId(snapshot.activeTaskId) ?? null;
+            if (activeTaskId && !map.has(activeTaskId)) {
+                activeTaskId = null;
+            }
+            if (!activeTaskId && map.size > 0) {
+                const sorted = [...map.values()].sort(
                     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
                 );
                 activeTaskId = sorted[0]?.taskId ?? null;
@@ -547,6 +580,10 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                 sessions: map,
                 activeTaskId,
             });
+
+            if (droppedSessions > 0) {
+                persistStateSnapshot(map, activeTaskId, 180);
+            }
         },
     }))
 );

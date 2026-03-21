@@ -74,6 +74,8 @@ export type ExecutionRuntimeDeps = {
                 autoSaveMemory: boolean;
                 notifyOnComplete: boolean;
                 runInBackground: boolean;
+                sessionTaskId?: string;
+                workspacePath?: string;
             }
         ) => Promise<AutonomousTaskResult>;
     };
@@ -151,6 +153,15 @@ export type ExecutionRuntimeDeps = {
             summary: string;
             reason: string;
             trigger: ReplanTrigger;
+            reasons?: string[];
+            diff?: {
+                changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+                modeChanged?: { before: string; after: string };
+                objectiveChanged?: { before: string; after: string };
+                deliverablesChanged?: { before: string[]; after: string[] };
+                targetsChanged?: { before: string[]; after: string[] };
+                workflowsChanged?: { before: string[]; after: string[] };
+            };
             nextStepId?: string;
         }
     ) => void;
@@ -472,6 +483,11 @@ async function executeAutonomousFlow(input: {
             autoSaveMemory: true,
             notifyOnComplete: true,
             runInBackground: false,
+            sessionTaskId: input.taskId,
+            workspacePath:
+                input.config?.workspacePath ||
+                input.preparedWorkRequest.frozenWorkRequest.workspacePath ||
+                process.cwd(),
         });
 
         const completedAutonomousSubtasks = task.decomposedTasks.filter(

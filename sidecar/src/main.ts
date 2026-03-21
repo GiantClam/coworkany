@@ -150,6 +150,11 @@ import {
     type PersistedTaskSuspension,
 } from './execution/taskRuntimeStore';
 import { planTaskRuntimeRecovery } from './execution/taskRuntimeRecovery';
+import { formatSidecarDoctorReport, runSidecarDoctor } from './doctor/sidecarDoctor';
+import {
+    clearTaskIsolationPolicy,
+    setTaskIsolationPolicy,
+} from './execution/taskIsolationPolicyStore';
 import {
     TaskEventBus,
     type TaskCheckpointReachedPayload,
@@ -168,6 +173,15 @@ import {
     autoInstallSkillDependencies,
     inspectSkillDependencies,
 } from './claude_skills/dependencyInstaller';
+import {
+    buildExtensionGovernanceReview,
+    summarizeSkillPermissions,
+    type ExtensionGovernanceReview,
+} from './extensions/governance';
+import {
+    ExtensionGovernanceStore,
+    type ExtensionGovernanceState,
+} from './extensions/governanceStore';
 import {
     ScheduledTaskStore,
     detectScheduledIntent,
@@ -189,7 +203,11 @@ import {
 } from './orchestration/workRequestAnalyzer';
 import { snapshotFrozenWorkRequest } from './orchestration/workRequestSnapshot';
 import { WorkRequestStore } from './orchestration/workRequestStore';
-import { type FrozenWorkRequest } from './orchestration/workRequestSchema';
+import {
+    type CheckpointContract,
+    type FrozenWorkRequest,
+    type UserActionRequest,
+} from './orchestration/workRequestSchema';
 import {
     appendPlanningProgressEntry,
     shouldUsePlanningFiles,
@@ -241,7 +259,7 @@ import {
 } from './agent/selfLearning';
 import type { SkillRecord, ReuseEngineDependencies } from './agent/selfLearning/reuseEngine';
 import { createSelfLearningTools, type SelfLearningToolHandlers } from './tools/selfLearning';
-import { getRagBridge, getMemoryContext, getVaultManager } from './memory';
+import { getRagBridge } from './memory';
 import {
     AutonomousAgentController,
     createAutonomousAgent,
@@ -612,26 +630,48 @@ function toCheckpointReachedPayload(checkpoint: NonNullable<ReturnType<typeof ge
         kind: checkpoint.kind,
         reason: checkpoint.reason,
         userMessage: checkpoint.userMessage,
+        riskTier: checkpoint.riskTier,
+        executionPolicy: checkpoint.executionPolicy,
         requiresUserConfirmation: checkpoint.requiresUserConfirmation,
         blocking: checkpoint.blocking,
     };
 }
 
-function toUserActionRequiredPayload(action: {
-    id: string;
-    title: string;
-    kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
-    description: string;
-    blocking: boolean;
-    questions: string[];
-    instructions: string[];
-    fulfillsCheckpointId?: string;
-}): TaskUserActionRequiredPayload {
+function isBlockingExecutionPolicy(
+    policy: CheckpointContract['executionPolicy'] | UserActionRequest['executionPolicy'] | undefined,
+    fallbackBlocking: boolean = false
+): boolean {
+    if (policy === 'review_required' || policy === 'hard_block') {
+        return true;
+    }
+    if (policy === 'auto') {
+        return false;
+    }
+    return fallbackBlocking;
+}
+
+function toUserActionRequiredPayload(
+    action: Pick<
+    UserActionRequest,
+    | 'id'
+    | 'title'
+    | 'kind'
+    | 'description'
+    | 'riskTier'
+    | 'executionPolicy'
+    | 'blocking'
+    | 'questions'
+    | 'instructions'
+    | 'fulfillsCheckpointId'
+    >
+): TaskUserActionRequiredPayload {
     return {
         actionId: action.id,
         title: action.title,
         kind: action.kind,
         description: action.description,
+        riskTier: action.riskTier,
+        executionPolicy: action.executionPolicy,
         blocking: action.blocking,
         questions: action.questions,
         instructions: action.instructions,
@@ -748,7 +788,8 @@ class AutonomousLlmAdapter implements AutonomousLlmInterface {
             throw new Error('Provider config not set');
         }
 
-        const taskId = `subtask_${subtask.id}`;
+        const taskContext = this.resolveAutonomousTaskContext(subtask.id);
+        const streamTaskId = `subtask_${subtask.id}`;
         const usedToolNames: string[] = [];
         const maxSteps = 10;
 
@@ -823,7 +864,7 @@ Rules:
         for (let step = 0; step < maxSteps; step++) {
             // 1. Call LLM
             const response = await streamLlmResponse(
-                taskId,
+                streamTaskId,
                 messages,
                 {
                     modelId: this.providerConfig.modelId,
@@ -868,13 +909,11 @@ Rules:
                 console.error(`[Autonomous] Step ${step + 1}: Executing ${toolName}`);
 
                 // Execute via internal helper
-                // We need to access global context or assume executeInternalTool is available in scope
-                // Since this class is in main.ts, executeInternalTool is available.
                 const result = await executeInternalTool(
-                    taskId,
+                    taskContext.taskId,
                     toolName,
                     toolArgs,
-                    { workspacePath: process.cwd() } // Use global workspace for now
+                    { workspacePath: taskContext.workspacePath }
                 );
 
                 toolResults.push({
@@ -896,6 +935,25 @@ Rules:
         return {
             result: "Max steps reached without final answer.",
             toolsUsed: usedToolNames
+        };
+    }
+
+    /**
+     * Subtasks are generated as `${taskId}_sub_${n}` or `${taskId}_recovery_${n}`.
+     * Resolve back to the parent session task id so tool execution stays policy-bound.
+     */
+    private resolveAutonomousTaskContext(subtaskId: string): { taskId: string; workspacePath: string } {
+        const match = subtaskId.match(/^(.*)_(?:sub|recovery)_\d+$/);
+        const parentTaskId = (match?.[1] || subtaskId).trim();
+        const sessionConfig = taskSessionStore.getConfig(parentTaskId) as { workspacePath?: unknown } | undefined;
+        const workspacePath =
+            typeof sessionConfig?.workspacePath === 'string' && sessionConfig.workspacePath.length > 0
+                ? sessionConfig.workspacePath
+                : workspaceRoot;
+
+        return {
+            taskId: parentTaskId,
+            workspacePath,
         };
     }
 
@@ -1063,7 +1121,7 @@ function getAutonomousAgent(taskId: string): AutonomousAgentController {
             autoSaveMemory: true,
             onEvent: (event: AutonomousEvent) => {
                 // Emit autonomous events to the frontend
-                emitAutonomousEvent(taskId, event);
+                emitAutonomousEvent(event.taskId, event);
             },
         });
     }
@@ -1528,6 +1586,7 @@ const SCHEDULED_TASK_STALE_RUNNING_TIMEOUT_MS = SCHEDULED_TASK_EXECUTION_TIMEOUT
 let directiveManagerCache: { root: string; manager: DirectiveManager } | null = null;
 let hostAccessGrantManagerCache: { root: string; manager: HostAccessGrantManager } | null = null;
 let taskRuntimeStoreCache: { root: string; store: TaskRuntimeStore } | null = null;
+let extensionGovernanceStoreCache: { root: string; store: ExtensionGovernanceStore } | null = null;
 
 function getResolvedAppDataRoot(): string {
     return desktopRuntimeContext?.appDataDir?.trim() || appDataRoot;
@@ -1568,6 +1627,17 @@ function getTaskRuntimeStore(): TaskRuntimeStore {
     return taskRuntimeStoreCache.store;
 }
 
+function getExtensionGovernanceStore(): ExtensionGovernanceStore {
+    const root = getResolvedAppDataRoot();
+    if (!extensionGovernanceStoreCache || extensionGovernanceStoreCache.root !== root) {
+        extensionGovernanceStoreCache = {
+            root,
+            store: new ExtensionGovernanceStore(path.join(root, 'extension-governance.json')),
+        };
+    }
+    return extensionGovernanceStoreCache.store;
+}
+
 function getResolvedShell(): string {
     return desktopRuntimeContext?.shell || (process.platform === 'win32' ? 'PowerShell/cmd' : process.env.SHELL || '/bin/bash');
 }
@@ -1587,17 +1657,42 @@ type SkillImportResponsePayload = {
     warnings?: string[];
     dependencyCheck?: ReturnType<typeof inspectSkillDependencies>;
     installResults?: Awaited<ReturnType<typeof autoInstallSkillDependencies>>['attempts'];
+    governanceReview?: ExtensionGovernanceReview;
+    governanceState?: ExtensionGovernanceState;
 };
 
 async function importSkillFromDirectory(
     inputPath: string,
-    autoInstallDependencies: boolean = true
+    autoInstallDependencies: boolean = true,
+    approvePermissionExpansion: boolean = false
 ): Promise<SkillImportResponsePayload> {
     const manifest = SkillStore.loadFromDirectory(inputPath);
     if (!manifest) {
         return {
             success: false,
             error: 'missing_skill_manifest',
+        };
+    }
+
+    const existingSkill = skillStore.get(manifest.name);
+    const governanceReview = buildExtensionGovernanceReview({
+        extensionType: 'skill',
+        extensionId: manifest.name,
+        previous: existingSkill ? summarizeSkillPermissions(existingSkill.manifest) : undefined,
+        next: summarizeSkillPermissions(manifest),
+        blockOnPermissionExpansion: !approvePermissionExpansion,
+    });
+    const governanceStore = getExtensionGovernanceStore();
+    if (governanceReview.blocking) {
+        const governanceState = governanceStore.recordReview(governanceReview, {
+            decision: 'pending',
+            quarantined: false,
+        });
+        return {
+            success: false,
+            error: 'skill_permission_expansion_requires_review',
+            governanceReview,
+            governanceState,
         };
     }
 
@@ -1621,12 +1716,23 @@ async function importSkillFromDirectory(
     }
 
     skillStore.install(manifest);
+    const quarantineOnFirstInstall = governanceReview.reason === 'first_install_review'
+        && approvePermissionExpansion !== true;
+    const governanceState = governanceStore.recordReview(governanceReview, {
+        decision: quarantineOnFirstInstall ? 'pending' : 'approved',
+        quarantined: quarantineOnFirstInstall,
+    });
+    if (governanceState.quarantined) {
+        skillStore.setEnabled(manifest.name, false);
+    }
     return {
         success: true,
         skillId: manifest.name,
         warnings: warnings.length > 0 ? warnings : undefined,
         dependencyCheck: installOutcome.after,
         installResults: installOutcome.attempts.length > 0 ? installOutcome.attempts : undefined,
+        governanceReview,
+        governanceState,
     };
 }
 
@@ -1660,6 +1766,7 @@ const APP_MANAGEMENT_TOOLS = createAppManagementTools({
     workspaceRoot,
     getResolvedAppDataRoot,
     skillStore,
+    getExtensionGovernanceStore,
     workspaceStore,
     importSkillFromDirectory,
     downloadSkillFromGitHub,
@@ -1691,6 +1798,7 @@ const routerDeps: CommandRouterDeps = {
 const capabilityCommandDeps: CapabilityCommandDeps = {
     skillStore,
     toolpackStore,
+    getExtensionGovernanceStore,
     getDirectiveManager,
     importSkillFromDirectory,
     downloadSkillFromGitHub,
@@ -1717,6 +1825,46 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
             );
         },
         restorePersistedTasks,
+        runDoctorPreflight: (input) => {
+            const repositoryRoot = path.basename(workspaceRoot) === 'sidecar'
+                ? path.resolve(workspaceRoot, '..')
+                : workspaceRoot;
+            const outputDir = input?.outputDir
+                ? (
+                    path.isAbsolute(input.outputDir)
+                        ? input.outputDir
+                        : path.resolve(repositoryRoot, input.outputDir)
+                )
+                : undefined;
+            const report = runSidecarDoctor({
+                repositoryRoot,
+                appDataDir: getResolvedAppDataRoot(),
+                startupProfile: input?.startupProfile,
+                incidentLogPaths: input?.incidentLogPaths,
+                readinessReportPath: input?.readinessReportPath,
+                controlPlaneThresholdProfile: input?.controlPlaneThresholdProfile,
+            });
+            const markdown = formatSidecarDoctorReport(report);
+
+            if (outputDir) {
+                fs.mkdirSync(outputDir, { recursive: true });
+                const reportPath = path.join(outputDir, 'report.json');
+                const markdownPath = path.join(outputDir, 'report.md');
+                fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
+                fs.writeFileSync(markdownPath, markdown, 'utf-8');
+                return {
+                    report,
+                    markdown,
+                    reportPath,
+                    markdownPath,
+                };
+            }
+
+            return {
+                report,
+                markdown,
+            };
+        },
         executeFreshTask,
         ensureTaskRuntimePersistence,
         cancelTaskExecution,
@@ -2077,55 +2225,6 @@ function mergeSkillIds(...skillGroups: Array<string[] | undefined>): string[] {
         }
     }
     return Array.from(merged);
-}
-
-/**
- * Retrieve relevant memory context for a user query (RAG integration)
- * Returns formatted context string for injection into system prompt
- */
-async function getRelevantMemoryContext(userQuery: string): Promise<string> {
-    try {
-        const bridge = getRagBridge();
-        const isAvailable = await bridge.isAvailable();
-
-        if (!isAvailable) {
-            return '';
-        }
-
-        const context = await getMemoryContext(userQuery, {
-            topK: 3,
-            maxChars: 2000,
-        });
-
-        if (context) {
-            console.log(`[Memory] Retrieved ${context.length} chars of relevant context`);
-            return `\n## Relevant Memory Context\n\nThe following information from your memory vault may be relevant:\n\n${context}\n\n`;
-        }
-    } catch (error) {
-        console.error('[Memory] Failed to retrieve context:', error);
-    }
-
-    return '';
-}
-
-/**
- * Save information to the memory vault
- */
-async function saveToMemoryVault(
-    title: string,
-    content: string,
-    category: 'learnings' | 'preferences' | 'projects' = 'learnings',
-    tags?: string[]
-): Promise<boolean> {
-    try {
-        const vault = getVaultManager();
-        const relativePath = await vault.saveMemory(title, content, { category, tags });
-        console.log(`[Memory] Saved to vault: ${relativePath}`);
-        return true;
-    } catch (error) {
-        console.error('[Memory] Failed to save to vault:', error);
-        return false;
-    }
 }
 
 // ============================================================================
@@ -2858,6 +2957,16 @@ function applyFrozenWorkRequestSessionPolicy(
     const nextConfig = persistFrozenWorkRequestSnapshot(taskId, frozenWorkRequest, {
         ...(baseConfig ?? taskSessionStore.getConfig(taskId) ?? {}),
         runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
+        sessionIsolationPolicy: frozenWorkRequest.sessionIsolationPolicy,
+        memoryIsolationPolicy: frozenWorkRequest.memoryIsolationPolicy,
+        tenantIsolationPolicy: frozenWorkRequest.tenantIsolationPolicy,
+    });
+    setTaskIsolationPolicy({
+        taskId,
+        workspacePath: frozenWorkRequest.workspacePath,
+        sessionIsolationPolicy: frozenWorkRequest.sessionIsolationPolicy,
+        memoryIsolationPolicy: frozenWorkRequest.memoryIsolationPolicy,
+        tenantIsolationPolicy: frozenWorkRequest.tenantIsolationPolicy,
     });
     mcpGateway.setSessionPolicy(taskId, buildMcpSessionIsolationPolicy(frozenWorkRequest, nextConfig));
     return nextConfig;
@@ -4170,6 +4279,7 @@ function archiveTaskRuntimePersistence(
 function clearTaskRuntimePersistence(taskId: string): void {
     taskRuntimeMeta.delete(taskId);
     taskCancellationRegistry.clear(taskId);
+    clearTaskIsolationPolicy(taskId);
     getTaskRuntimeStore().delete(taskId);
 }
 
@@ -4183,6 +4293,13 @@ function restorePersistedTasks(): void {
         taskSessionStore.setArtifacts(record.taskId, record.artifactsCreated);
         if (record.config) {
             taskSessionStore.setConfig(record.taskId, record.config);
+            setTaskIsolationPolicy({
+                taskId: record.taskId,
+                workspacePath: record.workspacePath,
+                sessionIsolationPolicy: record.config.sessionIsolationPolicy,
+                memoryIsolationPolicy: record.config.memoryIsolationPolicy,
+                tenantIsolationPolicy: record.config.tenantIsolationPolicy,
+            });
         }
         if (record.artifactContract) {
             taskSessionStore.setArtifactContract(
@@ -6357,6 +6474,8 @@ async function runAgentLoop(
                     kind: 'manual_action',
                     reason: suspended.reason,
                     userMessage: suspended.userMessage,
+                    riskTier: 'high',
+                    executionPolicy: 'hard_block',
                     requiresUserConfirmation: true,
                     blocking: true,
                 }));
@@ -6365,6 +6484,8 @@ async function runAgentLoop(
                     title: 'Complete required manual action',
                     kind: suspended.reason.toLowerCase().includes('auth') ? 'external_auth' : 'manual_step',
                     description: suspended.userMessage,
+                    riskTier: 'high',
+                    executionPolicy: 'hard_block',
                     blocking: true,
                     questions: [],
                     instructions: [suspended.userMessage],
@@ -6731,6 +6852,15 @@ function getExecutionRuntimeDeps(taskId: string) {
             summary: string;
             reason: string;
             trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+            reasons?: string[];
+            diff?: {
+                changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+                modeChanged?: { before: string; after: string };
+                objectiveChanged?: { before: string; after: string };
+                deliverablesChanged?: { before: string[]; after: string[] };
+                targetsChanged?: { before: string[]; after: string[] };
+                workflowsChanged?: { before: string[]; after: string[] };
+            };
             nextStepId?: string;
         }) => emit(createTaskContractReopenedEvent(runtimeTaskId, payload)),
         emitPreparedWorkRequestRefrozen: (input: {
@@ -6778,7 +6908,7 @@ function getExecutionRuntimeDeps(taskId: string) {
                     summary: clarificationMessage,
                 };
             }
-            if (blockingUserAction?.blocking && blockingUserAction.kind === 'confirm_plan') {
+            if (blockingUserAction && isBlockingExecutionPolicy(blockingUserAction.executionPolicy, blockingUserAction.blocking)) {
                 const confirmationMessage = buildBlockingUserActionMessage(blockingUserAction);
                 pushConversationMessage(runtimeTaskId, {
                     role: 'assistant',
@@ -6806,6 +6936,8 @@ function getExecutionRuntimeDeps(taskId: string) {
                     title: actionTitle,
                     kind: 'manual_step',
                     description,
+                    riskTier: 'high',
+                    executionPolicy: 'hard_block',
                     blocking: true,
                     questions: [],
                     instructions: [reason],

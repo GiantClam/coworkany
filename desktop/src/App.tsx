@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { useTauriEvents } from './hooks/useTauriEvents';
 import { useEffectConfirmation } from './hooks/useEffectConfirmation';
@@ -44,6 +45,20 @@ const SettingsViewLazy = lazy(async () => {
     const mod = await import('./components/Settings/SettingsView');
     return { default: mod.SettingsView };
 });
+
+type DoctorPreflightPayload = {
+    success?: boolean;
+    report?: unknown;
+    markdown?: string;
+    reportPath?: string;
+    markdownPath?: string;
+    error?: string;
+};
+
+type DoctorPreflightInvokeResult = {
+    success: boolean;
+    payload: DoctorPreflightPayload;
+};
 
 function App() {
     const { t } = useTranslation();
@@ -223,6 +238,25 @@ function App() {
     const exportDiagnostics = useCallback(async () => {
         try {
             const shortcuts = await getShortcuts();
+            let sidecarDoctor: DoctorPreflightPayload | null = null;
+            let sidecarDoctorInvokeError: string | undefined;
+
+            if (isTauri()) {
+                try {
+                    const doctorResult = await invoke<DoctorPreflightInvokeResult>('run_doctor_preflight', {
+                        input: {
+                            startupProfile: IS_STARTUP_BASELINE ? 'baseline' : undefined,
+                        },
+                    });
+                    sidecarDoctor = doctorResult?.payload ?? null;
+                    if (!doctorResult?.success && !sidecarDoctor?.error) {
+                        sidecarDoctorInvokeError = 'doctor_preflight_failed';
+                    }
+                } catch (error) {
+                    sidecarDoctorInvokeError = error instanceof Error ? error.message : String(error);
+                }
+            }
+
             const payload = {
                 timestamp: new Date().toISOString(),
                 locale: navigator.language,
@@ -238,6 +272,8 @@ function App() {
                     settingsDialogOpen,
                 },
                 shortcuts,
+                sidecarDoctor,
+                sidecarDoctorInvokeError,
             };
 
             const text = JSON.stringify(payload, null, 2);

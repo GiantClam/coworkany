@@ -7,9 +7,11 @@ import {
     type DefaultingPolicy,
     type DeliverableContract,
     type FrozenWorkRequest,
+    type HitlExecutionPolicy,
     type GoalFrame,
     type HitlPolicy,
     type MissingInfoItem,
+    type MemoryIsolationPolicy,
     type NormalizedWorkRequest,
     type PresentationPayload,
     type PresentationContract,
@@ -18,8 +20,10 @@ import {
     type ResearchQuery,
     type ResumeStrategy,
     type RuntimeIsolationPolicy,
+    type SessionIsolationPolicy,
     type StrategyOption,
     type TaskDefinition,
+    type TenantIsolationPolicy,
     type UncertaintyItem,
     type UserActionRequest,
 } from './workRequestSchema';
@@ -258,6 +262,86 @@ function buildRuntimeIsolationPolicy(input: {
     };
 }
 
+function isPreferencePersistenceTask(text: string): boolean {
+    return /\b(preference|prefer|default setting|remember that i|save.*preference)\b|偏好|喜欢|默认设置|记住我/i.test(text);
+}
+
+function isWorkspaceMemoryTask(goalFrame: GoalFrame): boolean {
+    return goalFrame.taskCategory === 'workspace'
+        || goalFrame.taskCategory === 'coding'
+        || goalFrame.taskCategory === 'research'
+        || goalFrame.taskCategory === 'mixed';
+}
+
+function buildSessionIsolationPolicy(): SessionIsolationPolicy {
+    return {
+        workspaceBindingMode: 'frozen_workspace_only',
+        followUpScope: 'same_task_only',
+        allowWorkspaceOverride: false,
+        supersededContractHandling: 'tombstone_prior_contracts',
+        staleEvidenceHandling: 'evict_on_refreeze',
+        notes: [
+            'Follow-up and resume execution stay bound to the original task session.',
+            'Workspace overrides are denied once the task session is frozen.',
+            'Superseded frozen contracts are retained only as tombstones and must not drive new execution.',
+        ],
+    };
+}
+
+function buildMemoryIsolationPolicy(input: {
+    text: string;
+    goalFrame: GoalFrame;
+}): MemoryIsolationPolicy {
+    const readScopes: MemoryIsolationPolicy['readScopes'] = ['task', 'user_preference'];
+    if (isWorkspaceMemoryTask(input.goalFrame)) {
+        readScopes.push('workspace');
+    }
+    if (input.goalFrame.taskCategory === 'app_management') {
+        readScopes.push('system');
+    }
+
+    const writeScopes: MemoryIsolationPolicy['writeScopes'] = ['task'];
+    if (isWorkspaceMemoryTask(input.goalFrame)) {
+        writeScopes.push('workspace');
+    }
+    if (isPreferencePersistenceTask(input.text)) {
+        writeScopes.push('user_preference');
+    }
+
+    const defaultWriteScope: MemoryIsolationPolicy['defaultWriteScope'] = isPreferencePersistenceTask(input.text)
+        ? 'user_preference'
+        : isWorkspaceMemoryTask(input.goalFrame)
+            ? 'workspace'
+            : 'task';
+
+    return {
+        classificationMode: 'scope_tagged',
+        readScopes: Array.from(new Set(readScopes)),
+        writeScopes: Array.from(new Set(writeScopes)),
+        defaultWriteScope,
+        notes: [
+            'Memory reads and writes must be tagged by scope before they can enter long-term storage or prompt context.',
+            'Task memory is ephemeral to the current task session; workspace memory is limited to the current workspace tenant.',
+            'User-preference memory is reserved for explicit preference capture and must stay bound to the current local user.',
+        ],
+    };
+}
+
+function buildTenantIsolationPolicy(): TenantIsolationPolicy {
+    return {
+        workspaceBoundaryMode: 'same_workspace_only',
+        userBoundaryMode: 'current_local_user_only',
+        allowCrossWorkspaceMemory: false,
+        allowCrossWorkspaceFollowUp: false,
+        allowCrossUserMemory: false,
+        notes: [
+            'Task continuity is restricted to the same workspace boundary.',
+            'Cross-workspace memory recall is denied unless data is explicitly scoped as user preference.',
+            'Per-user memory and session state stay bound to the current local user.',
+        ],
+    };
+}
+
 function buildMissingInfo(clarification: ClarificationDecision): MissingInfoItem[] {
     return clarification.missingFields.map((field, index) => ({
         field,
@@ -370,27 +454,36 @@ function buildCheckpoints(input: {
 }): CheckpointContract[] {
     const checkpoints: CheckpointContract[] = [];
 
+    const toBlocking = (policy: HitlExecutionPolicy): boolean =>
+        policy === 'review_required' || policy === 'hard_block';
+
     if (input.hitlPolicy.requiresPlanConfirmation && !input.clarification.required) {
+        const executionPolicy: HitlExecutionPolicy = 'review_required';
         checkpoints.push({
             id: randomUUID(),
             title: 'Review execution plan',
             kind: 'review',
             reason: `Execution risk tier is ${input.hitlPolicy.riskTier} and requires explicit user approval before continuing.`,
             userMessage: 'Review the planned execution and wait for the user to confirm before starting execution.',
+            riskTier: input.hitlPolicy.riskTier,
+            executionPolicy,
             requiresUserConfirmation: true,
-            blocking: true,
+            blocking: toBlocking(executionPolicy),
         });
     }
 
     if (input.hasManualAction) {
+        const executionPolicy: HitlExecutionPolicy = 'hard_block';
         checkpoints.push({
             id: randomUUID(),
             title: 'User action required',
             kind: 'manual_action',
             reason: 'Execution depends on a manual step the user must complete.',
             userMessage: 'Pause and ask the user to complete the required manual action before continuing.',
+            riskTier: 'high',
+            executionPolicy,
             requiresUserConfirmation: true,
-            blocking: true,
+            blocking: toBlocking(executionPolicy),
         });
     }
 
@@ -398,14 +491,17 @@ function buildCheckpoints(input: {
         isComplexPlanningTask(input.text, input.mode) ||
         input.deliverables.some((deliverable) => deliverable.type === 'report_file' || deliverable.type === 'artifact_file')
     ) {
+        const executionPolicy: HitlExecutionPolicy = 'auto';
         checkpoints.push({
             id: randomUUID(),
             title: 'Checkpoint before final delivery',
             kind: 'pre_delivery',
             reason: 'Summarize progress and verify the planned deliverables before final handoff.',
             userMessage: 'Provide a checkpoint summary before final delivery and request input only if a blocker or decision remains.',
+            riskTier: 'low',
+            executionPolicy,
             requiresUserConfirmation: false,
-            blocking: false,
+            blocking: toBlocking(executionPolicy),
         });
     }
 
@@ -422,13 +518,19 @@ function buildUserActionsRequired(input: {
 }): UserActionRequest[] {
     const actions: UserActionRequest[] = [];
 
+    const toBlocking = (policy: HitlExecutionPolicy): boolean =>
+        policy === 'review_required' || policy === 'hard_block';
+
     if (input.clarification.required) {
+        const executionPolicy: HitlExecutionPolicy = 'hard_block';
         actions.push({
             id: randomUUID(),
             title: 'Provide missing task details',
             kind: 'clarify_input',
             description: input.clarification.reason || 'Coworkany needs more information before it can safely execute the task.',
-            blocking: true,
+            riskTier: 'high',
+            executionPolicy,
+            blocking: toBlocking(executionPolicy),
             questions: input.clarification.questions,
             instructions: input.missingInfo.map((item) => item.field),
         });
@@ -436,12 +538,15 @@ function buildUserActionsRequired(input: {
 
     if (input.hitlPolicy.requiresPlanConfirmation && !input.clarification.required) {
         const reviewCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'review');
+        const executionPolicy: HitlExecutionPolicy = 'review_required';
         actions.push({
             id: randomUUID(),
             title: 'Confirm the execution plan',
             kind: 'confirm_plan',
             description: `This ${input.hitlPolicy.riskTier}-risk task needs explicit approval before Coworkany starts execution.`,
-            blocking: true,
+            riskTier: input.hitlPolicy.riskTier,
+            executionPolicy,
+            blocking: toBlocking(executionPolicy),
             questions: [
                 'Confirm whether Coworkany should proceed with the current execution plan.',
             ],
@@ -454,6 +559,7 @@ function buildUserActionsRequired(input: {
 
     if (input.hasManualAction) {
         const manualCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'manual_action');
+        const executionPolicy: HitlExecutionPolicy = 'hard_block';
         actions.push({
             id: randomUUID(),
             title: 'Complete required manual action',
@@ -461,7 +567,9 @@ function buildUserActionsRequired(input: {
                 ? 'external_auth'
                 : 'manual_step',
             description: 'A manual or external step is required before Coworkany can continue the task.',
-            blocking: true,
+            riskTier: 'high',
+            executionPolicy,
+            blocking: toBlocking(executionPolicy),
             questions: [],
             instructions: ['Complete the manual step in the UI or external system, then resume the task.'],
             fulfillsCheckpointId: manualCheckpoint?.id,
@@ -1134,6 +1242,12 @@ export function analyzeWorkRequest(input: {
         taskDefinition,
         goalFrame,
     });
+    const sessionIsolationPolicy = buildSessionIsolationPolicy();
+    const memoryIsolationPolicy = buildMemoryIsolationPolicy({
+        text: executableText,
+        goalFrame,
+    });
+    const tenantIsolationPolicy = buildTenantIsolationPolicy();
     const researchQueries = buildResearchQueries({
         text: executableText,
         mode,
@@ -1195,6 +1309,9 @@ export function analyzeWorkRequest(input: {
         userActionsRequired,
         hitlPolicy,
         runtimeIsolationPolicy,
+        sessionIsolationPolicy,
+        memoryIsolationPolicy,
+        tenantIsolationPolicy,
         missingInfo,
         defaultingPolicy,
         resumeStrategy: buildResumeStrategy(),

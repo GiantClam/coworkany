@@ -24,6 +24,7 @@ type TimelineCache = {
     effectIndex: Map<string, number>;
     patchIndex: Map<string, number>;
     currentDraftIndex: number | null;
+    taskUpdateCardIndex: number | null;
 };
 
 function createEmptyCache(
@@ -43,6 +44,7 @@ function createEmptyCache(
         effectIndex: new Map(),
         patchIndex: new Map(),
         currentDraftIndex: null,
+        taskUpdateCardIndex: null,
     };
 }
 
@@ -54,6 +56,108 @@ function appendItem(cache: TimelineCache, item: TimelineItemType): number {
     const nextIndex = cache.items.length;
     cache.items.push(item);
     return nextIndex;
+}
+
+function normalizeText(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeLines(values: unknown[]): string[] {
+    const lines = values
+        .map((value) => normalizeText(value))
+        .filter((line) => line.length > 0);
+    return Array.from(new Set(lines));
+}
+
+function appendSystemEvent(cache: TimelineCache, event: TaskSession['events'][number], content: string): void {
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+        return;
+    }
+
+    const lastItem = cache.items.at(-1);
+    if (lastItem?.type === 'system_event' && lastItem.content.trim() === normalizedContent) {
+        return;
+    }
+
+    appendItem(cache, {
+        type: 'system_event',
+        id: event.id,
+        content: normalizedContent,
+        timestamp: event.timestamp,
+    });
+}
+
+function upsertTaskUpdateCard(
+    cache: TimelineCache,
+    event: TaskSession['events'][number],
+    card: {
+        subtitle?: string;
+        sections: Array<{ label: string; lines: string[] }>;
+    }
+): void {
+    const subtitle = normalizeText(card.subtitle);
+    const sections = card.sections
+        .map((section) => ({
+            label: normalizeText(section.label),
+            lines: normalizeLines(section.lines),
+        }))
+        .filter((section) => section.label.length > 0);
+
+    if (!subtitle && sections.length === 0) {
+        return;
+    }
+
+    let cardIndex = cache.taskUpdateCardIndex;
+    let existingItem = cardIndex !== null ? cache.items[cardIndex] : undefined;
+    if (!existingItem || existingItem.type !== 'task_card') {
+        cardIndex = appendItem(cache, {
+            type: 'task_card',
+            id: `task-update-${cache.taskId}`,
+            title: 'Task update',
+            subtitle: undefined,
+            sections: [],
+            timestamp: event.timestamp,
+        });
+        cache.taskUpdateCardIndex = cardIndex;
+        existingItem = cache.items[cardIndex];
+    }
+
+    if (!existingItem || existingItem.type !== 'task_card') {
+        return;
+    }
+    if (cardIndex === null) {
+        return;
+    }
+
+    const nextSections = [...existingItem.sections];
+    for (const section of sections) {
+        const index = nextSections.findIndex((entry) => entry.label.toLowerCase() === section.label.toLowerCase());
+        if (section.lines.length === 0) {
+            if (index >= 0) {
+                nextSections.splice(index, 1);
+            }
+            continue;
+        }
+        if (index >= 0) {
+            nextSections[index] = {
+                label: section.label,
+                lines: section.lines,
+            };
+            continue;
+        }
+        nextSections.push({
+            label: section.label,
+            lines: section.lines,
+        });
+    }
+
+    upsertItem(cache, cardIndex, {
+        ...existingItem,
+        subtitle: subtitle || existingItem.subtitle,
+        sections: nextSections,
+        timestamp: event.timestamp,
+    });
 }
 
 function appendFinishedSummaryIfNeeded(
@@ -252,71 +356,166 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
         }
 
         case 'RATE_LIMITED':
-            appendItem(cache, {
-                type: 'system_event',
-                id: event.id,
-                content: payload.message || `API rate limited (attempt ${payload.attempt}/${payload.maxRetries}). Retrying...`,
-                timestamp: event.timestamp,
-            });
+            appendSystemEvent(
+                cache,
+                event,
+                payload.message || `API rate limited (attempt ${payload.attempt}/${payload.maxRetries}). Retrying...`
+            );
             break;
 
+        case 'TASK_STATUS': {
+            const status = typeof payload.status === 'string' ? payload.status : '';
+            const statusLabel = status === 'running'
+                ? 'Status updated: in progress'
+                : status === 'finished'
+                    ? 'Status updated: completed'
+                    : status === 'failed'
+                        ? 'Status updated: failed'
+                        : status === 'idle'
+                            ? 'Status updated: waiting'
+                            : '';
+
+            appendSystemEvent(cache, event, statusLabel);
+            break;
+        }
+
         case 'TASK_PLAN_READY':
-            appendItem(cache, {
-                type: 'system_event',
-                id: event.id,
-                content: payload.summary || 'Coworkany prepared an execution plan.',
-                timestamp: event.timestamp,
+            upsertTaskUpdateCard(cache, event, {
+                subtitle: payload.summary || 'Coworkany prepared an execution plan.',
+                sections: [
+                    {
+                        label: 'Plan · Deliverables',
+                        lines: ((Array.isArray(payload.deliverables) ? payload.deliverables : []) as Array<Record<string, unknown>>)
+                            .map((deliverable) => {
+                                const title = normalizeText(deliverable.title);
+                                const path = normalizeText(deliverable.path);
+                                const description = normalizeText(deliverable.description);
+                                if (path) return `${title || 'Deliverable'}: ${path}`;
+                                if (description) return `${title || 'Deliverable'}: ${description}`;
+                                return title || '';
+                            }),
+                    },
+                    {
+                        label: 'Plan · Checkpoints',
+                        lines: ((Array.isArray(payload.checkpoints) ? payload.checkpoints : []) as Array<Record<string, unknown>>)
+                            .map((checkpoint) => {
+                                const title = normalizeText(checkpoint.title);
+                                const reason = normalizeText(checkpoint.reason);
+                                return reason ? `${title || 'Checkpoint'}: ${reason}` : title;
+                            }),
+                    },
+                    {
+                        label: 'Plan · User actions',
+                        lines: ((Array.isArray(payload.userActionsRequired) ? payload.userActionsRequired : []) as Array<Record<string, unknown>>)
+                            .map((action) => {
+                                const title = normalizeText(action.title);
+                                const description = normalizeText(action.description);
+                                return description ? `${title || 'Action'}: ${description}` : title;
+                            }),
+                    },
+                    {
+                        label: 'Plan · Needs from you',
+                        lines: ((Array.isArray(payload.missingInfo) ? payload.missingInfo : []) as Array<Record<string, unknown>>)
+                            .map((entry) => {
+                                const field = normalizeText(entry.field);
+                                const question = normalizeText(entry.question);
+                                const reason = normalizeText(entry.reason);
+                                return question || reason ? `${field || 'Item'}: ${question || reason}` : field;
+                            }),
+                    },
+                ],
             });
             break;
 
         case 'TASK_RESEARCH_UPDATED':
-            appendItem(cache, {
-                type: 'system_event',
-                id: event.id,
-                content: [
-                    payload.summary || 'Research updated.',
-                    Array.isArray(payload.sourcesChecked) && payload.sourcesChecked.length > 0
-                        ? `Sources: ${payload.sourcesChecked.join(', ')}`
-                        : null,
-                    Array.isArray(payload.blockingUnknowns) && payload.blockingUnknowns.length > 0
-                        ? `Blocking: ${payload.blockingUnknowns.join(', ')}`
-                        : null,
-                ].filter(Boolean).join('\n'),
-                timestamp: event.timestamp,
+            upsertTaskUpdateCard(cache, event, {
+                subtitle: payload.summary || 'Research updated.',
+                sections: [
+                    {
+                        label: 'Research · Sources checked',
+                        lines: Array.isArray(payload.sourcesChecked) ? payload.sourcesChecked : [],
+                    },
+                    {
+                        label: 'Research · Blocking unknowns',
+                        lines: Array.isArray(payload.blockingUnknowns) ? payload.blockingUnknowns : [],
+                    },
+                ],
             });
             break;
 
         case 'TASK_CONTRACT_REOPENED':
-            appendItem(cache, {
-                type: 'system_event',
-                id: event.id,
-                content: [
-                    payload.summary || 'Execution contract reopened.',
-                    payload.reason || null,
-                ].filter(Boolean).join('\n'),
-                timestamp: event.timestamp,
+        {
+            const changedFields = Array.isArray(payload.diff?.changedFields)
+                ? payload.diff.changedFields.filter((field: unknown): field is string => typeof field === 'string')
+                : [];
+            const diff = payload.diff as Record<string, any> | undefined;
+            const diffLines = [
+                diff?.modeChanged
+                    ? `Mode: ${normalizeText(diff.modeChanged.before)} -> ${normalizeText(diff.modeChanged.after)}`
+                    : '',
+                diff?.objectiveChanged
+                    ? `Objective: ${normalizeText(diff.objectiveChanged.before)} -> ${normalizeText(diff.objectiveChanged.after)}`
+                    : '',
+                diff?.deliverablesChanged
+                    ? `Deliverables: ${(Array.isArray(diff.deliverablesChanged.before) ? diff.deliverablesChanged.before.join(', ') : 'none')} -> ${(Array.isArray(diff.deliverablesChanged.after) ? diff.deliverablesChanged.after.join(', ') : 'none')}`
+                    : '',
+                diff?.targetsChanged
+                    ? `Targets: ${(Array.isArray(diff.targetsChanged.before) ? diff.targetsChanged.before.join(', ') : 'none')} -> ${(Array.isArray(diff.targetsChanged.after) ? diff.targetsChanged.after.join(', ') : 'none')}`
+                    : '',
+                diff?.workflowsChanged
+                    ? `Workflow: ${(Array.isArray(diff.workflowsChanged.before) ? diff.workflowsChanged.before.join(', ') : 'none')} -> ${(Array.isArray(diff.workflowsChanged.after) ? diff.workflowsChanged.after.join(', ') : 'none')}`
+                    : '',
+            ];
+            upsertTaskUpdateCard(cache, event, {
+                subtitle: payload.summary || payload.reason || 'Execution contract reopened.',
+                sections: [
+                    {
+                        label: 'Contract · Reason',
+                        lines: payload.reason ? [payload.reason] : [],
+                    },
+                    {
+                        label: 'Contract · Changed fields',
+                        lines: changedFields,
+                    },
+                    {
+                        label: 'Contract · Diff',
+                        lines: diffLines,
+                    },
+                ],
             });
             break;
+        }
 
         case 'TASK_CHECKPOINT_REACHED':
-            appendItem(cache, {
-                type: 'system_event',
-                id: event.id,
-                content: payload.userMessage || payload.reason || 'Checkpoint reached.',
-                timestamp: event.timestamp,
+            upsertTaskUpdateCard(cache, event, {
+                subtitle: payload.userMessage || payload.reason || 'Checkpoint reached.',
+                sections: [
+                    {
+                        label: 'Checkpoint · Current',
+                        lines: [
+                            [
+                                normalizeText(payload.title),
+                                normalizeText(payload.reason),
+                            ].filter(Boolean).join(': '),
+                        ],
+                    },
+                ],
             });
             break;
 
         case 'TASK_USER_ACTION_REQUIRED':
-            appendItem(cache, {
-                type: 'system_event',
-                id: event.id,
-                content: [
-                    payload.description,
-                    ...(Array.isArray(payload.questions) ? payload.questions : []),
-                    ...(Array.isArray(payload.instructions) ? payload.instructions : []),
-                ].filter(Boolean).join('\n') || 'User action required.',
-                timestamp: event.timestamp,
+            upsertTaskUpdateCard(cache, event, {
+                subtitle: payload.description || 'User action required.',
+                sections: [
+                    {
+                        label: 'Action · Questions',
+                        lines: Array.isArray(payload.questions) ? payload.questions : [],
+                    },
+                    {
+                        label: 'Action · Instructions',
+                        lines: Array.isArray(payload.instructions) ? payload.instructions : [],
+                    },
+                ],
             });
             break;
 
@@ -354,6 +553,7 @@ function finalizeStreamingState(cache: TimelineCache, sessionStatus: TaskSession
         toolIndex: new Map(cache.toolIndex),
         effectIndex: new Map(cache.effectIndex),
         patchIndex: new Map(cache.patchIndex),
+        taskUpdateCardIndex: cache.taskUpdateCardIndex,
     };
 
     if (nextCache.currentDraftIndex !== null) {

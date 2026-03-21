@@ -190,7 +190,7 @@
     "disableNewShell": "Disable New UI Shell",
     "newShellTitle": "UI Shell",
     "newShellHint": "Toggle the new unified shell experience and restart the app if layout behavior looks stale.",
-    "exportDiagnostics": "Export UI Diagnostics"
+    "exportDiagnostics": "Export Diagnostics"
   },
 
   "chat": {
@@ -631,7 +631,7 @@
 
   "diagnostics": {
     "title": "Diagnostics Exported",
-    "description": "Diagnostics copied to clipboard and printed to console.",
+    "description": "UI diagnostics and sidecar doctor preflight copied to clipboard and printed to console.",
     "failedTitle": "Diagnostics Export Failed",
     "failedDescription": "Unable to export diagnostics right now."
   }

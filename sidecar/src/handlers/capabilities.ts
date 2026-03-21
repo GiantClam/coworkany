@@ -5,6 +5,20 @@ import {
     type IpcResponse,
     ToolpackManifestSchema,
 } from '../protocol';
+import {
+    buildExtensionGovernanceReview,
+    summarizeSkillPermissions,
+    summarizeSkillProvenance,
+    summarizeSkillTrust,
+    summarizeToolpackProvenance,
+    summarizeToolpackTrust,
+    summarizeToolpackPermissions,
+    type ExtensionGovernanceReview,
+} from '../extensions/governance';
+import type {
+    ExtensionGovernanceState,
+    ExtensionGovernanceStore,
+} from '../extensions/governanceStore';
 import type { Directive, DirectiveManager } from '../agent/directives/directiveManager';
 import type { ToolpackStore } from '../storage/toolpackStore';
 import type { SkillStore } from '../storage/skillStore';
@@ -17,15 +31,19 @@ export type SkillImportResponsePayload = {
     warnings?: string[];
     dependencyCheck?: unknown;
     installResults?: unknown[];
+    governanceReview?: ExtensionGovernanceReview;
+    governanceState?: ExtensionGovernanceState;
 };
 
 export type CapabilityCommandDeps = {
     skillStore: Pick<SkillStore, 'list' | 'get' | 'install' | 'setEnabled' | 'uninstall'>;
     toolpackStore: Pick<ToolpackStore, 'list' | 'getById' | 'add' | 'setEnabledById' | 'removeById'>;
+    getExtensionGovernanceStore: () => Pick<ExtensionGovernanceStore, 'get' | 'recordReview' | 'markApproved' | 'clear'>;
     getDirectiveManager: () => Pick<DirectiveManager, 'listDirectives' | 'upsertDirective' | 'removeDirective'>;
     importSkillFromDirectory: (
         inputPath: string,
-        autoInstallDependencies?: boolean
+        autoInstallDependencies?: boolean,
+        approvePermissionExpansion?: boolean
     ) => Promise<SkillImportResponsePayload>;
     downloadSkillFromGitHub: (
         source: string,
@@ -68,6 +86,38 @@ function ensureToolpackId(manifest: Record<string, unknown>): Record<string, unk
     return manifest;
 }
 
+function mergeTrustWithGovernance<T extends {
+    level: 'trusted' | 'review_required' | 'untrusted';
+    pendingReview: boolean;
+    reasons: string[];
+}>(
+    trust: T,
+    governanceState?: ExtensionGovernanceState
+): T {
+    if (!governanceState) {
+        return trust;
+    }
+
+    const reasons = new Set(trust.reasons);
+    if (governanceState.pendingReview) {
+        reasons.add('governance_pending_review');
+    }
+    if (governanceState.quarantined) {
+        reasons.add('governance_quarantined');
+    }
+
+    const level = governanceState.pendingReview && trust.level === 'trusted'
+        ? 'review_required'
+        : trust.level;
+
+    return {
+        ...trust,
+        level,
+        pendingReview: governanceState.pendingReview,
+        reasons: Array.from(reasons),
+    };
+}
+
 function toToolpackRecord(stored: {
     manifest: {
         id: string;
@@ -88,15 +138,32 @@ function toToolpackRecord(stored: {
     installedAt: string;
     lastUsedAt?: string;
     workingDir: string;
-}) {
+    isBuiltin?: boolean;
+}, deps: CapabilityCommandDeps) {
+    const source = stored.isBuiltin ? 'built_in' : 'local_folder';
+    const governance = deps.getExtensionGovernanceStore().get('toolpack', stored.manifest.id);
+    const trust = mergeTrustWithGovernance(
+        summarizeToolpackTrust(stored.manifest, {
+            isBuiltin: stored.isBuiltin,
+        }),
+        governance,
+    );
     return {
         manifest: stored.manifest,
-        source: 'local_folder',
+        source,
         rootPath: stored.workingDir,
         installedAt: stored.installedAt,
         enabled: stored.enabled,
         lastUsedAt: stored.lastUsedAt,
         status: 'stopped',
+        provenance: summarizeToolpackProvenance(stored.manifest, {
+            isBuiltin: stored.isBuiltin,
+            sourceType: source,
+            sourceRef: stored.workingDir,
+        }),
+        trust,
+        permissions: summarizeToolpackPermissions(stored.manifest),
+        governance,
     };
 }
 
@@ -112,7 +179,15 @@ function toSkillRecord(stored: {
     enabled: boolean;
     installedAt: string;
     lastUsedAt?: string;
-}) {
+    isBuiltin?: boolean;
+}, deps: CapabilityCommandDeps) {
+    const governance = deps.getExtensionGovernanceStore().get('skill', stored.manifest.name);
+    const trust = mergeTrustWithGovernance(
+        summarizeSkillTrust(stored.manifest, {
+            isBuiltin: stored.isBuiltin,
+        }),
+        governance,
+    );
     return {
         manifest: {
             id: stored.manifest.name,
@@ -127,24 +202,95 @@ function toSkillRecord(stored: {
         installedAt: stored.installedAt,
         enabled: stored.enabled,
         lastUsedAt: stored.lastUsedAt,
+        provenance: summarizeSkillProvenance(stored.manifest, {
+            isBuiltin: stored.isBuiltin,
+            sourceType: stored.isBuiltin ? 'built_in' : 'local_folder',
+            sourceRef: stored.manifest.directory,
+        }),
+        trust,
+        permissions: summarizeSkillPermissions(stored.manifest),
+        governance,
     };
 }
 
-function tryRegisterDownloadedToolpack(
+function getExistingToolpackManifest(
     toolpackStore: CapabilityCommandDeps['toolpackStore'],
-    installPath: string
-): void {
+    candidate: { id: string; name: string }
+): ToolpackManifest | undefined {
+    const byId = toolpackStore.getById(candidate.id) as { manifest?: ToolpackManifest } | undefined;
+    if (byId?.manifest) {
+        return byId.manifest;
+    }
+
+    const byName = toolpackStore.getById(candidate.name) as { manifest?: ToolpackManifest } | undefined;
+    return byName?.manifest;
+}
+
+function buildToolpackGovernanceReview(
+    toolpackStore: CapabilityCommandDeps['toolpackStore'],
+    manifest: ToolpackManifest,
+    approvePermissionExpansion: boolean
+): ExtensionGovernanceReview {
+    const previousManifest = getExistingToolpackManifest(toolpackStore, {
+        id: manifest.id,
+        name: manifest.name,
+    });
+
+    return buildExtensionGovernanceReview({
+        extensionType: 'toolpack',
+        extensionId: manifest.id,
+        previous: previousManifest ? summarizeToolpackPermissions(previousManifest) : undefined,
+        next: summarizeToolpackPermissions(manifest),
+        blockOnPermissionExpansion: !approvePermissionExpansion,
+    });
+}
+
+function tryRegisterDownloadedToolpack(
+    deps: CapabilityCommandDeps,
+    installPath: string,
+    approvePermissionExpansion: boolean
+): { governanceReview: ExtensionGovernanceReview; governanceState: ExtensionGovernanceState } | null {
     const manifestPath = path.join(installPath, 'manifest.json');
     if (!fs.existsSync(manifestPath)) {
-        return;
+        return null;
     }
 
     try {
         const content = fs.readFileSync(manifestPath, 'utf-8');
         const manifest = ToolpackManifestSchema.parse(JSON.parse(content));
-        toolpackStore.add(manifest, installPath);
+        const governanceReview = buildToolpackGovernanceReview(
+            deps.toolpackStore,
+            manifest as ToolpackManifest,
+            approvePermissionExpansion
+        );
+        const governanceStore = deps.getExtensionGovernanceStore();
+        if (governanceReview.blocking) {
+            return {
+                governanceReview,
+                governanceState: governanceStore.recordReview(governanceReview, {
+                    decision: 'pending',
+                    quarantined: false,
+                }),
+            };
+        }
+        deps.toolpackStore.add(manifest, installPath);
+
+        const quarantineOnFirstInstall = governanceReview.reason === 'first_install_review'
+            && approvePermissionExpansion !== true;
+        const governanceState = governanceStore.recordReview(governanceReview, {
+            decision: quarantineOnFirstInstall ? 'pending' : 'approved',
+            quarantined: quarantineOnFirstInstall,
+        });
+        if (governanceState.quarantined) {
+            deps.toolpackStore.setEnabledById(manifest.id, false);
+        }
+        return {
+            governanceReview,
+            governanceState,
+        };
     } catch (error) {
         console.error('[handleCapabilityCommand] Failed to register MCP:', error);
+        return null;
     }
 }
 
@@ -152,24 +298,49 @@ async function handleInstallFromGitHub(
     command: IpcCommand,
     deps: CapabilityCommandDeps
 ): Promise<IpcResponse> {
-    const { workspacePath, source, targetType } = command.payload as {
+    const { workspacePath, source, targetType, approvePermissionExpansion } = command.payload as {
         workspacePath: string;
         source: string;
         targetType: 'skill' | 'mcp';
+        approvePermissionExpansion?: boolean;
     };
 
     let result: { success: boolean; path: string; filesDownloaded?: number; error?: string };
     let importResult: SkillImportResponsePayload | undefined;
+    let governanceReview: ExtensionGovernanceReview | undefined;
+    let governanceState: ExtensionGovernanceState | undefined;
 
     if (targetType === 'skill') {
         result = await deps.downloadSkillFromGitHub(source, workspacePath);
         if (result.success) {
-            importResult = await deps.importSkillFromDirectory(result.path, true);
+            importResult = await deps.importSkillFromDirectory(
+                result.path,
+                true,
+                approvePermissionExpansion === true
+            );
+            governanceReview = importResult.governanceReview;
+            governanceState = importResult.governanceState;
         }
     } else {
         result = await deps.downloadMcpFromGitHub(source, workspacePath);
         if (result.success) {
-            tryRegisterDownloadedToolpack(deps.toolpackStore, result.path);
+            const registration = tryRegisterDownloadedToolpack(
+                deps,
+                result.path,
+                approvePermissionExpansion === true
+            );
+            if (registration?.governanceReview.blocking) {
+                return respond(command.id, 'install_from_github_response', {
+                    success: false,
+                    path: result.path,
+                    filesDownloaded: result.filesDownloaded,
+                    governanceReview: registration.governanceReview,
+                    governanceState: registration.governanceState,
+                    error: 'toolpack_permission_expansion_requires_review',
+                });
+            }
+            governanceReview = registration?.governanceReview;
+            governanceState = registration?.governanceState;
         }
     }
 
@@ -180,15 +351,18 @@ async function handleInstallFromGitHub(
         path: result.path,
         filesDownloaded: result.filesDownloaded,
         importResult,
+        governanceReview,
+        governanceState,
         error: result.error ?? importResult?.error,
     });
 }
 
 function handleInstallToolpack(command: IpcCommand, deps: CapabilityCommandDeps): IpcResponse {
-    const { source, path: inputPath, allowUnsigned } = command.payload as {
+    const { source, path: inputPath, allowUnsigned, approvePermissionExpansion } = command.payload as {
         source: string;
         path?: string;
         allowUnsigned?: boolean;
+        approvePermissionExpansion?: boolean;
     };
 
     if (source !== 'local_folder') {
@@ -250,10 +424,40 @@ function handleInstallToolpack(command: IpcCommand, deps: CapabilityCommandDeps)
             });
         }
 
+        const governanceReview = buildToolpackGovernanceReview(
+            deps.toolpackStore,
+            parsed.data as ToolpackManifest,
+            approvePermissionExpansion === true
+        );
+        const governanceStore = deps.getExtensionGovernanceStore();
+        if (governanceReview.blocking) {
+            const governanceState = governanceStore.recordReview(governanceReview, {
+                decision: 'pending',
+                quarantined: false,
+            });
+            return respond(command.id, 'install_toolpack_response', {
+                success: false,
+                governanceReview,
+                governanceState,
+                error: 'toolpack_permission_expansion_requires_review',
+            });
+        }
+
         deps.toolpackStore.add(parsed.data as ToolpackManifest, workingDir);
+        const quarantineOnFirstInstall = governanceReview.reason === 'first_install_review'
+            && approvePermissionExpansion !== true;
+        const governanceState = governanceStore.recordReview(governanceReview, {
+            decision: quarantineOnFirstInstall ? 'pending' : 'approved',
+            quarantined: quarantineOnFirstInstall,
+        });
+        if (governanceState.quarantined) {
+            deps.toolpackStore.setEnabledById(parsed.data.id, false);
+        }
         return respond(command.id, 'install_toolpack_response', {
             success: true,
             toolpackId: parsed.data.id,
+            governanceReview,
+            governanceState,
         });
     } catch (error) {
         return respond(command.id, 'install_toolpack_response', {
@@ -273,14 +477,14 @@ export async function handleCapabilityCommand(
             const toolpacks = deps.toolpackStore
                 .list()
                 .filter((tp) => includeDisabled || tp.enabled)
-                .map((tp) => toToolpackRecord(tp as any));
+                .map((tp) => toToolpackRecord(tp as any, deps));
             return respond(command.id, 'list_toolpacks_response', { toolpacks: toolpacks as any });
         }
         case 'get_toolpack': {
             const toolpackId = (command.payload as { toolpackId: string }).toolpackId;
             const stored = deps.toolpackStore.getById(toolpackId);
             return respond(command.id, 'get_toolpack_response', {
-                toolpack: (stored ? toToolpackRecord(stored as any) : undefined) as any,
+                toolpack: (stored ? toToolpackRecord(stored as any, deps) : undefined) as any,
             });
         }
         case 'install_toolpack':
@@ -291,6 +495,11 @@ export async function handleCapabilityCommand(
                 enabled: boolean;
             };
             const success = deps.toolpackStore.setEnabledById(toolpackId, enabled);
+            if (success && enabled) {
+                const stored = deps.toolpackStore.getById(toolpackId) as { manifest?: { id?: string; name?: string } } | undefined;
+                const extensionId = stored?.manifest?.id ?? stored?.manifest?.name ?? toolpackId;
+                deps.getExtensionGovernanceStore().markApproved('toolpack', extensionId);
+            }
             return respond(command.id, 'set_toolpack_enabled_response', {
                 success,
                 toolpackId,
@@ -311,6 +520,12 @@ export async function handleCapabilityCommand(
                     console.error('[handleCapabilityCommand] Failed to delete toolpack files:', error);
                 }
             }
+            if (success) {
+                const extensionId = (record as { manifest?: { id?: string; name?: string } } | undefined)?.manifest?.id
+                    ?? (record as { manifest?: { id?: string; name?: string } } | undefined)?.manifest?.name
+                    ?? toolpackId;
+                deps.getExtensionGovernanceStore().clear('toolpack', extensionId);
+            }
             return respond(command.id, 'remove_toolpack_response', {
                 success,
                 toolpackId,
@@ -322,21 +537,22 @@ export async function handleCapabilityCommand(
             const skills = deps.skillStore
                 .list()
                 .filter((skill) => includeDisabled || skill.enabled)
-                .map((skill) => toSkillRecord(skill as any));
+                .map((skill) => toSkillRecord(skill as any, deps));
             return respond(command.id, 'list_claude_skills_response', { skills: skills as any });
         }
         case 'get_claude_skill': {
             const skillId = (command.payload as { skillId: string }).skillId;
             const stored = deps.skillStore.get(skillId);
             return respond(command.id, 'get_claude_skill_response', {
-                skill: (stored ? toSkillRecord(stored as any) : undefined) as any,
+                skill: (stored ? toSkillRecord(stored as any, deps) : undefined) as any,
             });
         }
         case 'import_claude_skill': {
-            const { source, path: inputPath, autoInstallDependencies } = command.payload as {
+            const { source, path: inputPath, autoInstallDependencies, approvePermissionExpansion } = command.payload as {
                 source: string;
                 path?: string;
                 autoInstallDependencies?: boolean;
+                approvePermissionExpansion?: boolean;
             };
 
             if (source !== 'local_folder') {
@@ -355,7 +571,8 @@ export async function handleCapabilityCommand(
 
             const importResult = await deps.importSkillFromDirectory(
                 inputPath,
-                autoInstallDependencies !== false
+                autoInstallDependencies !== false,
+                approvePermissionExpansion === true
             );
             return respond(command.id, 'import_claude_skill_response', importResult);
         }
@@ -365,6 +582,9 @@ export async function handleCapabilityCommand(
                 enabled: boolean;
             };
             const success = deps.skillStore.setEnabled(skillId, enabled);
+            if (success && enabled) {
+                deps.getExtensionGovernanceStore().markApproved('skill', skillId);
+            }
             return respond(command.id, 'set_claude_skill_enabled_response', {
                 success,
                 skillId,
@@ -384,6 +604,9 @@ export async function handleCapabilityCommand(
                 } catch (error) {
                     console.error('[handleCapabilityCommand] Failed to delete skill files:', error);
                 }
+            }
+            if (success) {
+                deps.getExtensionGovernanceStore().clear('skill', skillId);
             }
             return respond(command.id, 'remove_claude_skill_response', {
                 success,

@@ -22,6 +22,43 @@ function makeTempDir(prefix: string): string {
 }
 
 function createDeps(overrides: Partial<CapabilityCommandDeps> = {}): CapabilityCommandDeps {
+    const governanceState = new Map<string, any>();
+    const governanceStore = {
+        get: (extensionType: 'skill' | 'toolpack', extensionId: string) => governanceState.get(`${extensionType}:${extensionId}`),
+        recordReview: (review: any, input?: { decision?: 'pending' | 'approved'; quarantined?: boolean }) => {
+            const pending = input?.decision === 'pending';
+            const entry = {
+                extensionType: review.extensionType,
+                extensionId: review.extensionId,
+                pendingReview: pending,
+                quarantined: input?.quarantined === true,
+                lastDecision: pending ? 'pending' : 'approved',
+                lastReviewReason: review.reason,
+                lastReviewSummary: review.summary,
+                lastUpdatedAt: new Date().toISOString(),
+                approvedAt: pending ? undefined : new Date().toISOString(),
+            };
+            governanceState.set(`${review.extensionType}:${review.extensionId}`, entry);
+            return entry;
+        },
+        markApproved: (extensionType: 'skill' | 'toolpack', extensionId: string) => {
+            const key = `${extensionType}:${extensionId}`;
+            const existing = governanceState.get(key);
+            if (!existing) return undefined;
+            const approved = {
+                ...existing,
+                pendingReview: false,
+                quarantined: false,
+                lastDecision: 'approved',
+                approvedAt: new Date().toISOString(),
+                lastUpdatedAt: new Date().toISOString(),
+            };
+            governanceState.set(key, approved);
+            return approved;
+        },
+        clear: (extensionType: 'skill' | 'toolpack', extensionId: string) => governanceState.delete(`${extensionType}:${extensionId}`),
+    };
+
     return {
         skillStore: {
             list: () => [],
@@ -37,6 +74,7 @@ function createDeps(overrides: Partial<CapabilityCommandDeps> = {}): CapabilityC
             setEnabledById: () => true,
             removeById: () => true,
         },
+        getExtensionGovernanceStore: () => governanceStore,
         getDirectiveManager: () => ({
             listDirectives: () => [],
             upsertDirective: (directive) => directive,
@@ -53,6 +91,150 @@ function createDeps(overrides: Partial<CapabilityCommandDeps> = {}): CapabilityC
 }
 
 describe('capability commands handler', () => {
+    test('install_toolpack returns a first-install governance review summary', async () => {
+        const installDir = makeTempDir('capability-toolpack-install-');
+        fs.writeFileSync(path.join(installDir, 'toolpack.json'), JSON.stringify({
+            id: 'local-pack',
+            name: 'Local Pack',
+            version: '1.0.0',
+            runtime: 'node',
+            tools: ['read_file'],
+            effects: ['filesystem:read'],
+        }));
+
+        const setEnabledCalls: Array<{ toolpackId: string; enabled: boolean }> = [];
+        const response = await handleCapabilityCommand({
+            id: 'cmd-toolpack-first-install',
+            type: 'install_toolpack',
+            payload: {
+                source: 'local_folder',
+                path: installDir,
+                allowUnsigned: true,
+            },
+        } as any, createDeps({
+            toolpackStore: {
+                list: () => [],
+                getById: () => undefined,
+                add: () => {},
+                setEnabledById: (toolpackId, enabled) => {
+                    setEnabledCalls.push({ toolpackId, enabled });
+                    return true;
+                },
+                removeById: () => true,
+            },
+        }));
+
+        expect(response?.type).toBe('install_toolpack_response');
+        expect((response as any).payload.success).toBe(true);
+        expect((response as any).payload.governanceReview).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'local-pack',
+            installKind: 'first_install',
+            reviewRequired: true,
+            blocking: false,
+            reason: 'first_install_review',
+        });
+        expect((response as any).payload.governanceState).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'local-pack',
+            pendingReview: true,
+            quarantined: true,
+            lastDecision: 'pending',
+        });
+        expect(setEnabledCalls).toEqual([{ toolpackId: 'local-pack', enabled: false }]);
+    });
+
+    test('install_toolpack blocks permission-expansion updates until explicitly approved', async () => {
+        const installDir = makeTempDir('capability-toolpack-update-');
+        fs.writeFileSync(path.join(installDir, 'toolpack.json'), JSON.stringify({
+            id: 'demo-pack',
+            name: 'Demo Pack',
+            version: '2.0.0',
+            runtime: 'node',
+            tools: ['read_file'],
+            effects: ['filesystem:read', 'network:outbound'],
+        }));
+
+        let addCalls = 0;
+        const deps = createDeps({
+            toolpackStore: {
+                list: () => [],
+                getById: () => ({
+                    manifest: {
+                        id: 'demo-pack',
+                        name: 'Demo Pack',
+                        version: '1.0.0',
+                        tools: ['read_file'],
+                        effects: ['filesystem:read'],
+                    },
+                } as any),
+                add: () => {
+                    addCalls += 1;
+                },
+                setEnabledById: () => true,
+                removeById: () => true,
+            },
+        });
+
+        const blocked = await handleCapabilityCommand({
+            id: 'cmd-toolpack-update-blocked',
+            type: 'install_toolpack',
+            payload: {
+                source: 'local_folder',
+                path: installDir,
+                allowUnsigned: true,
+            },
+        } as any, deps);
+
+        expect((blocked as any).payload.success).toBe(false);
+        expect((blocked as any).payload.error).toBe('toolpack_permission_expansion_requires_review');
+        expect((blocked as any).payload.governanceReview).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'demo-pack',
+            installKind: 'update',
+            reviewRequired: true,
+            blocking: true,
+            reason: 'permission_expansion',
+        });
+        expect((blocked as any).payload.governanceState).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'demo-pack',
+            pendingReview: true,
+            quarantined: false,
+            lastDecision: 'pending',
+        });
+        expect(addCalls).toBe(0);
+
+        const approved = await handleCapabilityCommand({
+            id: 'cmd-toolpack-update-approved',
+            type: 'install_toolpack',
+            payload: {
+                source: 'local_folder',
+                path: installDir,
+                allowUnsigned: true,
+                approvePermissionExpansion: true,
+            },
+        } as any, deps);
+
+        expect((approved as any).payload.success).toBe(true);
+        expect((approved as any).payload.governanceReview).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'demo-pack',
+            installKind: 'update',
+            reviewRequired: true,
+            blocking: false,
+            reason: 'permission_expansion',
+        });
+        expect((approved as any).payload.governanceState).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'demo-pack',
+            pendingReview: false,
+            quarantined: false,
+            lastDecision: 'approved',
+        });
+        expect(addCalls).toBe(1);
+    });
+
     test('forwards import_claude_skill to injected importer with auto-install enabled by default', async () => {
         const calls: Array<{ inputPath: string; autoInstallDependencies?: boolean }> = [];
         const deps = createDeps({
@@ -275,5 +457,52 @@ describe('capability commands handler', () => {
         expect(skillResponse?.type).toBe('validate_github_url_response');
         expect((skillResponse as any).payload.sourceType).toBe('skill');
         expect((mcpResponse as any).payload.sourceType).toBe('mcp');
+    });
+
+    test('list_claude_skills exposes provenance trust and permission summaries', async () => {
+        const deps = createDeps({
+            skillStore: {
+                list: () => [{
+                    manifest: {
+                        name: 'Third Party Skill',
+                        version: '1.2.3',
+                        description: 'demo',
+                        directory: '/tmp/skills/third-party',
+                        allowedTools: ['Read', 'Write'],
+                        author: 'Acme',
+                        homepage: 'https://example.com/skill',
+                        requires: {
+                            tools: [],
+                            capabilities: ['filesystem:write'],
+                            bins: ['python3'],
+                            env: ['OPENAI_API_KEY'],
+                            config: [],
+                        },
+                    },
+                    enabled: true,
+                    installedAt: new Date().toISOString(),
+                    isBuiltin: false,
+                } as any],
+                get: () => undefined,
+                install: () => {},
+                setEnabled: () => true,
+                uninstall: () => true,
+            },
+        });
+
+        const response = await handleCapabilityCommand({
+            id: 'cmd-list-skills-governance',
+            type: 'list_claude_skills',
+            payload: {},
+        } as any, deps);
+
+        const first = (response as any)?.payload?.skills?.[0];
+        expect(first?.provenance?.sourceType).toBe('local_folder');
+        expect(first?.provenance?.publisher).toBe('Acme');
+        expect(first?.trust?.level).toBe('review_required');
+        expect(first?.trust?.pendingReview).toBe(true);
+        expect(first?.permissions?.tools).toContain('Read');
+        expect(first?.permissions?.capabilities).toContain('filesystem:write');
+        expect(first?.permissions?.bins).toContain('python3');
     });
 });

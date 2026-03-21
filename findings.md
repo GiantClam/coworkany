@@ -218,6 +218,22 @@
   - one runner for static planner checks
   - one runner for live reopen replay
   - one runner for recorded-production replay
+
+## 2026-03-21 Session / Memory / Tenant Isolation
+
+- Current runtime hard isolation stops at filesystem/network/MCP connector scope. Task continuity and memory surfaces still lack a first-class contract analogous to `runtimeIsolationPolicy`.
+- The highest-signal runtime gaps are:
+  - follow-up / resume can still mutate `workspacePath` through `payload.config`
+  - vault/RAG memory is global by default and not filtered by task/workspace/user scope
+  - quick note / vault save flows do not stamp tenant or scope metadata
+- `TaskSessionStore` is already the right persistence seam for this work. It stores `workspacePath`, frozen snapshot context, and `runtimeIsolationPolicy`, so additive session/memory/tenant policy fields can travel with existing task runtime persistence.
+- The cleanest enforcement shape mirrors MCP session policy:
+  - analyzer emits formal isolation contracts
+  - `main.ts` resolves and registers task-scoped runtime policy
+  - follow-up/resume/refreeze paths refresh that policy
+  - tool/memory helpers consult the current task policy by `taskId`
+- Vault/RAG memory needs metadata-aware filtering rather than only category filtering. The Python RAG service currently supports `filter_category` only, so sidecar alone cannot prevent cross-scope recall.
+- Workspace-local `remember/recall` storage already has a natural workspace boundary via `.coworkany/memory.json`; the bigger commercial risk is the global vault/RAG path and task-session reuse across workspaces.
   - one release report consuming the same summary artifact
 - The seed suite now includes both dynamic replay modes:
   - `runtime-followup-reopen` for live sidecar replay
@@ -243,3 +259,24 @@
   - control-plane eval metrics are now checked against explicit default thresholds
   - if the eval command passes but the metrics violate thresholds, the `control-plane-eval` readiness stage is still marked failed
   - this avoids the common trap where a report shows bad metrics but rollout logic ignores them
+- After the first isolation pass, the remaining bypass surface was not in MCP/tool contracts but inside agent internals:
+  - `ReActController` was still reading memory via global `getMemoryContext(...)`
+  - `AutonomousAgentController` was still reading memory via global `getMemoryContext(...)` and saving extracted learnings via global vault writes
+  - `KnowledgeUpdater` tool handlers were still saving and searching knowledge through non-task-scoped memory paths
+- Those paths could bypass the intended task/session/tenant boundary even if MCP gateway and tool handlers were already locked down, because the agent could still consult or persist cross-task memory from inside its own control loop.
+- The autonomous task implementation also had a separate scoping bug:
+  - `start_autonomous_task` was keyed by a runtime session task id, but `AutonomousAgentController.startTask(...)` generated a different internal id
+  - that meant autonomous events, memory tags, and status lookup were not guaranteed to stay aligned with the real task session boundary
+- The current fix closes that hole by pushing `sessionTaskId + workspacePath` into autonomous startup and by routing agent memory reads/writes through the same `taskIsolationPolicyStore`-backed helpers used by other runtime surfaces.
+- That residual cleanup is now closed:
+  - the dead legacy helpers were removed from `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - doctor now includes a `memory-source-guards` check that scans guarded runtime sources for reintroduced global memory APIs or helper patterns
+- This makes the evidence chain stronger than a one-time grep:
+  - code path is removed
+  - regression test proves doctor fails if the helper comes back
+  - operators can see the guard explicitly in `sidecar doctor` output instead of relying on code review memory
+- Another concrete isolation bypass existed in autonomous subtask tool execution:
+  - `AutonomousLlmAdapter.executeSubtask(...)` used to call `executeInternalTool(...)` with synthetic task ids like `subtask_${subtask.id}` plus global cwd.
+  - isolation/policy mappings are keyed by real task session ids, so synthetic ids can silently degrade enforcement to an unbound context.
+- The fix now resolves the parent session task id and workspace from subtask ids and executes tools under that parent session context.
+- A dedicated doctor regression now flags this pattern if reintroduced, so this bug class cannot creep back quietly.

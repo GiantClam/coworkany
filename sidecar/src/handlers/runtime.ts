@@ -6,15 +6,19 @@ import type {
     DeliverableContract,
     FrozenWorkRequest,
     HitlPolicy,
+    MemoryIsolationPolicy,
     MissingInfoItem,
     ResumeStrategy,
     RuntimeIsolationPolicy,
+    SessionIsolationPolicy,
+    TenantIsolationPolicy,
     UserActionRequest,
 } from '../orchestration/workRequestSchema';
 import {
     snapshotFrozenWorkRequest,
     type FrozenWorkRequestSnapshot,
 } from '../orchestration/workRequestSnapshot';
+import { assertWorkspaceOverrideAllowed } from '../execution/taskIsolationPolicyStore';
 import { parseInlineAttachmentContent } from '../llm/attachmentContent';
 import {
     buildBlockingUserActionMessage,
@@ -34,10 +38,35 @@ function respond(commandId: string, type: string, payload: Record<string, unknow
     } as IpcResponse;
 }
 
+function validateWorkspaceOverride(taskId: string, payloadConfig: unknown): string | null {
+    if (!payloadConfig || typeof payloadConfig !== 'object') {
+        return null;
+    }
+
+    const candidateWorkspacePath = (payloadConfig as { workspacePath?: unknown }).workspacePath;
+    if (typeof candidateWorkspacePath !== 'string' || candidateWorkspacePath.trim().length === 0) {
+        return null;
+    }
+
+    return assertWorkspaceOverrideAllowed(taskId, candidateWorkspacePath);
+}
+
 export type RuntimeCommandDeps = {
     emit: (message: Record<string, unknown>) => void;
     onBootstrapRuntimeContext: (runtimeContext: unknown) => void;
     restorePersistedTasks: () => void;
+    runDoctorPreflight: (input?: {
+        startupProfile?: string;
+        readinessReportPath?: string;
+        controlPlaneThresholdProfile?: string;
+        incidentLogPaths?: string[];
+        outputDir?: string;
+    }) => {
+        report: unknown;
+        markdown: string;
+        reportPath?: string;
+        markdownPath?: string;
+    };
     executeFreshTask: (args: any) => Promise<unknown>;
     ensureTaskRuntimePersistence: (input: {
         taskId: string;
@@ -64,6 +93,15 @@ export type RuntimeCommandDeps = {
         summary: string;
         reason: string;
         trigger: 'new_scope_signal' | 'missing_resource' | 'permission_block' | 'contradictory_evidence' | 'execution_infeasible';
+        reasons?: string[];
+        diff?: {
+            changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+            modeChanged?: { before: string; after: string };
+            objectiveChanged?: { before: string; after: string };
+            deliverablesChanged?: { before: string[]; after: string[] };
+            targetsChanged?: { before: string[]; after: string[] };
+            workflowsChanged?: { before: string[]; after: string[] };
+        };
         nextStepId?: string;
     }) => Record<string, unknown>;
     createTaskPlanReadyEvent: (taskId: string, payload: {
@@ -75,6 +113,8 @@ export type RuntimeCommandDeps = {
             kind: 'review' | 'manual_action' | 'pre_delivery';
             reason: string;
             userMessage: string;
+            riskTier: 'low' | 'medium' | 'high';
+            executionPolicy: 'auto' | 'review_required' | 'hard_block';
             requiresUserConfirmation: boolean;
             blocking: boolean;
         }>;
@@ -83,6 +123,8 @@ export type RuntimeCommandDeps = {
             title: string;
             kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
             description: string;
+            riskTier: 'low' | 'medium' | 'high';
+            executionPolicy: 'auto' | 'review_required' | 'hard_block';
             blocking: boolean;
             questions: string[];
             instructions: string[];
@@ -90,6 +132,9 @@ export type RuntimeCommandDeps = {
         }>;
         hitlPolicy?: HitlPolicy;
         runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+        sessionIsolationPolicy?: SessionIsolationPolicy;
+        memoryIsolationPolicy?: MemoryIsolationPolicy;
+        tenantIsolationPolicy?: TenantIsolationPolicy;
         missingInfo: Array<{
             field: string;
             reason: string;
@@ -133,6 +178,8 @@ export type RuntimeCommandDeps = {
         kind: 'review' | 'manual_action' | 'pre_delivery';
         reason: string;
         userMessage: string;
+        riskTier: 'low' | 'medium' | 'high';
+        executionPolicy: 'auto' | 'review_required' | 'hard_block';
         requiresUserConfirmation: boolean;
         blocking: boolean;
     }) => Record<string, unknown>;
@@ -141,6 +188,8 @@ export type RuntimeCommandDeps = {
         title: string;
         kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
         description: string;
+        riskTier: 'low' | 'medium' | 'high';
+        executionPolicy: 'auto' | 'review_required' | 'hard_block';
         blocking: boolean;
         questions: string[];
         instructions: string[];
@@ -213,6 +262,8 @@ export type RuntimeCommandDeps = {
             autoSaveMemory: boolean;
             notifyOnComplete: boolean;
             runInBackground: boolean;
+            sessionTaskId?: string;
+            workspacePath?: string;
         }) => Promise<any>;
         getTask: (taskId: string) => any;
         pauseTask: (taskId: string) => boolean;
@@ -424,6 +475,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
     userActionsRequired?: UserActionRequest[];
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    sessionIsolationPolicy?: SessionIsolationPolicy;
+    memoryIsolationPolicy?: MemoryIsolationPolicy;
+    tenantIsolationPolicy?: TenantIsolationPolicy;
     missingInfo?: MissingInfoItem[];
     defaultingPolicy?: DefaultingPolicy;
     resumeStrategy?: ResumeStrategy;
@@ -434,6 +488,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
     userActionsRequired: UserActionRequest[];
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    sessionIsolationPolicy?: SessionIsolationPolicy;
+    memoryIsolationPolicy?: MemoryIsolationPolicy;
+    tenantIsolationPolicy?: TenantIsolationPolicy;
     missingInfo: MissingInfoItem[];
     defaultingPolicy?: DefaultingPolicy;
     resumeStrategy?: ResumeStrategy;
@@ -445,6 +502,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
         userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
         hitlPolicy: frozenWorkRequest.hitlPolicy,
         runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
+        sessionIsolationPolicy: frozenWorkRequest.sessionIsolationPolicy,
+        memoryIsolationPolicy: frozenWorkRequest.memoryIsolationPolicy,
+        tenantIsolationPolicy: frozenWorkRequest.tenantIsolationPolicy,
         missingInfo: frozenWorkRequest.missingInfo ?? [],
         defaultingPolicy: frozenWorkRequest.defaultingPolicy,
         resumeStrategy: frozenWorkRequest.resumeStrategy,
@@ -478,6 +538,19 @@ function emitBlockingCollaborationEvents(
         | 'createTaskStatusEvent'
     >
 ): { blocked: boolean; blockingUserAction?: UserActionRequest } {
+    const isBlockingPolicy = (
+        policy: UserActionRequest['executionPolicy'] | undefined,
+        fallbackBlocking: boolean
+    ): boolean => {
+        if (policy === 'review_required' || policy === 'hard_block') {
+            return true;
+        }
+        if (policy === 'auto') {
+            return false;
+        }
+        return fallbackBlocking;
+    };
+
     const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
     if (blockingCheckpoint) {
         deps.emit(deps.createTaskCheckpointReachedEvent(taskId, {
@@ -486,6 +559,8 @@ function emitBlockingCollaborationEvents(
             kind: blockingCheckpoint.kind,
             reason: blockingCheckpoint.reason,
             userMessage: blockingCheckpoint.userMessage,
+            riskTier: blockingCheckpoint.riskTier,
+            executionPolicy: blockingCheckpoint.executionPolicy,
             requiresUserConfirmation: blockingCheckpoint.requiresUserConfirmation,
             blocking: blockingCheckpoint.blocking,
         }));
@@ -501,6 +576,8 @@ function emitBlockingCollaborationEvents(
             title: blockingUserAction.title,
             kind: blockingUserAction.kind,
             description: blockingUserAction.description,
+            riskTier: blockingUserAction.riskTier,
+            executionPolicy: blockingUserAction.executionPolicy,
             blocking: blockingUserAction.blocking,
             questions: blockingUserAction.questions,
             instructions: blockingUserAction.instructions,
@@ -515,7 +592,7 @@ function emitBlockingCollaborationEvents(
         };
     }
 
-    if (blockingUserAction?.blocking && blockingUserAction.kind === 'confirm_plan') {
+    if (blockingUserAction && isBlockingPolicy(blockingUserAction.executionPolicy, blockingUserAction.blocking)) {
         deps.emit(deps.createChatMessageEvent(taskId, {
             role: 'assistant',
             content: buildBlockingUserActionMessage(blockingUserAction),
@@ -572,38 +649,82 @@ function detectFollowUpContractReopen(input: {
     summary: string;
     reason: string;
     trigger: 'new_scope_signal' | 'contradictory_evidence';
+    reasons: string[];
+    diff: {
+        changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+        modeChanged?: { before: string; after: string };
+        objectiveChanged?: { before: string; after: string };
+        deliverablesChanged?: { before: string[]; after: string[] };
+        targetsChanged?: { before: string[]; after: string[] };
+        workflowsChanged?: { before: string[]; after: string[] };
+    };
 } | null {
     if (!input.previous) {
         return null;
     }
 
     const reasons: string[] = [];
+    const diff: {
+        changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+        modeChanged?: { before: string; after: string };
+        objectiveChanged?: { before: string; after: string };
+        deliverablesChanged?: { before: string[]; after: string[] };
+        targetsChanged?: { before: string[]; after: string[] };
+        workflowsChanged?: { before: string[]; after: string[] };
+    } = {
+        changedFields: [],
+    };
     const previousObjective = normalizeComparisonValue(input.previous.primaryObjective || input.previous.sourceText);
     const nextObjective = normalizeComparisonValue(input.next.primaryObjective || input.next.sourceText);
-    const previousDeliverables = buildDeliverableFingerprint(input.previous).join('|');
-    const nextDeliverables = buildDeliverableFingerprint(input.next).join('|');
-    const previousTargets = buildResolvedTargetFingerprint(input.previous).join('|');
-    const nextTargets = buildResolvedTargetFingerprint(input.next).join('|');
-    const previousWorkflows = buildWorkflowFingerprint(input.previous).join('|');
-    const nextWorkflows = buildWorkflowFingerprint(input.next).join('|');
+    const previousDeliverables = buildDeliverableFingerprint(input.previous);
+    const nextDeliverables = buildDeliverableFingerprint(input.next);
+    const previousTargets = buildResolvedTargetFingerprint(input.previous);
+    const nextTargets = buildResolvedTargetFingerprint(input.next);
+    const previousWorkflows = buildWorkflowFingerprint(input.previous);
+    const nextWorkflows = buildWorkflowFingerprint(input.next);
 
     if (input.previous.mode !== input.next.mode) {
         reasons.push(`task mode changed from ${input.previous.mode} to ${input.next.mode}`);
+        diff.changedFields.push('mode');
+        diff.modeChanged = {
+            before: input.previous.mode,
+            after: input.next.mode,
+        };
     }
-    if (previousDeliverables !== nextDeliverables) {
+    if (previousDeliverables.join('|') !== nextDeliverables.join('|')) {
         reasons.push('deliverables or output targets changed');
+        diff.changedFields.push('deliverables');
+        diff.deliverablesChanged = {
+            before: previousDeliverables,
+            after: nextDeliverables,
+        };
     }
-    if (previousTargets !== nextTargets) {
+    if (previousTargets.join('|') !== nextTargets.join('|')) {
         reasons.push('execution targets changed');
+        diff.changedFields.push('execution_targets');
+        diff.targetsChanged = {
+            before: previousTargets,
+            after: nextTargets,
+        };
     }
-    if (previousWorkflows !== nextWorkflows) {
+    if (previousWorkflows.join('|') !== nextWorkflows.join('|')) {
         reasons.push('execution workflow changed');
+        diff.changedFields.push('workflow');
+        diff.workflowsChanged = {
+            before: previousWorkflows,
+            after: nextWorkflows,
+        };
     }
     if (
         previousObjective !== nextObjective &&
         normalizeComparisonValue(input.promptText).length >= 8
     ) {
         reasons.push('primary objective changed');
+        diff.changedFields.push('objective');
+        diff.objectiveChanged = {
+            before: input.previous.primaryObjective || input.previous.sourceText,
+            after: input.next.primaryObjective || input.next.sourceText,
+        };
     }
 
     if (reasons.length === 0) {
@@ -621,6 +742,8 @@ function detectFollowUpContractReopen(input: {
         summary: `${reasonPrefix}: ${reasons[0]}.`,
         reason: `${reasonPrefix}: ${reasons.join('; ')}.`,
         trigger,
+        reasons,
+        diff,
     };
 }
 
@@ -632,6 +755,33 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             deps.emit(respond(command.id, 'bootstrap_runtime_context_response', {
                 success: true,
             }));
+            return true;
+        }
+
+        case 'doctor_preflight': {
+            const payload = (command.payload as {
+                startupProfile?: string;
+                readinessReportPath?: string;
+                controlPlaneThresholdProfile?: string;
+                incidentLogPaths?: string[];
+                outputDir?: string;
+            } | undefined) ?? {};
+
+            try {
+                const result = deps.runDoctorPreflight(payload);
+                deps.emit(respond(command.id, 'doctor_preflight_response', {
+                    success: true,
+                    report: result.report,
+                    markdown: result.markdown,
+                    reportPath: result.reportPath,
+                    markdownPath: result.markdownPath,
+                }));
+            } catch (error) {
+                deps.emit(respond(command.id, 'doctor_preflight_response', {
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                }));
+            }
             return true;
         }
 
@@ -702,14 +852,28 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 role: 'user',
                 content,
             });
+
+            const taskConfig = deps.getTaskConfig(taskId);
+            let effectiveTaskConfig = taskConfig;
+            const workspaceOverrideViolation = validateWorkspaceOverride(taskId, payload.config);
+            if (workspaceOverrideViolation) {
+                deps.emit(respond(command.id, 'send_task_message_response', {
+                    success: false,
+                    taskId,
+                    error: 'session_workspace_override_denied',
+                }));
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'system',
+                    content: workspaceOverrideViolation,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
             deps.emit(respond(command.id, 'send_task_message_response', {
                 success: true,
                 taskId,
             }));
             deps.taskEventBus.emitStatus(taskId, { status: 'running' });
-
-            const taskConfig = deps.getTaskConfig(taskId);
-            let effectiveTaskConfig = taskConfig;
             if (payload.config) {
                 if (typeof payload.config.maxHistoryMessages === 'number' && payload.config.maxHistoryMessages > 0) {
                     deps.taskSessionStore.setHistoryLimit(taskId, payload.config.maxHistoryMessages);
@@ -886,6 +1050,20 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
 
             const taskConfig = deps.getTaskConfig(taskId);
             let effectiveTaskConfig = taskConfig;
+            const workspaceOverrideViolation = validateWorkspaceOverride(taskId, payload.config);
+            if (workspaceOverrideViolation) {
+                deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                    success: false,
+                    taskId,
+                    error: 'session_workspace_override_denied',
+                }));
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'system',
+                    content: workspaceOverrideViolation,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
             if (payload.config) {
                 if (typeof payload.config.maxHistoryMessages === 'number' && payload.config.maxHistoryMessages > 0) {
                     deps.taskSessionStore.setHistoryLimit(taskId, payload.config.maxHistoryMessages);
@@ -1053,12 +1231,16 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const providerConfig = deps.resolveProviderConfig(llmConfig, {});
             deps.autonomousLlmAdapter.setProviderConfig(providerConfig);
             const agent = deps.getAutonomousAgent(payload.taskId);
+            const taskConfig = deps.getTaskConfig(payload.taskId);
+            const workspacePath =
+                (taskConfig?.workspacePath as string | undefined) ||
+                deps.workspaceRoot;
 
             deps.taskEventBus.emitStarted(payload.taskId, {
                 title: 'Autonomous Task',
                 description: payload.query,
                 context: {
-                    workspacePath: deps.workspaceRoot,
+                    workspacePath,
                     userQuery: payload.query,
                 },
             });
@@ -1074,6 +1256,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     autoSaveMemory: payload.autoSaveMemory ?? true,
                     notifyOnComplete: true,
                     runInBackground: payload.runInBackground ?? false,
+                    sessionTaskId: payload.taskId,
+                    workspacePath,
                 });
                 deps.taskEventBus.emitFinished(payload.taskId, {
                     summary: task.summary || 'Task completed',

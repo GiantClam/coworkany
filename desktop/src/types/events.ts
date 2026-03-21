@@ -80,6 +80,8 @@ export interface PlannedCheckpoint {
     kind: 'review' | 'manual_action' | 'pre_delivery';
     reason: string;
     userMessage: string;
+    riskTier: 'low' | 'medium' | 'high';
+    executionPolicy: 'auto' | 'review_required' | 'hard_block';
     requiresUserConfirmation: boolean;
     blocking: boolean;
 }
@@ -89,6 +91,8 @@ export interface PlannedUserAction {
     title: string;
     kind: 'clarify_input' | 'confirm_plan' | 'manual_step' | 'external_auth';
     description: string;
+    riskTier: 'low' | 'medium' | 'high';
+    executionPolicy: 'auto' | 'review_required' | 'hard_block';
     blocking: boolean;
     questions: string[];
     instructions: string[];
@@ -167,6 +171,15 @@ export interface SkillRecommendation {
     priority: number;
 }
 
+export interface ContractReopenDiff {
+    changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
+    modeChanged?: { before: string; after: string };
+    objectiveChanged?: { before: string; after: string };
+    deliverablesChanged?: { before: string[]; after: string[] };
+    targetsChanged?: { before: string[]; after: string[] };
+    workflowsChanged?: { before: string[]; after: string[] };
+}
+
 export interface TaskSession {
     taskId: string;
     status: TaskStatus;
@@ -192,6 +205,8 @@ export interface TaskSession {
     researchBlockingUnknowns?: string[];
     selectedStrategyTitle?: string;
     contractReopenReason?: string;
+    contractReopenReasons?: string[];
+    contractReopenDiff?: ContractReopenDiff;
     contractReopenCount?: number;
     plannedDeliverables?: PlannedDeliverable[];
     plannedCheckpoints?: PlannedCheckpoint[];
@@ -228,6 +243,7 @@ export type TimelineItemType =
     | AssistantMessageItem
     | ToolCallItem
     | SystemEventItem
+    | TaskCardItem
     | EffectRequestItem
     | PatchItem;
 
@@ -255,6 +271,16 @@ export type ToolCallStatus = 'running' | 'success' | 'failed';
 export interface SystemEventItem extends BaseEvent {
     type: 'system_event';
     content: string;
+}
+
+export interface TaskCardItem extends BaseEvent {
+    type: 'task_card';
+    title: string;
+    subtitle?: string;
+    sections: Array<{
+        label: string;
+        lines: string[];
+    }>;
 }
 
 export interface EffectRequestItem extends BaseEvent {
@@ -399,6 +425,10 @@ export function isToolCall(item: TimelineItemType): item is ToolCallItem {
 
 export function isSystemEvent(item: TimelineItemType): item is SystemEventItem {
     return item.type === 'system_event';
+}
+
+export function isTaskCard(item: TimelineItemType): item is TaskCardItem {
+    return item.type === 'task_card';
 }
 
 export function isEffectRequest(item: TimelineItemType): item is EffectRequestItem {

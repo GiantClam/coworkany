@@ -110,6 +110,7 @@ fn main() {
             ipc::resume_interrupted_task,
             ipc::clear_task_history,
             ipc::get_tasks, // Previously added
+            ipc::run_doctor_preflight,
             ipc::get_voice_state,
             ipc::get_voice_provider_status,
             ipc::stop_voice,

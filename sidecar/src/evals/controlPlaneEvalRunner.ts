@@ -51,6 +51,9 @@ const analyzeExpectationSchema = z.object({
     preferredSkillsInclude: z.array(z.string()).optional(),
     preferredToolsInclude: z.array(z.string()).optional(),
     preferredWorkflow: z.string().optional(),
+    sessionFollowUpScope: z.string().optional(),
+    memoryDefaultWriteScope: z.string().optional(),
+    tenantWorkspaceBoundaryMode: z.string().optional(),
 });
 
 const freezeExpectationSchema = z.object({
@@ -115,6 +118,9 @@ const runtimeReplayExpectationSchema = z.object({
     ]).optional(),
     reopenReasonIncludes: z.string().optional(),
     planReadyDeliverablePathsInclude: z.array(z.string()).optional(),
+    planReadySessionFollowUpScope: z.string().optional(),
+    planReadyMemoryDefaultWriteScope: z.string().optional(),
+    planReadyTenantWorkspaceBoundaryMode: z.string().optional(),
     finalStatus: z.enum(['idle', 'running', 'finished', 'failed']).optional(),
 });
 
@@ -213,6 +219,9 @@ export type ControlPlaneEvalAnalyzeActual = {
     preferredSkills: string[];
     preferredTools: string[];
     preferredWorkflow?: string;
+    sessionFollowUpScope?: string;
+    memoryDefaultWriteScope?: string;
+    tenantWorkspaceBoundaryMode?: string;
 };
 
 export type ControlPlaneEvalFreezeActual = {
@@ -244,6 +253,9 @@ export type ControlPlaneEvalRuntimeReplayActual = {
     reopenTrigger?: string;
     reopenReason?: string;
     planReadyDeliverablePaths: string[];
+    planReadySessionFollowUpScope?: string;
+    planReadyMemoryDefaultWriteScope?: string;
+    planReadyTenantWorkspaceBoundaryMode?: string;
     finalStatus?: string;
 };
 
@@ -524,6 +536,9 @@ function buildAnalyzeActual(analyzed: NormalizedWorkRequest): ControlPlaneEvalAn
         preferredSkills: dedupe(tasks.flatMap((task) => task.preferredSkills)),
         preferredTools: dedupe(tasks.flatMap((task) => task.preferredTools)),
         preferredWorkflow: tasks[0]?.preferredWorkflow,
+        sessionFollowUpScope: analyzed.sessionIsolationPolicy?.followUpScope,
+        memoryDefaultWriteScope: analyzed.memoryIsolationPolicy?.defaultWriteScope,
+        tenantWorkspaceBoundaryMode: analyzed.tenantIsolationPolicy?.workspaceBoundaryMode,
     };
 }
 
@@ -662,6 +677,18 @@ function buildRuntimeReplayActualFromEvents(events: TaskEvent[], source: 'live_s
                     .map((deliverable) => deliverable.path)
                     .filter((value): value is string => typeof value === 'string'))
                 : [],
+        planReadySessionFollowUpScope:
+            planReadyEvent && 'sessionIsolationPolicy' in planReadyEvent.payload
+                ? (planReadyEvent.payload as { sessionIsolationPolicy?: { followUpScope?: string } }).sessionIsolationPolicy?.followUpScope
+                : undefined,
+        planReadyMemoryDefaultWriteScope:
+            planReadyEvent && 'memoryIsolationPolicy' in planReadyEvent.payload
+                ? (planReadyEvent.payload as { memoryIsolationPolicy?: { defaultWriteScope?: string } }).memoryIsolationPolicy?.defaultWriteScope
+                : undefined,
+        planReadyTenantWorkspaceBoundaryMode:
+            planReadyEvent && 'tenantIsolationPolicy' in planReadyEvent.payload
+                ? (planReadyEvent.payload as { tenantIsolationPolicy?: { workspaceBoundaryMode?: string } }).tenantIsolationPolicy?.workspaceBoundaryMode
+                : undefined,
         finalStatus:
             latestStatus && 'status' in latestStatus.payload
                 ? String(latestStatus.payload.status)
@@ -867,6 +894,15 @@ function evaluateAnalyzeStage(
     if (typeof expectation.preferredWorkflow === 'string') {
         compareEqual('preferredWorkflow', actual.preferredWorkflow, expectation.preferredWorkflow, mismatches);
     }
+    if (typeof expectation.sessionFollowUpScope === 'string') {
+        compareEqual('sessionFollowUpScope', actual.sessionFollowUpScope, expectation.sessionFollowUpScope, mismatches);
+    }
+    if (typeof expectation.memoryDefaultWriteScope === 'string') {
+        compareEqual('memoryDefaultWriteScope', actual.memoryDefaultWriteScope, expectation.memoryDefaultWriteScope, mismatches);
+    }
+    if (typeof expectation.tenantWorkspaceBoundaryMode === 'string') {
+        compareEqual('tenantWorkspaceBoundaryMode', actual.tenantWorkspaceBoundaryMode, expectation.tenantWorkspaceBoundaryMode, mismatches);
+    }
 
     return {
         passed: mismatches.length === 0,
@@ -996,6 +1032,30 @@ function evaluateRuntimeReplayStage(
             'runtimeReplay.planReadyDeliverablePaths',
             actual.planReadyDeliverablePaths,
             expectation.planReadyDeliverablePathsInclude,
+            mismatches
+        );
+    }
+    if (expectation.planReadySessionFollowUpScope) {
+        compareEqual(
+            'runtimeReplay.planReadySessionFollowUpScope',
+            actual.planReadySessionFollowUpScope,
+            expectation.planReadySessionFollowUpScope,
+            mismatches
+        );
+    }
+    if (expectation.planReadyMemoryDefaultWriteScope) {
+        compareEqual(
+            'runtimeReplay.planReadyMemoryDefaultWriteScope',
+            actual.planReadyMemoryDefaultWriteScope,
+            expectation.planReadyMemoryDefaultWriteScope,
+            mismatches
+        );
+    }
+    if (expectation.planReadyTenantWorkspaceBoundaryMode) {
+        compareEqual(
+            'runtimeReplay.planReadyTenantWorkspaceBoundaryMode',
+            actual.planReadyTenantWorkspaceBoundaryMode,
+            expectation.planReadyTenantWorkspaceBoundaryMode,
             mismatches
         );
     }

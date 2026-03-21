@@ -1,5 +1,10 @@
 import type { FrozenWorkRequestSnapshot } from '../orchestration/workRequestSnapshot';
-import type { RuntimeIsolationPolicy } from '../orchestration/workRequestSchema';
+import type {
+    MemoryIsolationPolicy,
+    RuntimeIsolationPolicy,
+    SessionIsolationPolicy,
+    TenantIsolationPolicy,
+} from '../orchestration/workRequestSchema';
 
 export type TaskSessionConfig = {
     modelId?: string;
@@ -12,6 +17,9 @@ export type TaskSessionConfig = {
     voiceProviderMode?: 'auto' | 'system' | 'custom';
     lastFrozenWorkRequestSnapshot?: FrozenWorkRequestSnapshot;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
+    sessionIsolationPolicy?: SessionIsolationPolicy;
+    memoryIsolationPolicy?: MemoryIsolationPolicy;
+    tenantIsolationPolicy?: TenantIsolationPolicy;
 };
 
 export type TaskResumeMessage = {

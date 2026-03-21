@@ -216,6 +216,29 @@ export const BootstrapRuntimeContextResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+export const DoctorPreflightCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('doctor_preflight'),
+    payload: z.object({
+        startupProfile: z.string().optional(),
+        readinessReportPath: z.string().optional(),
+        controlPlaneThresholdProfile: z.string().optional(),
+        incidentLogPaths: z.array(z.string()).optional(),
+        outputDir: z.string().optional(),
+    }).optional(),
+});
+
+export const DoctorPreflightResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('doctor_preflight_response'),
+    payload: z.object({
+        success: z.boolean(),
+        report: z.unknown().optional(),
+        markdown: z.string().optional(),
+        reportPath: z.string().optional(),
+        markdownPath: z.string().optional(),
+        error: z.string().optional(),
+    }),
+});
+
 // ============================================================================
 // Effect Commands
 // ============================================================================
@@ -465,6 +488,60 @@ export const ToolpackManifestSchema = z.object({
     signature: z.string().optional(), // Package signature for verification
 });
 
+export const ExtensionPermissionSummarySchema = z.object({
+    tools: z.array(z.string()).default([]),
+    effects: z.array(z.string()).default([]),
+    capabilities: z.array(z.string()).default([]),
+    bins: z.array(z.string()).default([]),
+    env: z.array(z.string()).default([]),
+    config: z.array(z.string()).default([]),
+});
+
+export const ExtensionPermissionDeltaSchema = z.object({
+    added: ExtensionPermissionSummarySchema,
+    removed: ExtensionPermissionSummarySchema,
+});
+
+export const ExtensionProvenanceSchema = z.object({
+    sourceType: z.enum(['built_in', 'local_folder', 'github', 'skillhub', 'clawhub', 'unknown']),
+    sourceRef: z.string().optional(),
+    publisher: z.string().optional(),
+    homepage: z.string().optional(),
+    repository: z.string().optional(),
+    signaturePresent: z.boolean(),
+});
+
+export const ExtensionTrustSummarySchema = z.object({
+    level: z.enum(['trusted', 'review_required', 'untrusted']),
+    pendingReview: z.boolean(),
+    reasons: z.array(z.string()).default([]),
+});
+
+export const ExtensionGovernanceReviewSchema = z.object({
+    extensionType: z.enum(['skill', 'toolpack']),
+    extensionId: z.string(),
+    installKind: z.enum(['first_install', 'update']),
+    reviewRequired: z.boolean(),
+    blocking: z.boolean(),
+    reason: z.enum(['none', 'first_install_review', 'permission_expansion']),
+    summary: z.string(),
+    before: ExtensionPermissionSummarySchema.optional(),
+    after: ExtensionPermissionSummarySchema,
+    delta: ExtensionPermissionDeltaSchema.optional(),
+});
+
+export const ExtensionGovernanceStateSchema = z.object({
+    extensionType: z.enum(['skill', 'toolpack']),
+    extensionId: z.string(),
+    pendingReview: z.boolean(),
+    quarantined: z.boolean(),
+    lastDecision: z.enum(['pending', 'approved']),
+    lastReviewReason: z.enum(['none', 'first_install_review', 'permission_expansion']).optional(),
+    lastReviewSummary: z.string().optional(),
+    lastUpdatedAt: z.string().datetime(),
+    approvedAt: z.string().datetime().optional(),
+});
+
 export const ToolpackRecordSchema = z.object({
     manifest: ToolpackManifestSchema,
     source: ToolpackSourceSchema,
@@ -473,6 +550,10 @@ export const ToolpackRecordSchema = z.object({
     enabled: z.boolean(),
     lastUsedAt: z.string().datetime().optional(),
     status: z.enum(['stopped', 'running', 'error']).optional(),
+    provenance: ExtensionProvenanceSchema.optional(),
+    trust: ExtensionTrustSummarySchema.optional(),
+    permissions: ExtensionPermissionSummarySchema.optional(),
+    governance: ExtensionGovernanceStateSchema.optional(),
 });
 
 export const ListToolpacksCommandSchema = BaseCommandSchema.extend({
@@ -511,6 +592,7 @@ export const InstallToolpackCommandSchema = BaseCommandSchema.extend({
         url: z.string().optional(),
         allowUnsigned: z.boolean().default(false),
         overwrite: z.boolean().default(false),
+        approvePermissionExpansion: z.boolean().default(false),
     }),
 });
 
@@ -519,6 +601,8 @@ export const InstallToolpackResponseSchema = BaseResponseSchema.extend({
     payload: z.object({
         success: z.boolean(),
         toolpackId: z.string().optional(),
+        governanceReview: ExtensionGovernanceReviewSchema.optional(),
+        governanceState: ExtensionGovernanceStateSchema.optional(),
         error: z.string().optional(),
     }),
 });
@@ -587,6 +671,10 @@ export const ClaudeSkillRecordSchema = z.object({
     installedAt: z.string().datetime(),
     enabled: z.boolean(),
     lastUsedAt: z.string().datetime().optional(),
+    provenance: ExtensionProvenanceSchema.optional(),
+    trust: ExtensionTrustSummarySchema.optional(),
+    permissions: ExtensionPermissionSummarySchema.optional(),
+    governance: ExtensionGovernanceStateSchema.optional(),
 });
 
 export const ListClaudeSkillsCommandSchema = BaseCommandSchema.extend({
@@ -625,6 +713,7 @@ export const ImportClaudeSkillCommandSchema = BaseCommandSchema.extend({
         url: z.string().optional(),
         overwrite: z.boolean().default(false),
         autoInstallDependencies: z.boolean().default(true),
+        approvePermissionExpansion: z.boolean().default(false),
     }),
 });
 
@@ -663,6 +752,8 @@ export const ImportClaudeSkillResponseSchema = BaseResponseSchema.extend({
             url: z.string().optional(),
             targetPath: z.string().optional(),
         })).optional(),
+        governanceReview: ExtensionGovernanceReviewSchema.optional(),
+        governanceState: ExtensionGovernanceStateSchema.optional(),
     }),
 });
 
@@ -961,6 +1052,7 @@ export const InstallFromGitHubCommandSchema = BaseCommandSchema.extend({
         workspacePath: z.string(),
         source: z.string(),
         targetType: z.enum(['skill', 'mcp']),
+        approvePermissionExpansion: z.boolean().default(false),
     }),
 });
 
@@ -1019,6 +1111,8 @@ export const InstallFromGitHubResponseSchema = BaseResponseSchema.extend({
         path: z.string().optional(),
         filesDownloaded: z.number().optional(),
         importResult: ImportClaudeSkillResponseSchema.shape.payload.optional(),
+        governanceReview: ExtensionGovernanceReviewSchema.optional(),
+        governanceState: ExtensionGovernanceStateSchema.optional(),
         error: z.string().optional(),
     }),
 });
@@ -1196,6 +1290,7 @@ export const ListAutonomousTasksCommandSchema = BaseCommandSchema.extend({
 
 export const IpcCommandSchema = z.discriminatedUnion('type', [
     BootstrapRuntimeContextCommandSchema,
+    DoctorPreflightCommandSchema,
     StartTaskCommandSchema,
     CancelTaskCommandSchema,
     ClearTaskHistoryCommandSchema,
@@ -1254,6 +1349,7 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
 
 export const IpcResponseSchema = z.discriminatedUnion('type', [
     BootstrapRuntimeContextResponseSchema,
+    DoctorPreflightResponseSchema,
     StartTaskResponseSchema,
     CancelTaskResponseSchema,
     ClearTaskHistoryResponseSchema,
@@ -1309,6 +1405,8 @@ export type ManagedServiceCapability = z.infer<typeof ManagedServiceCapabilitySc
 export type PlatformRuntimeContext = z.infer<typeof PlatformRuntimeContextSchema>;
 export type BootstrapRuntimeContextCommand = z.infer<typeof BootstrapRuntimeContextCommandSchema>;
 export type BootstrapRuntimeContextResponse = z.infer<typeof BootstrapRuntimeContextResponseSchema>;
+export type DoctorPreflightCommand = z.infer<typeof DoctorPreflightCommandSchema>;
+export type DoctorPreflightResponse = z.infer<typeof DoctorPreflightResponseSchema>;
 export type StartTaskCommand = z.infer<typeof StartTaskCommandSchema>;
 export type CancelTaskCommand = z.infer<typeof CancelTaskCommandSchema>;
 export type ClearTaskHistoryCommand = z.infer<typeof ClearTaskHistoryCommandSchema>;
@@ -1323,6 +1421,12 @@ export type ExecShellCommand = z.infer<typeof ExecShellCommandSchema>;
 export type ToolpackRuntime = z.infer<typeof ToolpackRuntimeSchema>;
 export type ToolpackSource = z.infer<typeof ToolpackSourceSchema>;
 export type ToolpackManifest = z.infer<typeof ToolpackManifestSchema>;
+export type ExtensionPermissionSummary = z.infer<typeof ExtensionPermissionSummarySchema>;
+export type ExtensionPermissionDelta = z.infer<typeof ExtensionPermissionDeltaSchema>;
+export type ExtensionProvenance = z.infer<typeof ExtensionProvenanceSchema>;
+export type ExtensionTrustSummary = z.infer<typeof ExtensionTrustSummarySchema>;
+export type ExtensionGovernanceReview = z.infer<typeof ExtensionGovernanceReviewSchema>;
+export type ExtensionGovernanceState = z.infer<typeof ExtensionGovernanceStateSchema>;
 export type ToolpackRecord = z.infer<typeof ToolpackRecordSchema>;
 export type ListToolpacksCommand = z.infer<typeof ListToolpacksCommandSchema>;
 export type ListToolpacksResponse = z.infer<typeof ListToolpacksResponseSchema>;

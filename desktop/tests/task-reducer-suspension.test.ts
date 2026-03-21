@@ -176,6 +176,14 @@ describe('task reducer suspension handling', () => {
                 summary: 'Execution evidence requires contract reopen: artifact contract unmet.',
                 reason: 'Artifact contract unmet: expected pptx output (generated markdown only)',
                 trigger: 'execution_infeasible',
+                reasons: ['artifact contract unmet'],
+                diff: {
+                    changedFields: ['deliverables'],
+                    deliverablesChanged: {
+                        before: ['report_file:/tmp/report.pptx:pptx'],
+                        after: ['report_file:/tmp/report.md:md'],
+                    },
+                },
                 nextStepId: 'research',
             },
         }));
@@ -185,6 +193,8 @@ describe('task reducer suspension handling', () => {
         expect(reopened.researchBlockingUnknowns).toEqual(['target output format']);
         expect(reopened.selectedStrategyTitle).toBe('Use workspace-first export flow');
         expect(reopened.contractReopenReason).toContain('expected pptx output');
+        expect(reopened.contractReopenReasons).toEqual(['artifact contract unmet']);
+        expect(reopened.contractReopenDiff?.changedFields).toEqual(['deliverables']);
         expect(reopened.contractReopenCount).toBe(1);
         expect(reopened.messages.at(-1)?.content).toContain('Execution contract reopened');
     });
@@ -228,6 +238,14 @@ describe('task reducer suspension handling', () => {
                 summary: 'User follow-up introduced a new task scope: deliverables or output targets changed.',
                 reason: 'User follow-up introduced a new task scope: deliverables or output targets changed.',
                 trigger: 'new_scope_signal',
+                reasons: ['deliverables or output targets changed'],
+                diff: {
+                    changedFields: ['deliverables'],
+                    deliverablesChanged: {
+                        before: ['report_file:/tmp/report.md:md'],
+                        after: ['artifact_file:/tmp/report.pdf:pdf'],
+                    },
+                },
                 nextStepId: 'research',
             },
         }));
@@ -304,6 +322,7 @@ describe('task reducer suspension handling', () => {
         }));
 
         expect(blocked.contractReopenReason).toContain('deliverables or output targets changed');
+        expect(blocked.contractReopenDiff?.changedFields).toEqual(['deliverables']);
         expect(blocked.contractReopenCount).toBe(1);
         expect(blocked.researchSummary).toContain('3/3 queries processed');
         expect(blocked.selectedStrategyTitle).toBe('Use PDF export flow');

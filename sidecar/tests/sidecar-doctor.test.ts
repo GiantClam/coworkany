@@ -15,6 +15,7 @@ describe('sidecar doctor', () => {
         const startupDir = path.join(appDataDir, 'startup-metrics');
         const telemetryDir = path.join(root, '.coworkany', 'self-learning');
         const readinessDir = path.join(root, 'artifacts', 'release-readiness');
+        const extensionGovernancePath = path.join(appDataDir, 'extension-governance.json');
         const thresholdsPath = path.join(root, 'sidecar', 'evals', 'control-plane', 'readiness-thresholds.json');
         const incidentDir = path.join(root, 'sidecar', 'evals', 'control-plane', 'import-sources', 'canary');
         fs.mkdirSync(startupDir, { recursive: true });
@@ -22,6 +23,11 @@ describe('sidecar doctor', () => {
         fs.mkdirSync(readinessDir, { recursive: true });
         fs.mkdirSync(incidentDir, { recursive: true });
         fs.mkdirSync(path.dirname(thresholdsPath), { recursive: true });
+        fs.mkdirSync(path.join(root, 'sidecar', 'src', 'agent'), { recursive: true });
+
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'main.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'reactLoop.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'autonomousAgent.ts'), 'export {};\n', 'utf-8');
 
         fs.writeFileSync(
             path.join(appDataDir, 'task-runtime.json'),
@@ -34,10 +40,44 @@ describe('sidecar doctor', () => {
                     updatedAt: '2026-03-21T06:05:00.000Z',
                     status: 'finished',
                     conversation: [],
+                    config: {
+                        workspacePath: '/tmp/workspace',
+                        sessionIsolationPolicy: {
+                            workspaceBindingMode: 'frozen_workspace_only',
+                            followUpScope: 'same_task_only',
+                            allowWorkspaceOverride: false,
+                            supersededContractHandling: 'tombstone_prior_contracts',
+                            staleEvidenceHandling: 'evict_on_refreeze',
+                            notes: [],
+                        },
+                        memoryIsolationPolicy: {
+                            classificationMode: 'scope_tagged',
+                            readScopes: ['task', 'workspace', 'user_preference'],
+                            writeScopes: ['task', 'workspace'],
+                            defaultWriteScope: 'workspace',
+                            notes: [],
+                        },
+                        tenantIsolationPolicy: {
+                            workspaceBoundaryMode: 'same_workspace_only',
+                            userBoundaryMode: 'current_local_user_only',
+                            allowCrossWorkspaceMemory: false,
+                            allowCrossWorkspaceFollowUp: false,
+                            allowCrossUserMemory: false,
+                            notes: [],
+                        },
+                    },
                     historyLimit: 20,
                     artifactsCreated: ['/tmp/out.md'],
                 },
             ], null, 2),
+            'utf-8',
+        );
+        fs.writeFileSync(
+            extensionGovernancePath,
+            JSON.stringify({
+                version: 1,
+                states: {},
+            }, null, 2),
             'utf-8',
         );
         fs.writeFileSync(
@@ -125,7 +165,7 @@ describe('sidecar doctor', () => {
         });
 
         expect(report.overallStatus).toBe('healthy');
-        expect(report.checks.map((check) => check.status)).toEqual(['pass', 'pass', 'pass', 'pass']);
+        expect(report.checks.map((check) => check.status)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'pass']);
         expect(formatSidecarDoctorReport(report)).toContain('Overall: healthy');
     });
 
@@ -139,6 +179,15 @@ describe('sidecar doctor', () => {
         fs.mkdirSync(readinessDir, { recursive: true });
         fs.mkdirSync(incidentDir, { recursive: true });
         fs.mkdirSync(path.dirname(thresholdsPath), { recursive: true });
+        fs.mkdirSync(path.join(root, 'sidecar', 'src', 'agent'), { recursive: true });
+
+        fs.writeFileSync(
+            path.join(root, 'sidecar', 'src', 'main.ts'),
+            'async function getRelevantMemoryContext(userQuery: string) { return userQuery; }\n',
+            'utf-8',
+        );
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'reactLoop.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'autonomousAgent.ts'), 'export {};\n', 'utf-8');
 
         fs.writeFileSync(
             path.join(appDataDir, 'task-runtime.json'),
@@ -271,11 +320,334 @@ describe('sidecar doctor', () => {
 
         expect(report.overallStatus).toBe('blocked');
         expect(report.checks.find((check) => check.id === 'runtime-store')?.status).toBe('fail');
+        expect(report.checks.find((check) => check.id === 'memory-source-guards')?.status).toBe('fail');
         expect(report.checks.find((check) => check.id === 'control-plane-readiness')?.status).toBe('fail');
         expect(report.checks.find((check) => check.id === 'anomaly-signals')?.status).toBe('warn');
         expect(formatSidecarDoctorReport(report)).toContain('stale running task');
+        expect(formatSidecarDoctorReport(report)).toContain('global memory access anti-pattern');
         expect(formatSidecarDoctorReport(report)).toContain('Failed stages: control-plane-eval');
         expect(formatSidecarDoctorReport(report)).toContain('Repeated reopen anomalies');
         expect(formatSidecarDoctorReport(report)).toContain('Artifact degradation signals: 1');
+    });
+
+    test('fails guarded sources when autonomous subtask execution synthesizes task ids', () => {
+        const root = makeTempRepo();
+        const appDataDir = path.join(root, '.coworkany');
+        const readinessDir = path.join(root, 'artifacts', 'release-readiness');
+        const thresholdsPath = path.join(root, 'sidecar', 'evals', 'control-plane', 'readiness-thresholds.json');
+        fs.mkdirSync(appDataDir, { recursive: true });
+        fs.mkdirSync(readinessDir, { recursive: true });
+        fs.mkdirSync(path.dirname(thresholdsPath), { recursive: true });
+        fs.mkdirSync(path.join(root, 'sidecar', 'src', 'agent'), { recursive: true });
+
+        fs.writeFileSync(
+            path.join(appDataDir, 'task-runtime.json'),
+            JSON.stringify([
+                {
+                    taskId: 'finished-1',
+                    title: 'Finished task',
+                    workspacePath: '/tmp/workspace',
+                    createdAt: '2026-03-21T06:00:00.000Z',
+                    updatedAt: '2026-03-21T06:05:00.000Z',
+                    status: 'finished',
+                    conversation: [],
+                    config: {
+                        workspacePath: '/tmp/workspace',
+                        sessionIsolationPolicy: {
+                            workspaceBindingMode: 'frozen_workspace_only',
+                            followUpScope: 'same_task_only',
+                            allowWorkspaceOverride: false,
+                            supersededContractHandling: 'tombstone_prior_contracts',
+                            staleEvidenceHandling: 'evict_on_refreeze',
+                            notes: [],
+                        },
+                        memoryIsolationPolicy: {
+                            classificationMode: 'scope_tagged',
+                            readScopes: ['task', 'workspace', 'user_preference'],
+                            writeScopes: ['task', 'workspace'],
+                            defaultWriteScope: 'workspace',
+                            notes: [],
+                        },
+                        tenantIsolationPolicy: {
+                            workspaceBoundaryMode: 'same_workspace_only',
+                            userBoundaryMode: 'current_local_user_only',
+                            allowCrossWorkspaceMemory: false,
+                            allowCrossWorkspaceFollowUp: false,
+                            allowCrossUserMemory: false,
+                            notes: [],
+                        },
+                    },
+                    historyLimit: 20,
+                    artifactsCreated: [],
+                },
+            ], null, 2),
+            'utf-8',
+        );
+
+        fs.writeFileSync(
+            path.join(readinessDir, 'report.json'),
+            JSON.stringify({
+                stages: [
+                    {
+                        id: 'control-plane-eval',
+                        label: 'Control-plane eval suite',
+                        status: 'passed',
+                        durationMs: 10,
+                        exitCode: 0,
+                        command: 'bun run eval:control-plane',
+                        cwd: root,
+                    },
+                ],
+                controlPlaneEval: {
+                    passedCases: 8,
+                    totalCases: 8,
+                },
+                controlPlaneEvalGate: {
+                    passed: true,
+                    findings: [],
+                },
+                productionReplayThresholdRecommendations: [],
+            }, null, 2),
+            'utf-8',
+        );
+
+        fs.writeFileSync(
+            thresholdsPath,
+            JSON.stringify({
+                defaultProfile: 'beta',
+                profiles: {
+                    beta: {
+                        maxUnnecessaryClarificationRate: 0.05,
+                        minFreezeExpectationPassRate: 1,
+                        minArtifactExpectationPassRate: 1,
+                        minRuntimeReplayPassRate: 1,
+                        requireZeroFailedCases: true,
+                    },
+                },
+            }, null, 2),
+            'utf-8',
+        );
+
+        fs.writeFileSync(
+            path.join(root, 'sidecar', 'src', 'main.ts'),
+            'const taskId = `subtask_${subtask.id}`;\n',
+            'utf-8',
+        );
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'reactLoop.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'autonomousAgent.ts'), 'export {};\n', 'utf-8');
+        fs.mkdirSync(path.join(root, '.coworkany', 'startup-metrics'), { recursive: true });
+        fs.writeFileSync(
+            path.join(root, '.coworkany', 'startup-metrics', 'default.jsonl'),
+            `${JSON.stringify({ mark: 'frontend_ready', timestampEpochMs: Date.parse('2026-03-21T06:00:00.000Z') })}\n`,
+            'utf-8',
+        );
+        fs.mkdirSync(path.join(root, '.coworkany', 'self-learning'), { recursive: true });
+        fs.writeFileSync(
+            path.join(root, '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl'),
+            `${JSON.stringify({ createdAt: '2026-03-21T06:06:00.000Z', artifactsCreated: [] })}\n`,
+            'utf-8',
+        );
+
+        const report = runSidecarDoctor({
+            repositoryRoot: root,
+            appDataDir,
+            readinessReportPath: path.join(readinessDir, 'report.json'),
+            controlPlaneThresholdsPath: thresholdsPath,
+            controlPlaneThresholdProfile: 'beta',
+            now: new Date('2026-03-21T06:10:00.000Z'),
+        });
+
+        expect(report.overallStatus).toBe('blocked');
+        expect(report.checks.find((check) => check.id === 'memory-source-guards')?.status).toBe('fail');
+        expect(formatSidecarDoctorReport(report)).toContain('synthesize standalone task ids');
+    });
+
+    test('flags extension governance when pending review extensions stay enabled', () => {
+        const root = makeTempRepo();
+        const appDataDir = path.join(root, '.coworkany');
+        const readinessDir = path.join(root, 'artifacts', 'release-readiness');
+        const thresholdsPath = path.join(root, 'sidecar', 'evals', 'control-plane', 'readiness-thresholds.json');
+        fs.mkdirSync(appDataDir, { recursive: true });
+        fs.mkdirSync(readinessDir, { recursive: true });
+        fs.mkdirSync(path.dirname(thresholdsPath), { recursive: true });
+        fs.mkdirSync(path.join(root, '.coworkany', 'startup-metrics'), { recursive: true });
+        fs.mkdirSync(path.join(root, '.coworkany', 'self-learning'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'sidecar', 'src', 'agent'), { recursive: true });
+
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'main.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'reactLoop.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'autonomousAgent.ts'), 'export {};\n', 'utf-8');
+
+        fs.writeFileSync(
+            path.join(appDataDir, 'task-runtime.json'),
+            JSON.stringify([{
+                taskId: 'finished-1',
+                title: 'Finished task',
+                workspacePath: '/tmp/workspace',
+                createdAt: '2026-03-21T06:00:00.000Z',
+                updatedAt: '2026-03-21T06:05:00.000Z',
+                status: 'finished',
+                conversation: [],
+                config: {
+                    sessionIsolationPolicy: {
+                        workspaceBindingMode: 'frozen_workspace_only',
+                        followUpScope: 'same_task_only',
+                        allowWorkspaceOverride: false,
+                        supersededContractHandling: 'tombstone_prior_contracts',
+                        staleEvidenceHandling: 'evict_on_refreeze',
+                        notes: [],
+                    },
+                    memoryIsolationPolicy: {
+                        classificationMode: 'scope_tagged',
+                        readScopes: ['task', 'workspace', 'user_preference'],
+                        writeScopes: ['task', 'workspace'],
+                        defaultWriteScope: 'workspace',
+                        notes: [],
+                    },
+                    tenantIsolationPolicy: {
+                        workspaceBoundaryMode: 'same_workspace_only',
+                        userBoundaryMode: 'current_local_user_only',
+                        allowCrossWorkspaceMemory: false,
+                        allowCrossWorkspaceFollowUp: false,
+                        allowCrossUserMemory: false,
+                        notes: [],
+                    },
+                },
+                historyLimit: 20,
+                artifactsCreated: [],
+            }], null, 2),
+            'utf-8',
+        );
+        fs.writeFileSync(
+            path.join(root, '.coworkany', 'startup-metrics', 'default.jsonl'),
+            `${JSON.stringify({ mark: 'frontend_ready', timestampEpochMs: Date.parse('2026-03-21T06:00:00.000Z') })}\n`,
+            'utf-8',
+        );
+        fs.writeFileSync(
+            path.join(root, '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl'),
+            `${JSON.stringify({ createdAt: '2026-03-21T06:06:00.000Z', artifactsCreated: [] })}\n`,
+            'utf-8',
+        );
+        fs.writeFileSync(
+            path.join(readinessDir, 'report.json'),
+            JSON.stringify({
+                stages: [{
+                    id: 'control-plane-eval',
+                    label: 'Control-plane eval suite',
+                    status: 'passed',
+                    durationMs: 10,
+                    exitCode: 0,
+                    command: 'bun run eval:control-plane',
+                    cwd: root,
+                }],
+                controlPlaneEval: {
+                    passedCases: 8,
+                    totalCases: 8,
+                },
+                controlPlaneEvalGate: {
+                    passed: true,
+                    findings: [],
+                },
+                productionReplayThresholdRecommendations: [],
+            }, null, 2),
+            'utf-8',
+        );
+        fs.writeFileSync(
+            thresholdsPath,
+            JSON.stringify({
+                defaultProfile: 'beta',
+                profiles: {
+                    beta: {
+                        maxUnnecessaryClarificationRate: 0.05,
+                        minFreezeExpectationPassRate: 1,
+                        minArtifactExpectationPassRate: 1,
+                        minRuntimeReplayPassRate: 1,
+                        requireZeroFailedCases: true,
+                    },
+                },
+            }, null, 2),
+            'utf-8',
+        );
+        fs.mkdirSync(path.join(root, '.coworkany'), { recursive: true });
+        fs.writeFileSync(
+            path.join(root, '.coworkany', 'skills.json'),
+            JSON.stringify({
+                'Pending Skill': {
+                    manifest: {
+                        name: 'Pending Skill',
+                        version: '1.0.0',
+                        description: 'Pending',
+                        directory: '/tmp/pending-skill',
+                    },
+                    enabled: true,
+                    installedAt: '2026-03-21T06:00:00.000Z',
+                },
+            }, null, 2),
+            'utf-8',
+        );
+        fs.writeFileSync(
+            path.join(appDataDir, 'extension-governance.json'),
+            JSON.stringify({
+                version: 1,
+                states: {
+                    'skill:Pending Skill': {
+                        extensionType: 'skill',
+                        extensionId: 'Pending Skill',
+                        pendingReview: true,
+                        quarantined: true,
+                        lastDecision: 'pending',
+                        lastReviewReason: 'first_install_review',
+                        lastReviewSummary: 'First install review required',
+                        lastUpdatedAt: '2026-03-21T06:00:00.000Z',
+                    },
+                },
+            }, null, 2),
+            'utf-8',
+        );
+
+        const report = runSidecarDoctor({
+            repositoryRoot: root,
+            appDataDir,
+            readinessReportPath: path.join(readinessDir, 'report.json'),
+            controlPlaneThresholdsPath: thresholdsPath,
+            controlPlaneThresholdProfile: 'beta',
+            now: new Date('2026-03-21T06:10:00.000Z'),
+        });
+
+        expect(report.checks.find((check) => check.id === 'extension-governance')?.status).toBe('fail');
+        expect(formatSidecarDoctorReport(report)).toContain('pending governance review still enabled');
+    });
+
+    test('warns extension governance when pending reviews exist but are not enabled', () => {
+        const root = makeTempRepo();
+        const appDataDir = path.join(root, '.coworkany');
+        fs.mkdirSync(appDataDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(appDataDir, 'extension-governance.json'),
+            JSON.stringify({
+                version: 1,
+                states: {
+                    'skill:Pending Skill': {
+                        extensionType: 'skill',
+                        extensionId: 'Pending Skill',
+                        pendingReview: true,
+                        quarantined: true,
+                        lastDecision: 'pending',
+                        lastReviewReason: 'first_install_review',
+                        lastReviewSummary: 'First install review required',
+                        lastUpdatedAt: '2026-03-21T06:00:00.000Z',
+                    },
+                },
+            }, null, 2),
+            'utf-8',
+        );
+
+        const report = runSidecarDoctor({
+            repositoryRoot: root,
+            appDataDir,
+            now: new Date('2026-03-21T06:10:00.000Z'),
+        });
+
+        expect(report.checks.find((check) => check.id === 'extension-governance')?.status).toBe('warn');
     });
 });

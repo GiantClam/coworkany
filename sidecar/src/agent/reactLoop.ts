@@ -5,7 +5,8 @@
  * Integrates with RAG for memory-enhanced reasoning.
  */
 
-import { getMemoryContext, SearchResult } from '../memory';
+import { SearchResult } from '../memory';
+import { getIsolatedMemoryContext } from '../memory/isolation';
 import { getSelfCorrectionEngine, formatErrorForAI } from './selfCorrection';
 import {
     analyzeAndRecommendSkills,
@@ -94,6 +95,14 @@ export interface ToolExecutor {
     execute(toolName: string, args: Record<string, unknown>): Promise<string>;
 }
 
+type MemoryContextProvider = (input: {
+    taskId: string;
+    workspacePath: string;
+    query: string;
+    topK?: number;
+    maxChars?: number;
+}) => Promise<string>;
+
 // ============================================================================
 // LLM Interface for ReAct
 // ============================================================================
@@ -143,6 +152,7 @@ export class ReActController {
     private verificationEngine = getVerificationEngine();
     private correctionCoordinator = getCorrectionCoordinator();
     private suspendCoordinator?: any; // SuspendCoordinator (avoid circular dependency)
+    private getMemoryContextForTask: MemoryContextProvider;
 
     // Plan refinement tracking
     private consecutiveErrors: number = 0;
@@ -159,6 +169,7 @@ export class ReActController {
         onEvent?: ReActEventCallback;
         adaptiveExecutor?: any; // AdaptiveExecutor (optional)
         suspendCoordinator?: any; // SuspendCoordinator (optional)
+        getMemoryContext?: MemoryContextProvider;
     }) {
         this.llm = options.llm;
 
@@ -181,6 +192,16 @@ export class ReActController {
         this.enableSelfCorrection = options.enableSelfCorrection ?? true;
         this.enableVerification = options.enableVerification ?? true;
         this.eventCallback = options.onEvent;
+        this.getMemoryContextForTask =
+            options.getMemoryContext ||
+            (async (input) =>
+                getIsolatedMemoryContext({
+                    taskId: input.taskId,
+                    workspacePath: input.workspacePath,
+                    query: input.query,
+                    topK: input.topK,
+                    maxChars: input.maxChars,
+                }));
     }
 
     /**
@@ -419,7 +440,10 @@ When encountering an unknown problem, ALWAYS search_web for solutions first.
                         data: { query },
                     });
 
-                    memoryContext = await getMemoryContext(query, {
+                    memoryContext = await this.getMemoryContextForTask({
+                        taskId: context.taskId,
+                        workspacePath: context.workspacePath,
+                        query,
                         topK: 3,
                         maxChars: 2000,
                     });
@@ -753,7 +777,13 @@ When encountering an unknown problem, ALWAYS search_web for solutions first.
         let memoryContext = '';
         if (this.enableMemory) {
             try {
-                memoryContext = await getMemoryContext(query, { topK: 3, maxChars: 2000 });
+                memoryContext = await this.getMemoryContextForTask({
+                    taskId: context.taskId,
+                    workspacePath: context.workspacePath,
+                    query,
+                    topK: 3,
+                    maxChars: 2000,
+                });
             } catch {
                 // Ignore memory errors
             }
@@ -813,6 +843,7 @@ export function createReActController(options: {
     maxSteps?: number;
     enableMemory?: boolean;
     onEvent?: ReActEventCallback;
+    getMemoryContext?: MemoryContextProvider;
 }): ReActController {
     return new ReActController(options);
 }

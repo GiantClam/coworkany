@@ -159,24 +159,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         [activeSession]
     );
     const canResumeInterruptedTask = activeSession?.failure?.errorCode === 'INTERRUPTED';
-    const plannedDeliverables = activeSession?.plannedDeliverables ?? [];
-    const plannedCheckpoints = activeSession?.plannedCheckpoints ?? [];
-    const plannedUserActions = activeSession?.plannedUserActions ?? [];
-    const missingInfo = activeSession?.missingInfo ?? [];
-    const currentUserAction = activeSession?.currentUserAction;
-    const currentCheckpoint = activeSession?.currentCheckpoint;
-    const researchSourcesChecked = activeSession?.researchSourcesChecked ?? [];
-    const researchBlockingUnknowns = activeSession?.researchBlockingUnknowns ?? [];
-    const shouldShowPlanCard = Boolean(
-        activeSession?.planSummary ||
-        activeSession?.researchSummary ||
-        activeSession?.contractReopenReason ||
-        plannedDeliverables.length > 0 ||
-        plannedCheckpoints.length > 0 ||
-        plannedUserActions.length > 0 ||
-        currentUserAction ||
-        currentCheckpoint
-    );
 
     const setActiveProfile = useCallback(async (id: string) => {
         try {
@@ -467,6 +449,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             clearAttachments();
         }
     }, [activeSession, canResumeInterruptedTask, clearAttachments, enabledSkills, enabledToolpacks, resumeInterruptedTask]);
+    const handleResumeInterruptedTaskClick = useCallback(() => {
+        void handleResumeInterruptedTask();
+    }, [handleResumeInterruptedTask]);
 
     const handleStopVoice = useCallback(async () => {
         await stopPlayback();
@@ -578,134 +563,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </div>
             )}
 
-            {canResumeInterruptedTask && (
-                <div className="chat-recovery-banner">
-                    <div className="chat-recovery-copy">
-                        <strong>
-                            {t('chat.resumeInterruptedTitle', {
-                                defaultValue: 'Task interrupted, but the saved context is still available.',
-                            })}
-                        </strong>
-                        <span>
-                            {activeSession.failure?.suggestion || t('chat.resumeInterruptedSuggestion', {
-                                defaultValue: 'Resume the task to continue from the saved context.',
-                            })}
-                        </span>
-                    </div>
-                    <button
-                        type="button"
-                        className="status-action accent"
-                        onClick={() => {
-                            void handleResumeInterruptedTask();
-                        }}
-                        disabled={isSending || isStarting || isResuming}
-                    >
-                        {t('chat.resumeInterruptedAction', { defaultValue: 'Continue task' })}
-                    </button>
-                </div>
-            )}
-
-            {shouldShowPlanCard && (
-                <section className="chat-plan-card">
-                    <div className="chat-plan-card-header">
-                        <span className="chat-plan-card-kicker">Coworkany plan</span>
-                        <span className="chat-plan-card-meta">
-                            {plannedDeliverables.length} deliverable{plannedDeliverables.length === 1 ? '' : 's'}
-                        </span>
-                    </div>
-                    {activeSession.planSummary && (
-                        <p className="chat-plan-card-summary">{activeSession.planSummary}</p>
-                    )}
-                    {activeSession.researchSummary && (
-                        <div className="chat-plan-section">
-                            <div className="chat-plan-section-title">Research</div>
-                            <div className="chat-plan-list">
-                                <div className="chat-plan-item">
-                                    <strong>{activeSession.selectedStrategyTitle || 'Research status'}</strong>
-                                    <span>{activeSession.researchSummary}</span>
-                                </div>
-                                {researchSourcesChecked.length > 0 && (
-                                    <div className="chat-plan-item">
-                                        <strong>Sources checked</strong>
-                                        <span>{researchSourcesChecked.join(', ')}</span>
-                                    </div>
-                                )}
-                                {researchBlockingUnknowns.length > 0 && (
-                                    <div className="chat-plan-item">
-                                        <strong>Blocking unknowns</strong>
-                                        <span>{researchBlockingUnknowns.join(', ')}</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                    {activeSession.contractReopenReason && (
-                        <div className="chat-plan-callout">
-                            <strong>Contract reopened</strong>
-                            <span>{activeSession.contractReopenReason}</span>
-                        </div>
-                    )}
-                    {(currentUserAction || currentCheckpoint) && (
-                        <div className="chat-plan-callout">
-                            <strong>
-                                {currentUserAction?.title || currentCheckpoint?.title || 'Action needed'}
-                            </strong>
-                            <span>
-                                {currentUserAction?.description || currentCheckpoint?.userMessage || currentCheckpoint?.reason}
-                            </span>
-                            {currentUserAction?.questions?.length ? (
-                                <div className="chat-plan-callout-list">
-                                    {currentUserAction.questions.map((question) => (
-                                        <span key={question}>{question}</span>
-                                    ))}
-                                </div>
-                            ) : null}
-                        </div>
-                    )}
-                    {plannedDeliverables.length > 0 && (
-                        <div className="chat-plan-section">
-                            <div className="chat-plan-section-title">Deliverables</div>
-                            <div className="chat-plan-list">
-                                {plannedDeliverables.slice(0, 3).map((deliverable) => (
-                                    <div key={deliverable.id} className="chat-plan-item">
-                                        <strong>{deliverable.title}</strong>
-                                        <span>{deliverable.path || deliverable.description}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                    {plannedCheckpoints.length > 0 && (
-                        <div className="chat-plan-section">
-                            <div className="chat-plan-section-title">Checkpoints</div>
-                            <div className="chat-plan-list">
-                                {plannedCheckpoints.slice(0, 3).map((checkpoint) => (
-                                    <div key={checkpoint.id} className="chat-plan-item">
-                                        <strong>{checkpoint.title}</strong>
-                                        <span>{checkpoint.reason}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                    {!currentUserAction && missingInfo.length > 0 && (
-                        <div className="chat-plan-section">
-                            <div className="chat-plan-section-title">Needs from you</div>
-                            <div className="chat-plan-list">
-                                {missingInfo.slice(0, 2).map((item) => (
-                                    <div key={item.field} className="chat-plan-item">
-                                        <strong>{item.field}</strong>
-                                        <span>{item.question || item.reason}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </section>
-            )}
-
             {/* Timeline Area */}
-            <Timeline session={activeSession} />
+            <Timeline
+                session={activeSession}
+                showResumeCard={Boolean(canResumeInterruptedTask)}
+                resumeCardTitle={t('chat.resumeInterruptedTitle', {
+                    defaultValue: 'Task interrupted, but the saved context is still available.',
+                })}
+                resumeCardSuggestion={activeSession.failure?.suggestion || t('chat.resumeInterruptedSuggestion', {
+                    defaultValue: 'Resume the task to continue from the saved context.',
+                })}
+                resumeCardActionLabel={t('chat.resumeInterruptedAction', { defaultValue: 'Continue task' })}
+                resumeCardActionDisabled={isSending || isStarting || isResuming}
+                onResumeCardAction={handleResumeInterruptedTaskClick}
+            />
 
             <InputArea
                 query={query}

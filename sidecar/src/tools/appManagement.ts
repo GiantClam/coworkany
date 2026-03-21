@@ -2,9 +2,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import type { ClawHubSkillInfo } from '../claude_skills/openclawCompat';
+import {
+    summarizeSkillPermissions,
+    summarizeSkillProvenance,
+    summarizeSkillTrust,
+} from '../extensions/governance';
+import type {
+    ExtensionGovernanceState,
+    ExtensionGovernanceStore,
+} from '../extensions/governanceStore';
 import { BrowserService, type BrowserMode } from '../services/browserService';
 import { SkillStore, type ClaudeSkillManifest, type StoredSkill } from '../storage/skillStore';
 import type { Workspace, WorkspaceStore } from '../storage/workspaceStore';
+import type { ExtensionGovernanceReview } from '../extensions/governance';
 import { type ToolDefinition } from './standard';
 import { setSearchConfig, type SearchProvider } from './websearch';
 
@@ -59,16 +69,20 @@ type SkillImportResponsePayload = {
     warnings?: string[];
     dependencyCheck?: unknown;
     installResults?: unknown[];
+    governanceReview?: ExtensionGovernanceReview;
+    governanceState?: ExtensionGovernanceState;
 };
 
 export type AppManagementToolDeps = {
     workspaceRoot: string;
     getResolvedAppDataRoot: () => string;
     skillStore: Pick<SkillStore, 'list' | 'get' | 'install' | 'setEnabled' | 'uninstall'>;
+    getExtensionGovernanceStore?: () => Pick<ExtensionGovernanceStore, 'get'>;
     workspaceStore: Pick<WorkspaceStore, 'list' | 'create' | 'update' | 'delete'>;
     importSkillFromDirectory?: (
         inputPath: string,
-        autoInstallDependencies?: boolean
+        autoInstallDependencies?: boolean,
+        approvePermissionExpansion?: boolean
     ) => Promise<SkillImportResponsePayload>;
     downloadSkillFromGitHub?: (
         source: string,
@@ -273,7 +287,54 @@ function buildManagedWorkspacePath(name: string, requestedPath: string | undefin
     return path.join(workspacesDir, `${safeName}_${Date.now()}`);
 }
 
-function toSkillSummary(skill: StoredSkill): Record<string, unknown> {
+function mergeTrustWithGovernance<T extends {
+    level: 'trusted' | 'review_required' | 'untrusted';
+    pendingReview: boolean;
+    reasons: string[];
+}>(
+    trust: T,
+    governanceState?: ExtensionGovernanceState
+): T {
+    if (!governanceState) {
+        return trust;
+    }
+
+    const reasons = new Set(trust.reasons);
+    if (governanceState.pendingReview) {
+        reasons.add('governance_pending_review');
+    }
+    if (governanceState.quarantined) {
+        reasons.add('governance_quarantined');
+    }
+
+    const level = governanceState.pendingReview && trust.level === 'trusted'
+        ? 'review_required'
+        : trust.level;
+
+    return {
+        ...trust,
+        level,
+        pendingReview: governanceState.pendingReview,
+        reasons: Array.from(reasons),
+    };
+}
+
+function resolveSkillGovernanceState(
+    deps: AppManagementToolDeps,
+    skill: StoredSkill
+): ExtensionGovernanceState | undefined {
+    return deps.getExtensionGovernanceStore?.().get('skill', skill.manifest.name);
+}
+
+function toSkillSummary(skill: StoredSkill, deps: AppManagementToolDeps): Record<string, unknown> {
+    const governance = resolveSkillGovernanceState(deps, skill);
+    const trust = mergeTrustWithGovernance(
+        summarizeSkillTrust(skill.manifest, {
+            isBuiltin: skill.isBuiltin === true,
+        }),
+        governance,
+    );
+
     return {
         id: skill.manifest.name,
         name: skill.manifest.name,
@@ -286,6 +347,14 @@ function toSkillSummary(skill: StoredSkill): Record<string, unknown> {
         directory: skill.manifest.directory,
         tags: skill.manifest.tags ?? [],
         allowedTools: skill.manifest.allowedTools ?? [],
+        provenance: summarizeSkillProvenance(skill.manifest, {
+            isBuiltin: skill.isBuiltin === true,
+            sourceType: skill.isBuiltin ? 'built_in' : 'local_folder',
+            sourceRef: skill.manifest.directory,
+        }),
+        trust,
+        permissions: summarizeSkillPermissions(skill.manifest),
+        governance,
     };
 }
 
@@ -442,11 +511,16 @@ function searchSkillhubSkills(
     }
 }
 
-function extractSkillUsageGuidance(skill: StoredSkill): string[] {
-    const guidance = [
-        `已安装并启用技能 \`${skill.manifest.name}\`。`,
-        `后续可以直接在聊天里提出与“${skill.manifest.name}”相关的任务，CoworkAny 会按触发词自动启用该技能。`,
-    ];
+function extractSkillUsageGuidance(skill: StoredSkill, enabled: boolean = skill.enabled): string[] {
+    const guidance = enabled
+        ? [
+            `已安装并启用技能 \`${skill.manifest.name}\`。`,
+            `后续可以直接在聊天里提出与“${skill.manifest.name}”相关的任务，CoworkAny 会按触发词自动启用该技能。`,
+        ]
+        : [
+            `已安装技能 \`${skill.manifest.name}\`，当前未启用。`,
+            '完成权限审查后，可使用 `set_coworkany_skill_enabled` 将该技能启用。',
+        ];
 
     const triggers = (skill.manifest.triggers ?? []).filter(Boolean).slice(0, 5);
     if (triggers.length > 0) {
@@ -458,6 +532,10 @@ function extractSkillUsageGuidance(skill: StoredSkill): string[] {
     }
 
     return guidance;
+}
+
+function shouldEnableSkillAfterImport(result: SkillImportResponsePayload): boolean {
+    return result.governanceState?.quarantined !== true;
 }
 
 function mapClawHubSkills(skills: ClawHubSkillInfo[]): MarketplaceSkillRecord[] {
@@ -474,14 +552,22 @@ function buildMarketplaceInstallMessage(input: {
     skill: StoredSkill;
     marketplace: MarketplaceKind;
     source: string;
+    enabled: boolean;
     warnings?: string[];
+    governanceState?: ExtensionGovernanceState;
 }): string {
     const lines = [
-        `已从 ${input.marketplace} 安装并启用技能 \`${input.skill.manifest.name}\`。`,
+        input.enabled
+            ? `已从 ${input.marketplace} 安装并启用技能 \`${input.skill.manifest.name}\`。`
+            : `已从 ${input.marketplace} 安装技能 \`${input.skill.manifest.name}\`，当前未启用。`,
         `来源：${input.source}`,
         `目录：${input.skill.manifest.directory}`,
-        ...extractSkillUsageGuidance(input.skill),
+        ...extractSkillUsageGuidance(input.skill, input.enabled),
     ];
+
+    if (input.governanceState?.pendingReview) {
+        lines.push('治理状态：该技能处于待审核状态，请在上线前完成权限审查。');
+    }
 
     if (input.warnings && input.warnings.length > 0) {
         lines.push(`注意事项：${input.warnings.join('；')}`);
@@ -712,7 +798,7 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                 properties: {},
             },
             handler: async () => ({
-                skills: deps.skillStore.list().map((skill) => toSkillSummary(skill as StoredSkill)),
+                skills: deps.skillStore.list().map((skill) => toSkillSummary(skill as StoredSkill, deps)),
             }),
         },
         {
@@ -733,7 +819,7 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                 const skill = deps.skillStore.get(args.skill_id);
                 return {
                     found: !!skill,
-                    skill: skill ? toSkillSummary(skill as StoredSkill) : undefined,
+                    skill: skill ? toSkillSummary(skill as StoredSkill, deps) : undefined,
                 };
             },
         },
@@ -752,16 +838,28 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         type: 'boolean',
                         description: 'Whether CoworkAny should try to auto-install declared dependencies while importing the skill.',
                     },
+                    approve_permission_expansion: {
+                        type: 'boolean',
+                        description: 'Set true only when the user explicitly approved a skill permission expansion update.',
+                    },
                 },
                 required: ['path'],
             },
-            handler: async (args: { path: string; auto_install_dependencies?: boolean }) => {
+            handler: async (args: {
+                path: string;
+                auto_install_dependencies?: boolean;
+                approve_permission_expansion?: boolean;
+            }) => {
                 const result = deps.importSkillFromDirectory
-                    ? await deps.importSkillFromDirectory(args.path, args.auto_install_dependencies ?? true)
+                    ? await deps.importSkillFromDirectory(
+                        args.path,
+                        args.auto_install_dependencies ?? true,
+                        args.approve_permission_expansion === true
+                    )
                     : importSkillDirectly(deps.skillStore, args.path);
 
                 if (result.success && result.skillId) {
-                    deps.skillStore.setEnabled(result.skillId, true);
+                    deps.skillStore.setEnabled(result.skillId, shouldEnableSkillAfterImport(result));
                     deps.onSkillsUpdated?.();
                 }
 
@@ -854,6 +952,10 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         type: 'boolean',
                         description: 'Whether to auto-install declared skill dependencies while importing.',
                     },
+                    approve_permission_expansion: {
+                        type: 'boolean',
+                        description: 'Set true only when the user explicitly approved a skill permission expansion update.',
+                    },
                 },
                 required: ['source'],
             },
@@ -861,10 +963,12 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                 source: string;
                 marketplace?: 'auto' | MarketplaceKind;
                 auto_install_dependencies?: boolean;
+                approve_permission_expansion?: boolean;
             }) => {
                 const source = args.source.trim();
                 const marketplace = args.marketplace ?? 'auto';
                 const autoInstallDependencies = args.auto_install_dependencies ?? true;
+                const approvePermissionExpansion = args.approve_permission_expansion === true;
 
                 if (!source) {
                     return {
@@ -894,7 +998,11 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     }
 
                     const importResult = deps.importSkillFromDirectory
-                        ? await deps.importSkillFromDirectory(downloadResult.path, autoInstallDependencies)
+                        ? await deps.importSkillFromDirectory(
+                            downloadResult.path,
+                            autoInstallDependencies,
+                            approvePermissionExpansion
+                        )
                         : importSkillDirectly(deps.skillStore, downloadResult.path);
 
                     if (!importResult.success || !importResult.skillId) {
@@ -906,7 +1014,7 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         };
                     }
 
-                    deps.skillStore.setEnabled(importResult.skillId, true);
+                    deps.skillStore.setEnabled(importResult.skillId, shouldEnableSkillAfterImport(importResult));
                     deps.onSkillsUpdated?.();
                     const installedSkill = deps.skillStore.get(importResult.skillId);
                     if (!installedSkill) {
@@ -922,15 +1030,17 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         marketplace: 'github',
                         source: normalizedSource,
                         skillId: importResult.skillId,
-                        enabled: true,
-                        skill: toSkillSummary(installedSkill as StoredSkill),
-                        usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill),
+                        enabled: installedSkill.enabled,
+                        skill: toSkillSummary(installedSkill as StoredSkill, deps),
+                        usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill, installedSkill.enabled),
                         importResult,
                         message: buildMarketplaceInstallMessage({
                             skill: installedSkill as StoredSkill,
                             marketplace: 'github',
                             source: normalizedSource,
+                            enabled: installedSkill.enabled,
                             warnings: importResult.warnings,
+                            governanceState: importResult.governanceState,
                         }),
                     };
                 }
@@ -978,7 +1088,11 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     }
 
                     const importResult = deps.importSkillFromDirectory
-                        ? await deps.importSkillFromDirectory(installResult.path, autoInstallDependencies)
+                        ? await deps.importSkillFromDirectory(
+                            installResult.path,
+                            autoInstallDependencies,
+                            approvePermissionExpansion
+                        )
                         : importSkillDirectly(deps.skillStore, installResult.path);
 
                     if (!importResult.success || !importResult.skillId) {
@@ -990,7 +1104,7 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         };
                     }
 
-                    deps.skillStore.setEnabled(importResult.skillId, true);
+                    deps.skillStore.setEnabled(importResult.skillId, shouldEnableSkillAfterImport(importResult));
                     deps.onSkillsUpdated?.();
                     const installedSkill = deps.skillStore.get(importResult.skillId);
                     if (!installedSkill) {
@@ -1006,15 +1120,17 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         marketplace: 'clawhub',
                         source: selectedSkill.source,
                         skillId: importResult.skillId,
-                        enabled: true,
-                        skill: toSkillSummary(installedSkill as StoredSkill),
-                        usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill),
+                        enabled: installedSkill.enabled,
+                        skill: toSkillSummary(installedSkill as StoredSkill, deps),
+                        usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill, installedSkill.enabled),
                         importResult,
                         message: buildMarketplaceInstallMessage({
                             skill: installedSkill as StoredSkill,
                             marketplace: 'clawhub',
                             source: selectedSkill.source,
+                            enabled: installedSkill.enabled,
                             warnings: importResult.warnings,
+                            governanceState: importResult.governanceState,
                         }),
                     };
                 }
@@ -1077,7 +1193,11 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                 }
 
                 const importResult = deps.importSkillFromDirectory
-                    ? await deps.importSkillFromDirectory(skillPath, autoInstallDependencies)
+                    ? await deps.importSkillFromDirectory(
+                        skillPath,
+                        autoInstallDependencies,
+                        approvePermissionExpansion
+                    )
                     : importSkillDirectly(deps.skillStore, skillPath);
 
                 if (!importResult.success || !importResult.skillId) {
@@ -1089,7 +1209,7 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     };
                 }
 
-                deps.skillStore.setEnabled(importResult.skillId, true);
+                deps.skillStore.setEnabled(importResult.skillId, shouldEnableSkillAfterImport(importResult));
                 deps.onSkillsUpdated?.();
                 const installedSkill = deps.skillStore.get(importResult.skillId);
                 if (!installedSkill) {
@@ -1105,15 +1225,17 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     marketplace: 'skillhub',
                     source: selectedSkill.source,
                     skillId: importResult.skillId,
-                    enabled: true,
-                    skill: toSkillSummary(installedSkill as StoredSkill),
-                    usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill),
+                    enabled: installedSkill.enabled,
+                    skill: toSkillSummary(installedSkill as StoredSkill, deps),
+                    usageGuidance: extractSkillUsageGuidance(installedSkill as StoredSkill, installedSkill.enabled),
                     importResult,
                     message: buildMarketplaceInstallMessage({
                         skill: installedSkill as StoredSkill,
                         marketplace: 'skillhub',
                         source: selectedSkill.source,
+                        enabled: installedSkill.enabled,
                         warnings: importResult.warnings,
+                        governanceState: importResult.governanceState,
                     }),
                 };
             },

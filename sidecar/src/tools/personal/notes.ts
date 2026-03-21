@@ -1,4 +1,5 @@
 import { ToolDefinition, ToolContext } from '../standard';
+import { resolveMemoryWriteTarget } from '../../memory/isolation';
 
 /**
  * Quick Note Tool - Integrated with Vault System
@@ -55,6 +56,10 @@ export const quickNoteTool: ToolDefinition = {
             const { getVaultManager } = await import('../../memory');
 
             const vault = getVaultManager();
+            const writeTarget = resolveMemoryWriteTarget({
+                taskId: context.taskId,
+                workspacePath: context.workspacePath,
+            });
 
             // Add 'quick-note' tag automatically
             const allTags = ['quick-note', ...tags];
@@ -62,6 +67,8 @@ export const quickNoteTool: ToolDefinition = {
             const relativePath = await vault.saveMemory(autoTitle, content, {
                 category,
                 tags: allTags,
+                relativePathPrefix: writeTarget.relativePathPrefix,
+                metadata: writeTarget.metadata,
             });
 
             console.error(`[QuickNote] Note saved to: ${relativePath}`);
@@ -71,6 +78,7 @@ export const quickNoteTool: ToolDefinition = {
                 title: autoTitle,
                 path: relativePath,
                 category,
+                scope: writeTarget.scope,
                 tags: allTags,
                 message: `Note saved: "${autoTitle}"`,
                 searchable: true,

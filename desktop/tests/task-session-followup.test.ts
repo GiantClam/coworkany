@@ -109,4 +109,18 @@ describe('task session follow-up behavior', () => {
 
         expect(matchingAssistantMessages).toHaveLength(1);
     });
+
+    test('ignores events that do not include a valid taskId', () => {
+        useTaskEventStore.getState().addEvents([
+            makeEvent({
+                id: 'bad-task-id-event',
+                taskId: '' as unknown as string,
+                payload: { role: 'user', content: 'ignored event' },
+            }),
+        ]);
+
+        const state = useTaskEventStore.getState();
+        expect(state.sessions.size).toBe(0);
+        expect(state.activeTaskId).toBeNull();
+    });
 });

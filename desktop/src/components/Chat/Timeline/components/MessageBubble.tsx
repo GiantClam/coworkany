@@ -11,25 +11,38 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from '../Timeline.module.css';
-import type { TimelineItemType } from '../../../../types';
 import { processMessageContent } from '../../../../lib/text/messageProcessor';
 import { parseInlineAttachments } from '../../../../lib/text/inlineAttachments';
 import { parseMessageContent } from '../../../../lib/parsers/qualityParser';
 import { isExternalHref } from '../../../../lib/externalLinks';
 import { VerificationStatus, CodeQualityReport } from '../../../index';
 
-interface MessageBubbleProps {
-    item: TimelineItemType & { content: string };
-    isUser: boolean;
+interface MessageBubbleItem {
+    id: string;
+    content: string;
+    isStreaming?: boolean;
 }
 
-const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) => {
+interface MessageBubbleProps {
+    item: MessageBubbleItem;
+    isUser: boolean;
+    tone?: 'default' | 'system' | 'status';
+}
+
+const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser, tone = 'default' }) => {
     const { t } = useTranslation();
     const [showCopy, setShowCopy] = useState(false);
     const [copied, setCopied] = useState(false);
-    const isStreamingAssistant = !isUser && 'isStreaming' in item && item.isStreaming === true;
+    const isStreamingAssistant = !isUser && item.isStreaming === true;
     const userContent = isUser ? parseInlineAttachments(item.content) : null;
     const copyableContent = isUser ? (userContent?.text || item.content) : item.content;
+    const nonUserToneClass = !isUser
+        ? tone === 'system'
+            ? styles.systemContentBubble
+            : tone === 'status'
+                ? styles.statusContentBubble
+                : ''
+        : '';
 
     const handleCopy = async () => {
         try {
@@ -100,7 +113,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
                     {copied ? t('chat.copied') : '📋'}
                 </button>
             )}
-            <div className={`${styles.contentBubble} ${!isUser ? styles.markdownBody : ''}`}>
+            <div className={`${styles.contentBubble} ${!isUser ? styles.markdownBody : ''} ${nonUserToneClass}`.trim()}>
                 {isUser ? (
                     <div className={styles.userMessageBody}>
                         {userContent?.text ? (
@@ -161,7 +174,9 @@ const arePropsEqual = (prevProps: MessageBubbleProps, nextProps: MessageBubblePr
     return (
         prevProps.item.id === nextProps.item.id &&
         prevProps.item.content === nextProps.item.content &&
-        prevProps.isUser === nextProps.isUser
+        prevProps.item.isStreaming === nextProps.item.isStreaming &&
+        prevProps.isUser === nextProps.isUser &&
+        prevProps.tone === nextProps.tone
     );
 };
 

@@ -290,13 +290,16 @@ export class VaultManager {
             category?: 'learnings' | 'preferences' | 'projects' | string;
             tags?: string[];
             metadata?: Record<string, unknown>;
+            relativePathPrefix?: string;
         }
     ): Promise<string> {
         const category = options?.category || 'learnings';
         const timestamp = new Date().toISOString().split('T')[0];
         const safeTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50);
         const filename = `${timestamp}-${safeTitle}.md`;
-        const relativePath = path.join(category, filename);
+        const relativePath = options?.relativePathPrefix
+            ? path.join(category, options.relativePathPrefix, filename)
+            : path.join(category, filename);
 
         // Build frontmatter
         const frontmatter = [

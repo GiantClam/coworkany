@@ -187,4 +187,22 @@ describe('task event store hydration', () => {
 
         expect(session?.title).toBe('从 skillhub 中安装 skill-vetter');
     });
+
+    test('drops persisted sessions that do not have a valid taskId', () => {
+        useTaskEventStore.getState().hydrate({
+            sessions: [
+                makeSession({ taskId: 'task-valid', status: 'finished' }),
+                {
+                    ...makeSession({ taskId: 'task-invalid' }),
+                    taskId: '' as unknown as string,
+                },
+            ],
+            activeTaskId: 'task-valid',
+        });
+
+        const state = useTaskEventStore.getState();
+        expect(state.sessions.has('task-valid')).toBe(true);
+        expect(state.sessions.size).toBe(1);
+        expect(state.activeTaskId).toBe('task-valid');
+    });
 });

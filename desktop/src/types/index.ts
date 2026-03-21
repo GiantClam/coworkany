@@ -35,6 +35,7 @@ export type {
     ToolCallItem,
     ToolCallStatus,
     SystemEventItem,
+    TaskCardItem,
     EffectRequestItem,
     PatchItem,
     TaskStartedPayload,
@@ -57,6 +58,7 @@ export {
     isAssistantMessage,
     isToolCall,
     isSystemEvent,
+    isTaskCard,
     isEffectRequest,
     isPatch,
 } from './events';
