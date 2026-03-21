@@ -304,6 +304,39 @@
     text-align: center;
 }
 
+.chat-error--llm {
+    background: linear-gradient(135deg, rgba(120, 53, 15, 0.34), rgba(67, 20, 7, 0.2)), rgba(18, 26, 42, 0.72);
+    border: 1px solid rgba(251, 191, 36, 0.26);
+    color: #fff6dc;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.chat-error__text {
+    display: block;
+}
+
+.chat-error__action {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(251, 191, 36, 0.4);
+    background: rgba(251, 191, 36, 0.15);
+    color: #fcd34d;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.chat-error__action:hover {
+    background: rgba(251, 191, 36, 0.25);
+    border-color: rgba(251, 191, 36, 0.6);
+}
+
 .chat-recovery-banner {
     margin: 14px 20px 0;
     padding: 14px 16px;

@@ -173,10 +173,44 @@ pub fn packaged_service_exists(app_handle: &AppHandle, service_name: &str) -> bo
 }
 
 pub fn resolve_skillhub_executable() -> Result<PathBuf, String> {
+    // Check HOME environment variable (Unix)
     if let Some(home) = std::env::var_os("HOME") {
         let candidate = PathBuf::from(home).join(".local/bin/skillhub");
         if candidate.exists() {
             return Ok(candidate);
+        }
+    }
+
+    // Check USERPROFILE environment variable (Windows)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+            let base = PathBuf::from(&userprofile);
+
+            // Check .local/bin (manual install location)
+            let candidate = base.join(".local/bin/skillhub.exe");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+
+            // Check npm global install location
+            let npm_global = base.join("AppData").join("Roaming").join("npm");
+            let candidate = npm_global.join("skillhub.cmd");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+
+            // Check for skills-hub-ai (npm package name)
+            let candidate = npm_global.join("skills-hub-ai.cmd");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+
+            // Check for npx-based skillhub
+            let candidate = npm_global.join("skillhub");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
         }
     }
 
@@ -185,6 +219,23 @@ pub fn resolve_skillhub_executable() -> Result<PathBuf, String> {
             let candidate = dir.join(skillhub_binary_name());
             if candidate.exists() {
                 return Ok(candidate);
+            }
+
+            // Also check for npm-style names on Windows
+            #[cfg(target_os = "windows")]
+            {
+                let candidate = dir.join("skillhub.cmd");
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+                let candidate = dir.join("skills-hub-ai.cmd");
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+                let candidate = dir.join("skills-hub-ai");
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
             }
         }
     }

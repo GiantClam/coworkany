@@ -67,6 +67,18 @@ interface ChatInterfaceProps {
     onOpenTasks?: () => void;
 }
 
+function isLlmConfigError(error: string | null | undefined): boolean {
+    if (!error) return false;
+    const lower = error.toLowerCase();
+    return lower.includes('missing_api_key')
+        || lower.includes('missing_base_url')
+        || lower.includes('invalid_api_key')
+        || lower.includes('api key')
+        || lower.includes('no provider')
+        || lower.includes('provider not configured')
+        || lower.includes('no llm');
+}
+
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenSkills,
     onOpenMcp,
@@ -500,6 +512,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         focusComposer();
     }, [activeWorkspace?.path, clearAttachments, createDraftSession, focusComposer, t]);
 
+    const currentError = workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError;
+    const showErrorBanner = Boolean(currentError);
+    const isLlmError = isLlmConfigError(currentError);
+
     if (!activeSession) {
         return (
             <div className="chat-interface">
@@ -508,9 +524,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenProject={() => {}}
                     onTaskList={onOpenTasks ?? (() => {})}
                 />
-                {(workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError) && (
-                    <div className="chat-error">
-                        {workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError}
+                {showErrorBanner && (
+                    <div className={`chat-error${isLlmError ? ' chat-error--llm' : ''}`}>
+                        <span className="chat-error__text">{currentError}</span>
+                        {isLlmError && (
+                            <button
+                                type="button"
+                                className="chat-error__action"
+                                onClick={handleShowSettings}
+                            >
+                                {t('chat.goToSettings', { defaultValue: 'Go to Settings' })}
+                            </button>
+                        )}
                     </div>
                 )}
                 <InputArea
@@ -558,8 +583,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             />
 
             {(workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError) && (
-                <div className="chat-error">
-                    {workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError}
+                <div className={`chat-error${isLlmError ? ' chat-error--llm' : ''}`}>
+                    <span className="chat-error__text">{workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError}</span>
+                    {isLlmError && (
+                        <button
+                            type="button"
+                            className="chat-error__action"
+                            onClick={handleShowSettings}
+                        >
+                            {t('chat.goToSettings', { defaultValue: 'Go to Settings' })}
+                        </button>
+                    )}
                 </div>
             )}
 

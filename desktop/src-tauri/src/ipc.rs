@@ -2702,9 +2702,74 @@ pub fn get_dependency_statuses(
     })
 }
 
+const SKILLHUB_KIT_URL: &str =
+    "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/latest.tar.gz";
+
+fn install_skillhub_windows() -> Result<PathBuf, String> {
+    info!("install_skillhub_windows: using npm to install skillhub");
+
+    // Use npm to install skillhub globally
+    let npm_output = Command::new("npm")
+        .args(["install", "-g", "@skills-hub-ai/cli"])
+        .output()
+        .map_err(|e| format!("Failed to run npm: {e}. Make sure Node.js is installed."))?;
+
+    if !npm_output.status.success() {
+        let stderr = String::from_utf8_lossy(&npm_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&npm_output.stdout).to_string();
+        let message = if !stderr.is_empty() { stderr } else { stdout };
+        error!("install_skillhub_windows: npm install failed: {}", message);
+        return Err(format!("npm install failed: {message}"));
+    }
+
+    info!("install_skillhub_windows: npm install completed successfully");
+
+    // Try to find the installed binary
+    // First check if it's in PATH (global npm install should add it)
+    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+        // Check common npm global install locations on Windows
+        let npm_global = PathBuf::from(&userprofile)
+            .join("AppData")
+            .join("Roaming")
+            .join("npm");
+        let candidate = npm_global.join("skills-hub-ai.cmd");
+        if candidate.exists() {
+            info!("install_skillhub_windows: found at {:?}", candidate);
+            return Ok(candidate);
+        }
+
+        // Also check for skillhub.exe directly
+        let candidate2 = npm_global.join("skillhub.cmd");
+        if candidate2.exists() {
+            info!("install_skillhub_windows: found at {:?}", candidate2);
+            return Ok(candidate2);
+        }
+    }
+
+    // Try to find via where command
+    let where_output = Command::new("where")
+        .arg("skills-hub-ai")
+        .output();
+    if let Ok(output) = where_output {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path_str.is_empty() {
+                let path = PathBuf::from(path_str);
+                info!("install_skillhub_windows: found via where at {:?}", path);
+                return Ok(path);
+            }
+        }
+    }
+
+    // Fallback: try resolve_skillhub_executable
+    resolve_skillhub_executable().map_err(|_| {
+        "Skillhub CLI installed via npm but executable was not found. Try restarting the application.".to_string()
+    })
+}
+
 #[tauri::command]
 pub async fn install_skillhub_cli(app_handle: AppHandle) -> Result<GenericIpcResult, String> {
-    let extras = tauri::async_runtime::spawn_blocking(move || {
+    let extras = tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
         info!("install_skillhub_cli: starting installer");
         if let Ok(path) = resolve_skillhub_executable() {
             info!("install_skillhub_cli: already installed at {:?}", path);
@@ -2715,35 +2780,49 @@ pub async fn install_skillhub_cli(app_handle: AppHandle) -> Result<GenericIpcRes
             }));
         }
 
-        let mut command = Command::new("bash");
-        command.arg("-lc").arg(format!(
-            "curl -fsSL {url} | bash -s -- --cli-only",
-            url = SKILLHUB_INSTALL_SCRIPT_URL
-        ));
-
-        let output = command
-            .output()
-            .map_err(|e| format!("Failed to run Skillhub installer: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let message = if !stderr.is_empty() { stderr } else { stdout };
-            error!("install_skillhub_cli: installer failed: {}", message);
-            return Err(message);
+        #[cfg(target_os = "windows")]
+        {
+            let executable = install_skillhub_windows()?;
+            info!("install_skillhub_cli: completed at {:?}", executable);
+            return Ok(json!({
+                "message": "Skillhub CLI installed",
+                "path": executable,
+                "errors": Value::Null,
+            }));
         }
 
-        let executable = resolve_skillhub_executable().map_err(|_| {
-            "Skillhub installer finished but executable was not found in ~/.local/bin or PATH"
-                .to_string()
-        })?;
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut command = Command::new("bash");
+            command.arg("-lc").arg(format!(
+                "curl -fsSL {url} | bash -s -- --cli-only",
+                url = SKILLHUB_INSTALL_SCRIPT_URL
+            ));
 
-        info!("install_skillhub_cli: completed at {:?}", executable);
-        Ok(json!({
-            "message": "Skillhub CLI installed",
-            "path": executable,
-            "stdout": String::from_utf8_lossy(&output.stdout).trim().to_string(),
-            "errors": Value::Null,
-        }))
+            let output = command
+                .output()
+                .map_err(|e| format!("Failed to run Skillhub installer: {e}"))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let message = if !stderr.is_empty() { stderr } else { stdout };
+                error!("install_skillhub_cli: installer failed: {}", message);
+                return Err(message);
+            }
+
+            let executable = resolve_skillhub_executable().map_err(|_| {
+                "Skillhub installer finished but executable was not found in ~/.local/bin or PATH"
+                    .to_string()
+            })?;
+
+            info!("install_skillhub_cli: completed at {:?}", executable);
+            Ok(json!({
+                "message": "Skillhub CLI installed",
+                "path": executable,
+                "stdout": String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                "errors": Value::Null,
+            }))
+        }
     })
     .await
     .map_err(|e| e.to_string())??;
