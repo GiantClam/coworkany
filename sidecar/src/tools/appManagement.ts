@@ -11,6 +11,11 @@ import type {
     ExtensionGovernanceState,
     ExtensionGovernanceStore,
 } from '../extensions/governanceStore';
+import {
+    isWorkspaceExtensionAllowed,
+    loadWorkspaceExtensionAllowlistPolicy,
+    saveWorkspaceExtensionAllowlistPolicy,
+} from '../extensions/workspaceExtensionAllowlist';
 import { BrowserService, type BrowserMode } from '../services/browserService';
 import { SkillStore, type ClaudeSkillManifest, type StoredSkill } from '../storage/skillStore';
 import type { Workspace, WorkspaceStore } from '../storage/workspaceStore';
@@ -77,7 +82,7 @@ export type AppManagementToolDeps = {
     workspaceRoot: string;
     getResolvedAppDataRoot: () => string;
     skillStore: Pick<SkillStore, 'list' | 'get' | 'install' | 'setEnabled' | 'uninstall'>;
-    getExtensionGovernanceStore?: () => Pick<ExtensionGovernanceStore, 'get'>;
+    getExtensionGovernanceStore?: () => Pick<ExtensionGovernanceStore, 'get' | 'markApproved'>;
     workspaceStore: Pick<WorkspaceStore, 'list' | 'create' | 'update' | 'delete'>;
     importSkillFromDirectory?: (
         inputPath: string,
@@ -538,6 +543,36 @@ function shouldEnableSkillAfterImport(result: SkillImportResponsePayload): boole
     return result.governanceState?.quarantined !== true;
 }
 
+function canEnableSkillInWorkspace(deps: AppManagementToolDeps, skillId: string, isBuiltin: boolean): boolean {
+    const policy = loadWorkspaceExtensionAllowlistPolicy(deps.workspaceRoot);
+    return isWorkspaceExtensionAllowed(policy, {
+        extensionType: 'skill',
+        extensionId: skillId,
+        isBuiltin,
+    });
+}
+
+function resolveImportedSkillEnablement(
+    deps: AppManagementToolDeps,
+    result: SkillImportResponsePayload,
+): { enabled: boolean; allowlistBlocked: boolean } {
+    if (!result.skillId) {
+        return { enabled: false, allowlistBlocked: false };
+    }
+
+    const shouldEnable = shouldEnableSkillAfterImport(result);
+    if (!shouldEnable) {
+        return { enabled: false, allowlistBlocked: false };
+    }
+
+    const installed = deps.skillStore.get(result.skillId) as StoredSkill | undefined;
+    const allowlisted = canEnableSkillInWorkspace(deps, result.skillId, installed?.isBuiltin === true);
+    return {
+        enabled: allowlisted,
+        allowlistBlocked: !allowlisted,
+    };
+}
+
 function mapClawHubSkills(skills: ClawHubSkillInfo[]): MarketplaceSkillRecord[] {
     return skills.map((skill) => ({
         name: skill.name,
@@ -548,12 +583,36 @@ function mapClawHubSkills(skills: ClawHubSkillInfo[]): MarketplaceSkillRecord[] 
     }));
 }
 
+function summarizePermissionExpansionDelta(review?: ExtensionGovernanceReview): string[] {
+    if (!review?.delta) {
+        return [];
+    }
+
+    const entries: string[] = [];
+    const pushEntries = (label: string, values: string[] | undefined) => {
+        const normalized = (values ?? []).filter(Boolean);
+        if (normalized.length > 0) {
+            entries.push(`${label}:${normalized.join(',')}`);
+        }
+    };
+
+    pushEntries('tools', review.delta.added.tools);
+    pushEntries('effects', review.delta.added.effects);
+    pushEntries('capabilities', review.delta.added.capabilities);
+    pushEntries('bins', review.delta.added.bins);
+    pushEntries('env', review.delta.added.env);
+    pushEntries('config', review.delta.added.config);
+
+    return entries;
+}
+
 function buildMarketplaceInstallMessage(input: {
     skill: StoredSkill;
     marketplace: MarketplaceKind;
     source: string;
     enabled: boolean;
     warnings?: string[];
+    governanceReview?: ExtensionGovernanceReview;
     governanceState?: ExtensionGovernanceState;
 }): string {
     const lines = [
@@ -564,6 +623,14 @@ function buildMarketplaceInstallMessage(input: {
         `目录：${input.skill.manifest.directory}`,
         ...extractSkillUsageGuidance(input.skill, input.enabled),
     ];
+
+    if (input.governanceReview?.reviewRequired) {
+        lines.push(`治理审查：${input.governanceReview.summary}`);
+        const expansion = summarizePermissionExpansionDelta(input.governanceReview);
+        if (expansion.length > 0) {
+            lines.push(`权限增量：${expansion.join('；')}`);
+        }
+    }
 
     if (input.governanceState?.pendingReview) {
         lines.push('治理状态：该技能处于待审核状态，请在上线前完成权限审查。');
@@ -602,6 +669,54 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     workspaceRootSkillRegistryPath: path.join(deps.workspaceRoot, '.coworkany', 'skills.json'),
                 };
             },
+        },
+        {
+            name: 'get_coworkany_extension_allowlist',
+            description: 'Read the workspace-level extension allowlist policy used to gate skill/toolpack enablement.',
+            effects: ['filesystem:read'],
+            input_schema: {
+                type: 'object',
+                properties: {},
+            },
+            handler: async () => ({
+                policy: loadWorkspaceExtensionAllowlistPolicy(deps.workspaceRoot),
+            }),
+        },
+        {
+            name: 'set_coworkany_extension_allowlist',
+            description: 'Update the workspace-level extension allowlist policy. In enforce mode, only listed extensions can be enabled.',
+            effects: ['filesystem:read', 'filesystem:write'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    mode: {
+                        type: 'string',
+                        description: 'Policy mode: off or enforce.',
+                    },
+                    allowed_skill_ids: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Skill ids allowed when mode=enforce.',
+                    },
+                    allowed_toolpack_ids: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Toolpack ids allowed when mode=enforce.',
+                    },
+                },
+            },
+            handler: async (args: {
+                mode?: 'off' | 'enforce';
+                allowed_skill_ids?: string[];
+                allowed_toolpack_ids?: string[];
+            }) => ({
+                success: true,
+                policy: saveWorkspaceExtensionAllowlistPolicy(deps.workspaceRoot, {
+                    ...(typeof args.mode === 'string' ? { mode: args.mode } : {}),
+                    ...(Array.isArray(args.allowed_skill_ids) ? { allowedSkills: args.allowed_skill_ids } : {}),
+                    ...(Array.isArray(args.allowed_toolpack_ids) ? { allowedToolpacks: args.allowed_toolpack_ids } : {}),
+                }),
+            }),
         },
         {
             name: 'get_coworkany_config',
@@ -859,8 +974,18 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     : importSkillDirectly(deps.skillStore, args.path);
 
                 if (result.success && result.skillId) {
-                    deps.skillStore.setEnabled(result.skillId, shouldEnableSkillAfterImport(result));
+                    const enablement = resolveImportedSkillEnablement(deps, result);
+                    deps.skillStore.setEnabled(result.skillId, enablement.enabled);
                     deps.onSkillsUpdated?.();
+                    if (enablement.allowlistBlocked) {
+                        return {
+                            ...result,
+                            warnings: [
+                                ...(result.warnings ?? []),
+                                `Workspace extension allowlist blocked enabling skill "${result.skillId}".`,
+                            ],
+                        };
+                    }
                 }
 
                 return result;
@@ -1014,7 +1139,8 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         };
                     }
 
-                    deps.skillStore.setEnabled(importResult.skillId, shouldEnableSkillAfterImport(importResult));
+                    const enablement = resolveImportedSkillEnablement(deps, importResult);
+                    deps.skillStore.setEnabled(importResult.skillId, enablement.enabled);
                     deps.onSkillsUpdated?.();
                     const installedSkill = deps.skillStore.get(importResult.skillId);
                     if (!installedSkill) {
@@ -1024,6 +1150,13 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                             message: `技能已导入，但无法在技能仓库中找到 ${importResult.skillId}。`,
                         };
                     }
+
+                    const warnings = enablement.allowlistBlocked
+                        ? [
+                            ...(importResult.warnings ?? []),
+                            `Workspace extension allowlist blocked enabling skill "${importResult.skillId}".`,
+                        ]
+                        : importResult.warnings;
 
                     return {
                         success: true,
@@ -1039,7 +1172,8 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                             marketplace: 'github',
                             source: normalizedSource,
                             enabled: installedSkill.enabled,
-                            warnings: importResult.warnings,
+                            warnings,
+                            governanceReview: importResult.governanceReview,
                             governanceState: importResult.governanceState,
                         }),
                     };
@@ -1104,7 +1238,8 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         };
                     }
 
-                    deps.skillStore.setEnabled(importResult.skillId, shouldEnableSkillAfterImport(importResult));
+                    const enablement = resolveImportedSkillEnablement(deps, importResult);
+                    deps.skillStore.setEnabled(importResult.skillId, enablement.enabled);
                     deps.onSkillsUpdated?.();
                     const installedSkill = deps.skillStore.get(importResult.skillId);
                     if (!installedSkill) {
@@ -1114,6 +1249,13 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                             message: `技能已导入，但无法在技能仓库中找到 ${importResult.skillId}。`,
                         };
                     }
+
+                    const warnings = enablement.allowlistBlocked
+                        ? [
+                            ...(importResult.warnings ?? []),
+                            `Workspace extension allowlist blocked enabling skill "${importResult.skillId}".`,
+                        ]
+                        : importResult.warnings;
 
                     return {
                         success: true,
@@ -1129,7 +1271,8 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                             marketplace: 'clawhub',
                             source: selectedSkill.source,
                             enabled: installedSkill.enabled,
-                            warnings: importResult.warnings,
+                            warnings,
+                            governanceReview: importResult.governanceReview,
                             governanceState: importResult.governanceState,
                         }),
                     };
@@ -1209,7 +1352,8 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     };
                 }
 
-                deps.skillStore.setEnabled(importResult.skillId, shouldEnableSkillAfterImport(importResult));
+                const enablement = resolveImportedSkillEnablement(deps, importResult);
+                deps.skillStore.setEnabled(importResult.skillId, enablement.enabled);
                 deps.onSkillsUpdated?.();
                 const installedSkill = deps.skillStore.get(importResult.skillId);
                 if (!installedSkill) {
@@ -1219,6 +1363,13 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         message: `技能已导入，但无法在技能仓库中找到 ${importResult.skillId}。`,
                     };
                 }
+
+                const warnings = enablement.allowlistBlocked
+                    ? [
+                        ...(importResult.warnings ?? []),
+                        `Workspace extension allowlist blocked enabling skill "${importResult.skillId}".`,
+                    ]
+                    : importResult.warnings;
 
                 return {
                     success: true,
@@ -1234,7 +1385,8 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                         marketplace: 'skillhub',
                         source: selectedSkill.source,
                         enabled: installedSkill.enabled,
-                        warnings: importResult.warnings,
+                        warnings,
+                        governanceReview: importResult.governanceReview,
                         governanceState: importResult.governanceState,
                     }),
                 };
@@ -1267,8 +1419,88 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     };
                 }
 
+                if (args.enabled && skill && !canEnableSkillInWorkspace(deps, args.skill_id, false)) {
+                    return {
+                        success: false,
+                        error: 'workspace_extension_not_allowlisted',
+                    };
+                }
+
                 return {
                     success: deps.skillStore.setEnabled(args.skill_id, args.enabled),
+                };
+            },
+        },
+        {
+            name: 'approve_coworkany_skill_governance_review',
+            description: 'Explicitly approve a pending governance review for an installed CoworkAny skill. Optionally enables the skill after approval.',
+            effects: ['filesystem:read', 'filesystem:write'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    skill_id: {
+                        type: 'string',
+                        description: 'Skill id or name.',
+                    },
+                    enable_after_approve: {
+                        type: 'boolean',
+                        description: 'Whether to enable this skill immediately after review approval.',
+                    },
+                },
+                required: ['skill_id'],
+            },
+            handler: async (args: { skill_id: string; enable_after_approve?: boolean }) => {
+                if (!deps.getExtensionGovernanceStore) {
+                    return {
+                        success: false,
+                        error: 'extension_governance_unavailable',
+                    };
+                }
+
+                const governanceStore = deps.getExtensionGovernanceStore();
+                const current = governanceStore.get('skill', args.skill_id);
+                if (!current) {
+                    return {
+                        success: false,
+                        error: 'governance_record_not_found',
+                    };
+                }
+
+                const shouldEnable = args.enable_after_approve !== false;
+                if (shouldEnable) {
+                    const skill = deps.skillStore.get(args.skill_id) as StoredSkill | undefined;
+                    if (!canEnableSkillInWorkspace(deps, args.skill_id, skill?.isBuiltin === true)) {
+                        return {
+                            success: false,
+                            error: 'workspace_extension_not_allowlisted',
+                            governanceState: current,
+                        };
+                    }
+                    const enabled = deps.skillStore.setEnabled(args.skill_id, true);
+                    if (!enabled) {
+                        return {
+                            success: false,
+                            error: 'skill_not_found',
+                            governanceState: current,
+                        };
+                    }
+                }
+
+                const governanceState = governanceStore.markApproved('skill', args.skill_id);
+                if (!governanceState) {
+                    return {
+                        success: false,
+                        error: 'governance_record_not_found',
+                    };
+                }
+
+                const skill = deps.skillStore.get(args.skill_id);
+                return {
+                    success: true,
+                    skillId: args.skill_id,
+                    enabled: skill?.enabled,
+                    governanceState,
+                    skill: skill ? toSkillSummary(skill as StoredSkill, deps) : undefined,
                 };
             },
         },

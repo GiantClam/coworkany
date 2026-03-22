@@ -1,17 +1,32 @@
 {
-  "generatedAt": "2026-03-18T05:17:33.107Z",
+  "generatedAt": "2026-03-22T03:17:53.591Z",
   "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
   "requestedOptions": {
-    "buildDesktop": true,
-    "realE2E": false
+    "buildDesktop": false,
+    "realE2E": false,
+    "doctorRequiredStatus": "degraded",
+    "canaryEvidencePath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json",
+    "requireCanaryEvidence": false,
+    "controlPlaneThresholdsPath": "/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json",
+    "controlPlaneThresholdProfile": "beta",
+    "syncProductionReplays": false
   },
   "stages": [
+    {
+      "id": "control-plane-eval",
+      "label": "Control-plane eval suite",
+      "command": "bun run eval:control-plane --out /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "durationMs": 5233,
+      "status": "passed",
+      "exitCode": 0
+    },
     {
       "id": "sidecar-typecheck",
       "label": "Sidecar typecheck",
       "command": "npm run typecheck",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 20846,
+      "durationMs": 6072,
       "status": "passed",
       "exitCode": 0
     },
@@ -20,7 +35,7 @@
       "label": "Sidecar stable regression suite",
       "command": "npm run test:stable",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 4728,
+      "durationMs": 4624,
       "status": "passed",
       "exitCode": 0
     },
@@ -29,7 +44,7 @@
       "label": "Sidecar release gate tests",
       "command": "bun test tests/runtime-commands.test.ts tests/capability-commands.test.ts tests/workspace-commands.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/planning-files.test.ts tests/release-readiness.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 214,
+      "durationMs": 438,
       "status": "passed",
       "exitCode": 0
     },
@@ -38,7 +53,7 @@
       "label": "Desktop typecheck",
       "command": "npx tsc --noEmit",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 6109,
+      "durationMs": 2744,
       "status": "passed",
       "exitCode": 0
     },
@@ -47,20 +62,98 @@
       "label": "Desktop acceptance suite",
       "command": "npm test",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 673,
+      "durationMs": 216,
       "status": "passed",
       "exitCode": 0
     },
     {
-      "id": "desktop-build",
-      "label": "Desktop production build",
-      "command": "npm run build",
-      "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 10434,
+      "id": "sidecar-doctor",
+      "label": "Sidecar doctor preflight",
+      "command": "bun run doctor -- --output-dir /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor --readiness-report /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/report.json",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "durationMs": 4,
       "status": "passed",
       "exitCode": 0
+    },
+    {
+      "id": "workspace-extension-allowlist",
+      "label": "Workspace extension allowlist gate",
+      "command": "workspace extension allowlist policy check",
+      "cwd": "/Users/beihuang/Documents/github/coworkany",
+      "durationMs": 0,
+      "status": "passed",
+      "exitCode": 0,
+      "note": "No enabled third-party extensions detected; workspace allowlist enforcement is not required yet. (mode=off, enabledSkills=0, enabledToolpacks=0)"
+    },
+    {
+      "id": "canary-checklist-evidence",
+      "label": "Canary checklist evidence gate",
+      "command": "canary checklist evidence validation (/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json)",
+      "cwd": "/Users/beihuang/Documents/github/coworkany",
+      "durationMs": 0,
+      "status": "passed",
+      "exitCode": 0,
+      "note": "required=no, completedAreas=0, missingAreas=6"
     }
   ],
+  "productionReplayThresholdRecommendations": [],
+  "controlPlaneEval": {
+    "summaryPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
+    "exists": true,
+    "totalCases": 8,
+    "passedCases": 8,
+    "failedCases": 0,
+    "clarificationRate": 0.16666666666666666,
+    "unnecessaryClarificationRate": 0,
+    "freezeExpectationPassRate": 1,
+    "artifactExpectationPassRate": 1,
+    "artifactSatisfactionRate": 0.5,
+    "runtimeReplayPassRate": 1,
+    "productionReplaySources": {
+      "canary": {
+        "totalCases": 1,
+        "passedCases": 1,
+        "failedCases": 0,
+        "runtimeReplayCases": 1,
+        "runtimeReplayPassedCases": 1
+      }
+    }
+  },
+  "controlPlaneEvalGate": {
+    "passed": true,
+    "findings": [],
+    "thresholds": {
+      "maxUnnecessaryClarificationRate": 0.05,
+      "minFreezeExpectationPassRate": 1,
+      "minArtifactExpectationPassRate": 1,
+      "minRuntimeReplayPassRate": 1,
+      "requireZeroFailedCases": true,
+      "minProductionReplayCasesBySource": {
+        "canary": 1
+      }
+    },
+    "thresholdSourcePath": "/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json",
+    "thresholdProfile": "beta"
+  },
+  "canaryEvidence": {
+    "evidencePath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json",
+    "exists": false,
+    "completedAreas": [],
+    "missingAreas": [
+      "Audience",
+      "Decision Gate",
+      "Fault Injection",
+      "Health",
+      "Observability",
+      "Rollback"
+    ],
+    "findings": []
+  },
+  "canaryEvidenceGate": {
+    "passed": true,
+    "required": false,
+    "findings": []
+  },
   "observability": {
     "startupMetrics": {
       "inspected": false,
@@ -109,5 +202,63 @@
       "item": "Hold rollout expansion until no blocker regression remains in readiness report warnings or failed stages.",
       "requiredEvidence": "Final go/no-go comment referencing the readiness report artifact."
     }
-  ]
+  ],
+  "sidecarDoctor": {
+    "reportPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor/report.json",
+    "markdownPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor/report.md",
+    "exists": true,
+    "overallStatus": "degraded",
+    "failedChecks": 0,
+    "warnedChecks": 3,
+    "checks": [
+      {
+        "id": "runtime-store",
+        "label": "Runtime store integrity",
+        "status": "warn",
+        "summary": "Runtime store not found at /Users/beihuang/Documents/github/coworkany/.coworkany/task-runtime.json"
+      },
+      {
+        "id": "isolation-contracts",
+        "label": "Session/memory/tenant isolation posture",
+        "status": "warn",
+        "summary": "Runtime store not found at /Users/beihuang/Documents/github/coworkany/.coworkany/task-runtime.json"
+      },
+      {
+        "id": "extension-governance",
+        "label": "Extension governance posture",
+        "status": "pass",
+        "summary": "No enabled third-party extensions detected; governance store has not been created yet."
+      },
+      {
+        "id": "memory-source-guards",
+        "label": "Runtime memory source guards",
+        "status": "pass",
+        "summary": "Guarded runtime sources are free of known global memory bypass patterns (3 file(s) scanned)."
+      },
+      {
+        "id": "control-plane-readiness",
+        "label": "Control-plane readiness posture",
+        "status": "pass",
+        "summary": "Latest readiness artifact is present and passing."
+      },
+      {
+        "id": "observability",
+        "label": "Observability coverage",
+        "status": "warn",
+        "summary": "Observability coverage has 2 warning(s)."
+      },
+      {
+        "id": "anomaly-signals",
+        "label": "Incident anomaly signals",
+        "status": "pass",
+        "summary": "No repeated reopen, clarification, or degraded-output anomalies detected."
+      }
+    ],
+    "warnings": []
+  },
+  "sidecarDoctorGate": {
+    "passed": true,
+    "requiredOverallStatus": "degraded",
+    "findings": []
+  }
 }

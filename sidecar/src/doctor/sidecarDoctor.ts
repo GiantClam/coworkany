@@ -726,23 +726,9 @@ function inspectExtensionGovernance(input: {
     appDataDir: string;
 }): DoctorCheck {
     const governancePath = path.join(input.appDataDir, 'extension-governance.json');
-    if (!fs.existsSync(governancePath)) {
-        return {
-            id: 'extension-governance',
-            label: 'Extension governance posture',
-            status: 'warn',
-            summary: `Extension governance store not found at ${governancePath}`,
-            details: [
-                'No persisted extension governance evidence found. First-install review and update-delta audit history is unavailable.',
-            ],
-        };
-    }
-
-    let states: ExtensionGovernanceState[];
     let enabledSkillIds: Set<string>;
     let enabledToolpackIds: Set<string>;
     try {
-        states = new ExtensionGovernanceStore(governancePath).list();
         enabledSkillIds = readEnabledSkillIds(input.repositoryRoot);
         enabledToolpackIds = readEnabledToolpackIds(input.repositoryRoot);
     } catch (error) {
@@ -750,7 +736,43 @@ function inspectExtensionGovernance(input: {
             id: 'extension-governance',
             label: 'Extension governance posture',
             status: 'fail',
-            summary: 'Failed to load extension governance evidence or extension registries.',
+            summary: 'Failed to load extension registries.',
+            details: [String(error)],
+        };
+    }
+    const enabledExtensionCount = enabledSkillIds.size + enabledToolpackIds.size;
+
+    if (!fs.existsSync(governancePath)) {
+        if (enabledExtensionCount === 0) {
+            return {
+                id: 'extension-governance',
+                label: 'Extension governance posture',
+                status: 'pass',
+                summary: 'No enabled third-party extensions detected; governance store has not been created yet.',
+                details: [],
+            };
+        }
+        return {
+            id: 'extension-governance',
+            label: 'Extension governance posture',
+            status: 'fail',
+            summary: `Extension governance store not found at ${governancePath} while third-party extensions are enabled.`,
+            details: [
+                `Enabled third-party skills: ${enabledSkillIds.size}`,
+                `Enabled third-party toolpacks: ${enabledToolpackIds.size}`,
+            ],
+        };
+    }
+
+    let states: ExtensionGovernanceState[];
+    try {
+        states = new ExtensionGovernanceStore(governancePath).list();
+    } catch (error) {
+        return {
+            id: 'extension-governance',
+            label: 'Extension governance posture',
+            status: 'fail',
+            summary: 'Failed to load extension governance evidence.',
             details: [String(error)],
         };
     }

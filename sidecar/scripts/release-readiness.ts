@@ -5,23 +5,33 @@ import { fileURLToPath } from 'url';
 import {
     applyControlPlaneThresholdUpdateSuggestion,
     buildControlPlaneThresholdUpdateSuggestion,
+    evaluateCanaryChecklistEvidence,
+    evaluateSidecarDoctorReadiness,
     evaluateControlPlaneEvalReadiness,
+    evaluateWorkspaceExtensionAllowlistReadiness,
     createDefaultCanaryChecklist,
     inspectObservability,
     loadControlPlaneEvalThresholds,
     recommendProductionReplayThresholds,
     renderReleaseReadinessMarkdown,
+    summarizeSidecarDoctorReport,
     summarizeControlPlaneEvalSummary,
     summarizeProductionReplayImportSummary,
+    summarizeCanaryChecklistEvidence,
     type ReleaseReadinessReport,
     type ReleaseStageResult,
 } from '../src/release/readiness';
+import { formatSidecarDoctorReport, runSidecarDoctor } from '../src/doctor/sidecarDoctor';
+import { loadWorkspaceExtensionAllowlistPolicy } from '../src/extensions/workspaceExtensionAllowlist';
 
 type CliOptions = {
     buildDesktop: boolean;
     realE2E: boolean;
     appDataDir?: string;
     startupProfile?: string;
+    doctorRequiredStatus?: 'healthy' | 'degraded' | 'blocked';
+    canaryEvidencePath?: string;
+    requireCanaryEvidence: boolean;
     artifactTelemetryPath?: string;
     outputDir: string;
     controlPlaneThresholdsPath?: string;
@@ -35,12 +45,24 @@ function bin(name: string): string {
     return process.platform === 'win32' ? `${name}.cmd` : name;
 }
 
+function isDoctorRequiredStatus(
+    value: string | undefined,
+): value is 'healthy' | 'degraded' | 'blocked' {
+    return value === 'healthy' || value === 'degraded' || value === 'blocked';
+}
+
 function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
     const options: CliOptions = {
         buildDesktop: false,
         realE2E: false,
         appDataDir: process.env.COWORKANY_APP_DATA_DIR || undefined,
         startupProfile: process.env.COWORKANY_STARTUP_PROFILE || undefined,
+        doctorRequiredStatus: isDoctorRequiredStatus(process.env.COWORKANY_DOCTOR_REQUIRED_STATUS)
+            ? process.env.COWORKANY_DOCTOR_REQUIRED_STATUS
+            : undefined,
+        canaryEvidencePath: process.env.COWORKANY_CANARY_EVIDENCE_PATH || undefined,
+        requireCanaryEvidence: process.env.COWORKANY_REQUIRE_CANARY_EVIDENCE === '1'
+            || process.env.COWORKANY_REQUIRE_CANARY_EVIDENCE === 'true',
         artifactTelemetryPath: process.env.COWORKANY_ARTIFACT_TELEMETRY_PATH || undefined,
         outputDir: path.join(repositoryRoot, 'artifacts', 'release-readiness'),
         controlPlaneThresholdsPath: process.env.COWORKANY_CONTROL_PLANE_THRESHOLDS || undefined,
@@ -66,6 +88,22 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
             case '--startup-profile':
                 options.startupProfile = argv[index + 1];
                 index += 1;
+                break;
+            case '--doctor-required-status': {
+                const value = argv[index + 1];
+                if (!isDoctorRequiredStatus(value)) {
+                    throw new Error(`Invalid --doctor-required-status value: ${value}`);
+                }
+                options.doctorRequiredStatus = value;
+                index += 1;
+                break;
+            }
+            case '--canary-evidence':
+                options.canaryEvidencePath = path.resolve(argv[index + 1]);
+                index += 1;
+                break;
+            case '--require-canary-evidence':
+                options.requireCanaryEvidence = true;
                 break;
             case '--artifact-telemetry':
                 options.artifactTelemetryPath = argv[index + 1];
@@ -100,6 +138,74 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
     }
 
     return options;
+}
+
+function readEnabledSkillIds(workspaceRoot: string): string[] {
+    const filePath = path.join(workspaceRoot, '.coworkany', 'skills.json');
+    if (!fs.existsSync(filePath)) {
+        return [];
+    }
+
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error(`Invalid skills store format: ${filePath}`);
+    }
+
+    const enabled = new Set<string>();
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object') {
+            continue;
+        }
+        const record = value as {
+            enabled?: boolean;
+            manifest?: { name?: string };
+        };
+        if (record.enabled !== true) {
+            continue;
+        }
+        const id = typeof record.manifest?.name === 'string' && record.manifest.name.trim().length > 0
+            ? record.manifest.name.trim()
+            : key.trim();
+        if (id.length > 0) {
+            enabled.add(id);
+        }
+    }
+    return Array.from(enabled).sort((left, right) => left.localeCompare(right));
+}
+
+function readEnabledToolpackIds(workspaceRoot: string): string[] {
+    const filePath = path.join(workspaceRoot, '.coworkany', 'toolpacks.json');
+    if (!fs.existsSync(filePath)) {
+        return [];
+    }
+
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error(`Invalid toolpack store format: ${filePath}`);
+    }
+
+    const enabled = new Set<string>();
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!value || typeof value !== 'object') {
+            continue;
+        }
+        const record = value as {
+            enabled?: boolean;
+            manifest?: { id?: string; name?: string };
+        };
+        if (record.enabled !== true) {
+            continue;
+        }
+        const id = typeof record.manifest?.id === 'string' && record.manifest.id.trim().length > 0
+            ? record.manifest.id.trim()
+            : (typeof record.manifest?.name === 'string' && record.manifest.name.trim().length > 0
+                ? record.manifest.name.trim()
+                : key.trim());
+        if (id.length > 0) {
+            enabled.add(id);
+        }
+    }
+    return Array.from(enabled).sort((left, right) => left.localeCompare(right));
 }
 
 function runStage(input: {
@@ -157,6 +263,8 @@ async function main(): Promise<void> {
         controlPlaneThresholdsPath,
         options.controlPlaneThresholdProfile,
     );
+    const doctorRequiredStatus = options.doctorRequiredStatus
+        ?? (options.appDataDir ? 'healthy' : 'degraded');
 
     const stages: ReleaseStageResult[] = [];
 
@@ -330,7 +438,22 @@ async function main(): Promise<void> {
         );
     }
 
-    const report: ReleaseReadinessReport = {
+    const jsonPath = path.join(options.outputDir, 'report.json');
+    const markdownPath = path.join(options.outputDir, 'report.md');
+    const checklist = createDefaultCanaryChecklist();
+    const canaryEvidencePath = options.canaryEvidencePath
+        ? path.resolve(options.canaryEvidencePath)
+        : path.join(options.outputDir, 'canary-evidence.json');
+    const canaryEvidence = summarizeCanaryChecklistEvidence({
+        checklist,
+        evidencePath: canaryEvidencePath,
+    });
+    const canaryEvidenceGate = evaluateCanaryChecklistEvidence(
+        canaryEvidence,
+        options.requireCanaryEvidence,
+    );
+
+    let report: ReleaseReadinessReport = {
         generatedAt: new Date().toISOString(),
         repositoryRoot,
         requestedOptions: {
@@ -338,6 +461,9 @@ async function main(): Promise<void> {
             realE2E: options.realE2E,
             appDataDir: options.appDataDir,
             startupProfile: options.startupProfile,
+            doctorRequiredStatus,
+            canaryEvidencePath,
+            requireCanaryEvidence: options.requireCanaryEvidence,
             controlPlaneThresholdsPath: controlPlaneEvalThresholds.sourcePath,
             controlPlaneThresholdProfile: controlPlaneEvalThresholds.profile,
             syncProductionReplays: options.syncProductionReplays,
@@ -360,12 +486,106 @@ async function main(): Promise<void> {
             : undefined,
         controlPlaneEval,
         controlPlaneEvalGate,
+        canaryEvidence,
+        canaryEvidenceGate,
         observability,
-        checklist: createDefaultCanaryChecklist(),
+        checklist,
     };
 
-    const jsonPath = path.join(options.outputDir, 'report.json');
-    const markdownPath = path.join(options.outputDir, 'report.md');
+    fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf-8');
+
+    const doctorStartedAt = Date.now();
+    const doctorOutputDir = path.join(options.outputDir, 'doctor');
+    fs.mkdirSync(doctorOutputDir, { recursive: true });
+    const doctorReportPath = path.join(doctorOutputDir, 'report.json');
+    const doctorMarkdownPath = path.join(doctorOutputDir, 'report.md');
+    const doctorReport = runSidecarDoctor({
+        repositoryRoot,
+        appDataDir: options.appDataDir,
+        startupProfile: options.startupProfile,
+        artifactTelemetryPath: options.artifactTelemetryPath,
+        readinessReportPath: jsonPath,
+        controlPlaneThresholdsPath: controlPlaneEvalThresholds.sourcePath,
+        controlPlaneThresholdProfile: controlPlaneEvalThresholds.profile,
+    });
+    fs.writeFileSync(doctorReportPath, JSON.stringify(doctorReport, null, 2), 'utf-8');
+    fs.writeFileSync(doctorMarkdownPath, formatSidecarDoctorReport(doctorReport), 'utf-8');
+    const sidecarDoctor = summarizeSidecarDoctorReport(doctorReportPath, doctorMarkdownPath);
+    const sidecarDoctorGate = evaluateSidecarDoctorReadiness(sidecarDoctor, doctorRequiredStatus);
+
+    stages.push({
+        id: 'sidecar-doctor',
+        label: 'Sidecar doctor preflight',
+        command: `bun run doctor -- --output-dir ${doctorOutputDir} --readiness-report ${jsonPath}`,
+        cwd: sidecarDir,
+        durationMs: Date.now() - doctorStartedAt,
+        status: sidecarDoctorGate.passed ? 'passed' : 'failed',
+        exitCode: sidecarDoctorGate.passed ? 0 : 1,
+        note: sidecarDoctorGate.findings.join(' | ') || undefined,
+    });
+
+    try {
+        const extensionAllowlistPolicy = loadWorkspaceExtensionAllowlistPolicy(repositoryRoot);
+        const allowlistGate = evaluateWorkspaceExtensionAllowlistReadiness({
+            mode: extensionAllowlistPolicy.mode,
+            allowedSkills: extensionAllowlistPolicy.allowedSkills,
+            allowedToolpacks: extensionAllowlistPolicy.allowedToolpacks,
+            enabledSkills: readEnabledSkillIds(repositoryRoot),
+            enabledToolpacks: readEnabledToolpackIds(repositoryRoot),
+        });
+        const summaryBits = [
+            `mode=${extensionAllowlistPolicy.mode}`,
+            `enabledSkills=${allowlistGate.enabledSkills.length}`,
+            `enabledToolpacks=${allowlistGate.enabledToolpacks.length}`,
+        ];
+
+        stages.push({
+            id: 'workspace-extension-allowlist',
+            label: 'Workspace extension allowlist gate',
+            command: 'workspace extension allowlist policy check',
+            cwd: repositoryRoot,
+            durationMs: 0,
+            status: allowlistGate.passed ? 'passed' : 'failed',
+            exitCode: allowlistGate.passed ? 0 : 1,
+            note: allowlistGate.passed
+                ? `${allowlistGate.summary} (${summaryBits.join(', ')})`
+                : `${allowlistGate.summary} ${allowlistGate.findings.join(' | ')} (${summaryBits.join(', ')})`,
+        });
+    } catch (error) {
+        stages.push({
+            id: 'workspace-extension-allowlist',
+            label: 'Workspace extension allowlist gate',
+            command: 'workspace extension allowlist policy check',
+            cwd: repositoryRoot,
+            durationMs: 0,
+            status: 'failed',
+            exitCode: 1,
+            note: `Failed to evaluate extension allowlist readiness: ${String(error)}`,
+        });
+    }
+
+    stages.push({
+        id: 'canary-checklist-evidence',
+        label: 'Canary checklist evidence gate',
+        command: `canary checklist evidence validation (${canaryEvidencePath})`,
+        cwd: repositoryRoot,
+        durationMs: 0,
+        status: canaryEvidenceGate.passed ? 'passed' : 'failed',
+        exitCode: canaryEvidenceGate.passed ? 0 : 1,
+        note: canaryEvidenceGate.passed
+            ? `required=${canaryEvidenceGate.required ? 'yes' : 'no'}, completedAreas=${canaryEvidence.completedAreas.length}, missingAreas=${canaryEvidence.missingAreas.length}`
+            : canaryEvidenceGate.findings.join(' | '),
+    });
+
+    report = {
+        ...report,
+        stages,
+        sidecarDoctor,
+        sidecarDoctorGate,
+        canaryEvidence,
+        canaryEvidenceGate,
+    };
+
     fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf-8');
     fs.writeFileSync(markdownPath, renderReleaseReadinessMarkdown(report), 'utf-8');
 

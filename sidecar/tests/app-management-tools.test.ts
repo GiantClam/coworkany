@@ -30,6 +30,7 @@ function buildTools(options?: {
     searchClawHubSkills?: (query: string, limit?: number) => Promise<any>;
     installSkillFromClawHub?: (skillName: string, targetDir: string) => Promise<any>;
     getSkillhubExecutable?: () => string | undefined;
+    getExtensionGovernanceStore?: () => { get: (...args: any[]) => any; markApproved: (...args: any[]) => any };
     onSkillsUpdated?: () => void;
 }) {
     const workspaceRoot = makeTempDir('coworkany-app-tools-workspace-');
@@ -40,6 +41,7 @@ function buildTools(options?: {
         workspaceRoot,
         getResolvedAppDataRoot: () => appDataRoot,
         skillStore,
+        getExtensionGovernanceStore: options?.getExtensionGovernanceStore as any,
         workspaceStore,
         applyLlmConfig: options?.applyLlmConfig as any,
         importSkillFromDirectory: options?.importSkillFromDirectory,
@@ -193,6 +195,27 @@ describe('app management tools', () => {
         expect(fixture.workspaceStore.list()).toHaveLength(0);
     });
 
+    test('extension allowlist tools read and persist workspace policy', async () => {
+        const fixture = buildTools();
+        const getToolByName = getTool(fixture.tools, 'get_coworkany_extension_allowlist');
+        const setToolByName = getTool(fixture.tools, 'set_coworkany_extension_allowlist');
+
+        const initial = await getToolByName.handler({}, TOOL_CONTEXT);
+        const updated = await setToolByName.handler({
+            mode: 'enforce',
+            allowed_skill_ids: ['Approved Skill'],
+            allowed_toolpack_ids: ['approved-toolpack'],
+        }, TOOL_CONTEXT);
+        const reloaded = await getToolByName.handler({}, TOOL_CONTEXT);
+
+        expect(initial.policy.mode).toBe('off');
+        expect(updated.success).toBe(true);
+        expect(updated.policy.mode).toBe('enforce');
+        expect(updated.policy.allowedSkills).toEqual(['Approved Skill']);
+        expect(updated.policy.allowedToolpacks).toEqual(['approved-toolpack']);
+        expect(reloaded.policy.mode).toBe('enforce');
+    });
+
     test('skill tools install, disable, inspect, and remove local skills', async () => {
         const fixture = buildTools();
         const skillDir = makeTempDir('coworkany-app-tool-skill-');
@@ -226,6 +249,100 @@ description: Demo managed skill
         expect(removed.success).toBe(true);
         expect(removed.filesDeleted).toBe(true);
         expect(fs.existsSync(skillDir)).toBe(false);
+    });
+
+    test('set_coworkany_skill_enabled blocks non-allowlisted skill enablement in enforce mode', async () => {
+        const fixture = buildTools();
+        const skillDir = makeTempDir('coworkany-app-tool-allowlist-skill-');
+        fs.writeFileSync(
+            path.join(skillDir, 'SKILL.md'),
+            `---
+name: Blocked Managed Skill
+version: 1.0.0
+description: Blocked by allowlist
+---
+
+# Blocked Managed Skill
+`
+        );
+
+        const installTool = getTool(fixture.tools, 'install_coworkany_skill');
+        const setEnabledTool = getTool(fixture.tools, 'set_coworkany_skill_enabled');
+        const setAllowlistTool = getTool(fixture.tools, 'set_coworkany_extension_allowlist');
+
+        const installed = await installTool.handler({ path: skillDir }, TOOL_CONTEXT);
+        expect(installed.success).toBe(true);
+        await setAllowlistTool.handler({
+            mode: 'enforce',
+            allowed_skill_ids: ['Approved Skill'],
+        }, TOOL_CONTEXT);
+
+        const enableAttempt = await setEnabledTool.handler(
+            { skill_id: 'Blocked Managed Skill', enabled: true },
+            TOOL_CONTEXT,
+        );
+
+        expect(enableAttempt.success).toBe(false);
+        expect(enableAttempt.error).toBe('workspace_extension_not_allowlisted');
+    });
+
+    test('approve skill governance review explicitly approves pending review and re-enables skill', async () => {
+        const states = new Map<string, any>();
+        const fixture = buildTools({
+            getExtensionGovernanceStore: () => ({
+                get: (_type, id) => states.get(id),
+                markApproved: (_type, id) => {
+                    const current = states.get(id);
+                    if (!current) return undefined;
+                    const approved = {
+                        ...current,
+                        pendingReview: false,
+                        quarantined: false,
+                        lastDecision: 'approved',
+                        approvedAt: new Date().toISOString(),
+                        lastUpdatedAt: new Date().toISOString(),
+                    };
+                    states.set(id, approved);
+                    return approved;
+                },
+            }),
+        });
+        const skillDir = makeTempDir('coworkany-app-tool-approve-skill-');
+        fs.writeFileSync(
+            path.join(skillDir, 'SKILL.md'),
+            `---
+name: Pending Managed Skill
+version: 1.0.0
+description: Pending managed skill
+---
+
+# Pending Managed Skill
+`
+        );
+
+        const installTool = getTool(fixture.tools, 'install_coworkany_skill');
+        const approveTool = getTool(fixture.tools, 'approve_coworkany_skill_governance_review');
+
+        const installed = await installTool.handler({ path: skillDir }, TOOL_CONTEXT);
+        expect(installed.success).toBe(true);
+        fixture.skillStore.setEnabled('Pending Managed Skill', false);
+        states.set('Pending Managed Skill', {
+            extensionType: 'skill',
+            extensionId: 'Pending Managed Skill',
+            pendingReview: true,
+            quarantined: true,
+            lastDecision: 'pending',
+            lastReviewReason: 'first_install_review',
+            lastReviewSummary: 'First install review required',
+            lastUpdatedAt: new Date().toISOString(),
+        });
+
+        const approved = await approveTool.handler({ skill_id: 'Pending Managed Skill' }, TOOL_CONTEXT);
+
+        expect(approved.success).toBe(true);
+        expect(approved.enabled).toBe(true);
+        expect(approved.governanceState.pendingReview).toBe(false);
+        expect(approved.governanceState.lastDecision).toBe('approved');
     });
 
     test('marketplace install tool installs and enables a skill from GitHub source', async () => {
@@ -270,6 +387,113 @@ triggers:
         expect(response.enabled).toBe(true);
         expect(response.source).toBe('github:openai/repo-skill');
         expect(response.message).toContain('已从 github 安装并启用技能');
+    });
+
+    test('marketplace install message surfaces governance review summary and permission expansion delta', async () => {
+        let skillStoreRef: SkillStore | undefined;
+        const fixture = buildTools({
+            downloadSkillFromGitHub: async (_source, workspacePath) => {
+                const skillDir = path.join(workspacePath, '.coworkany', 'skills', 'governed-repo-skill');
+                fs.mkdirSync(skillDir, { recursive: true });
+                fs.writeFileSync(
+                    path.join(skillDir, 'SKILL.md'),
+                    `---
+name: Governed Repo Skill
+version: 2.0.0
+description: Repo skill with governance review
+---
+
+# Governed Repo Skill
+`,
+                    'utf-8'
+                );
+                return {
+                    success: true,
+                    path: skillDir,
+                    filesDownloaded: 1,
+                };
+            },
+            importSkillFromDirectory: async (inputPath) => {
+                const manifest = SkillStore.loadFromDirectory(inputPath);
+                if (manifest) {
+                    skillStoreRef?.install(manifest as any);
+                }
+                return {
+                    success: true,
+                    skillId: manifest?.name,
+                    governanceReview: {
+                        extensionType: 'skill',
+                        extensionId: manifest?.name ?? 'Governed Repo Skill',
+                        installKind: 'update',
+                        reviewRequired: true,
+                        blocking: false,
+                        reason: 'permission_expansion',
+                        summary: '权限扩展需要显式批准后再上线。',
+                        before: {
+                            tools: ['read_file'],
+                            effects: ['filesystem:read'],
+                            capabilities: [],
+                            bins: [],
+                            env: [],
+                            config: [],
+                        },
+                        after: {
+                            tools: ['read_file', 'write_file'],
+                            effects: ['filesystem:read', 'filesystem:write'],
+                            capabilities: ['codegen'],
+                            bins: [],
+                            env: ['OPENAI_API_KEY'],
+                            config: ['approval.mode'],
+                        },
+                        delta: {
+                            added: {
+                                tools: ['write_file'],
+                                effects: ['filesystem:write'],
+                                capabilities: ['codegen'],
+                                bins: [],
+                                env: ['OPENAI_API_KEY'],
+                                config: ['approval.mode'],
+                            },
+                            removed: {
+                                tools: [],
+                                effects: [],
+                                capabilities: [],
+                                bins: [],
+                                env: [],
+                                config: [],
+                            },
+                        },
+                    },
+                    governanceState: {
+                        extensionType: 'skill',
+                        extensionId: manifest?.name ?? 'Governed Repo Skill',
+                        pendingReview: true,
+                        quarantined: true,
+                        lastDecision: 'pending',
+                        lastReviewReason: 'permission_expansion',
+                        lastReviewSummary: '权限扩展需要审批',
+                        lastUpdatedAt: new Date().toISOString(),
+                    },
+                };
+            },
+        });
+        skillStoreRef = fixture.skillStore;
+
+        const tool = getTool(fixture.tools, 'install_coworkany_skill_from_marketplace');
+        const response = await tool.handler(
+            {
+                source: 'openai/governed-repo-skill',
+                marketplace: 'github',
+            },
+            TOOL_CONTEXT
+        );
+
+        expect(response.success).toBe(true);
+        expect(response.message).toContain('治理审查：权限扩展需要显式批准后再上线。');
+        expect(response.message).toContain('权限增量：');
+        expect(response.message).toContain('tools:write_file');
+        expect(response.message).toContain('effects:filesystem:write');
+        expect(response.message).toContain('env:OPENAI_API_KEY');
     });
 
     test('marketplace install tool searches skillhub, installs the selected skill, and returns usage guidance', async () => {

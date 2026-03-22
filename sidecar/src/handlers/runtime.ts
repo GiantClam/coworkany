@@ -17,6 +17,7 @@ import type {
 import {
     snapshotFrozenWorkRequest,
     type FrozenWorkRequestSnapshot,
+    type SupersededContractTombstone,
 } from '../orchestration/workRequestSnapshot';
 import { assertWorkspaceOverrideAllowed } from '../execution/taskIsolationPolicyStore';
 import { parseInlineAttachmentContent } from '../llm/attachmentContent';
@@ -49,6 +50,73 @@ function validateWorkspaceOverride(taskId: string, payloadConfig: unknown): stri
     }
 
     return assertWorkspaceOverrideAllowed(taskId, candidateWorkspacePath);
+}
+
+const MAX_SUPERSEDED_CONTRACT_TOMBSTONES = 20;
+
+function snapshotsMatch(
+    left?: FrozenWorkRequestSnapshot,
+    right?: FrozenWorkRequestSnapshot,
+): boolean {
+    if (!left || !right) {
+        return false;
+    }
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function coerceSupersededContractTombstones(value: unknown): SupersededContractTombstone[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') {
+            return [];
+        }
+        const candidate = entry as Partial<SupersededContractTombstone>;
+        if (
+            candidate.reason !== 'contract_refreeze'
+            || typeof candidate.supersededAt !== 'string'
+            || !candidate.snapshot
+            || typeof candidate.snapshot !== 'object'
+        ) {
+            return [];
+        }
+
+        return [{
+            reason: 'contract_refreeze' as const,
+            supersededAt: candidate.supersededAt,
+            snapshot: candidate.snapshot as FrozenWorkRequestSnapshot,
+        }];
+    });
+}
+
+function appendSupersededContractTombstone(
+    config: Record<string, unknown>,
+    previousSnapshot: FrozenWorkRequestSnapshot | undefined,
+    nextSnapshot: FrozenWorkRequestSnapshot,
+): Record<string, unknown> {
+    const existing = coerceSupersededContractTombstones(config.supersededContractTombstones);
+    if (!previousSnapshot || snapshotsMatch(previousSnapshot, nextSnapshot)) {
+        return existing.length > 0
+            ? {
+                ...config,
+                supersededContractTombstones: existing.slice(-MAX_SUPERSEDED_CONTRACT_TOMBSTONES),
+            }
+            : config;
+    }
+
+    return {
+        ...config,
+        supersededContractTombstones: [
+            ...existing,
+            {
+                reason: 'contract_refreeze',
+                supersededAt: new Date().toISOString(),
+                snapshot: previousSnapshot,
+            },
+        ].slice(-MAX_SUPERSEDED_CONTRACT_TOMBSTONES),
+    };
 }
 
 export type RuntimeCommandDeps = {
@@ -919,10 +987,15 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 previous: previousFrozenSnapshot,
                 next: frozenSnapshot,
             });
-            deps.taskSessionStore.setConfig(taskId, {
-                ...(effectiveTaskConfig ?? {}),
-                lastFrozenWorkRequestSnapshot: frozenSnapshot,
-            });
+            const nextTaskConfig = appendSupersededContractTombstone(
+                {
+                    ...(effectiveTaskConfig ?? {}),
+                    lastFrozenWorkRequestSnapshot: frozenSnapshot,
+                },
+                previousFrozenSnapshot,
+                frozenSnapshot,
+            );
+            deps.taskSessionStore.setConfig(taskId, nextTaskConfig);
             effectiveTaskConfig = deps.applyFrozenWorkRequestSessionPolicy?.(
                 taskId,
                 frozenWorkRequest,
@@ -1110,10 +1183,15 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 workspacePath,
                 workRequestStore: deps.workRequestStore,
             });
-            const resumedConfig = {
-                ...(effectiveTaskConfig ?? {}),
-                lastFrozenWorkRequestSnapshot: snapshotFrozenWorkRequest(preparedWorkRequest.frozenWorkRequest),
-            };
+            const resumedSnapshot = snapshotFrozenWorkRequest(preparedWorkRequest.frozenWorkRequest);
+            const resumedConfig = appendSupersededContractTombstone(
+                {
+                    ...(effectiveTaskConfig ?? {}),
+                    lastFrozenWorkRequestSnapshot: resumedSnapshot,
+                },
+                effectiveTaskConfig?.lastFrozenWorkRequestSnapshot,
+                resumedSnapshot,
+            );
             effectiveTaskConfig = deps.applyFrozenWorkRequestSessionPolicy?.(
                 taskId,
                 preparedWorkRequest.frozenWorkRequest,

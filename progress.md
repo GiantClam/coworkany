@@ -447,6 +447,46 @@
 - Verification:
   - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
   - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+## 2026-03-22 Commercialization Gate Hardening
+
+- Updated release-readiness doctor gating in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`:
+  - added `--doctor-required-status healthy|degraded|blocked`
+  - default behavior is now contextual: `degraded` when no `appDataDir` is provided, `healthy` when `appDataDir` is provided
+  - report output now records `doctorRequiredStatus`
+- Added allowlist gate evaluator in `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`:
+  - `evaluateWorkspaceExtensionAllowlistReadiness(...)`
+  - gate passes when no third-party extension is enabled
+  - gate fails when third-party extensions are enabled without enforce-mode allowlist coverage
+- Updated allowlist stage in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts` to use enabled third-party skills/toolpacks from `.coworkany/skills.json` and `.coworkany/toolpacks.json`.
+- Hardened extension governance doctor behavior in `/Users/beihuang/Documents/github/coworkany/sidecar/src/doctor/sidecarDoctor.ts`:
+  - missing governance store is now pass when no third-party extension is enabled
+  - missing governance store is fail when third-party extensions are enabled
+- Added/updated regression coverage:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/sidecar-doctor.test.ts`
+- Verification:
+  - `bun test sidecar/tests/release-readiness.test.ts sidecar/tests/sidecar-doctor.test.ts`
+  - `bun x tsc -p sidecar/tsconfig.json --noEmit`
+  - `bun run sidecar/scripts/release-readiness.ts` (exit 0; all stages passed)
+
+## 2026-03-22 Canary Evidence Gate
+
+- Added canary evidence summary/gate primitives in `/Users/beihuang/Documents/github/coworkany/sidecar/src/release/readiness.ts`:
+  - `summarizeCanaryChecklistEvidence(...)`
+  - `evaluateCanaryChecklistEvidence(...)`
+  - readiness report schema + markdown now include `canaryEvidence` and `canaryEvidenceGate`
+- Extended release-readiness CLI in `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`:
+  - `--canary-evidence <path>`
+  - `--require-canary-evidence`
+  - new stage: `canary-checklist-evidence`
+- Added release-owner template: `/Users/beihuang/Documents/github/coworkany/docs/releases/canary-evidence.template.json`
+- Updated release process doc `/Users/beihuang/Documents/github/coworkany/docs/releases/canary-rollout-checklist.md` with strict commercial preflight command.
+- Added test coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts` for canary evidence summary + required/optional gate behavior.
+- Verification:
+  - `bun test sidecar/tests/release-readiness.test.ts sidecar/tests/sidecar-doctor.test.ts`
+  - `bun x tsc -p sidecar/tsconfig.json --noEmit`
+  - `bun run sidecar/scripts/release-readiness.ts` (exit 0; report includes canary evidence section/stage)
 - Closed the remaining agent-side memory isolation gaps:
   - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/knowledgeUpdater.ts` now writes and searches through task-scoped memory isolation when a tool context is present.
   - `/Users/beihuang/Documents/github/coworkany/sidecar/src/agent/reactLoop.ts` now retrieves reasoning memory through task-aware isolation instead of global memory context.

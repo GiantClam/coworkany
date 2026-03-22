@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "area": "Audience",
+      "completed": false,
+      "evidence": "Record named testers, cohort size, and install channel."
+    },
+    {
+      "area": "Rollback",
+      "completed": false,
+      "evidence": "Link previous signed/notarized bundle and rollback owner."
+    },
+    {
+      "area": "Observability",
+      "completed": false,
+      "evidence": "Attach startup metrics path and artifact telemetry excerpt from canary."
+    },
+    {
+      "area": "Fault Injection",
+      "completed": false,
+      "evidence": "Attach database failure recovery run output or Playwright report."
+    },
+    {
+      "area": "Health",
+      "completed": false,
+      "evidence": "Attach sidecar/service health checks after install and first task."
+    },
+    {
+      "area": "Decision Gate",
+      "completed": false,
+      "evidence": "Paste release-owner go/no-go decision linked to readiness report."
+    }
+  ]
+}

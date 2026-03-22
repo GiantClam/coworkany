@@ -3,10 +3,12 @@
 ## Scope
 - Use this checklist after `sidecar/scripts/release-readiness.ts` passes and before widening access beyond the initial beta cohort.
 - Treat the generated `artifacts/release-readiness/report.md` as the canonical machine-produced evidence bundle.
+- Keep a structured canary evidence file (template: `docs/releases/canary-evidence.template.json`) and validate it with `--canary-evidence`.
 
 ## Preflight
 - [ ] Run `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run scripts/release-readiness.ts --build-desktop`.
 - [ ] If you have a GUI-capable machine with the required provider credentials, run `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run scripts/release-readiness.ts --build-desktop --real-e2e`.
+- [ ] For commercial-claim preflight, run `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run scripts/release-readiness.ts --build-desktop --app-data-dir <appDataDir> --doctor-required-status healthy --canary-evidence <path/to/canary-evidence.json> --require-canary-evidence`.
 - [ ] Attach the generated `artifacts/release-readiness/report.json` and `artifacts/release-readiness/report.md` to the release issue or ship room.
 
 ## Real E2E Acceptance

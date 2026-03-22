@@ -280,3 +280,30 @@
   - isolation/policy mappings are keyed by real task session ids, so synthetic ids can silently degrade enforcement to an unbound context.
 - The fix now resolves the parent session task id and workspace from subtask ids and executes tools under that parent session context.
 - A dedicated doctor regression now flags this pattern if reintroduced, so this bug class cannot creep back quietly.
+
+## 2026-03-22 Commercialization Gate Hardening
+
+- Current `release-readiness` preflight was over-strict for clean local environments: it required doctor `healthy` even when no `appDataDir` evidence was supplied.
+- Workspace allowlist gating should be conditional on risk surface. Requiring enforce mode while zero third-party extensions are enabled creates false blockers and does not improve safety.
+- Safer gating model:
+  - zero enabled third-party extensions -> allowlist gate passes with explicit note
+  - any enabled third-party extension -> require `mode=enforce` and explicit allowlist membership for each enabled id
+- Extension governance doctor signal should also be risk-aware:
+  - missing governance store + zero enabled third-party extensions -> pass
+  - missing governance store + enabled third-party extensions -> fail
+- `release-readiness` now supports explicit doctor strictness and defaults to:
+  - `degraded` when `appDataDir` is not provided
+  - `healthy` when `appDataDir` is provided
+- This keeps local/preflight runs usable while preserving strict commercial gating for real canary evidence runs.
+
+## 2026-03-22 Canary Evidence Productization
+
+- The roadmap canary checklist was still a markdown-only process artifact; readiness could pass without structured proof for audience/rollback/fault-injection/go-no-go ownership.
+- To close that commercialization gap, release-readiness now supports a structured canary evidence file and a dedicated gate:
+  - evidence summary is included in report JSON/Markdown
+  - enforcement can be toggled with `--require-canary-evidence`
+  - strict runs fail when required checklist areas lack evidence
+- Optional mode preserves developer velocity:
+  - if `--require-canary-evidence` is not set, missing evidence file does not fail the run
+  - malformed evidence files still surface explicit findings
+- Added a template artifact in `docs/releases/canary-evidence.template.json` so release owners can fill evidence in a machine-checkable format instead of ad-hoc comments.

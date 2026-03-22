@@ -791,6 +791,27 @@ export const RemoveClaudeSkillResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+export const ApproveExtensionGovernanceCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('approve_extension_governance'),
+    payload: z.object({
+        extensionType: z.enum(['skill', 'toolpack']),
+        extensionId: z.string(),
+        enableAfterApprove: z.boolean().default(true),
+    }),
+});
+
+export const ApproveExtensionGovernanceResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('approve_extension_governance_response'),
+    payload: z.object({
+        success: z.boolean(),
+        extensionType: z.enum(['skill', 'toolpack']),
+        extensionId: z.string(),
+        governanceState: ExtensionGovernanceStateSchema.optional(),
+        enabled: z.boolean().optional(),
+        error: z.string().optional(),
+    }),
+});
+
 export const ListDirectivesCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_directives'),
     payload: z.object({}).optional(),
@@ -1316,6 +1337,7 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillCommandSchema,
     SetClaudeSkillEnabledCommandSchema,
     RemoveClaudeSkillCommandSchema,
+    ApproveExtensionGovernanceCommandSchema,
     ListDirectivesCommandSchema,
     UpsertDirectiveCommandSchema,
     RemoveDirectiveCommandSchema,
@@ -1373,6 +1395,7 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ImportClaudeSkillResponseSchema,
     SetClaudeSkillEnabledResponseSchema,
     RemoveClaudeSkillResponseSchema,
+    ApproveExtensionGovernanceResponseSchema,
     ListDirectivesResponseSchema,
     UpsertDirectiveResponseSchema,
     RemoveDirectiveResponseSchema,
@@ -1450,6 +1473,8 @@ export type ImportClaudeSkillResponse = z.infer<typeof ImportClaudeSkillResponse
 export type SetClaudeSkillEnabledCommand = z.infer<typeof SetClaudeSkillEnabledCommandSchema>;
 export type SetClaudeSkillEnabledResponse = z.infer<typeof SetClaudeSkillEnabledResponseSchema>;
 export type RemoveClaudeSkillCommand = z.infer<typeof RemoveClaudeSkillCommandSchema>;
+export type ApproveExtensionGovernanceCommand = z.infer<typeof ApproveExtensionGovernanceCommandSchema>;
+export type ApproveExtensionGovernanceResponse = z.infer<typeof ApproveExtensionGovernanceResponseSchema>;
 export type Directive = z.infer<typeof DirectiveSchema>;
 export type ListDirectivesCommand = z.infer<typeof ListDirectivesCommandSchema>;
 export type ListDirectivesResponse = z.infer<typeof ListDirectivesResponseSchema>;

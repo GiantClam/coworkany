@@ -13,6 +13,12 @@ export type FrozenWorkRequestSnapshot = {
     }>;
 };
 
+export type SupersededContractTombstone = {
+    supersededAt: string;
+    reason: 'contract_refreeze';
+    snapshot: FrozenWorkRequestSnapshot;
+};
+
 function sortStrings(values: Array<string | undefined>): string[] {
     return values
         .filter((value): value is string => typeof value === 'string' && value.length > 0)

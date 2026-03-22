@@ -1,4 +1,4 @@
-import type { FrozenWorkRequestSnapshot } from '../orchestration/workRequestSnapshot';
+import type { FrozenWorkRequestSnapshot, SupersededContractTombstone } from '../orchestration/workRequestSnapshot';
 import type {
     MemoryIsolationPolicy,
     RuntimeIsolationPolicy,
@@ -16,6 +16,7 @@ export type TaskSessionConfig = {
     workspacePath?: string;
     voiceProviderMode?: 'auto' | 'system' | 'custom';
     lastFrozenWorkRequestSnapshot?: FrozenWorkRequestSnapshot;
+    supersededContractTombstones?: SupersededContractTombstone[];
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;
     memoryIsolationPolicy?: MemoryIsolationPolicy;

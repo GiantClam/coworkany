@@ -196,3 +196,44 @@ Extend the safe-by-default isolation work into a first productized Workstream 5 
 - `bun x tsc -p sidecar/tsconfig.json --noEmit`
 - `bun test sidecar/tests/work-request-control-plane.test.ts sidecar/tests/runtime-commands.test.ts sidecar/tests/mcp-gateway-runtime-isolation.test.ts sidecar/tests/sidecar-doctor.test.ts sidecar/tests/control-plane-incident-replay.test.ts sidecar/tests/release-readiness.test.ts sidecar/tests/control-plane-event-log-importer.test.ts sidecar/tests/control-plane-evals.test.ts sidecar/tests/task-isolation-policy-store.test.ts`
 - `bun run sidecar/src/evals/controlPlaneEvalRunner.ts`
+
+## 2026-03-22 Release Gate Alignment (Roadmap v2 Diff Fix)
+
+### Goal
+Remove false-negative release blockers while preserving strict commercial gating for real canary evidence runs.
+
+### Phases
+- Discovery and failure triage: complete
+- Gate policy adjustments: complete
+- Test and readiness verification: complete
+
+### Decisions
+- `sidecar-doctor` gate strictness in `release-readiness` is now explicit and configurable via `--doctor-required-status`.
+- Default doctor strictness now depends on evidence context:
+  - no `appDataDir` => require `degraded`
+  - explicit `appDataDir` => require `healthy`
+- Workspace extension allowlist release gate is now risk-surface-aware:
+  - no enabled third-party extension => pass with explanatory note
+  - enabled third-party extension => require enforce-mode allowlist coverage for enabled ids
+- Missing extension governance store is now treated as:
+  - pass when no third-party extension is enabled
+  - fail when third-party extensions are enabled
+
+## 2026-03-22 Canary Checklist Evidence Gate
+
+### Goal
+Turn release checklist evidence from markdown-only process text into a machine-checkable readiness artifact for small commercial rollout.
+
+### Phases
+- Evidence schema and readiness helpers: complete
+- CLI and stage wiring: complete
+- Template/doc/test updates: complete
+
+### Decisions
+- Keep evidence enforcement opt-in for local/dev (`--require-canary-evidence`), but make strict commercial runs enforceable from the same release-readiness entrypoint.
+- Default evidence path is `artifacts/release-readiness/canary-evidence.json` when `--canary-evidence` is not specified.
+- Required mode fails on:
+  - missing evidence file
+  - invalid evidence JSON
+  - missing evidence for checklist areas
+- Optional mode remains non-blocking for missing/incomplete evidence so developers can run fast preflights while still seeing checklist deltas in the report.

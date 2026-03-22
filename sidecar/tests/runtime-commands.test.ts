@@ -490,6 +490,108 @@ describe('runtime commands handler', () => {
         }]);
     });
 
+    test('records superseded frozen contracts as tombstones when follow-up refreeze changes scope', async () => {
+        let capturedConfig: any;
+        const deps = createRuntimeCommandDeps({
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: (_taskId, config) => {
+                    capturedConfig = config;
+                },
+                getConfig: () => undefined,
+                getConversation: () => [],
+                getArtifactContract: () => ({ type: 'old-artifact-contract' }),
+                setArtifactContract: () => {},
+            },
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-old',
+                    mode: 'immediate_task',
+                    sourceText: '写一个总结，保存到 /tmp/report.md',
+                    tasks: [{ objective: '写一个总结' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-old',
+                        title: 'Old report',
+                        type: 'report_file',
+                        description: 'Save the report to markdown.',
+                        required: true,
+                        path: '/tmp/report.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-new',
+                    mode: 'immediate_task',
+                    sourceText: 'Actually, save it to /tmp/report.pdf instead.',
+                    tasks: [{ objective: '写一个总结' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-new',
+                        title: 'Updated report',
+                        type: 'artifact_file',
+                        description: 'Save the report to PDF.',
+                        required: true,
+                        path: '/tmp/report.pdf',
+                        format: 'pdf',
+                    }],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-new',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze corrected request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute corrected plan',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: 'Actually, save it to /tmp/report.pdf instead.',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-tombstone',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-refreeze-tombstone',
+                content: 'Actually, save it to /tmp/report.pdf instead.',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(capturedConfig?.lastFrozenWorkRequestSnapshot?.deliverables?.[0]?.path).toBe('/tmp/report.pdf');
+        expect(capturedConfig?.supersededContractTombstones).toHaveLength(1);
+        expect(capturedConfig?.supersededContractTombstones?.[0]).toMatchObject({
+            reason: 'contract_refreeze',
+            snapshot: {
+                deliverables: [
+                    expect.objectContaining({
+                        path: '/tmp/report.md',
+                        format: 'md',
+                    }),
+                ],
+            },
+        });
+    });
+
     test('falls back to the stored frozen snapshot for reopen detection after the active prepared request is cleared', async () => {
         const emitted: any[] = [];
         const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];

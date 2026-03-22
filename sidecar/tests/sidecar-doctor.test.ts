@@ -330,6 +330,72 @@ describe('sidecar doctor', () => {
         expect(formatSidecarDoctorReport(report)).toContain('Artifact degradation signals: 1');
     });
 
+    test('treats missing governance store as pass when no third-party extensions are enabled', () => {
+        const root = makeTempRepo();
+        const appDataDir = path.join(root, '.coworkany');
+        const readinessDir = path.join(root, 'artifacts', 'release-readiness');
+        const thresholdsPath = path.join(root, 'sidecar', 'evals', 'control-plane', 'readiness-thresholds.json');
+        fs.mkdirSync(appDataDir, { recursive: true });
+        fs.mkdirSync(readinessDir, { recursive: true });
+        fs.mkdirSync(path.dirname(thresholdsPath), { recursive: true });
+        fs.mkdirSync(path.join(root, 'sidecar', 'src', 'agent'), { recursive: true });
+        fs.mkdirSync(path.join(root, '.coworkany', 'self-learning'), { recursive: true });
+        fs.mkdirSync(path.join(appDataDir, 'startup-metrics'), { recursive: true });
+
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'main.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'reactLoop.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(root, 'sidecar', 'src', 'agent', 'autonomousAgent.ts'), 'export {};\n', 'utf-8');
+        fs.writeFileSync(path.join(appDataDir, 'task-runtime.json'), '[]\n', 'utf-8');
+        fs.writeFileSync(
+            path.join(appDataDir, 'startup-metrics', 'default.jsonl'),
+            `${JSON.stringify({ mark: 'frontend_ready', timestampEpochMs: Date.parse('2026-03-21T06:00:00.000Z') })}\n`,
+            'utf-8',
+        );
+        fs.writeFileSync(
+            path.join(root, '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl'),
+            `${JSON.stringify({ createdAt: '2026-03-21T06:06:00.000Z', artifactsCreated: ['/tmp/out.md'] })}\n`,
+            'utf-8',
+        );
+        fs.writeFileSync(
+            thresholdsPath,
+            JSON.stringify({
+                defaultProfile: 'beta',
+                profiles: {
+                    beta: {
+                        maxUnnecessaryClarificationRate: 0.05,
+                        minFreezeExpectationPassRate: 1,
+                        minArtifactExpectationPassRate: 1,
+                        minRuntimeReplayPassRate: 1,
+                        requireZeroFailedCases: true,
+                        minProductionReplayCasesBySource: { canary: 1 },
+                    },
+                },
+            }, null, 2),
+            'utf-8',
+        );
+        fs.writeFileSync(
+            path.join(readinessDir, 'report.json'),
+            JSON.stringify({
+                stages: [{ id: 'control-plane-eval', label: 'Control-plane eval suite', status: 'passed' }],
+                controlPlaneEvalGate: { passed: true, findings: [] },
+            }, null, 2),
+            'utf-8',
+        );
+
+        const report = runSidecarDoctor({
+            repositoryRoot: root,
+            appDataDir,
+            readinessReportPath: path.join(readinessDir, 'report.json'),
+            controlPlaneThresholdsPath: thresholdsPath,
+            controlPlaneThresholdProfile: 'beta',
+            now: new Date('2026-03-21T06:10:00.000Z'),
+        });
+
+        const governanceCheck = report.checks.find((check) => check.id === 'extension-governance');
+        expect(governanceCheck?.status).toBe('pass');
+        expect(governanceCheck?.summary).toContain('No enabled third-party extensions detected');
+    });
+
     test('fails guarded sources when autonomous subtask execution synthesizes task ids', () => {
         const root = makeTempRepo();
         const appDataDir = path.join(root, '.coworkany');

@@ -1,0 +1,536 @@
+{
+  "datasetFiles": [
+    "/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/gold.jsonl"
+  ],
+  "totals": {
+    "totalCases": 8,
+    "passedCases": 8,
+    "failedCases": 0
+  },
+  "stages": {
+    "analyze": {
+      "total": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "freeze": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0
+    },
+    "plan": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    "artifact": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0
+    },
+    "runtimeReplay": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0
+    }
+  },
+  "metrics": {
+    "clarificationRate": 0.16666666666666666,
+    "unnecessaryClarificationRate": 0,
+    "contractFreezeExpectationPassRate": 1,
+    "artifactExpectationPassRate": 1,
+    "artifactSatisfactionRate": 0.5,
+    "runtimeReplayPassRate": 1
+  },
+  "coverage": {
+    "productionReplaySources": {
+      "canary": {
+        "totalCases": 1,
+        "passedCases": 1,
+        "failedCases": 0,
+        "runtimeReplayCases": 1,
+        "runtimeReplayPassedCases": 1
+      }
+    }
+  },
+  "failures": [],
+  "caseResults": [
+    {
+      "id": "chat-simple",
+      "description": "Simple conversational input should stay in chat mode without clarification.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "analyze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "mode": "chat",
+            "clarificationRequired": false,
+            "missingFields": [],
+            "deliverableTypes": [
+              "chat_reply"
+            ],
+            "deliverablePaths": [],
+            "deliverableFormats": [
+              "chat_message"
+            ],
+            "checkpointKinds": [],
+            "userActionKinds": [],
+            "researchSources": [],
+            "selectedStrategyPresent": true,
+            "taskCategory": "mixed",
+            "preferredSkills": [
+              "task-orchestrator"
+            ],
+            "preferredTools": [],
+            "sessionFollowUpScope": "same_task_only",
+            "memoryDefaultWriteScope": "workspace",
+            "tenantWorkspaceBoundaryMode": "same_workspace_only"
+          }
+        }
+      }
+    },
+    {
+      "id": "planning-report",
+      "description": "Complex planning requests should freeze into a report-oriented contract with strategy selection.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "analyze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "mode": "immediate_task",
+            "clarificationRequired": false,
+            "missingFields": [],
+            "deliverableTypes": [
+              "report_file"
+            ],
+            "deliverablePaths": [
+              "reports/task-output.md"
+            ],
+            "deliverableFormats": [
+              "md"
+            ],
+            "checkpointKinds": [
+              "pre_delivery"
+            ],
+            "userActionKinds": [],
+            "researchSources": [
+              "web",
+              "template"
+            ],
+            "selectedStrategyPresent": true,
+            "taskCategory": "research",
+            "preferredSkills": [
+              "task-orchestrator",
+              "superpowers-workflow",
+              "planning-with-files"
+            ],
+            "preferredTools": [],
+            "sessionFollowUpScope": "same_task_only",
+            "memoryDefaultWriteScope": "workspace",
+            "tenantWorkspaceBoundaryMode": "same_workspace_only"
+          }
+        },
+        "freeze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "sourcesChecked": [
+              "conversation",
+              "template",
+              "web"
+            ],
+            "researchStatusesBySource": {
+              "web": "skipped",
+              "template": "skipped"
+            },
+            "blockingUnknownTopics": [],
+            "selectedStrategyPresent": true,
+            "deliverablePaths": [
+              "reports/task-output.md"
+            ]
+          }
+        },
+        "plan": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "runMode": "single",
+            "stepKinds": [
+              "goal_framing",
+              "research",
+              "uncertainty_resolution",
+              "contract_freeze",
+              "execution",
+              "reduction",
+              "presentation"
+            ],
+            "blockedStepKinds": [],
+            "pendingStepKinds": [
+              "execution",
+              "reduction",
+              "presentation"
+            ],
+            "completedStepKinds": [
+              "goal_framing",
+              "research",
+              "uncertainty_resolution",
+              "contract_freeze"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "explicit-path-artifact-pass",
+      "description": "Explicit output paths should survive contract freeze and satisfy the artifact contract when the file is produced.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "analyze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "mode": "immediate_task",
+            "clarificationRequired": false,
+            "missingFields": [],
+            "deliverableTypes": [
+              "artifact_file"
+            ],
+            "deliverablePaths": [
+              "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-control-plane-eval-explicit-path-artifact-pass-5NtZDA/workspace/.coworkany/gui-test.js"
+            ],
+            "deliverableFormats": [
+              "js"
+            ],
+            "checkpointKinds": [
+              "pre_delivery"
+            ],
+            "userActionKinds": [],
+            "researchSources": [
+              "workspace",
+              "web",
+              "template"
+            ],
+            "selectedStrategyPresent": true,
+            "taskCategory": "workspace",
+            "preferredSkills": [
+              "task-orchestrator",
+              "superpowers-workflow",
+              "planning-with-files"
+            ],
+            "preferredTools": [],
+            "sessionFollowUpScope": "same_task_only",
+            "memoryDefaultWriteScope": "workspace",
+            "tenantWorkspaceBoundaryMode": "same_workspace_only"
+          }
+        },
+        "artifact": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "passed": true,
+            "failedRequirementKinds": [],
+            "warnings": []
+          }
+        }
+      }
+    },
+    {
+      "id": "explicit-path-artifact-missing",
+      "description": "Artifact evaluation should fail when the planned explicit-path file is missing.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "analyze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "mode": "immediate_task",
+            "clarificationRequired": false,
+            "missingFields": [],
+            "deliverableTypes": [
+              "artifact_file"
+            ],
+            "deliverablePaths": [
+              "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-control-plane-eval-explicit-path-artifact-missing-SaiIm1/workspace/.coworkany/gui-test.js"
+            ],
+            "deliverableFormats": [
+              "js"
+            ],
+            "checkpointKinds": [
+              "pre_delivery"
+            ],
+            "userActionKinds": [],
+            "researchSources": [
+              "workspace",
+              "web",
+              "template"
+            ],
+            "selectedStrategyPresent": true,
+            "taskCategory": "workspace",
+            "preferredSkills": [
+              "task-orchestrator",
+              "superpowers-workflow",
+              "planning-with-files"
+            ],
+            "preferredTools": [],
+            "sessionFollowUpScope": "same_task_only",
+            "memoryDefaultWriteScope": "workspace",
+            "tenantWorkspaceBoundaryMode": "same_workspace_only"
+          }
+        },
+        "artifact": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "passed": false,
+            "failedRequirementKinds": [
+              "file"
+            ],
+            "warnings": []
+          }
+        }
+      }
+    },
+    {
+      "id": "ambiguous-follow-up",
+      "description": "Reference-only follow-ups should block on task-scope clarification before execution.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "analyze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "mode": "immediate_task",
+            "clarificationRequired": true,
+            "missingFields": [
+              "task_scope"
+            ],
+            "deliverableTypes": [
+              "chat_reply"
+            ],
+            "deliverablePaths": [],
+            "deliverableFormats": [
+              "chat_message"
+            ],
+            "checkpointKinds": [],
+            "userActionKinds": [
+              "clarify_input"
+            ],
+            "researchSources": [
+              "conversation",
+              "memory"
+            ],
+            "selectedStrategyPresent": true,
+            "taskCategory": "mixed",
+            "preferredSkills": [
+              "task-orchestrator"
+            ],
+            "preferredTools": [],
+            "sessionFollowUpScope": "same_task_only",
+            "memoryDefaultWriteScope": "workspace",
+            "tenantWorkspaceBoundaryMode": "same_workspace_only"
+          }
+        },
+        "plan": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "runMode": "single",
+            "stepKinds": [
+              "goal_framing",
+              "research",
+              "uncertainty_resolution",
+              "contract_freeze",
+              "execution",
+              "reduction",
+              "presentation"
+            ],
+            "blockedStepKinds": [
+              "uncertainty_resolution",
+              "contract_freeze",
+              "execution",
+              "reduction",
+              "presentation"
+            ],
+            "pendingStepKinds": [],
+            "completedStepKinds": [
+              "goal_framing",
+              "research"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "research-with-stubs",
+      "description": "Research-heavy browser-adjacent requests should complete workspace, web, template, and connected-app research when adapters are available.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "analyze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "mode": "immediate_task",
+            "clarificationRequired": false,
+            "missingFields": [],
+            "deliverableTypes": [
+              "chat_reply"
+            ],
+            "deliverablePaths": [],
+            "deliverableFormats": [
+              "chat_message"
+            ],
+            "checkpointKinds": [
+              "review",
+              "manual_action"
+            ],
+            "userActionKinds": [
+              "confirm_plan",
+              "external_auth"
+            ],
+            "researchSources": [
+              "workspace",
+              "web",
+              "template",
+              "connected_app"
+            ],
+            "selectedStrategyPresent": true,
+            "taskCategory": "browser",
+            "preferredSkills": [
+              "task-orchestrator"
+            ],
+            "preferredTools": [],
+            "sessionFollowUpScope": "same_task_only",
+            "memoryDefaultWriteScope": "task",
+            "tenantWorkspaceBoundaryMode": "same_workspace_only"
+          }
+        },
+        "freeze": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "sourcesChecked": [
+              "conversation",
+              "template",
+              "workspace",
+              "web",
+              "connected_app"
+            ],
+            "researchStatusesBySource": {
+              "workspace": "completed",
+              "web": "completed",
+              "template": "skipped",
+              "connected_app": "completed"
+            },
+            "blockingUnknownTopics": [],
+            "selectedStrategyPresent": true,
+            "deliverablePaths": []
+          }
+        },
+        "plan": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "runMode": "single",
+            "stepKinds": [
+              "goal_framing",
+              "research",
+              "uncertainty_resolution",
+              "contract_freeze",
+              "execution",
+              "reduction",
+              "presentation"
+            ],
+            "blockedStepKinds": [],
+            "pendingStepKinds": [
+              "execution",
+              "reduction",
+              "presentation"
+            ],
+            "completedStepKinds": [
+              "goal_framing",
+              "research",
+              "uncertainty_resolution",
+              "contract_freeze"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "runtime-followup-reopen",
+      "description": "Persisted finished-task context should reopen the contract on follow-up correction and emit the governed replay sequence.",
+      "source": "gold",
+      "passed": true,
+      "stages": {
+        "runtimeReplay": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "validatedEventCount": 8,
+            "eventTypes": [
+              "CHAT_MESSAGE",
+              "TASK_STATUS",
+              "TASK_CONTRACT_REOPENED",
+              "TASK_RESEARCH_UPDATED",
+              "TASK_PLAN_READY",
+              "PLAN_UPDATED",
+              "TASK_CHECKPOINT_REACHED",
+              "PLAN_UPDATED"
+            ],
+            "source": "live_sidecar",
+            "reopenTrigger": "contradictory_evidence",
+            "reopenReason": "User follow-up corrected the previous contract: deliverables or output targets changed; execution targets changed; primary objective changed.",
+            "planReadyDeliverablePaths": [
+              "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-control-plane-eval-runtime-followup-reopen-sRwpNF/workspace/hello.ts"
+            ],
+            "planReadySessionFollowUpScope": "same_task_only",
+            "planReadyMemoryDefaultWriteScope": "workspace",
+            "planReadyTenantWorkspaceBoundaryMode": "same_workspace_only",
+            "finalStatus": "running"
+          }
+        }
+      }
+    },
+    {
+      "id": "runtime-followup-reopen-log",
+      "description": "Saved runtime event logs should replay through the same runtimeReplay expectation model.",
+      "source": "production_replay",
+      "productionReplaySource": "canary",
+      "passed": true,
+      "stages": {
+        "runtimeReplay": {
+          "passed": true,
+          "mismatches": [],
+          "actual": {
+            "validatedEventCount": 5,
+            "eventTypes": [
+              "TASK_STATUS",
+              "TASK_CONTRACT_REOPENED",
+              "TASK_RESEARCH_UPDATED",
+              "TASK_PLAN_READY",
+              "TASK_STATUS"
+            ],
+            "source": "event_log",
+            "reopenTrigger": "contradictory_evidence",
+            "reopenReason": "User follow-up corrected the previous contract: deliverable path changed.",
+            "planReadyDeliverablePaths": [
+              "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-control-plane-eval-runtime-followup-reopen-log-0O5sr3/workspace/hello.ts"
+            ],
+            "planReadySessionFollowUpScope": "same_task_only",
+            "planReadyMemoryDefaultWriteScope": "workspace",
+            "planReadyTenantWorkspaceBoundaryMode": "same_workspace_only",
+            "finalStatus": "idle"
+          }
+        }
+      }
+    }
+  ]
+}

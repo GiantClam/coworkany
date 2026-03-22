@@ -8,12 +8,17 @@ import {
     createDefaultControlPlaneEvalThresholds,
     createDefaultCanaryChecklist,
     evaluateControlPlaneEvalReadiness,
+    evaluateSidecarDoctorReadiness,
+    evaluateWorkspaceExtensionAllowlistReadiness,
     inspectObservability,
+    evaluateCanaryChecklistEvidence,
     loadControlPlaneThresholdUpdateSuggestion,
     loadControlPlaneEvalThresholds,
     recommendProductionReplayThresholds,
     renderReleaseReadinessMarkdown,
+    summarizeCanaryChecklistEvidence,
     summarizeControlPlaneEvalSummary,
+    summarizeSidecarDoctorReport,
     summarizeProductionReplayImportSummary,
 } from '../src/release/readiness';
 
@@ -63,6 +68,7 @@ describe('release readiness helpers', () => {
                 realE2E: false,
                 appDataDir: undefined,
                 startupProfile: undefined,
+                doctorRequiredStatus: 'degraded',
                 controlPlaneThresholdsPath: '/tmp/repo/sidecar/evals/control-plane/readiness-thresholds.json',
                 controlPlaneThresholdProfile: 'beta',
                 syncProductionReplays: true,
@@ -153,6 +159,28 @@ describe('release readiness helpers', () => {
                 thresholdSourcePath: '/tmp/repo/sidecar/evals/control-plane/readiness-thresholds.json',
                 thresholdProfile: 'beta',
             },
+            sidecarDoctor: {
+                reportPath: '/tmp/repo/artifacts/release-readiness/doctor/report.json',
+                markdownPath: '/tmp/repo/artifacts/release-readiness/doctor/report.md',
+                exists: true,
+                overallStatus: 'healthy',
+                failedChecks: 0,
+                warnedChecks: 0,
+                checks: [
+                    {
+                        id: 'runtime-store',
+                        label: 'Runtime store integrity',
+                        status: 'pass',
+                        summary: 'Runtime store healthy with 2 valid record(s).',
+                    },
+                ],
+                warnings: [],
+            },
+            sidecarDoctorGate: {
+                passed: true,
+                requiredOverallStatus: 'healthy',
+                findings: [],
+            },
             observability: {
                 startupMetrics: {
                     inspected: false,
@@ -170,6 +198,9 @@ describe('release readiness helpers', () => {
         });
 
         expect(markdown).toContain('# Release Readiness Report');
+        expect(markdown).toContain('Doctor required status: degraded');
+        expect(markdown).toContain('Canary evidence path: not provided');
+        expect(markdown).toContain('Require canary evidence: no');
         expect(markdown).toContain('## Control-Plane Eval');
         expect(markdown).toContain('Cases: 8/8 passed');
         expect(markdown).toContain('Runtime replay pass rate: 100.0%');
@@ -187,6 +218,9 @@ describe('release readiness helpers', () => {
         expect(markdown).toContain('Suggested min production replay cases (beta): 1');
         expect(markdown).toContain('## Control-Plane Threshold Candidate Config');
         expect(markdown).toContain('control-plane-thresholds.candidate.json');
+        expect(markdown).toContain('## Sidecar Doctor');
+        expect(markdown).toContain('Overall status: healthy');
+        expect(markdown).toContain('Required overall status: healthy');
         expect(markdown).toContain('## Canary Checklist');
         expect(markdown).toContain('Observability');
         expect(markdown).toContain('No appDataDir provided');
@@ -268,6 +302,105 @@ describe('release readiness helpers', () => {
             updatedCases: 0,
             totalDatasetCases: 2,
         });
+    });
+
+    test('summarizes sidecar doctor report and evaluates readiness gate', () => {
+        const root = makeTempDir();
+        const reportPath = path.join(root, 'doctor-report.json');
+        fs.writeFileSync(reportPath, JSON.stringify({
+            overallStatus: 'degraded',
+            checks: [
+                {
+                    id: 'extension-governance',
+                    label: 'Extension governance posture',
+                    status: 'warn',
+                    summary: 'Detected 1 extension pending governance review.',
+                },
+                {
+                    id: 'runtime-store',
+                    label: 'Runtime store integrity',
+                    status: 'pass',
+                    summary: 'Runtime store healthy.',
+                },
+            ],
+        }, null, 2), 'utf-8');
+
+        const summary = summarizeSidecarDoctorReport(reportPath);
+        expect(summary).toMatchObject({
+            exists: true,
+            overallStatus: 'degraded',
+            failedChecks: 0,
+            warnedChecks: 1,
+        });
+        expect(summary.checks).toHaveLength(2);
+
+        const strictGate = evaluateSidecarDoctorReadiness(summary, 'healthy');
+        expect(strictGate.passed).toBe(false);
+        expect(strictGate.findings.some((finding) => finding.includes('below required'))).toBe(true);
+
+        const relaxedGate = evaluateSidecarDoctorReadiness(summary, 'degraded');
+        expect(relaxedGate.passed).toBe(true);
+        expect(relaxedGate.findings).toHaveLength(0);
+    });
+
+    test('passes allowlist gate when no third-party extensions are enabled', () => {
+        const gate = evaluateWorkspaceExtensionAllowlistReadiness({
+            mode: 'off',
+            allowedSkills: [],
+            allowedToolpacks: [],
+            enabledSkills: [],
+            enabledToolpacks: [],
+        });
+
+        expect(gate.passed).toBe(true);
+        expect(gate.findings).toHaveLength(0);
+        expect(gate.summary).toContain('No enabled third-party extensions detected');
+    });
+
+    test('fails allowlist gate when enabled third-party extensions are not enforce-allowlisted', () => {
+        const gate = evaluateWorkspaceExtensionAllowlistReadiness({
+            mode: 'off',
+            allowedSkills: [],
+            allowedToolpacks: [],
+            enabledSkills: ['custom-skill'],
+            enabledToolpacks: ['custom-toolpack'],
+        });
+
+        expect(gate.passed).toBe(false);
+        expect(gate.findings.some((finding) => finding.includes('mode must be "enforce"'))).toBe(true);
+        expect(gate.findings.some((finding) => finding.includes('custom-skill'))).toBe(true);
+        expect(gate.findings.some((finding) => finding.includes('custom-toolpack'))).toBe(true);
+    });
+
+    test('summarizes canary checklist evidence and enforces required gate', () => {
+        const root = makeTempDir();
+        const evidencePath = path.join(root, 'canary-evidence.json');
+        fs.writeFileSync(
+            evidencePath,
+            JSON.stringify({
+                items: [
+                    { area: 'Audience', completed: true, evidence: 'named-testers.md#L1' },
+                    { area: 'Rollback', completed: false, evidence: '' },
+                ],
+            }, null, 2),
+            'utf-8',
+        );
+
+        const checklist = createDefaultCanaryChecklist();
+        const summary = summarizeCanaryChecklistEvidence({
+            checklist,
+            evidencePath,
+        });
+        expect(summary.exists).toBe(true);
+        expect(summary.completedAreas).toContain('Audience');
+        expect(summary.missingAreas).toContain('Rollback');
+
+        const requiredGate = evaluateCanaryChecklistEvidence(summary, true);
+        expect(requiredGate.passed).toBe(false);
+        expect(requiredGate.findings.some((finding) => finding.includes('missing for area'))).toBe(true);
+
+        const optionalGate = evaluateCanaryChecklistEvidence(summary, false);
+        expect(optionalGate.passed).toBe(true);
     });
 
     test('recommends raising new per-source replay minimums only for newly evidenced sources', () => {

@@ -505,4 +505,151 @@ describe('capability commands handler', () => {
         expect(first?.permissions?.capabilities).toContain('filesystem:write');
         expect(first?.permissions?.bins).toContain('python3');
     });
+
+    test('set_claude_skill_enabled blocks non-allowlisted skills when workspace allowlist enforcement is enabled', async () => {
+        const response = await handleCapabilityCommand({
+            id: 'cmd-skill-allowlist-block',
+            type: 'set_claude_skill_enabled',
+            payload: {
+                skillId: 'blocked-skill',
+                enabled: true,
+            },
+        } as any, createDeps({
+            skillStore: {
+                list: () => [],
+                get: () => ({
+                    manifest: {
+                        name: 'blocked-skill',
+                    },
+                    isBuiltin: false,
+                } as any),
+                install: () => {},
+                setEnabled: () => true,
+                uninstall: () => true,
+            },
+            getWorkspaceExtensionAllowlistPolicy: () => ({
+                mode: 'enforce',
+                allowedSkills: ['approved-skill'],
+                allowedToolpacks: [],
+            }),
+        }));
+
+        expect(response?.type).toBe('set_claude_skill_enabled_response');
+        expect((response as any).payload).toMatchObject({
+            success: false,
+            skillId: 'blocked-skill',
+            error: 'workspace_extension_not_allowlisted',
+        });
+    });
+
+    test('set_toolpack_enabled blocks non-allowlisted toolpacks when workspace allowlist enforcement is enabled', async () => {
+        const response = await handleCapabilityCommand({
+            id: 'cmd-toolpack-allowlist-block',
+            type: 'set_toolpack_enabled',
+            payload: {
+                toolpackId: 'blocked-toolpack',
+                enabled: true,
+            },
+        } as any, createDeps({
+            toolpackStore: {
+                list: () => [],
+                getById: () => ({
+                    manifest: {
+                        id: 'blocked-toolpack',
+                    },
+                    isBuiltin: false,
+                } as any),
+                add: () => {},
+                setEnabledById: () => true,
+                removeById: () => true,
+            },
+            getWorkspaceExtensionAllowlistPolicy: () => ({
+                mode: 'enforce',
+                allowedSkills: [],
+                allowedToolpacks: ['approved-toolpack'],
+            }),
+        }));
+
+        expect(response?.type).toBe('set_toolpack_enabled_response');
+        expect((response as any).payload).toMatchObject({
+            success: false,
+            toolpackId: 'blocked-toolpack',
+            error: 'workspace_extension_not_allowlisted',
+        });
+    });
+
+    test('approve_extension_governance explicitly approves pending toolpack review and re-enables the extension', async () => {
+        const installDir = makeTempDir('capability-toolpack-approve-');
+        fs.writeFileSync(path.join(installDir, 'toolpack.json'), JSON.stringify({
+            id: 'governed-pack',
+            name: 'Governed Pack',
+            version: '1.0.0',
+            runtime: 'node',
+            tools: ['read_file'],
+            effects: ['filesystem:read'],
+        }));
+
+        const setEnabledCalls: Array<{ toolpackId: string; enabled: boolean }> = [];
+        let installed = false;
+        const deps = createDeps({
+            toolpackStore: {
+                list: () => [],
+                getById: () => installed
+                    ? ({
+                        manifest: {
+                            id: 'governed-pack',
+                            name: 'Governed Pack',
+                            version: '1.0.0',
+                            tools: ['read_file'],
+                            effects: ['filesystem:read'],
+                        },
+                    } as any)
+                    : undefined,
+                add: () => {
+                    installed = true;
+                },
+                setEnabledById: (toolpackId, enabled) => {
+                    setEnabledCalls.push({ toolpackId, enabled });
+                    return true;
+                },
+                removeById: () => true,
+            },
+        });
+
+        const installResponse = await handleCapabilityCommand({
+            id: 'cmd-governance-install',
+            type: 'install_toolpack',
+            payload: {
+                source: 'local_folder',
+                path: installDir,
+                allowUnsigned: true,
+            },
+        } as any, deps);
+
+        expect((installResponse as any)?.payload?.governanceState?.pendingReview).toBe(true);
+        expect((installResponse as any)?.payload?.governanceState?.quarantined).toBe(true);
+
+        const approveResponse = await handleCapabilityCommand({
+            id: 'cmd-governance-approve',
+            type: 'approve_extension_governance',
+            payload: {
+                extensionType: 'toolpack',
+                extensionId: 'governed-pack',
+            },
+        } as any, deps);
+
+        expect(approveResponse?.type).toBe('approve_extension_governance_response');
+        expect((approveResponse as any).payload.success).toBe(true);
+        expect((approveResponse as any).payload.governanceState).toMatchObject({
+            extensionType: 'toolpack',
+            extensionId: 'governed-pack',
+            pendingReview: false,
+            quarantined: false,
+            lastDecision: 'approved',
+        });
+        expect(setEnabledCalls).toEqual([
+            { toolpackId: 'governed-pack', enabled: false },
+            { toolpackId: 'governed-pack', enabled: true },
+        ]);
+    });
 });

@@ -23,6 +23,10 @@ import type { Directive, DirectiveManager } from '../agent/directives/directiveM
 import type { ToolpackStore } from '../storage/toolpackStore';
 import type { SkillStore } from '../storage/skillStore';
 import type { ToolpackManifest } from '../protocol/commands';
+import {
+    isWorkspaceExtensionAllowed,
+    type WorkspaceExtensionAllowlistPolicy,
+} from '../extensions/workspaceExtensionAllowlist';
 
 export type SkillImportResponsePayload = {
     success: boolean;
@@ -39,6 +43,7 @@ export type CapabilityCommandDeps = {
     skillStore: Pick<SkillStore, 'list' | 'get' | 'install' | 'setEnabled' | 'uninstall'>;
     toolpackStore: Pick<ToolpackStore, 'list' | 'getById' | 'add' | 'setEnabledById' | 'removeById'>;
     getExtensionGovernanceStore: () => Pick<ExtensionGovernanceStore, 'get' | 'recordReview' | 'markApproved' | 'clear'>;
+    getWorkspaceExtensionAllowlistPolicy?: () => WorkspaceExtensionAllowlistPolicy;
     getDirectiveManager: () => Pick<DirectiveManager, 'listDirectives' | 'upsertDirective' | 'removeDirective'>;
     importSkillFromDirectory: (
         inputPath: string,
@@ -61,6 +66,21 @@ export type CapabilityCommandDeps = {
         errors: string[];
     }>;
 };
+
+function isExtensionEnableAllowed(
+    deps: CapabilityCommandDeps,
+    input: {
+        extensionType: 'skill' | 'toolpack';
+        extensionId: string;
+        isBuiltin?: boolean;
+    }
+): boolean {
+    const policy = deps.getWorkspaceExtensionAllowlistPolicy?.();
+    if (!policy) {
+        return true;
+    }
+    return isWorkspaceExtensionAllowed(policy, input);
+}
 
 function respond(commandId: string, type: string, payload: Record<string, unknown>): IpcResponse {
     return {
@@ -284,6 +304,13 @@ function tryRegisterDownloadedToolpack(
         if (governanceState.quarantined) {
             deps.toolpackStore.setEnabledById(manifest.id, false);
         }
+        if (!isExtensionEnableAllowed(deps, {
+            extensionType: 'toolpack',
+            extensionId: manifest.id,
+            isBuiltin: false,
+        })) {
+            deps.toolpackStore.setEnabledById(manifest.id, false);
+        }
         return {
             governanceReview,
             governanceState,
@@ -453,6 +480,13 @@ function handleInstallToolpack(command: IpcCommand, deps: CapabilityCommandDeps)
         if (governanceState.quarantined) {
             deps.toolpackStore.setEnabledById(parsed.data.id, false);
         }
+        if (!isExtensionEnableAllowed(deps, {
+            extensionType: 'toolpack',
+            extensionId: parsed.data.id,
+            isBuiltin: false,
+        })) {
+            deps.toolpackStore.setEnabledById(parsed.data.id, false);
+        }
         return respond(command.id, 'install_toolpack_response', {
             success: true,
             toolpackId: parsed.data.id,
@@ -494,12 +528,24 @@ export async function handleCapabilityCommand(
                 toolpackId: string;
                 enabled: boolean;
             };
-            const success = deps.toolpackStore.setEnabledById(toolpackId, enabled);
-            if (success && enabled) {
-                const stored = deps.toolpackStore.getById(toolpackId) as { manifest?: { id?: string; name?: string } } | undefined;
+            if (enabled) {
+                const stored = deps.toolpackStore.getById(toolpackId) as
+                    | { isBuiltin?: boolean; manifest?: { id?: string; name?: string } }
+                    | undefined;
                 const extensionId = stored?.manifest?.id ?? stored?.manifest?.name ?? toolpackId;
-                deps.getExtensionGovernanceStore().markApproved('toolpack', extensionId);
+                if (!isExtensionEnableAllowed(deps, {
+                    extensionType: 'toolpack',
+                    extensionId,
+                    isBuiltin: stored?.isBuiltin === true,
+                })) {
+                    return respond(command.id, 'set_toolpack_enabled_response', {
+                        success: false,
+                        toolpackId,
+                        error: 'workspace_extension_not_allowlisted',
+                    });
+                }
             }
+            const success = deps.toolpackStore.setEnabledById(toolpackId, enabled);
             return respond(command.id, 'set_toolpack_enabled_response', {
                 success,
                 toolpackId,
@@ -581,14 +627,94 @@ export async function handleCapabilityCommand(
                 skillId: string;
                 enabled: boolean;
             };
-            const success = deps.skillStore.setEnabled(skillId, enabled);
-            if (success && enabled) {
-                deps.getExtensionGovernanceStore().markApproved('skill', skillId);
+            if (enabled) {
+                const stored = deps.skillStore.get(skillId) as
+                    | { isBuiltin?: boolean; manifest?: { name?: string } }
+                    | undefined;
+                const extensionId = stored?.manifest?.name ?? skillId;
+                if (!isExtensionEnableAllowed(deps, {
+                    extensionType: 'skill',
+                    extensionId,
+                    isBuiltin: stored?.isBuiltin === true,
+                })) {
+                    return respond(command.id, 'set_claude_skill_enabled_response', {
+                        success: false,
+                        skillId,
+                        error: 'workspace_extension_not_allowlisted',
+                    });
+                }
             }
+            const success = deps.skillStore.setEnabled(skillId, enabled);
             return respond(command.id, 'set_claude_skill_enabled_response', {
                 success,
                 skillId,
                 error: success ? undefined : 'skill_not_found',
+            });
+        }
+        case 'approve_extension_governance': {
+            const { extensionType, extensionId, enableAfterApprove } = command.payload as {
+                extensionType: 'skill' | 'toolpack';
+                extensionId: string;
+                enableAfterApprove?: boolean;
+            };
+            const governanceStore = deps.getExtensionGovernanceStore();
+            const existing = governanceStore.get(extensionType, extensionId);
+            if (!existing) {
+                return respond(command.id, 'approve_extension_governance_response', {
+                    success: false,
+                    extensionType,
+                    extensionId,
+                    error: 'governance_record_not_found',
+                });
+            }
+
+            let enabled: boolean | undefined;
+            const shouldEnable = enableAfterApprove !== false;
+            if (shouldEnable) {
+                if (!isExtensionEnableAllowed(deps, {
+                    extensionType,
+                    extensionId,
+                })) {
+                    return respond(command.id, 'approve_extension_governance_response', {
+                        success: false,
+                        extensionType,
+                        extensionId,
+                        governanceState: existing,
+                        enabled: false,
+                        error: 'workspace_extension_not_allowlisted',
+                    });
+                }
+                enabled = extensionType === 'skill'
+                    ? deps.skillStore.setEnabled(extensionId, true)
+                    : deps.toolpackStore.setEnabledById(extensionId, true);
+                if (enabled !== true) {
+                    return respond(command.id, 'approve_extension_governance_response', {
+                        success: false,
+                        extensionType,
+                        extensionId,
+                        governanceState: existing,
+                        enabled,
+                        error: 'extension_not_found',
+                    });
+                }
+            }
+
+            const governanceState = governanceStore.markApproved(extensionType, extensionId);
+            if (!governanceState) {
+                return respond(command.id, 'approve_extension_governance_response', {
+                    success: false,
+                    extensionType,
+                    extensionId,
+                    error: 'governance_record_not_found',
+                });
+            }
+
+            return respond(command.id, 'approve_extension_governance_response', {
+                success: true,
+                extensionType,
+                extensionId,
+                governanceState,
+                enabled,
             });
         }
         case 'remove_claude_skill': {

@@ -40,6 +40,20 @@ export type CanaryChecklistItem = {
     requiredEvidence: string;
 };
 
+export type CanaryChecklistEvidenceSummary = {
+    evidencePath: string;
+    exists: boolean;
+    completedAreas: string[];
+    missingAreas: string[];
+    findings: string[];
+};
+
+export type CanaryChecklistEvidenceGateResult = {
+    passed: boolean;
+    required: boolean;
+    findings: string[];
+};
+
 export type ControlPlaneEvalReadinessSummary = {
     summaryPath: string;
     exists: boolean;
@@ -76,6 +90,36 @@ export type ControlPlaneEvalGateResult = {
     thresholds: ControlPlaneEvalThresholds;
     thresholdSourcePath?: string;
     thresholdProfile?: string;
+};
+
+export type SidecarDoctorReadinessSummary = {
+    reportPath: string;
+    markdownPath?: string;
+    exists: boolean;
+    overallStatus: 'healthy' | 'degraded' | 'blocked' | 'unknown';
+    failedChecks: number;
+    warnedChecks: number;
+    checks: Array<{
+        id: string;
+        label: string;
+        status: 'pass' | 'warn' | 'fail';
+        summary: string;
+    }>;
+    warnings: string[];
+};
+
+export type SidecarDoctorGateResult = {
+    passed: boolean;
+    requiredOverallStatus: 'healthy' | 'degraded' | 'blocked';
+    findings: string[];
+};
+
+export type WorkspaceExtensionAllowlistGateResult = {
+    passed: boolean;
+    summary: string;
+    findings: string[];
+    enabledSkills: string[];
+    enabledToolpacks: string[];
 };
 
 export type ProductionReplayImportSummary = {
@@ -118,6 +162,9 @@ export type ReleaseReadinessReport = {
         realE2E: boolean;
         appDataDir?: string;
         startupProfile?: string;
+        doctorRequiredStatus?: SidecarDoctorGateResult['requiredOverallStatus'];
+        canaryEvidencePath?: string;
+        requireCanaryEvidence?: boolean;
         controlPlaneThresholdsPath?: string;
         controlPlaneThresholdProfile?: string;
         syncProductionReplays?: boolean;
@@ -136,9 +183,80 @@ export type ReleaseReadinessReport = {
     };
     controlPlaneEval?: ControlPlaneEvalReadinessSummary;
     controlPlaneEvalGate?: ControlPlaneEvalGateResult;
+    sidecarDoctor?: SidecarDoctorReadinessSummary;
+    sidecarDoctorGate?: SidecarDoctorGateResult;
+    canaryEvidence?: CanaryChecklistEvidenceSummary;
+    canaryEvidenceGate?: CanaryChecklistEvidenceGateResult;
     observability: ObservabilitySummary;
     checklist: CanaryChecklistItem[];
 };
+
+function normalizeUniqueStringList(values: string[]): string[] {
+    return Array.from(
+        new Set(
+            values
+                .map((value) => value.trim())
+                .filter((value) => value.length > 0),
+        ),
+    ).sort((left, right) => left.localeCompare(right));
+}
+
+export function evaluateWorkspaceExtensionAllowlistReadiness(input: {
+    mode: 'off' | 'enforce';
+    allowedSkills: string[];
+    allowedToolpacks: string[];
+    enabledSkills: string[];
+    enabledToolpacks: string[];
+}): WorkspaceExtensionAllowlistGateResult {
+    const enabledSkills = normalizeUniqueStringList(input.enabledSkills);
+    const enabledToolpacks = normalizeUniqueStringList(input.enabledToolpacks);
+    const allowedSkills = new Set(normalizeUniqueStringList(input.allowedSkills));
+    const allowedToolpacks = new Set(normalizeUniqueStringList(input.allowedToolpacks));
+    const findings: string[] = [];
+    const enabledCount = enabledSkills.length + enabledToolpacks.length;
+
+    if (enabledCount === 0) {
+        return {
+            passed: true,
+            summary: 'No enabled third-party extensions detected; workspace allowlist enforcement is not required yet.',
+            findings: [],
+            enabledSkills,
+            enabledToolpacks,
+        };
+    }
+
+    if (input.mode !== 'enforce') {
+        findings.push('Workspace extension allowlist mode must be "enforce" when third-party extensions are enabled.');
+    }
+
+    const missingSkills = enabledSkills.filter((skillId) => !allowedSkills.has(skillId));
+    if (missingSkills.length > 0) {
+        findings.push(`Enabled third-party skills missing from allowlist: ${missingSkills.join(', ')}`);
+    }
+
+    const missingToolpacks = enabledToolpacks.filter((toolpackId) => !allowedToolpacks.has(toolpackId));
+    if (missingToolpacks.length > 0) {
+        findings.push(`Enabled third-party toolpacks missing from allowlist: ${missingToolpacks.join(', ')}`);
+    }
+
+    if (findings.length > 0) {
+        return {
+            passed: false,
+            summary: `Workspace allowlist gate failed for ${enabledCount} enabled third-party extension(s).`,
+            findings,
+            enabledSkills,
+            enabledToolpacks,
+        };
+    }
+
+    return {
+        passed: true,
+        summary: `Workspace allowlist gate passed for ${enabledCount} enabled third-party extension(s).`,
+        findings: [],
+        enabledSkills,
+        enabledToolpacks,
+    };
+}
 
 type StartupMetricEntry = {
     timestampEpochMs?: number;
@@ -180,6 +298,16 @@ type RawProductionReplayImportSummary = {
     insertedCases?: number;
     updatedCases?: number;
     totalDatasetCases?: number;
+};
+
+type RawSidecarDoctorReport = {
+    overallStatus?: string;
+    checks?: Array<{
+        id?: string;
+        label?: string;
+        status?: string;
+        summary?: string;
+    }>;
 };
 
 const ControlPlaneEvalThresholdConfigSchema = z.object({
@@ -398,6 +526,116 @@ export function summarizeProductionReplayImportSummary(summaryPath: string): Pro
             bySource: {},
         };
     }
+}
+
+function normalizeSidecarDoctorStatus(value: unknown): SidecarDoctorReadinessSummary['overallStatus'] {
+    if (value === 'healthy' || value === 'degraded' || value === 'blocked') {
+        return value;
+    }
+    return 'unknown';
+}
+
+export function summarizeSidecarDoctorReport(
+    reportPath: string,
+    markdownPath?: string,
+): SidecarDoctorReadinessSummary {
+    if (!fs.existsSync(reportPath)) {
+        return {
+            reportPath,
+            markdownPath,
+            exists: false,
+            overallStatus: 'unknown',
+            failedChecks: 0,
+            warnedChecks: 0,
+            checks: [],
+            warnings: [`Sidecar doctor report not found: ${reportPath}`],
+        };
+    }
+
+    try {
+        const parsed = JSON.parse(fs.readFileSync(reportPath, 'utf-8')) as RawSidecarDoctorReport;
+        const checks = (parsed.checks ?? []).flatMap((check) => {
+            const status = check?.status;
+            if (status !== 'pass' && status !== 'warn' && status !== 'fail') {
+                return [];
+            }
+            const normalizedStatus: 'pass' | 'warn' | 'fail' = status;
+            return [{
+                id: typeof check.id === 'string' ? check.id : 'unknown',
+                label: typeof check.label === 'string' ? check.label : 'Unknown check',
+                status: normalizedStatus,
+                summary: typeof check.summary === 'string' ? check.summary : '',
+            }];
+        });
+        const failedChecks = checks.filter((check) => check.status === 'fail').length;
+        const warnedChecks = checks.filter((check) => check.status === 'warn').length;
+        const overallStatus = normalizeSidecarDoctorStatus(parsed.overallStatus);
+        const warnings: string[] = [];
+        if (overallStatus === 'unknown') {
+            warnings.push('Sidecar doctor report has unknown overallStatus.');
+        }
+
+        return {
+            reportPath,
+            markdownPath,
+            exists: true,
+            overallStatus,
+            failedChecks,
+            warnedChecks,
+            checks,
+            warnings,
+        };
+    } catch {
+        return {
+            reportPath,
+            markdownPath,
+            exists: false,
+            overallStatus: 'unknown',
+            failedChecks: 0,
+            warnedChecks: 0,
+            checks: [],
+            warnings: [`Sidecar doctor report is not valid JSON: ${reportPath}`],
+        };
+    }
+}
+
+function sidecarDoctorStatusRank(status: SidecarDoctorReadinessSummary['overallStatus'] | SidecarDoctorGateResult['requiredOverallStatus']): number {
+    switch (status) {
+        case 'healthy':
+            return 2;
+        case 'degraded':
+            return 1;
+        case 'blocked':
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+export function evaluateSidecarDoctorReadiness(
+    summary: SidecarDoctorReadinessSummary,
+    requiredOverallStatus: SidecarDoctorGateResult['requiredOverallStatus'] = 'healthy',
+): SidecarDoctorGateResult {
+    const findings: string[] = [];
+
+    if (!summary.exists) {
+        findings.push('Sidecar doctor report is missing.');
+    }
+    if (summary.warnings.length > 0) {
+        findings.push(...summary.warnings);
+    }
+
+    if (sidecarDoctorStatusRank(summary.overallStatus) < sidecarDoctorStatusRank(requiredOverallStatus)) {
+        findings.push(
+            `Sidecar doctor overall status ${JSON.stringify(summary.overallStatus)} is below required ${JSON.stringify(requiredOverallStatus)}.`
+        );
+    }
+
+    return {
+        passed: findings.length === 0,
+        requiredOverallStatus,
+        findings,
+    };
 }
 
 export function recommendProductionReplayThresholds(
@@ -670,6 +908,105 @@ export function createDefaultCanaryChecklist(): CanaryChecklistItem[] {
     ];
 }
 
+type RawCanaryEvidenceItem = {
+    area?: unknown;
+    completed?: unknown;
+    evidence?: unknown;
+};
+
+type RawCanaryEvidencePayload = {
+    items?: unknown;
+};
+
+function extractCanaryEvidenceItems(raw: unknown): RawCanaryEvidenceItem[] {
+    if (Array.isArray(raw)) {
+        return raw as RawCanaryEvidenceItem[];
+    }
+    if (!raw || typeof raw !== 'object') {
+        return [];
+    }
+    const payload = raw as RawCanaryEvidencePayload;
+    return Array.isArray(payload.items) ? payload.items as RawCanaryEvidenceItem[] : [];
+}
+
+export function summarizeCanaryChecklistEvidence(input: {
+    checklist: CanaryChecklistItem[];
+    evidencePath: string;
+}): CanaryChecklistEvidenceSummary {
+    const expectedAreas = Array.from(new Set(input.checklist.map((item) => item.area))).sort((left, right) => left.localeCompare(right));
+    const summary: CanaryChecklistEvidenceSummary = {
+        evidencePath: input.evidencePath,
+        exists: fs.existsSync(input.evidencePath),
+        completedAreas: [],
+        missingAreas: [...expectedAreas],
+        findings: [],
+    };
+
+    if (!summary.exists) {
+        return summary;
+    }
+
+    let raw: unknown;
+    try {
+        raw = JSON.parse(fs.readFileSync(input.evidencePath, 'utf-8'));
+    } catch (error) {
+        summary.findings.push(`Canary evidence file is not valid JSON: ${String(error)}`);
+        return summary;
+    }
+
+    const items = extractCanaryEvidenceItems(raw);
+    const itemByArea = new Map<string, RawCanaryEvidenceItem>();
+    for (const item of items) {
+        if (!item || typeof item !== 'object') {
+            continue;
+        }
+        const area = typeof item.area === 'string' ? item.area.trim() : '';
+        if (area.length === 0) {
+            continue;
+        }
+        itemByArea.set(area, item);
+    }
+
+    const completedAreas: string[] = [];
+    const missingAreas: string[] = [];
+
+    for (const area of expectedAreas) {
+        const item = itemByArea.get(area);
+        const completed = item?.completed === true;
+        const evidence = typeof item?.evidence === 'string' ? item.evidence.trim() : '';
+
+        if (completed && evidence.length > 0) {
+            completedAreas.push(area);
+            continue;
+        }
+
+        missingAreas.push(area);
+    }
+
+    summary.completedAreas = completedAreas;
+    summary.missingAreas = missingAreas;
+    return summary;
+}
+
+export function evaluateCanaryChecklistEvidence(
+    summary: CanaryChecklistEvidenceSummary,
+    required: boolean,
+): CanaryChecklistEvidenceGateResult {
+    const findings = [...summary.findings];
+    if (required && !summary.exists) {
+        findings.push(`Canary evidence file not found: ${summary.evidencePath}`);
+    }
+    if (required && summary.missingAreas.length > 0) {
+        findings.push(`Canary checklist evidence missing for area(s): ${summary.missingAreas.join(', ')}`);
+    }
+
+    return {
+        passed: findings.length === 0,
+        required,
+        findings,
+    };
+}
+
 export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): string {
     const lines: string[] = [
         '# Release Readiness Report',
@@ -683,6 +1020,9 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
         `- Real E2E: ${report.requestedOptions.realE2E ? 'yes' : 'no'}`,
         `- App data dir: ${report.requestedOptions.appDataDir ?? 'not provided'}`,
         `- Startup profile: ${report.requestedOptions.startupProfile ?? 'all available profiles'}`,
+        `- Doctor required status: ${report.requestedOptions.doctorRequiredStatus ?? 'healthy'}`,
+        `- Canary evidence path: ${report.requestedOptions.canaryEvidencePath ?? 'not provided'}`,
+        `- Require canary evidence: ${report.requestedOptions.requireCanaryEvidence ? 'yes' : 'no'}`,
         `- Control-plane thresholds: ${report.requestedOptions.controlPlaneThresholdsPath ?? 'built-in defaults'}`,
         `- Control-plane threshold profile: ${report.requestedOptions.controlPlaneThresholdProfile ?? 'default'}`,
         `- Sync production replays: ${report.requestedOptions.syncProductionReplays ? 'yes' : 'no'}`,
@@ -750,6 +1090,54 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
                 lines.push(`- Min production replay cases (${sourceLabel}): ${minCases}`);
             }
             for (const finding of report.controlPlaneEvalGate.findings) {
+                lines.push(`- Gate finding: ${finding}`);
+            }
+        }
+    }
+
+    if (report.sidecarDoctor) {
+        lines.push('', '## Sidecar Doctor', '');
+        lines.push(`- Report: \`${report.sidecarDoctor.reportPath}\``);
+        if (report.sidecarDoctor.markdownPath) {
+            lines.push(`- Markdown: \`${report.sidecarDoctor.markdownPath}\``);
+        }
+        lines.push(`- Overall status: ${report.sidecarDoctor.overallStatus}`);
+        lines.push(`- Failed checks: ${report.sidecarDoctor.failedChecks}`);
+        lines.push(`- Warned checks: ${report.sidecarDoctor.warnedChecks}`);
+        for (const check of report.sidecarDoctor.checks) {
+            lines.push(`- Check (${check.status}): ${check.id} — ${check.summary}`);
+        }
+        for (const warning of report.sidecarDoctor.warnings) {
+            lines.push(`- Warning: ${warning}`);
+        }
+        if (report.sidecarDoctorGate) {
+            lines.push(`- Gate: ${report.sidecarDoctorGate.passed ? 'passed' : 'failed'}`);
+            lines.push(`- Required overall status: ${report.sidecarDoctorGate.requiredOverallStatus}`);
+            for (const finding of report.sidecarDoctorGate.findings) {
+                lines.push(`- Gate finding: ${finding}`);
+            }
+        }
+    }
+
+    if (report.canaryEvidence) {
+        lines.push('', '## Canary Evidence', '');
+        lines.push(`- Evidence file: \`${report.canaryEvidence.evidencePath}\``);
+        lines.push(`- Exists: ${report.canaryEvidence.exists ? 'yes' : 'no'}`);
+        lines.push(`- Completed areas: ${report.canaryEvidence.completedAreas.length}`);
+        lines.push(`- Missing areas: ${report.canaryEvidence.missingAreas.length}`);
+        if (report.canaryEvidence.completedAreas.length > 0) {
+            lines.push(`- Areas complete: ${report.canaryEvidence.completedAreas.join(', ')}`);
+        }
+        if (report.canaryEvidence.missingAreas.length > 0) {
+            lines.push(`- Areas missing evidence: ${report.canaryEvidence.missingAreas.join(', ')}`);
+        }
+        for (const finding of report.canaryEvidence.findings) {
+            lines.push(`- Finding: ${finding}`);
+        }
+        if (report.canaryEvidenceGate) {
+            lines.push(`- Gate: ${report.canaryEvidenceGate.passed ? 'passed' : 'failed'}`);
+            lines.push(`- Required: ${report.canaryEvidenceGate.required ? 'yes' : 'no'}`);
+            for (const finding of report.canaryEvidenceGate.findings) {
                 lines.push(`- Gate finding: ${finding}`);
             }
         }

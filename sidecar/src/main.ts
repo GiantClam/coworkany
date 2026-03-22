@@ -183,6 +183,11 @@ import {
     type ExtensionGovernanceState,
 } from './extensions/governanceStore';
 import {
+    isWorkspaceExtensionAllowed,
+    loadWorkspaceExtensionAllowlistPolicy,
+    type WorkspaceExtensionAllowlistPolicy,
+} from './extensions/workspaceExtensionAllowlist';
+import {
     ScheduledTaskStore,
     detectScheduledIntent,
     formatScheduledTime,
@@ -1638,6 +1643,10 @@ function getExtensionGovernanceStore(): ExtensionGovernanceStore {
     return extensionGovernanceStoreCache.store;
 }
 
+function getWorkspaceExtensionAllowlistPolicy(): WorkspaceExtensionAllowlistPolicy {
+    return loadWorkspaceExtensionAllowlistPolicy(workspaceRoot);
+}
+
 function getResolvedShell(): string {
     return desktopRuntimeContext?.shell || (process.platform === 'win32' ? 'PowerShell/cmd' : process.env.SHELL || '/bin/bash');
 }
@@ -1725,6 +1734,14 @@ async function importSkillFromDirectory(
     if (governanceState.quarantined) {
         skillStore.setEnabled(manifest.name, false);
     }
+    if (!isWorkspaceExtensionAllowed(getWorkspaceExtensionAllowlistPolicy(), {
+        extensionType: 'skill',
+        extensionId: manifest.name,
+        isBuiltin: false,
+    })) {
+        skillStore.setEnabled(manifest.name, false);
+        warnings.push(`Workspace extension allowlist denied automatic enable for skill "${manifest.name}".`);
+    }
     return {
         success: true,
         skillId: manifest.name,
@@ -1799,6 +1816,7 @@ const capabilityCommandDeps: CapabilityCommandDeps = {
     skillStore,
     toolpackStore,
     getExtensionGovernanceStore,
+    getWorkspaceExtensionAllowlistPolicy,
     getDirectiveManager,
     importSkillFromDirectory,
     downloadSkillFromGitHub,

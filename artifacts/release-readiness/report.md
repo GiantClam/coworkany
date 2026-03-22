@@ -1,18 +1,28 @@
 # Release Readiness Report
 
-Generated: 2026-03-18T05:17:33.107Z
+Generated: 2026-03-22T03:17:53.591Z
 Repository root: /Users/beihuang/Documents/github/coworkany
 
 ## Requested Options
 
-- Build desktop: yes
+- Build desktop: no
 - Real E2E: no
 - App data dir: not provided
 - Startup profile: all available profiles
+- Doctor required status: degraded
+- Canary evidence path: /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json
+- Require canary evidence: no
+- Control-plane thresholds: /Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json
+- Control-plane threshold profile: beta
+- Sync production replays: no
+- Production replay dataset: default dataset path
 
 ## Stage Results
 
-- [x] Sidecar typecheck: passed (21s, exit=0)
+- [x] Control-plane eval suite: passed (5s, exit=0)
+  Command: `bun run eval:control-plane --out /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json`
+  CWD: `/Users/beihuang/Documents/github/coworkany/sidecar`
+- [x] Sidecar typecheck: passed (6s, exit=0)
   Command: `npm run typecheck`
   CWD: `/Users/beihuang/Documents/github/coworkany/sidecar`
 - [x] Sidecar stable regression suite: passed (5s, exit=0)
@@ -21,15 +31,69 @@ Repository root: /Users/beihuang/Documents/github/coworkany
 - [x] Sidecar release gate tests: passed (0s, exit=0)
   Command: `bun test tests/runtime-commands.test.ts tests/capability-commands.test.ts tests/workspace-commands.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/planning-files.test.ts tests/release-readiness.test.ts`
   CWD: `/Users/beihuang/Documents/github/coworkany/sidecar`
-- [x] Desktop typecheck: passed (6s, exit=0)
+- [x] Desktop typecheck: passed (3s, exit=0)
   Command: `npx tsc --noEmit`
   CWD: `/Users/beihuang/Documents/github/coworkany/desktop`
-- [x] Desktop acceptance suite: passed (1s, exit=0)
+- [x] Desktop acceptance suite: passed (0s, exit=0)
   Command: `npm test`
   CWD: `/Users/beihuang/Documents/github/coworkany/desktop`
-- [x] Desktop production build: passed (10s, exit=0)
-  Command: `npm run build`
-  CWD: `/Users/beihuang/Documents/github/coworkany/desktop`
+- [x] Sidecar doctor preflight: passed (0s, exit=0)
+  Command: `bun run doctor -- --output-dir /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor --readiness-report /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/report.json`
+  CWD: `/Users/beihuang/Documents/github/coworkany/sidecar`
+- [x] Workspace extension allowlist gate: passed (0s, exit=0) — No enabled third-party extensions detected; workspace allowlist enforcement is not required yet. (mode=off, enabledSkills=0, enabledToolpacks=0)
+  Command: `workspace extension allowlist policy check`
+  CWD: `/Users/beihuang/Documents/github/coworkany`
+- [x] Canary checklist evidence gate: passed (0s, exit=0) — required=no, completedAreas=0, missingAreas=6
+  Command: `canary checklist evidence validation (/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json)`
+  CWD: `/Users/beihuang/Documents/github/coworkany`
+
+## Control-Plane Eval
+
+- Summary: `/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json`
+- Cases: 8/8 passed
+- Clarification rate: 16.7%
+- Unnecessary clarification rate: 0.0%
+- Freeze expectation pass rate: 100.0%
+- Artifact expectation pass rate: 100.0%
+- Artifact satisfaction rate: 50.0%
+- Runtime replay pass rate: 100.0%
+- Production replay coverage (canary): 1/1 passed, runtimeReplay 1/1
+- Gate: passed
+- Thresholds: `/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json`
+- Threshold profile: beta
+- Max unnecessary clarification rate: 5.0%
+- Min freeze expectation pass rate: 100.0%
+- Min artifact expectation pass rate: 100.0%
+- Min runtime replay pass rate: 100.0%
+- Require zero failed cases: yes
+- Min production replay cases (canary): 1
+
+## Sidecar Doctor
+
+- Report: `/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor/report.json`
+- Markdown: `/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor/report.md`
+- Overall status: degraded
+- Failed checks: 0
+- Warned checks: 3
+- Check (warn): runtime-store — Runtime store not found at /Users/beihuang/Documents/github/coworkany/.coworkany/task-runtime.json
+- Check (warn): isolation-contracts — Runtime store not found at /Users/beihuang/Documents/github/coworkany/.coworkany/task-runtime.json
+- Check (pass): extension-governance — No enabled third-party extensions detected; governance store has not been created yet.
+- Check (pass): memory-source-guards — Guarded runtime sources are free of known global memory bypass patterns (3 file(s) scanned).
+- Check (pass): control-plane-readiness — Latest readiness artifact is present and passing.
+- Check (warn): observability — Observability coverage has 2 warning(s).
+- Check (pass): anomaly-signals — No repeated reopen, clarification, or degraded-output anomalies detected.
+- Gate: passed
+- Required overall status: degraded
+
+## Canary Evidence
+
+- Evidence file: `/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json`
+- Exists: no
+- Completed areas: 0
+- Missing areas: 6
+- Areas missing evidence: Audience, Decision Gate, Fault Injection, Health, Observability, Rollback
+- Gate: passed
+- Required: no
 
 ## Observability
 
