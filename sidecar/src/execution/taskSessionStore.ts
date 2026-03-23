@@ -13,6 +13,7 @@ export type TaskSessionConfig = {
     enabledClaudeSkills?: string[];
     enabledToolpacks?: string[];
     enabledSkills?: string[];
+    disabledTools?: string[];
     workspacePath?: string;
     voiceProviderMode?: 'auto' | 'system' | 'custom';
     lastFrozenWorkRequestSnapshot?: FrozenWorkRequestSnapshot;

@@ -14,6 +14,7 @@
 import { test, expect, type Locator } from './tauriFixtureNoChrome';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { spawnSync } from 'child_process';
 
 const TASK_TIMEOUT_MS = 8 * 60 * 1000;
@@ -33,8 +34,19 @@ function ensureDir(dirPath: string): void {
     fs.mkdirSync(dirPath, { recursive: true });
 }
 
-function runPython(args: string[], cwd?: string): { code: number | null; stdout: string; stderr: string } {
-    const proc = spawnSync('python', args, {
+function resolvePythonCommand(): string {
+    const candidates = ['python', 'python3'];
+    for (const command of candidates) {
+        const probe = spawnSync(command, ['--version'], { encoding: 'utf-8' });
+        if (probe.status === 0) {
+            return command;
+        }
+    }
+    throw new Error('Neither python nor python3 is available in PATH');
+}
+
+function runPython(command: string, args: string[], cwd?: string): { code: number | null; stdout: string; stderr: string } {
+    const proc = spawnSync(command, args, {
         cwd,
         encoding: 'utf-8',
     });
@@ -45,8 +57,9 @@ function runPython(args: string[], cwd?: string): { code: number | null; stdout:
     };
 }
 
-function ensurePythonPdfDependencies(sidecarDir: string): void {
+function ensurePythonPdfDependencies(command: string, sidecarDir: string): void {
     const install = runPython(
+        command,
         ['-m', 'pip', 'install', '--disable-pip-version-check', 'pypdf', 'reportlab'],
         sidecarDir,
     );
@@ -55,7 +68,7 @@ function ensurePythonPdfDependencies(sidecarDir: string): void {
     }
 }
 
-function createWatermarkedPdf(pdfPath: string): void {
+function createWatermarkedPdf(command: string, pdfPath: string): void {
     const script = [
         'from reportlab.pdfgen import canvas',
         'from reportlab.lib.pagesizes import A4',
@@ -68,13 +81,13 @@ function createWatermarkedPdf(pdfPath: string): void {
         "print('PDF_CREATED')",
     ].join('\n');
 
-    const created = runPython(['-c', script]);
+    const created = runPython(command, ['-c', script]);
     if (created.code !== 0 || !/PDF_CREATED/.test(created.stdout)) {
         throw new Error(`Failed to create test PDF.\n${created.stdout}\n${created.stderr}`);
     }
 }
 
-function detectCoworkanyInPdf(pdfPath: string): boolean {
+function detectCoworkanyInPdf(command: string, pdfPath: string): boolean {
     const rawHas = fs.readFileSync(pdfPath).toString('latin1').toLowerCase().includes('coworkany');
     if (!rawHas) {
         return false;
@@ -90,7 +103,7 @@ function detectCoworkanyInPdf(pdfPath: string): boolean {
         '    text += (page.extract_text() or "")',
         "print('FOUND' if 'coworkany' in text.lower() else 'NOT_FOUND')",
     ].join('\n');
-    const result = runPython(['-c', script]);
+    const result = runPython(command, ['-c', script]);
     if (result.code !== 0) {
         return rawHas;
     }
@@ -133,8 +146,13 @@ function normalizeCommand(command: string): string {
     return command.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function parseRunCommandCalls(rawLogs: string): string[] {
-    const commands: string[] = [];
+type ExecutionToolCall = {
+    toolName: string;
+    command: string;
+};
+
+function parseExecutionToolCalls(rawLogs: string): ExecutionToolCall[] {
+    const calls: ExecutionToolCall[] = [];
     const marker = 'Received from sidecar: ';
     for (const line of rawLogs.split(/\r?\n/)) {
         const idx = line.indexOf(marker);
@@ -143,21 +161,27 @@ function parseRunCommandCalls(rawLogs: string): string[] {
         if (!jsonPart.startsWith('{')) continue;
         try {
             const evt = JSON.parse(jsonPart) as any;
-            if (evt?.type === 'TOOL_CALL' && evt?.payload?.name === 'run_command') {
-                const command = evt?.payload?.input?.command;
+            const name = evt?.payload?.name;
+            if (evt?.type === 'TOOL_CALL' && (name === 'run_command' || name === 'execute_python')) {
+                const input = evt?.payload?.input || {};
+                const command =
+                    typeof input?.command === 'string'
+                        ? input.command
+                        : JSON.stringify(input);
                 if (typeof command === 'string' && command.trim().length > 0) {
-                    commands.push(command);
+                    calls.push({ toolName: name, command });
                 }
             }
         } catch {
             // Fallback: regex parse for partially malformed JSON log lines.
-            if (line.includes('"type":"TOOL_CALL"') && line.includes('"name":"run_command"')) {
-                const m = line.match(/"command":"((?:\\.|[^"\\])*)"/);
+            if (line.includes('"type":"TOOL_CALL"') && (line.includes('"name":"run_command"') || line.includes('"name":"execute_python"'))) {
+                const m = line.match(/"(?:command|code|script)":"((?:\\.|[^"\\])*)"/);
                 if (m?.[1]) {
                     try {
                         const parsed = JSON.parse(`"${m[1]}"`);
                         if (typeof parsed === 'string' && parsed.trim().length > 0) {
-                            commands.push(parsed);
+                            const toolName = line.includes('"name":"execute_python"') ? 'execute_python' : 'run_command';
+                            calls.push({ toolName, command: parsed });
                         }
                     } catch {
                         // Ignore fallback parse errors.
@@ -166,7 +190,7 @@ function parseRunCommandCalls(rawLogs: string): string[] {
             }
         }
     }
-    return commands;
+    return calls;
 }
 
 function maxConsecutiveIdentical(commands: string[]): number {
@@ -192,20 +216,20 @@ test.describe('Desktop GUI E2E - PDF watermark cleanup', () => {
 
     test('send PDF cleanup message via desktop and verify anti-loop + cleanup result', async ({ page, tauriLogs }) => {
         const sidecarDir = path.resolve(process.cwd(), '..', 'sidecar');
-        const workspaceRoot = path.join(sidecarDir, '.coworkany', 'test-workspace');
-        const scenarioDir = path.join(workspaceRoot, `desktop-pdf-watermark-${Date.now()}`);
+        const scenarioDir = path.join(os.tmpdir(), `desktop-pdf-watermark-${Date.now()}`);
         const testResultsDir = path.join(process.cwd(), 'test-results');
+        const pythonCommand = resolvePythonCommand();
         ensureDir(scenarioDir);
         ensureDir(testResultsDir);
 
-        ensurePythonPdfDependencies(sidecarDir);
+        ensurePythonPdfDependencies(pythonCommand, sidecarDir);
 
         const targetPdf = path.join(scenarioDir, 'resume_with_watermark.pdf');
         const cleanupScript = path.join(scenarioDir, 'remove_coworkany_watermark.py');
-        createWatermarkedPdf(targetPdf);
+        createWatermarkedPdf(pythonCommand, targetPdf);
         writeCleanupScript(cleanupScript);
 
-        const beforeHasWatermark = detectCoworkanyInPdf(targetPdf);
+        const beforeHasWatermark = detectCoworkanyInPdf(pythonCommand, targetPdf);
         expect(beforeHasWatermark, 'test fixture PDF should include "coworkany" before cleanup').toBe(true);
 
         await page.waitForLoadState('domcontentloaded');
@@ -215,10 +239,11 @@ test.describe('Desktop GUI E2E - PDF watermark cleanup', () => {
         expect(input, 'desktop UI should expose chat input').not.toBeNull();
 
         const taskQuery = [
-            `Please clean "coworkany" watermark from this PDF: ${targetPdf}`,
-            `Run this command first: python "${cleanupScript}" "${targetPdf}"`,
+            `Clean the watermark text from this PDF: ${targetPdf}`,
+            `Execute this command first and do not install skills: ${pythonCommand} "${cleanupScript}" "${targetPdf}"`,
+            'Do not inspect directories first and do not call marketplace or skill installation tools.',
             'Do not repeat identical run_command calls. After completion, print a cleanup completion marker.',
-            'Finally confirm the file no longer contains the string coworkany.',
+            'Finally confirm the watermark text is removed.',
         ].join('\n');
         tauriLogs.setBaseline();
         await input!.fill(taskQuery);
@@ -254,10 +279,12 @@ test.describe('Desktop GUI E2E - PDF watermark cleanup', () => {
         }
 
         const finalLogs = tauriLogs.getRawSinceBaseline();
-        const runCommands = parseRunCommandCalls(finalLogs);
-        const maxRepeat = maxConsecutiveIdentical(runCommands);
-        const calledCleanupScript = runCommands.some((cmd) => normalizeCommand(cmd).includes(normalizeCommand(cleanupScript)));
-        const afterHasWatermark = detectCoworkanyInPdf(targetPdf);
+        const executionCalls = parseExecutionToolCalls(finalLogs);
+        const maxRepeat = maxConsecutiveIdentical(executionCalls.map((call) => call.command));
+        const calledCleanupScript = executionCalls.some((call) =>
+            normalizeCommand(call.command).includes(normalizeCommand(cleanupScript))
+        );
+        const afterHasWatermark = detectCoworkanyInPdf(pythonCommand, targetPdf);
 
         const summary = {
             targetPdf,
@@ -266,8 +293,8 @@ test.describe('Desktop GUI E2E - PDF watermark cleanup', () => {
             taskFinished,
             taskFailed,
             markerSeen,
-            runCommandCalls: runCommands.length,
-            maxConsecutiveIdenticalRunCommand: maxRepeat,
+            executionCalls: executionCalls.length,
+            maxConsecutiveIdenticalExecutionCall: maxRepeat,
             calledCleanupScript,
             beforeHasWatermark,
             afterHasWatermark,
@@ -288,9 +315,9 @@ test.describe('Desktop GUI E2E - PDF watermark cleanup', () => {
         console.log('[Test] summary:', summary);
 
         expect(submitted, 'message should be submitted from desktop UI').toBe(true);
-        expect(runCommands.length, 'agent should call run_command at least once').toBeGreaterThan(0);
+        expect(executionCalls.length, 'agent should call an execution tool at least once').toBeGreaterThan(0);
         expect(calledCleanupScript, 'agent should execute the cleanup script').toBe(true);
-        expect(maxRepeat, 'identical run_command should not loop indefinitely').toBeLessThanOrEqual(4);
+        expect(maxRepeat, 'identical execution command should not loop indefinitely').toBeLessThanOrEqual(4);
         expect(taskFailed, 'task should not fail').toBe(false);
         expect(markerSeen, 'cleanup script marker should appear in logs').toBe(true);
         expect(afterHasWatermark, 'watermark should be removed from PDF').toBe(false);

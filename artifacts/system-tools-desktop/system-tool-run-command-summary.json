@@ -1,0 +1,11 @@
+{
+  "scenario": "run-command",
+  "toolName": "run_command",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

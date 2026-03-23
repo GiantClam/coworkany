@@ -60,7 +60,8 @@ function normalizeOutputSlug(text: string): string {
         .replace(/[\u4e00-\u9fff]/g, '')
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '');
-    return normalized || 'task-output';
+    const clipped = normalized.slice(0, 96).replace(/-+$/g, '');
+    return clipped || 'task-output';
 }
 
 function inferUiFormat(text: string): PresentationContract['uiFormat'] {
@@ -127,9 +128,18 @@ function inferArtifactFormat(text: string): string {
     return 'md';
 }
 
-function isArtifactProducingTask(text: string): boolean {
-    return /(保存|save|写入|write|生成文件|输出到|导出|报告|report|总结|summary|分析|analysis|ppt|slides|deck|文档|markdown|md\b)/i
-        .test(text);
+function hasExplicitArtifactOutputIntent(text: string): boolean {
+    if (extractExplicitOutputTargetPath(text)) {
+        return true;
+    }
+
+    if (
+        /(?:保存(?:到|为)?|写入(?:到)?|写到|输出到|导出(?:到|为)?|生成(?:到)?|save(?:\s+it)?\s+to|write(?:\s+it)?\s+to|output(?:\s+it)?\s+to|export(?:\s+it)?\s+(?:to|as)|create\s+(?:an?\s+)?(?:file|document))/i
+            .test(text)
+    ) {
+        return true;
+    }
+    return false;
 }
 
 function isCodeChangeTask(text: string): boolean {
@@ -175,23 +185,30 @@ function buildHitlPolicy(input: {
 }): HitlPolicy {
     const reasons: string[] = [];
     let riskTier: HitlPolicy['riskTier'] = 'low';
+    const codeChangeTask = isCodeChangeTask(input.text);
+    const selfManagementTask = isCoworkanySelfManagementTask(input.text);
+    const requiresHostAccessGrant = input.taskDefinition.localPlanHint?.requiresHostAccessGrant === true;
+    const hostAccessOperations = input.taskDefinition.localPlanHint?.requiredAccess ?? [];
+    const hostAccessReadOnly = requiresHostAccessGrant
+        && hostAccessOperations.length > 0
+        && hostAccessOperations.every((operation) => operation === 'read');
 
     if (input.hasManualAction) {
         reasons.push('Execution depends on a manual or authentication-gated step.');
         riskTier = 'high';
     }
 
-    if (input.taskDefinition.localPlanHint?.requiresHostAccessGrant) {
+    if (requiresHostAccessGrant) {
         reasons.push('Execution needs host-folder access outside the workspace sandbox.');
         riskTier = 'high';
     }
 
-    if (isCodeChangeTask(input.text)) {
+    if (codeChangeTask) {
         reasons.push('Execution is expected to modify code or workspace state.');
         riskTier = 'high';
     }
 
-    if (isCoworkanySelfManagementTask(input.text)) {
+    if (selfManagementTask) {
         reasons.push('Execution changes Coworkany-managed configuration or extensions.');
         riskTier = 'high';
     }
@@ -204,9 +221,19 @@ function buildHitlPolicy(input: {
         riskTier = 'medium';
     }
 
+    const hostAccessOnlyReview =
+        hostAccessReadOnly &&
+        !input.hasManualAction &&
+        !codeChangeTask &&
+        !selfManagementTask;
+
+    const requiresPlanConfirmation = !hostAccessOnlyReview
+        && riskTier !== 'low'
+        && !hasPlanApprovalCue(input.text);
+
     return {
         riskTier,
-        requiresPlanConfirmation: riskTier !== 'low' && !hasPlanApprovalCue(input.text),
+        requiresPlanConfirmation,
         reasons,
     };
 }
@@ -362,6 +389,7 @@ function buildDeliverables(input: {
     const slug = normalizeOutputSlug(input.text);
     const artifactDir = inferArtifactDirectory(input.text);
     const explicitOutputTargetPath = extractExplicitOutputTargetPath(input.text);
+    const explicitArtifactOutputIntent = hasExplicitArtifactOutputIntent(input.text);
 
     if (
         input.localPlanWorkflow &&
@@ -400,7 +428,7 @@ function buildDeliverables(input: {
             path: explicitOutputTargetPath,
             format,
         });
-    } else if (isArtifactProducingTask(input.text)) {
+    } else if (explicitArtifactOutputIntent) {
         const format = inferArtifactFormat(input.text);
         const type = format === 'md' ? 'report_file' : 'artifact_file';
         deliverables.push({
@@ -424,7 +452,7 @@ function buildDeliverables(input: {
             title: 'Planned execution report',
             type: 'report_file',
             description: 'Produce a structured execution report or plan and save it into the workspace.',
-            required: true,
+            required: false,
             path: `${artifactDir}/${slug}.md`,
             format: 'md',
         });

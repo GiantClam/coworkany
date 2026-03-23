@@ -523,6 +523,17 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
             appendFinishedSummaryIfNeeded(cache, event, payload.summary);
             break;
 
+        case 'TASK_FAILED': {
+            const error = normalizeText(payload.error);
+            const suggestion = normalizeText(payload.suggestion);
+            appendSystemEvent(cache, event, error ? `Task failed: ${error}` : 'Task failed');
+            if (suggestion) {
+                appendSystemEvent(cache, event, suggestion);
+            }
+            cache.currentDraftIndex = null;
+            break;
+        }
+
         default:
             break;
     }

@@ -66,8 +66,8 @@ export interface DegradedOutputHint {
 const FILE_RULES: Array<{ pattern: RegExp; extension: string; description: string }> = [
     { pattern: /\bpptx\b|\bppt\b|powerpoint|presentation|演示文稿|幻灯片|简报/i, extension: '.pptx', description: '需要PPT/PPTX演示文稿文件' },
     { pattern: /\bpdf\b|导出pdf/i, extension: '.pdf', description: '需要PDF文件' },
-    { pattern: /\bdocx\b|\bword\b|文档|报告/i, extension: '.docx', description: '需要Word文档文件' },
-    { pattern: /\bxlsx\b|\bexcel\b|表格/i, extension: '.xlsx', description: '需要Excel文件' },
+    { pattern: /\bdocx\b|\bword\b|word文档/i, extension: '.docx', description: '需要Word文档文件' },
+    { pattern: /\bxlsx\b|\bexcel\b/i, extension: '.xlsx', description: '需要Excel文件' },
     { pattern: /\bjson\b/i, extension: '.json', description: '需要JSON文件' },
 ];
 
@@ -255,14 +255,25 @@ function extractPlannedDeliverableRequirements(
     const requirements: ArtifactRequirement[] = [];
 
     for (const deliverable of deliverables) {
+        if (deliverable.type !== 'report_file' && deliverable.type !== 'artifact_file') {
+            continue;
+        }
+
         const normalizedPath = normalizePath(deliverable.path);
+        const normalizedFormat = typeof deliverable.format === 'string'
+            ? deliverable.format.trim().toLowerCase()
+            : '';
         const extension = normalizedPath
             ? normalizeExtensionFromPath(normalizedPath)
-            : typeof deliverable.format === 'string' && deliverable.format.trim().length > 0
-                ? `.${deliverable.format.trim().toLowerCase()}`
+            : normalizedFormat.length > 0 &&
+                normalizedFormat !== 'report' &&
+                normalizedFormat !== 'table' &&
+                normalizedFormat !== 'artifact' &&
+                normalizedFormat !== 'chat_message'
+                ? `.${normalizedFormat}`
                 : null;
 
-        if (!extension || extension === '.chat_message') {
+        if (!extension) {
             continue;
         }
 

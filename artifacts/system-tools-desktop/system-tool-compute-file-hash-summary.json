@@ -1,0 +1,11 @@
+{
+  "scenario": "compute-file-hash",
+  "toolName": "compute_file_hash",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

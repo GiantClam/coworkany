@@ -1,0 +1,11 @@
+{
+  "scenario": "list-dir",
+  "toolName": "list_dir",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

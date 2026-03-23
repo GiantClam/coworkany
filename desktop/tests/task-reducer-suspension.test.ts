@@ -441,4 +441,98 @@ describe('task reducer suspension handling', () => {
         expect(resumed.status).toBe('running');
         expect(resumed.failure).toBeUndefined();
     });
+
+    test('TASK_HISTORY_CLEARED resets session history state and visible timeline events', () => {
+        const session: TaskSession = {
+            ...makeSession(),
+            status: 'running',
+            summary: 'Existing summary',
+            failure: {
+                error: 'old failure',
+                recoverable: true,
+            },
+            clarificationQuestions: ['old question'],
+            planSummary: 'old plan',
+            planSteps: [
+                {
+                    id: 'step-1',
+                    description: 'old step',
+                    status: 'in_progress',
+                },
+            ],
+            toolCalls: [
+                {
+                    id: 'tool-1',
+                    name: 'search_web',
+                    args: {},
+                    status: 'running',
+                },
+            ],
+            effects: [
+                {
+                    id: 'effect-1',
+                    effectType: 'shell_command',
+                    riskLevel: 2,
+                    status: 'pending',
+                    timestamp: new Date().toISOString(),
+                },
+            ],
+            patches: [
+                {
+                    id: 'patch-1',
+                    filePath: '/tmp/a.ts',
+                    diff: '+a',
+                    status: 'proposed',
+                    timestamp: new Date().toISOString(),
+                },
+            ],
+            messages: [
+                {
+                    id: 'msg-1',
+                    role: 'assistant',
+                    content: 'old message',
+                    timestamp: new Date().toISOString(),
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'old-event',
+                    sequence: 1,
+                    type: 'TASK_FAILED',
+                    payload: {
+                        error: 'old failure',
+                        recoverable: true,
+                    },
+                }),
+            ],
+            tokenUsage: {
+                inputTokens: 120,
+                outputTokens: 80,
+                estimatedCost: 0.1,
+            },
+        };
+
+        const clearEvent = makeEvent({
+            id: 'clear-event',
+            sequence: 2,
+            type: 'TASK_HISTORY_CLEARED',
+            payload: {
+                reason: 'user_requested',
+            },
+        });
+
+        const cleared = applyTaskEvent(session, clearEvent);
+
+        expect(cleared.status).toBe('idle');
+        expect(cleared.summary).toBeUndefined();
+        expect(cleared.failure).toBeUndefined();
+        expect(cleared.planSummary).toBeUndefined();
+        expect(cleared.planSteps).toEqual([]);
+        expect(cleared.toolCalls).toEqual([]);
+        expect(cleared.effects).toEqual([]);
+        expect(cleared.patches).toEqual([]);
+        expect(cleared.messages).toEqual([]);
+        expect(cleared.events).toEqual([clearEvent]);
+        expect(cleared.tokenUsage).toBeUndefined();
+    });
 });

@@ -1,0 +1,11 @@
+{
+  "scenario": "move-file",
+  "toolName": "move_file",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

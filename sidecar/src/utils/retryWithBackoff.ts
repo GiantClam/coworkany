@@ -47,6 +47,32 @@ export interface RetryInfo {
 
 const RETRYABLE_STATUS_CODES = [429, 500, 502, 503];
 const NON_RETRYABLE_ERRORS = ['missing_api_key', 'missing_base_url', 'invalid_api_key'];
+const PROXY_ENV_KEYS = [
+    'COWORKANY_PROXY_URL',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'ALL_PROXY',
+    'all_proxy',
+    'HTTP_PROXY',
+    'http_proxy',
+    'GLOBAL_AGENT_HTTPS_PROXY',
+    'GLOBAL_AGENT_HTTP_PROXY',
+] as const;
+
+let proxyFetchCache:
+    | {
+        proxyUrl: string;
+        fetchImpl: typeof fetch;
+    }
+    | null = null;
+let proxyBridgeLogSignature: string | null = null;
+let proxyBridgeLoadFailed = false;
+const DOH_CACHE_TTL_MS = 10 * 60 * 1000;
+const dohCache = new Map<string, { ips: string[]; expiresAt: number }>();
+let nodeReadableToWeb:
+    | ((stream: NodeJS.ReadableStream) => ReadableStream<Uint8Array>)
+    | null
+    | undefined;
 
 function formatErrorDetails(error: Error): string {
     const details: string[] = [];
@@ -87,6 +113,327 @@ function formatErrorDetails(error: Error): string {
     return details.length > 0 ? ` (${details.join(', ')})` : '';
 }
 
+function canUseNodeProxyBridge(): boolean {
+    return typeof process !== 'undefined' && !!process.versions?.node;
+}
+
+function firstNonEmptyEnv(keys: readonly string[]): string | undefined {
+    for (const key of keys) {
+        const value = process.env[key]?.trim();
+        if (value) {
+            return value;
+        }
+    }
+    return undefined;
+}
+
+function sanitizeProxyForLog(proxyUrl: string): string {
+    const atPos = proxyUrl.lastIndexOf('@');
+    if (atPos === -1) {
+        return proxyUrl;
+    }
+
+    const schemeEnd = proxyUrl.indexOf('://');
+    if (schemeEnd >= 0) {
+        return `${proxyUrl.slice(0, schemeEnd + 3)}***@${proxyUrl.slice(atPos + 1)}`;
+    }
+    return `***@${proxyUrl.slice(atPos + 1)}`;
+}
+
+function hostMatchesNoProxyRule(hostname: string, rule: string): boolean {
+    const normalizedRule = rule.trim().toLowerCase();
+    if (!normalizedRule) return false;
+    if (normalizedRule === '*') return true;
+
+    const hostnameOnly = hostname.toLowerCase();
+    const ruleWithoutPort = normalizedRule.replace(/:\d+$/, '');
+
+    if (ruleWithoutPort.startsWith('*.')) {
+        return hostnameOnly.endsWith(ruleWithoutPort.slice(1));
+    }
+    if (ruleWithoutPort.startsWith('.')) {
+        return hostnameOnly.endsWith(ruleWithoutPort);
+    }
+    return hostnameOnly === ruleWithoutPort;
+}
+
+function shouldBypassProxy(url: string): boolean {
+    const noProxyRaw = firstNonEmptyEnv(['NO_PROXY', 'no_proxy']);
+    if (!noProxyRaw) return false;
+
+    let hostname = '';
+    try {
+        hostname = new URL(url).hostname;
+    } catch {
+        return false;
+    }
+
+    return noProxyRaw
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .some((rule) => hostMatchesNoProxyRule(hostname, rule));
+}
+
+function isIpv4Address(value: string): boolean {
+    const parts = value.split('.');
+    if (parts.length !== 4) {
+        return false;
+    }
+    return parts.every((part) => {
+        if (!/^\d+$/.test(part)) return false;
+        const n = Number(part);
+        return n >= 0 && n <= 255;
+    });
+}
+
+function isTlsDisconnectError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+        return false;
+    }
+    const message = `${error.name} ${error.message}`.toLowerCase();
+    return message.includes('secure tls connection')
+        || message.includes('ssl_connect')
+        || message.includes('connection was closed unexpectedly')
+        || message.includes('unable to get issuer certificate')
+        || message.includes('unable_to_get_issuer_cert');
+}
+
+function toUrl(input: string | URL | Request): URL | null {
+    try {
+        if (typeof input === 'string') return new URL(input);
+        if (input instanceof URL) return new URL(input.toString());
+        const maybeUrl = (input as { url?: unknown }).url;
+        if (typeof maybeUrl === 'string') return new URL(maybeUrl);
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function isLikelyReplayableBody(body: unknown): boolean {
+    if (body === null || body === undefined) return true;
+    if (typeof body === 'string') return true;
+    if (body instanceof URLSearchParams) return true;
+    if (typeof ArrayBuffer !== 'undefined' && body instanceof ArrayBuffer) return true;
+    if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(body)) return true;
+    if (typeof Blob !== 'undefined' && body instanceof Blob) return true;
+    if (typeof FormData !== 'undefined' && body instanceof FormData) return true;
+    return false;
+}
+
+async function resolvePublicARecordsViaDoh(
+    hostname: string,
+    nodeFetch: (input: any, init?: any) => Promise<any>,
+    agent: unknown
+): Promise<string[]> {
+    const now = Date.now();
+    const cached = dohCache.get(hostname);
+    if (cached && cached.expiresAt > now) {
+        return cached.ips;
+    }
+
+    const response = await nodeFetch(
+        `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=A`,
+        {
+            method: 'GET',
+            agent,
+            signal: AbortSignal.timeout(15000),
+        }
+    );
+
+    if (!response?.ok) {
+        return [];
+    }
+
+    const payload = await response.json() as { Answer?: Array<{ data?: string }> };
+    const ips = (Array.isArray(payload.Answer) ? payload.Answer : [])
+        .map((record) => (record?.data ?? '').trim())
+        .filter((ip) => isIpv4Address(ip));
+
+    dohCache.set(hostname, {
+        ips,
+        expiresAt: now + DOH_CACHE_TTL_MS,
+    });
+    return ips;
+}
+
+async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
+    if (!rawResponse) {
+        throw new Error('empty_response_object');
+    }
+
+    const rawBody = rawResponse.body;
+    const hasWebReader = rawBody && typeof rawBody.getReader === 'function';
+
+    if (hasWebReader) {
+        return rawResponse as Response;
+    }
+
+    const headers = new Headers();
+    if (rawResponse.headers && typeof rawResponse.headers.forEach === 'function') {
+        rawResponse.headers.forEach((value: string, key: string) => {
+            headers.set(key, value);
+        });
+    }
+
+    let body: unknown = null;
+    if (!rawBody) {
+        body = null;
+    } else if (typeof rawBody.pipe === 'function') {
+        if (nodeReadableToWeb === undefined) {
+            try {
+                const streamModule = await import('node:stream');
+                nodeReadableToWeb = streamModule.Readable.toWeb.bind(streamModule.Readable) as (
+                    stream: NodeJS.ReadableStream
+                ) => ReadableStream<Uint8Array>;
+            } catch {
+                nodeReadableToWeb = null;
+            }
+        }
+
+        if (nodeReadableToWeb) {
+            body = nodeReadableToWeb(rawBody as NodeJS.ReadableStream);
+        } else {
+            body = await rawResponse.arrayBuffer();
+        }
+    } else {
+        body = await rawResponse.arrayBuffer();
+    }
+
+    return new Response(body as any, {
+        status: Number(rawResponse.status) || 200,
+        statusText: rawResponse.statusText || '',
+        headers,
+    });
+}
+
+async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | null> {
+    // We intentionally allow this bridge in Bun as well.
+    // Bun's env-proxy path can fail on specific domains (TLS handshake reset),
+    // while node-fetch + https-proxy-agent supports our DoH IP fallback path.
+    if (!canUseNodeProxyBridge()) {
+        return null;
+    }
+
+    if (proxyFetchCache?.proxyUrl === proxyUrl) {
+        return proxyFetchCache.fetchImpl;
+    }
+
+    try {
+        const [{ default: nodeFetch }, { HttpsProxyAgent }] = await Promise.all([
+            import('node-fetch'),
+            import('https-proxy-agent'),
+        ]);
+
+        const agent = new HttpsProxyAgent(proxyUrl);
+        const proxyFetch = (async (
+            input: string | URL | Request,
+            init?: RequestInit
+        ): Promise<Response> => {
+            const requestInit = {
+                ...(init as Record<string, unknown>),
+                agent,
+            } as any;
+
+            try {
+                const response = await nodeFetch(input as any, requestInit);
+                return await ensureWebReadableResponse(response);
+            } catch (error) {
+                if (!isTlsDisconnectError(error)) {
+                    throw error;
+                }
+                if (!isLikelyReplayableBody((init as any)?.body)) {
+                    throw error;
+                }
+
+                const requestUrl = toUrl(input);
+                if (!requestUrl || requestUrl.protocol !== 'https:' || isIpv4Address(requestUrl.hostname)) {
+                    throw error;
+                }
+
+                let fallbackIps: string[] = [];
+                try {
+                    fallbackIps = await resolvePublicARecordsViaDoh(requestUrl.hostname, nodeFetch as any, agent);
+                } catch {
+                    fallbackIps = [];
+                }
+
+                if (fallbackIps.length === 0) {
+                    throw error;
+                }
+
+                console.warn(
+                    `[Proxy] TLS handshake failed for ${requestUrl.hostname}. Trying ${fallbackIps.length} DoH A-record fallback IP(s).`
+                );
+
+                for (const ip of fallbackIps) {
+                    try {
+                        const fallbackUrl = new URL(requestUrl.toString());
+                        fallbackUrl.hostname = ip;
+
+                        const headers = new Headers(init?.headers as any);
+                        headers.set('host', requestUrl.hostname);
+
+                        const fallbackResponse = await nodeFetch(fallbackUrl.toString(), {
+                            ...requestInit,
+                            headers,
+                            servername: requestUrl.hostname,
+                        } as any);
+
+                        console.warn(
+                            `[Proxy] Fallback TLS route succeeded for ${requestUrl.hostname} via ${ip}.`
+                        );
+                        return await ensureWebReadableResponse(fallbackResponse);
+                    } catch {
+                        continue;
+                    }
+                }
+
+                throw error;
+            }
+        }) as typeof fetch;
+
+        proxyFetchCache = {
+            proxyUrl,
+            fetchImpl: proxyFetch,
+        };
+
+        if (proxyBridgeLogSignature !== proxyUrl) {
+            proxyBridgeLogSignature = proxyUrl;
+            console.error(
+                `[Proxy] Using explicit Node proxy bridge for fetch: ${sanitizeProxyForLog(proxyUrl)}`
+            );
+        }
+
+        return proxyFetch;
+    } catch (error) {
+        if (!proxyBridgeLoadFailed) {
+            proxyBridgeLoadFailed = true;
+            console.warn(
+                `[Proxy] Failed to initialize explicit Node proxy bridge, fallback to global fetch: ${
+                    error instanceof Error ? error.message : String(error)
+                }`
+            );
+        }
+        return null;
+    }
+}
+
+async function fetchWithProxySupport(url: string, init: RequestInit): Promise<Response> {
+    const proxyUrl = firstNonEmptyEnv(PROXY_ENV_KEYS);
+    if (!proxyUrl || shouldBypassProxy(url)) {
+        return fetch(url, init);
+    }
+
+    const proxyFetch = await createNodeProxyFetch(proxyUrl);
+    if (!proxyFetch) {
+        return fetch(url, init);
+    }
+
+    return proxyFetch(url, init);
+}
+
 // ============================================================================
 // Main function
 // ============================================================================
@@ -118,7 +465,7 @@ export async function fetchWithBackoff(
                 ...options,
                 signal: controller.signal,
             }, allowInsecureTls);
-            const response = await fetch(url, requestInit);
+            const response = await fetchWithProxySupport(url, requestInit);
 
             clearTimeout(timeoutId);
 

@@ -456,6 +456,43 @@ function detectFollowUpLanguage(text: string): 'zh' | 'en' {
     return /[\u4e00-\u9fff]/.test(text) ? 'zh' : 'en';
 }
 
+function isPlanApprovalReply(text: string): boolean {
+    return /^(?:确认|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
+        .test(text.trim());
+}
+
+function isGenericContinueReply(text: string): boolean {
+    return /^(?:继续|继续处理|继续执行|接着|往下|继续吧|continue|go on|carry on|keep going)[.!?？。!]*$/i
+        .test(text.trim());
+}
+
+function assistantPromptedForPlanApproval(text: string): boolean {
+    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|确认是否.*(?:继续|执行)|回复.*(?:确认|批准|approval)|显式批准)/i
+        .test(text);
+}
+
+function buildApprovalFollowUpSourceText(input: {
+    promptText: string;
+    baseObjective: string;
+}): string {
+    const language = detectFollowUpLanguage(`${input.baseObjective}\n${input.promptText}`);
+    const objective = input.baseObjective
+        .trim()
+        .replace(/^(?:原始任务|original task)\s*[:：]\s*/i, '');
+
+    if (language === 'zh') {
+        return [
+            `原始任务：${objective}`,
+            '用户确认：继续执行',
+        ].join('\n');
+    }
+
+    return [
+        `Original task: ${objective}`,
+        'User approval: proceed with execution.',
+    ].join('\n');
+}
+
 function buildCorrectionFollowUpSourceText(input: {
     promptText: string;
     previousContextText: string;
@@ -487,9 +524,35 @@ function buildFollowUpSourceText(input: {
 }): string {
     const previousUserMessage = getLatestMeaningfulUserMessage(input.conversation);
     const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
+    const previousPrimaryObjective = input.previousSnapshot?.primaryObjective?.trim();
     const previousContextText =
         input.previousSnapshot?.sourceText?.trim() ||
         previousUserMessage;
+
+    const approvalBaseObjective = previousPrimaryObjective || previousUserMessage || previousContextText;
+    const hasCarryForwardDeliverable = (input.previousSnapshot?.deliverables ?? [])
+        .some((deliverable) => deliverable.type !== 'chat_reply');
+    if (
+        approvalBaseObjective &&
+        isPlanApprovalReply(input.promptText) &&
+        (assistantPromptedForPlanApproval(latestAssistantMessage) || hasCarryForwardDeliverable)
+    ) {
+        return buildApprovalFollowUpSourceText({
+            promptText: input.promptText,
+            baseObjective: approvalBaseObjective,
+        });
+    }
+
+    if (
+        approvalBaseObjective &&
+        isGenericContinueReply(input.promptText) &&
+        !hasCorrectionCue(input.promptText)
+    ) {
+        return buildApprovalFollowUpSourceText({
+            promptText: input.promptText,
+            baseObjective: approvalBaseObjective,
+        });
+    }
 
     if (hasCorrectionCue(input.promptText) && previousContextText) {
         return buildCorrectionFollowUpSourceText({
@@ -885,11 +948,18 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
 
         case 'clear_task_history': {
             const payload = command.payload as any;
+            const cancellation = await deps.cancelTaskExecution(
+                payload.taskId,
+                'Task cleared by user'
+            );
             deps.taskSessionStore.clearConversation(payload.taskId);
             deps.taskSessionStore.ensureHistoryLimit(payload.taskId);
             deps.taskEventBus.emitRaw(payload.taskId, 'TASK_HISTORY_CLEARED', {
                 reason: 'user_requested',
             });
+            if (cancellation.success) {
+                deps.taskEventBus.emitStatus(payload.taskId, { status: 'idle' });
+            }
             deps.emit(respond(command.id, 'clear_task_history_response', {
                 success: true,
                 taskId: payload.taskId,
@@ -941,7 +1011,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 success: true,
                 taskId,
             }));
-            deps.taskEventBus.emitStatus(taskId, { status: 'running' });
             if (payload.config) {
                 if (typeof payload.config.maxHistoryMessages === 'number' && payload.config.maxHistoryMessages > 0) {
                     deps.taskSessionStore.setHistoryLimit(taskId, payload.config.maxHistoryMessages);
@@ -1058,6 +1127,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 return true;
             }
 
+            deps.taskEventBus.emitStatus(taskId, { status: 'running' });
             if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
                 const primaryTask = frozenWorkRequest.tasks?.[0];
                 const record = deps.scheduleTaskInternal({

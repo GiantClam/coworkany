@@ -237,3 +237,46 @@ Turn release checklist evidence from markdown-only process text into a machine-c
   - invalid evidence JSON
   - missing evidence for checklist areas
 - Optional mode remains non-blocking for missing/incomplete evidence so developers can run fast preflights while still seeing checklist deltas in the report.
+
+## 2026-03-23 Desktop Multi-Task Concurrency Scenario Coverage
+
+### Goal
+Enable repeatable desktop-triggered scenario tests for concurrent task execution, with batch-generated cases and explicit non-interference assertions.
+
+### Phases
+- Inventory current system task scenarios and concurrency coverage: complete
+- Design a unified desktop concurrency scenario framework: complete
+- Batch-generate scenario cases and wire assertions: complete
+- Run staged verification and capture evidence: complete
+
+### Decisions
+- Reuse the existing real-sidecar desktop smoke harness path to keep tests representative of production desktop->sidecar IPC.
+- Promote concurrent tests from one-off hardcoded flow into a data-driven scenario matrix so coverage can scale without copy/paste.
+- Add explicit isolation checks per task (`TASK_STARTED`/`PLAN_UPDATED`/`TOOL_CALL`/`request_effect`/no `TASK_FAILED`) and cross-task contamination checks.
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| none | - | - |
+
+## 2026-03-23 Desktop 股票检索分析场景化测试框架
+
+### Goal
+将 desktop 触发的股票检索分析测试统一为可批量生成的场景框架，并覆盖并行 `minimax / 衮矿能源(兖矿能源) / glm / nvidia` 分析预测链路。
+
+### Phases
+- 用例盘点：complete
+- 统一框架设计与实现：complete
+- 批量场景生成：complete
+- 逐步跑验与证据沉淀：complete
+
+### Decisions
+- 复用 `tauriFixtureNoChrome` 的真实 desktop 触发链路，保证测试接近真实用户路径。
+- 新增统一股票场景 runner（输入提交、sidecar 事件解析、证据文本抽取、断言聚合）。
+- 场景由矩阵驱动，批量覆盖传统三股场景 + 并行四标的场景 + 对比场景。
+- 外部依赖失败识别仅在任务失败上下文触发，避免误将成功场景判为 skip。
+
+### Verification
+- `cd desktop && npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts --list`
+- `cd desktop && COWORKANY_STOCK_SCENARIO_TIMEOUT_MS=180000 npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts -g "parallel-minimax-yankuang-glm-nvidia"`
+- `cd desktop && COWORKANY_STOCK_SCENARIO_TIMEOUT_MS=180000 npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts`

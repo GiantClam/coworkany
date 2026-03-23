@@ -346,6 +346,373 @@ describe('execution runtime', () => {
         expect(result.artifactsCreated).toEqual(['/tmp/out.html']);
     });
 
+    test('continuePreparedAgentFlow fails when explicit audit request lacks grounded inspection evidence', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        let markedFailed = false;
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '用 skill-vetter 审核所有已安装技能';
+        prepared.frozenWorkRequest.sourceText = '用 skill-vetter 审核所有已安装技能';
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-skill-vetter-drift',
+            userMessage: '同意',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['list_coworkany_skills'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: false,
+                requestedEvidence: 'grounded',
+                deliveredEvidence: 'metadata',
+                confidence: 0.92,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-skill-vetter-drift',
+                conversationReader: {
+                    buildConversationText: () => '仅基于元数据完成审核',
+                    getLatestAssistantResponseText: () => '已完成审核',
+                },
+            }),
+            markWorkRequestExecutionFailed: () => {
+                markedFailed = true;
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Execution protocol unmet');
+        expect(markedFailed).toBe(true);
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+        expect(failures[0]?.suggestion).toContain('grounded inspection steps');
+    });
+
+    test('continuePreparedAgentFlow fails when final response asks for unplanned user approval', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-unplanned-user-action',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['run_command'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: true,
+                requestedEvidence: 'standard',
+                deliveredEvidence: 'grounded',
+                confidence: 0.95,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-unplanned-user-action',
+                conversationReader: {
+                    buildConversationText: () => '当前仅做流程确认，请回复“执行”。',
+                    getLatestAssistantResponseText: () => '请回复“执行”。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('requested additional user approval/execution');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+        expect(failures[0]?.suggestion).toContain('Only request user action');
+    });
+
+    test('continuePreparedAgentFlow falls back to contract tool hints when protocol assessment is unavailable', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['view_file', 'run_command'];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-fallback',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['list_coworkany_skills'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-fallback',
+                conversationReader: {
+                    buildConversationText: () => '只做了技能列表元数据检查',
+                    getLatestAssistantResponseText: () => '已完成',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Execution protocol unmet');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow does not block user-action phrasing when protocol judge is unavailable', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-user-action-fallback',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: [],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-user-action-fallback',
+                conversationReader: {
+                    buildConversationText: () => '如果你同意这个范围，我就继续执行。',
+                    getLatestAssistantResponseText: () => '如果你同意这个范围，我就继续执行。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(result.summary).toBe('reduced summary');
+        expect(failures.length).toBe(0);
+    });
+
+    test('continuePreparedAgentFlow allows optional follow-up prompts once completion is already claimed', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-user-action-optional-followup',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: true,
+                requestedEvidence: 'standard',
+                deliveredEvidence: 'grounded',
+                completionClaim: 'present',
+                confidence: 0.9,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-user-action-optional-followup',
+                conversationReader: {
+                    buildConversationText: () => '已完成本次分析。如果你愿意，我可以继续监控后续变化。',
+                    getLatestAssistantResponseText: () => '已完成本次分析。如果你愿意，我可以继续监控后续变化。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(result.summary).toBe('reduced summary');
+        expect(failures.length).toBe(0);
+    });
+
+    test('continuePreparedAgentFlow blocks scheduled stock-analysis output that asks for extra user confirmation', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.mode = 'scheduled_task';
+        prepared.frozenWorkRequest.schedule = {
+            executeAt: new Date().toISOString(),
+        };
+        prepared.executionQuery =
+            '1 分钟之后，检索微信发布 clawbot 的消息，同时检索 openclaw 类的产品市场热度是否衰退，综合分析后，预测周一对腾讯股票的影响，给出买入建议和买入仓位';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-scheduled-stock-case',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: true,
+                requestedEvidence: 'standard',
+                deliveredEvidence: 'grounded',
+                completionClaim: 'present',
+                confidence: 0.92,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-scheduled-stock-case',
+                conversationReader: {
+                    buildConversationText: () =>
+                        '已完成检索与情景分析。如果你同意，我可以继续做盘后追踪。',
+                    getLatestAssistantResponseText: () =>
+                        '已完成检索与情景分析。如果你同意，我可以继续做盘后追踪。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('requested additional user approval/execution');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow fails when final response refuses the core objective without blocker', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-objective-refusal',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: false,
+                objectiveRefusal: true,
+                requestedEvidence: 'standard',
+                deliveredEvidence: 'grounded',
+                completionClaim: 'absent',
+                confidence: 0.91,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-objective-refusal',
+                conversationReader: {
+                    buildConversationText: () => '我不能为你提供具体个股建议。',
+                    getLatestAssistantResponseText: () => '我不能为你提供具体个股建议。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('refused the core task objective');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow does not flag stale approval phrases from conversation history', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-stale-approval-history',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['write_to_file'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-stale-approval-history',
+                conversationReader: {
+                    buildConversationText: () => '历史消息: 如果你同意这个范围，我就继续执行。',
+                    getLatestAssistantResponseText: () => '已完成执行并交付结果。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(failures).toHaveLength(0);
+    });
+
     test('executePreparedTaskFlow falls back to agent loop when autonomous execution makes no progress', async () => {
         let agentLoopCalled = false;
 
@@ -446,6 +813,59 @@ describe('execution runtime', () => {
         expect(result.artifactsCreated).toEqual(['/tmp/report.md']);
         expect(finishedSummaries[0]).toContain('/tmp/report.md');
         expect(failurePayloads).toHaveLength(0);
+    });
+
+    test('continuePreparedAgentFlow backfills planned artifact evidence from disk when tool output omits file paths', async () => {
+        const workspaceDir = makeTempDir('coworkany-runtime-artifact-evidence-');
+        const artifactRelativePath = 'reports/generated.md';
+        const artifactAbsolutePath = path.join(workspaceDir, artifactRelativePath);
+        fs.mkdirSync(path.dirname(artifactAbsolutePath), { recursive: true });
+        fs.writeFileSync(artifactAbsolutePath, '# generated report\n');
+
+        let observedEvidenceFiles: string[] = [];
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-artifact-evidence-backfill',
+            userMessage: 'continue',
+            workspacePath: workspaceDir,
+            preparedWorkRequest: makePreparedWorkRequest(),
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {
+                requirements: [
+                    {
+                        kind: 'file',
+                        payload: {
+                            extension: '.md',
+                            path: artifactRelativePath,
+                        },
+                    },
+                ],
+            },
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['run_command'],
+            }),
+            evaluateArtifactContract: (_contract, evidence) => {
+                observedEvidenceFiles = [...evidence.files];
+                const foundArtifact = evidence.files.some((filePath) =>
+                    filePath.endsWith(path.normalize(artifactRelativePath))
+                );
+                return foundArtifact
+                    ? { passed: true, failed: [] }
+                    : {
+                        passed: false,
+                        failed: [{
+                            description: 'expected markdown report',
+                            reason: 'missing generated file',
+                        }],
+                    };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(result.artifactsCreated).toContain(artifactAbsolutePath);
+        expect(observedEvidenceFiles).toContain(artifactAbsolutePath);
     });
 
     test('continuePreparedAgentFlow auto-refreezes and retries once when artifact validation fails and replanning is allowed', async () => {
@@ -1144,6 +1564,45 @@ describe('execution runtime', () => {
         });
     });
 
+    test('executePreparedTaskFlow skips marketplace fast path when install tool is disabled', async () => {
+        let agentLoopCalled = false;
+        const toolCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '从 skillhub 中安装 skill-vetter';
+        prepared.frozenWorkRequest.sourceText = '从 skillhub 中安装 skill-vetter';
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-marketplace-fastpath-disabled',
+            userQuery: '从 skillhub 中安装 skill-vetter',
+            workspacePath: '/tmp/workspace',
+            config: {
+                disabledTools: ['install_coworkany_skill_from_marketplace'],
+            },
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName, args) => {
+                toolCalls.push({ toolName, args });
+                return {};
+            },
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return {
+                    artifactsCreated: [],
+                    toolsUsed: ['run_command'],
+                };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(agentLoopCalled).toBe(true);
+        expect(toolCalls).toHaveLength(0);
+    });
+
     test('executePreparedTaskFlow uses deterministic local workflow for downloads image inspection', async () => {
         let agentLoopCalled = false;
         const summaries: string[] = [];
@@ -1185,6 +1644,44 @@ describe('execution runtime', () => {
         expect(result.success).toBe(true);
         expect(result.summary).toContain('Found 2 top-level image files');
         expect(summaries[0]).toContain('a.png');
+    });
+
+    test('executePreparedTaskFlow bypasses deterministic local workflow when user requires explicit command-first execution', async () => {
+        let agentLoopCalled = false;
+        let listDirCalled = false;
+        const prepared = makeLocalPreparedWorkRequest('inspect-downloads-images');
+        prepared.frozenWorkRequest.sourceText = 'Execute this exact command first: python3 "/tmp/remove.py" "/Users/tester/Downloads"';
+        prepared.executionQuery = 'Execute this exact command first: python3 "/tmp/remove.py" "/Users/tester/Downloads"';
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-command-first-bypass',
+            userQuery: prepared.executionQuery,
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: false,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            executeTool: async (_taskId, toolName) => {
+                if (toolName === 'list_dir') {
+                    listDirCalled = true;
+                }
+                return {};
+            },
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return {
+                    artifactsCreated: [],
+                    toolsUsed: ['run_command'],
+                };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(agentLoopCalled).toBe(true);
+        expect(listDirCalled).toBe(false);
     });
 
     test('executePreparedTaskFlow uses deterministic local workflow for downloads image organization', async () => {

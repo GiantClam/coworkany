@@ -76,4 +76,29 @@ describe('taskToolResolver', () => {
             args: { id: 1 },
         });
     });
+
+    test('filters disabled tools from resolved task tools', () => {
+        const builtin = makeTool('install_coworkany_skill_from_marketplace');
+        const safeTool = makeTool('run_command');
+
+        const tools = resolveToolsForTask({
+            config: { disabledTools: ['install_coworkany_skill_from_marketplace'] },
+            standardTools: [builtin, safeTool],
+            builtinTools: [],
+            controlPlaneTools: [],
+            knowledgeTools: [],
+            personalTools: [],
+            databaseTools: [],
+            enhancedBrowserTools: [],
+            selfLearningTools: [],
+            mcpGateway: {
+                getAvailableTools: () => [],
+                callTool: async () => ({ success: true }),
+            } as any,
+        });
+
+        const names = tools.map((tool) => tool.name);
+        expect(names).not.toContain('install_coworkany_skill_from_marketplace');
+        expect(names).toContain('run_command');
+    });
 });

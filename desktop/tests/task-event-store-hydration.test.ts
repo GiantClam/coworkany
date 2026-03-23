@@ -205,4 +205,83 @@ describe('task event store hydration', () => {
         expect(state.sessions.size).toBe(1);
         expect(state.activeTaskId).toBe('task-valid');
     });
+
+    test('request_effect awaiting_confirmation becomes task-level user action requirement', () => {
+        useTaskEventStore.getState().ensureSession('task-effect', { status: 'running' }, true);
+
+        useTaskEventStore.getState().handleIpcResponse({
+            commandId: 'ipc-effect-1',
+            type: 'request_effect_response',
+            timestamp: '2026-03-23T01:00:00.000Z',
+            payload: {
+                taskId: 'task-effect',
+                effectType: 'filesystem:read',
+                response: {
+                    requestId: 'req-1',
+                    approved: false,
+                    denialReason: 'awaiting_confirmation',
+                },
+            },
+        } as any);
+
+        const session = useTaskEventStore.getState().getSession('task-effect');
+        expect(session?.status).toBe('idle');
+        expect(session?.currentUserAction?.id).toBe('req-1');
+        expect(session?.currentUserAction?.blocking).toBe(true);
+        expect(session?.events.some((event) => event.type === 'EFFECT_DENIED')).toBe(true);
+        expect(session?.events.some((event) => event.type === 'TASK_USER_ACTION_REQUIRED')).toBe(true);
+    });
+
+    test('request_effect_response uses payload.taskId instead of active task fallback', () => {
+        useTaskEventStore.getState().ensureSession('task-active', { status: 'running' }, true);
+        useTaskEventStore.getState().ensureSession('task-target', { status: 'running' }, false);
+        useTaskEventStore.getState().setActiveTask('task-active');
+
+        useTaskEventStore.getState().handleIpcResponse({
+            commandId: 'ipc-effect-2',
+            type: 'request_effect_response',
+            timestamp: '2026-03-23T01:00:05.000Z',
+            payload: {
+                taskId: 'task-target',
+                effectType: 'filesystem:read',
+                response: {
+                    requestId: 'req-2',
+                    approved: false,
+                    denialReason: 'awaiting_confirmation',
+                },
+            },
+        } as any);
+
+        const active = useTaskEventStore.getState().getSession('task-active');
+        const target = useTaskEventStore.getState().getSession('task-target');
+        expect(active?.events.some((event) => event.id === 'ipc-effect-2')).toBe(false);
+        expect(target?.events.some((event) => event.id === 'ipc-effect-2')).toBe(true);
+        expect(target?.currentUserAction?.id).toBe('req-2');
+    });
+
+    test('request_effect_response creates missing target session when payload.taskId is present', () => {
+        useTaskEventStore.getState().setActiveTask('task-active');
+
+        useTaskEventStore.getState().handleIpcResponse({
+            commandId: 'ipc-effect-3',
+            type: 'request_effect_response',
+            timestamp: '2026-03-23T01:00:10.000Z',
+            payload: {
+                taskId: 'task-late-bound',
+                effectType: 'filesystem:read',
+                response: {
+                    requestId: 'req-3',
+                    approved: false,
+                    denialReason: 'awaiting_confirmation',
+                },
+            },
+        } as any);
+
+        const created = useTaskEventStore.getState().getSession('task-late-bound');
+        const active = useTaskEventStore.getState().getSession('task-active');
+        expect(created).toBeDefined();
+        expect(created?.events.some((event) => event.id === 'ipc-effect-3')).toBe(true);
+        expect(created?.currentUserAction?.id).toBe('req-3');
+        expect(active).toBeUndefined();
+    });
 });

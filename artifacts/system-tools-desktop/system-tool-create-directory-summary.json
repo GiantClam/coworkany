@@ -1,0 +1,11 @@
+{
+  "scenario": "create-directory",
+  "toolName": "create_directory",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

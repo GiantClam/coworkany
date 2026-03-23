@@ -4,11 +4,14 @@ const DROPPED_RESULT_BLOCK_PATTERNS = [
     /(?:时间范围|结果形式|偏好（可选）|按默认开始|你说的“.*”是想)/u,
     /(?:补充信息|补充几个关键项|确认\s*\d+\s*个偏好|可选)/u,
     /^(?:如果你要|如果需要|要的话|我现在也可以|我也可以)\b/u,
+    /^checkpoint before final delivery$/iu,
 ];
 
 const TRAILING_FOLLOWUP_PATTERNS = [
     /\n{2,}(?:如果你要|如果需要|要的话|我现在也可以|我也可以)[\s\S]*$/u,
     /\n{2,}(?:If you want|If needed|I can also)[\s\S]*$/iu,
+    /\n{2,}你回复一句[：:，,\s"'“”]*继续[\s\S]*$/u,
+    /\n{2,}继续，按checkpoint格式给我[\s\S]*$/iu,
 ];
 
 function stripMarkdownSyntax(text: string): string {

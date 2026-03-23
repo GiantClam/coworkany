@@ -1,0 +1,11 @@
+{
+  "scenario": "batch-delete-paths",
+  "toolName": "batch_delete_paths",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

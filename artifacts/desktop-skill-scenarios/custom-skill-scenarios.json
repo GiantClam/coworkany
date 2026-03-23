@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-03-23T04:59:37.684Z",
+  "customSkillCount": 5,
+  "enabledCustomSkillCount": 5,
+  "disabledCustomSkillCount": 1,
+  "disabledCustomSkillIds": [
+    "investoday-finance-data"
+  ],
+  "batchSize": 4,
+  "installResults": [
+    {
+      "skillId": "custom-desktop-qa-guard",
+      "success": true,
+      "error": null
+    },
+    {
+      "skillId": "custom-desktop-release-check",
+      "success": true,
+      "error": null
+    },
+    {
+      "skillId": "custom-desktop-runbook",
+      "success": true,
+      "error": null
+    }
+  ],
+  "batches": [
+    {
+      "batchId": "custom-batch-1",
+      "skillIds": [
+        "custom-desktop-qa-guard",
+        "custom-desktop-release-check",
+        "custom-desktop-runbook",
+        "polymarket"
+      ],
+      "taskIds": [
+        "9af334ec-5fca-4ad7-a235-e631e0962a78",
+        "3b2483e8-519c-48ce-af7a-22831ea228e2",
+        "60253783-af72-4175-86e5-04ea5d62358c",
+        "44b918d7-55d6-4d07-870d-92f6398995f0"
+      ],
+      "markers": [
+        "SKILL_CUSTOM_1_1_CUSTOM_DESKTOP_QA_GUARD",
+        "SKILL_CUSTOM_1_2_CUSTOM_DESKTOP_RELEASE_CHECK",
+        "SKILL_CUSTOM_1_3_CUSTOM_DESKTOP_RUNBOOK",
+        "SKILL_CUSTOM_1_4_POLYMARKET"
+      ]
+    },
+    {
+      "batchId": "custom-batch-2",
+      "skillIds": [
+        "skill-vetter"
+      ],
+      "taskIds": [
+        "ea96c0da-75ac-4af1-af0e-5e85874ca251"
+      ],
+      "markers": [
+        "SKILL_CUSTOM_2_1_SKILL_VETTER"
+      ]
+    }
+  ]
+}

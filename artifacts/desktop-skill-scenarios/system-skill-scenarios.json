@@ -1,0 +1,109 @@
+{
+  "timestamp": "2026-03-23T04:59:24.922Z",
+  "systemSkillCount": 19,
+  "batchSize": 4,
+  "batches": [
+    {
+      "batchId": "system-batch-1",
+      "skillIds": [
+        "backend-patterns",
+        "brainstorming",
+        "browser-automation",
+        "coding-standards"
+      ],
+      "taskIds": [
+        "1387de7c-b596-448c-ac87-d5b6627b91dd",
+        "64c1446e-80aa-4d84-a839-6b0b40add902",
+        "34b9f525-ca13-4d36-a0ac-23f5c20700a7",
+        "9fa3713a-85f9-4f19-aace-00e73e00db2b"
+      ],
+      "markers": [
+        "SKILL_SYSTEM_1_1_BACKEND_PATTERNS",
+        "SKILL_SYSTEM_1_2_BRAINSTORMING",
+        "SKILL_SYSTEM_1_3_BROWSER_AUTOMATION",
+        "SKILL_SYSTEM_1_4_CODING_STANDARDS"
+      ]
+    },
+    {
+      "batchId": "system-batch-2",
+      "skillIds": [
+        "continuous-learning-v2",
+        "coworkany-self-management",
+        "frontend-patterns",
+        "iterative-retrieval"
+      ],
+      "taskIds": [
+        "614ecad0-fa09-443b-aa0e-f900d93713a1",
+        "48a18e4a-bf09-47b3-9667-ca6a3d770e30",
+        "4cf1fa4c-b740-4cf4-a01f-7d1e1d81dec3",
+        "292c07d8-1e43-4571-81fd-2f4ac18ad4bf"
+      ],
+      "markers": [
+        "SKILL_SYSTEM_2_1_CONTINUOUS_LEARNING_V2",
+        "SKILL_SYSTEM_2_2_COWORKANY_SELF_MANAGEMENT",
+        "SKILL_SYSTEM_2_3_FRONTEND_PATTERNS",
+        "SKILL_SYSTEM_2_4_ITERATIVE_RETRIEVAL"
+      ]
+    },
+    {
+      "batchId": "system-batch-3",
+      "skillIds": [
+        "planning-with-files",
+        "security-review",
+        "stock-research",
+        "superpowers-workflow"
+      ],
+      "taskIds": [
+        "be786b53-3589-4bd2-8451-2f3396e5a01c",
+        "e0458ab5-fe47-4937-b224-37e3b9cf3ff2",
+        "9555ac85-76d4-482a-aa90-27d4654c9a89",
+        "a74a1b59-e62a-4d8e-82e9-401c65eb11ce"
+      ],
+      "markers": [
+        "SKILL_SYSTEM_3_1_PLANNING_WITH_FILES",
+        "SKILL_SYSTEM_3_2_SECURITY_REVIEW",
+        "SKILL_SYSTEM_3_3_STOCK_RESEARCH",
+        "SKILL_SYSTEM_3_4_SUPERPOWERS_WORKFLOW"
+      ]
+    },
+    {
+      "batchId": "system-batch-4",
+      "skillIds": [
+        "system-analysis",
+        "systematic-debugging",
+        "task-orchestrator",
+        "tdd-workflow"
+      ],
+      "taskIds": [
+        "ea28132b-4169-4f9c-ac4c-53403533daea",
+        "5785d5a8-cf3f-4c9f-86a8-026f6ef727cc",
+        "98750b86-c8d7-4fcc-8079-23434595dbd4",
+        "3101efc3-4fa4-46ec-881d-ea9541a10859"
+      ],
+      "markers": [
+        "SKILL_SYSTEM_4_1_SYSTEM_ANALYSIS",
+        "SKILL_SYSTEM_4_2_SYSTEMATIC_DEBUGGING",
+        "SKILL_SYSTEM_4_3_TASK_ORCHESTRATOR",
+        "SKILL_SYSTEM_4_4_TDD_WORKFLOW"
+      ]
+    },
+    {
+      "batchId": "system-batch-5",
+      "skillIds": [
+        "verification-loop",
+        "voice-tts",
+        "writing-plans"
+      ],
+      "taskIds": [
+        "d72d3ba4-fd28-4e7e-a191-441b06e6cc28",
+        "f0bed3a4-3312-478e-ae52-37de01cbd186",
+        "2ff5ec0b-b27c-4b6c-a172-9ffcf8a8f3f7"
+      ],
+      "markers": [
+        "SKILL_SYSTEM_5_1_VERIFICATION_LOOP",
+        "SKILL_SYSTEM_5_2_VOICE_TTS",
+        "SKILL_SYSTEM_5_3_WRITING_PLANS"
+      ]
+    }
+  ]
+}

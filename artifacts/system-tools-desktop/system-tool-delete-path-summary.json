@@ -1,0 +1,11 @@
+{
+  "scenario": "delete-path",
+  "toolName": "delete_path",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

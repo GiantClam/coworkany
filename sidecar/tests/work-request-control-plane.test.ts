@@ -286,6 +286,30 @@ describe('work request control plane', () => {
         });
     });
 
+    test('does not require pre-execution plan confirmation for read-only host-folder inspection', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '扫描 /Users/tester/Documents 目录下的文件夹，给出分类列表即可',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.tasks[0]?.localPlanHint).toMatchObject({
+            intent: 'inspect_folder',
+            requiredAccess: ['read'],
+            requiresHostAccessGrant: true,
+        });
+        expect(analyzed.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: false,
+        });
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(false);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(false);
+    });
+
     test('resolves explicit absolute paths for document organization into generic workflows', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '整理 /Users/tester/Documents/Inbox 里的 PDF 文档',
@@ -383,6 +407,40 @@ describe('work request control plane', () => {
         expect(analyzed.mode).toBe('scheduled_task');
         expect(analyzed.schedule?.executeAt).toBe('2026-03-20T01:18:12.000Z');
         expect(analyzed.tasks[0]?.objective).toBe('查询 minimax 的股价，给出深度分析');
+    });
+
+    test('treats 之后 phrasing as a scheduled request instead of an immediate task', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '1 分钟之后，查询 minimax 的股价，给出深度分析',
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-20T09:17:12+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.schedule?.executeAt).toBe('2026-03-20T01:18:12.000Z');
+        expect(analyzed.tasks[0]?.objective).toBe('查询 minimax 的股价，给出深度分析');
+    });
+
+    test('does not enforce hard file deliverables for scheduled analysis requests without explicit output-file intent', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText:
+                '1 分钟后，检索微信发布 clawbot 的消息，同时检索 openclaw 类的产品市场热度是否衰退，综合分析后，预测周一对腾讯股票的影响，给出买入建议和买入仓位',
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-22T09:00:00+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        const hardFileDeliverable = (analyzed.deliverables ?? []).find((deliverable) =>
+            (deliverable.type === 'report_file' || deliverable.type === 'artifact_file') &&
+            deliverable.required
+        );
+        expect(hardFileDeliverable).toBeUndefined();
+        const plannedReportPath = analyzed.deliverables?.find((deliverable) =>
+            deliverable.type === 'report_file'
+        )?.path;
+        if (plannedReportPath) {
+            expect(path.basename(plannedReportPath).length).toBeLessThanOrEqual(110);
+        }
     });
 
     test('marks ambiguous immediate follow-up requests for clarification before execution', () => {

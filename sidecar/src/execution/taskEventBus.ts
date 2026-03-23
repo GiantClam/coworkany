@@ -13,6 +13,12 @@ import type {
     TenantIsolationPolicy,
     UserActionRequest,
 } from '../orchestration/workRequestSchema';
+import {
+    createInitialTaskProtocolSnapshot,
+    reduceTaskProtocolState,
+    toTaskFailedPayloadFromProtocolViolation,
+    type TaskProtocolSnapshot,
+} from './protocolStateMachine';
 
 export type TaskStartedPayload = {
     title: string;
@@ -140,6 +146,7 @@ type TaskEventMeta = {
 
 export class TaskEventBus {
     private readonly sequences = new Map<string, number>();
+    private readonly protocolSnapshots = new Map<string, TaskProtocolSnapshot>();
     private readonly emitMessage: (event: TaskEvent) => void;
 
     constructor(input: {
@@ -150,6 +157,7 @@ export class TaskEventBus {
 
     reset(taskId: string, sequence: number = 0): void {
         this.sequences.set(taskId, sequence);
+        this.protocolSnapshots.set(taskId, createInitialTaskProtocolSnapshot());
     }
 
     nextSequence(taskId: string): number {
@@ -324,13 +332,34 @@ export class TaskEventBus {
     }
 
     private build(taskId: string, type: string, payload: unknown, meta?: TaskEventMeta): TaskEvent {
+        const currentSnapshot = this.protocolSnapshots.get(taskId) ?? createInitialTaskProtocolSnapshot();
+        const reduction = reduceTaskProtocolState(currentSnapshot, { type, payload });
+
+        let eventType = type;
+        let eventPayload = payload;
+
+        if (reduction.ok) {
+            this.protocolSnapshots.set(taskId, reduction.snapshot);
+        } else {
+            const violationPayload = toTaskFailedPayloadFromProtocolViolation(reduction.violation);
+            eventType = 'TASK_FAILED';
+            eventPayload = violationPayload;
+            const failedReduction = reduceTaskProtocolState(reduction.snapshot, {
+                type: 'TASK_FAILED',
+                payload: violationPayload,
+            });
+            if (failedReduction.ok) {
+                this.protocolSnapshots.set(taskId, failedReduction.snapshot);
+            }
+        }
+
         return {
             id: randomUUID(),
             taskId,
             timestamp: meta?.timestamp ?? new Date().toISOString(),
             sequence: this.resolveSequence(taskId, meta?.sequence),
-            type,
-            payload,
+            type: eventType,
+            payload: eventPayload,
         } as TaskEvent;
     }
 

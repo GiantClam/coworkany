@@ -280,7 +280,11 @@ function applyEventsBatch(
 
         const updated = applyEvent(existing, normalizedEvent);
         sessions.set(taskId, updated);
-        rememberEvent(taskId, normalizedEvent.id, updated);
+        if (normalizedEvent.type === 'TASK_HISTORY_CLEARED') {
+            sessionEventIds.set(taskId, new Set(updated.events.map((entry) => entry.id)));
+        } else {
+            rememberEvent(taskId, normalizedEvent.id, updated);
+        }
         changed = true;
 
         if (shouldPersistEvent(normalizedEvent)) {
@@ -469,24 +473,68 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                     const payload = response.payload as Record<string, unknown>;
                     const effectResponse = payload.response as Record<string, unknown>;
                     const approved = effectResponse?.approved as boolean;
-                    const taskId = state.activeTaskId ?? 'global';
-                    const session = state.sessions.get(taskId);
-                    if (session) {
-                        const event: TaskEvent = {
+                    const denialReason = effectResponse?.denialReason as string | undefined;
+                    const requestId = effectResponse?.requestId as string | undefined;
+                    const effectType = typeof payload.effectType === 'string'
+                        ? payload.effectType
+                        : 'unknown';
+                    const explicitTaskId = typeof payload.taskId === 'string' && payload.taskId.trim().length > 0
+                        ? payload.taskId
+                        : undefined;
+                    const taskId = explicitTaskId ?? state.activeTaskId ?? 'global';
+                    const existingSession = state.sessions.get(taskId);
+                    if (existingSession || explicitTaskId) {
+                        const effectEvent: TaskEvent = {
                             id: response.commandId,
                             taskId,
                             timestamp: response.timestamp,
-                            sequence: session.events.length + 1,
+                            sequence: (existingSession?.events.length ?? 0) + 1,
                             type: approved ? 'EFFECT_APPROVED' : 'EFFECT_DENIED',
                             payload: { response: effectResponse },
                         };
-                        if (hasSeenEvent(taskId, event.id, session)) {
+                        if (hasSeenEvent(taskId, effectEvent.id, existingSession)) {
                             return { pendingResponses };
                         }
+
                         const sessions = new Map(state.sessions);
-                        const updated = applyEvent(session, event);
+                        const baseSession = existingSession ?? createEmptySession(taskId);
+                        let updated = applyEvent(baseSession, effectEvent);
                         sessions.set(taskId, updated);
-                        rememberEvent(taskId, event.id, updated);
+
+                        rememberEvent(taskId, effectEvent.id, updated);
+
+                        if (!approved && denialReason === 'awaiting_confirmation') {
+                            const waitingEvent: TaskEvent = {
+                                id: `${response.commandId}-awaiting-confirmation`,
+                                taskId,
+                                timestamp: response.timestamp,
+                                sequence: updated.events.length + 1,
+                                type: 'TASK_USER_ACTION_REQUIRED',
+                                payload: {
+                                    actionId: requestId ?? response.commandId,
+                                    title: 'Grant required access',
+                                    kind: 'manual_step',
+                                    description: `Awaiting permission to continue (${effectType}).`,
+                                    riskTier: 'high',
+                                    executionPolicy: 'hard_block',
+                                    blocking: true,
+                                    questions: [
+                                        'Please approve or deny the pending permission prompt to continue.',
+                                    ],
+                                    instructions: [
+                                        requestId
+                                            ? `Permission request id: ${requestId}`
+                                            : 'Permission request is pending.',
+                                    ],
+                                },
+                            };
+                            if (!hasSeenEvent(taskId, waitingEvent.id, updated)) {
+                                updated = applyEvent(updated, waitingEvent);
+                                sessions.set(taskId, updated);
+                                rememberEvent(taskId, waitingEvent.id, updated);
+                            }
+                        }
+
                         persistStateSnapshot(sessions, state.activeTaskId, 180);
                         return { sessions, pendingResponses };
                     }
@@ -541,6 +589,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
             sessionEventIds.clear();
             const map = new Map<string, TaskSession>();
             let droppedSessions = 0;
+            let normalizedSessions = 0;
             for (const session of snapshot.sessions) {
                 const taskId = normalizeTaskId(session?.taskId);
                 if (!taskId) {
@@ -560,13 +609,17 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                         failure: normalizedSession.failure ?? createInterruptedFailureState(),
                     }
                     : normalizedSession;
+                if (cleanedSession !== normalizedSession) {
+                    normalizedSessions += 1;
+                }
                 map.set(cleanedSession.taskId, {
                     ...cleanedSession,
                     title: deriveLatestUserFacingTitle(cleanedSession),
                 });
                 getOrCreateEventIdSet(cleanedSession.taskId, cleanedSession);
             }
-            let activeTaskId = normalizeTaskId(snapshot.activeTaskId) ?? null;
+            const snapshotActiveTaskId = normalizeTaskId(snapshot.activeTaskId) ?? null;
+            let activeTaskId = snapshotActiveTaskId;
             if (activeTaskId && !map.has(activeTaskId)) {
                 activeTaskId = null;
             }
@@ -581,7 +634,8 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                 activeTaskId,
             });
 
-            if (droppedSessions > 0) {
+            const activeTaskWasAdjusted = activeTaskId !== snapshotActiveTaskId;
+            if (droppedSessions > 0 || normalizedSessions > 0 || activeTaskWasAdjusted) {
                 persistStateSnapshot(map, activeTaskId, 180);
             }
         },

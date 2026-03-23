@@ -150,7 +150,6 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                     aria-label={t('chat.createNewSession')}
                 >
                     <PlusIcon />
-                    <span className="chat-header-icon-button-text">NEW</span>
                 </button>
 
                 <button

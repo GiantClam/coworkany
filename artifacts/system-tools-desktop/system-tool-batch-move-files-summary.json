@@ -1,0 +1,11 @@
+{
+  "scenario": "batch-move-files",
+  "toolName": "batch_move_files",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

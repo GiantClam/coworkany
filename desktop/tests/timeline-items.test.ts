@@ -203,4 +203,32 @@ describe('buildTimelineItems', () => {
             'Status updated: waiting',
         ]);
     });
+
+    test('renders task failures as system feedback after in-progress updates', () => {
+        const session = makeSession({
+            status: 'failed',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_STATUS',
+                    payload: { status: 'running' },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_FAILED',
+                    payload: { error: 'fetch failed' },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const systemContents = result.items
+            .filter((item) => item.type === 'system_event')
+            .map((item) => item.content);
+
+        expect(systemContents).toEqual([
+            'Status updated: in progress',
+            'Task failed: fetch failed',
+        ]);
+    });
 });

@@ -107,7 +107,12 @@ function killWindowsViteOnPort(port) {
 
 function parseUnixListeningPids(port) {
   try {
-    const output = execSync(`lsof -ti tcp:${port}`, { encoding: 'utf8' }).trim();
+    // Only include LISTEN sockets. `lsof -ti tcp:${port}` also returns client
+    // connections (e.g. WebKit networking), which are not port blockers.
+    const output = execSync(
+      `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`,
+      { encoding: 'utf8' }
+    ).trim();
     if (!output) return [];
     return output
       .split(/\r?\n/)

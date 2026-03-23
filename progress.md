@@ -633,3 +633,53 @@
 - Verification:
   - `bun test /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-event-log-importer.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/control-plane-evals.test.ts /Users/beihuang/Documents/github/coworkany/sidecar/tests/release-readiness.test.ts`
   - `bun x tsc -p /Users/beihuang/Documents/github/coworkany/sidecar/tsconfig.json --noEmit`
+
+## 2026-03-23
+
+- Started desktop multi-task concurrency scenario expansion requested by user.
+- Loaded skills and established workflow:
+  - brainstorming (solution shape/tradeoffs)
+  - planning-with-files (task_plan/findings/progress tracking)
+  - verification-before-completion (evidence-first test claims)
+- Completed inventory pass over existing task and test surfaces:
+  - sidecar tests matrix and desktop smoke suites
+  - existing concurrent smoke path in `desktop/tests/interrupted-task-resume-sidecar-smoke.test.ts`
+  - reusable scenario-generation pattern in `desktop/tests/system-tools-desktop-e2e.test.ts`
+- Appended current task scope/decisions into planning files and prepared for framework/code changes.
+- Implemented unified desktop concurrent scenario framework in:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/interrupted-task-resume-sidecar-smoke.test.ts`
+  - added scenario definition schema + batch generator + shared readiness/isolation assertions
+  - replaced single hardcoded concurrent test with generated scenario matrix tests
+- Added design/inventory documentation:
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-23-desktop-concurrent-scenario-framework.md`
+- Staged verification results:
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && npx playwright test tests/interrupted-task-resume-sidecar-smoke.test.ts --grep "concurrent scenario batch" --workers=1` -> `2 passed`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && npx playwright test tests/interrupted-task-resume-sidecar-smoke.test.ts --workers=1` -> `6 passed`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && npx tsc --noEmit` -> success
+
+- Added desktop stock scenario framework and batch suite:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/utils/stockScenarioFramework.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/stock-research-desktop-scenarios.e2e.test.ts`
+- Added design/inventory doc:
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-23-desktop-stock-scenario-framework.md`
+- Implemented matrix-driven desktop scenarios:
+  - `legacy-us-ai-trio`
+  - `parallel-minimax-yankuang-glm-nvidia`
+  - `yankuang-vs-nvidia`
+  - `minimax-glm-vs-nvidia`
+- Implemented unified validations per scenario:
+  - desktop submit success
+  - `search_web` call count threshold
+  - entity coverage
+  - advice keyword hit
+  - prediction keyword hit
+  - completion state (finished / ready-for-follow-up / quiet-complete)
+- Fixed false skip issue in external dependency detection:
+  - tightened pattern matching
+  - external failure now requires failed-task context
+- Verification evidence:
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts --list` -> 4 tests discovered
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && COWORKANY_STOCK_SCENARIO_TIMEOUT_MS=180000 npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts -g "parallel-minimax-yankuang-glm-nvidia"` -> 1 passed
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && COWORKANY_STOCK_SCENARIO_TIMEOUT_MS=180000 npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts` -> 4 passed
+- Result artifacts written to:
+  - `/Users/beihuang/Documents/github/coworkany/artifacts/stock-research-desktop-scenarios`

@@ -1,5 +1,7 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import {
+    getBlockingUserAction,
     markWorkRequestPresentationStarted,
     markWorkRequestReductionStarted,
     reopenPreparedWorkRequestForResearch,
@@ -19,6 +21,7 @@ export type ExecutionTaskConfig = {
     enabledClaudeSkills?: string[];
     enabledToolpacks?: string[];
     enabledSkills?: string[];
+    disabledTools?: string[];
     workspacePath?: string;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
 };
@@ -191,6 +194,22 @@ export type ExecutionRuntimeDeps = {
         query: string,
         severity: number
     ) => Promise<{ learned: boolean }>;
+    assessExecutionProtocol?: (input: {
+        executionQuery: string;
+        outputText: string;
+        toolsUsed: string[];
+        hasBlockingUserAction: boolean;
+        toolResultText?: string;
+    }) => Promise<{
+        asksForAdditionalUserAction: boolean;
+        objectiveRefusal?: boolean;
+        requestedEvidence: 'grounded' | 'standard' | 'unknown';
+        deliveredEvidence: 'grounded' | 'metadata' | 'none' | 'unknown';
+        completionClaim?: 'present' | 'absent' | 'unknown';
+        verificationEvidence?: 'present' | 'absent' | 'unknown';
+        confidence?: number;
+        rationale?: string;
+    } | null>;
 };
 
 function extractMarketplaceInstallIntent(text: string): MarketplaceInstallIntent | null {
@@ -254,10 +273,16 @@ function extractMarketplaceInstallIntent(text: string): MarketplaceInstallIntent
 async function tryMarketplaceSkillInstallFastPath(input: {
     taskId: string;
     workspacePath: string;
+    config?: ExecutionTaskConfig;
     preparedWorkRequest: PreparedWorkRequestContext;
     startedAt: number;
     emitFinishedStatus: boolean;
 }, deps: ExecutionRuntimeDeps): Promise<ExecutionRuntimeResult | null> {
+    const disabledTools = input.config?.disabledTools ?? [];
+    if (Array.isArray(disabledTools) && disabledTools.includes('install_coworkany_skill_from_marketplace')) {
+        return null;
+    }
+
     const intent = extractMarketplaceInstallIntent(input.preparedWorkRequest.executionQuery);
     if (!intent) {
         return null;
@@ -335,6 +360,186 @@ function canReopenForTrigger(
         (preparedWorkRequest.frozenWorkRequest.replanPolicy?.triggers ?? []).includes(trigger) &&
         contractReopenAttempts < maxContractReopenAttempts
     );
+}
+
+function collectPlannedArtifactFilesFromDisk(
+    artifactContract: unknown,
+    workspacePath: string
+): string[] {
+    if (!artifactContract || typeof artifactContract !== 'object') {
+        return [];
+    }
+
+    const requirements = (artifactContract as { requirements?: unknown }).requirements;
+    if (!Array.isArray(requirements)) {
+        return [];
+    }
+
+    const discovered = new Set<string>();
+
+    for (const requirement of requirements) {
+        if (!requirement || typeof requirement !== 'object') {
+            continue;
+        }
+
+        const normalizedRequirement = requirement as {
+            kind?: unknown;
+            payload?: { path?: unknown };
+        };
+        if (normalizedRequirement.kind !== 'file') {
+            continue;
+        }
+
+        const requiredPath =
+            typeof normalizedRequirement.payload?.path === 'string'
+                ? normalizedRequirement.payload.path.trim()
+                : '';
+        if (!requiredPath) {
+            continue;
+        }
+
+        const resolvedPath = path.isAbsolute(requiredPath)
+            ? requiredPath
+            : path.resolve(workspacePath, requiredPath);
+        try {
+            const stats = fs.statSync(resolvedPath);
+            if (stats.isFile()) {
+                discovered.add(resolvedPath);
+            }
+        } catch {
+            // Missing file; keep artifact evidence unchanged.
+        }
+    }
+
+    return Array.from(discovered);
+}
+
+const GROUNDED_INSPECTION_TOOLS = new Set([
+    'view_file',
+    'list_dir',
+    'run_command',
+    'search_web',
+    'crawl_url',
+    'extract_content',
+    'browser_get_content',
+    'get_coworkany_skill',
+    'get_coworkany_config',
+    'get_coworkany_paths',
+]);
+
+const METADATA_ONLY_TOOLS = new Set([
+    'list_coworkany_skills',
+    'list_coworkany_workspaces',
+    'get_coworkany_paths',
+    'get_coworkany_config',
+]);
+
+function hasGroundedInspectionToolEvidence(toolsUsed: string[]): boolean {
+    return toolsUsed.some((tool) => GROUNDED_INSPECTION_TOOLS.has(tool));
+}
+
+function isMetadataOnlyExecution(toolsUsed: string[]): boolean {
+    return toolsUsed.length > 0 && toolsUsed.every((tool) => METADATA_ONLY_TOOLS.has(tool));
+}
+
+function contractDemandsGroundedInspection(prepared: PreparedWorkRequestContext): boolean {
+    const tasks = prepared.frozenWorkRequest.tasks ?? [];
+    return tasks.some((task) =>
+        (task.preferredTools ?? []).some((tool) => GROUNDED_INSPECTION_TOOLS.has(tool))
+    );
+}
+
+function hasPlannedBlockingUserAction(prepared: PreparedWorkRequestContext): boolean {
+    const request = prepared.frozenWorkRequest;
+    if (request.clarification.required) {
+        return true;
+    }
+    return Boolean(getBlockingUserAction(request));
+}
+
+async function evaluateExecutionProtocolCompliance(input: {
+    preparedWorkRequest: PreparedWorkRequestContext;
+    executionQuery: string;
+    toolsUsed: string[];
+    outputText: string;
+    assessExecutionProtocol?: ExecutionRuntimeDeps['assessExecutionProtocol'];
+}): Promise<{ trigger: ReplanTrigger; error: string; suggestion: string } | null> {
+    const hasBlockingUserAction = hasPlannedBlockingUserAction(input.preparedWorkRequest);
+    const mode = input.preparedWorkRequest.frozenWorkRequest.mode;
+    const isScheduledExecution = mode === 'scheduled_task' || mode === 'scheduled_multi_task';
+    const assessedProtocol = await input.assessExecutionProtocol?.({
+        executionQuery: input.executionQuery,
+        outputText: input.outputText,
+        toolsUsed: input.toolsUsed,
+        hasBlockingUserAction,
+    });
+    const asksForAdditionalUserAction = assessedProtocol?.asksForAdditionalUserAction === true;
+    const objectiveRefusal = assessedProtocol?.objectiveRefusal === true;
+    const completionClaim = assessedProtocol?.completionClaim ?? 'unknown';
+    const requestsBlockingAdditionalAction =
+        asksForAdditionalUserAction &&
+        (isScheduledExecution || completionClaim !== 'present');
+
+    if (
+        requestsBlockingAdditionalAction &&
+        !hasBlockingUserAction
+    ) {
+        return {
+            trigger: 'contradictory_evidence',
+            error:
+                'Execution protocol unmet: final response requested additional user approval/execution, ' +
+                'but the frozen contract has no blocking user-action checkpoint.',
+            suggestion:
+                'Continue execution and provide evidence directly. Only request user action when the contract ' +
+                'explicitly blocks or a new hard blocker is surfaced.',
+        };
+    }
+
+    if (objectiveRefusal && !hasBlockingUserAction) {
+        return {
+            trigger: 'contradictory_evidence',
+            error:
+                'Execution protocol unmet: final response refused the core task objective, ' +
+                'but the frozen contract has no blocking checkpoint requiring refusal.',
+            suggestion:
+                'Continue execution toward the requested objective with explicit uncertainty and risk language. ' +
+                'Do not stop at refusal unless a concrete technical blocker is surfaced.',
+        };
+    }
+
+    const requestedGroundedEvidence =
+        assessedProtocol?.requestedEvidence === 'grounded' ||
+        (!assessedProtocol && contractDemandsGroundedInspection(input.preparedWorkRequest));
+
+    if (requestedGroundedEvidence) {
+        const hasGroundedEvidence =
+            assessedProtocol?.deliveredEvidence === 'grounded' ||
+            hasGroundedInspectionToolEvidence(input.toolsUsed);
+        const deliveredEvidence = assessedProtocol?.deliveredEvidence;
+        const isMetadataOnlyByAssessment = deliveredEvidence === 'metadata' || deliveredEvidence === 'none';
+        const isMetadataOnlyByFallback =
+            !assessedProtocol &&
+            (isMetadataOnlyExecution(input.toolsUsed) || input.toolsUsed.length === 0);
+
+        if (
+            !hasGroundedEvidence &&
+            (
+                isMetadataOnlyByAssessment ||
+                isMetadataOnlyByFallback
+            )
+        ) {
+            return {
+                trigger: 'contradictory_evidence',
+                error:
+                    'Execution protocol unmet: requested audit/review requires grounded inspection evidence, ' +
+                    'but execution produced only metadata-level verification.',
+                suggestion:
+                    'Run grounded inspection steps (file/command/content checks) and provide file-level or command-level evidence before finishing.',
+            };
+        }
+    }
+
+    return null;
 }
 
 async function reopenAndRefreezePreparedContract(input: {
@@ -592,6 +797,7 @@ async function runPreparedAgentExecution(input: {
         const marketplaceInstallResult = await tryMarketplaceSkillInstallFastPath({
             taskId,
             workspacePath,
+            config,
             preparedWorkRequest,
             startedAt,
             emitFinishedStatus: input.emitFinishedStatus,
@@ -657,13 +863,80 @@ async function runPreparedAgentExecution(input: {
         const providerConfig = deps.buildProviderConfig(options);
         const loopResult = await deps.runAgentLoop(taskId, conversation, options, providerConfig, tools);
         const mergedArtifacts = deps.session.mergeKnownArtifacts(loopResult.artifactsCreated);
+        const diskDiscoveredArtifacts = collectPlannedArtifactFilesFromDisk(artifactContract, workspacePath);
+        const effectiveArtifacts = diskDiscoveredArtifacts.length > 0
+            ? deps.session.mergeKnownArtifacts(diskDiscoveredArtifacts)
+            : mergedArtifacts;
+        const fullConversationText = deps.session.buildConversationText();
+        const latestAssistantOutputText = deps.session.getLatestAssistantResponseText();
+        const protocolOutputText =
+            typeof latestAssistantOutputText === 'string' && latestAssistantOutputText.trim().length > 0
+                ? latestAssistantOutputText
+                : fullConversationText;
         const contractEvidence = {
-            files: mergedArtifacts,
+            files: effectiveArtifacts,
             toolsUsed: loopResult.toolsUsed,
-            outputText: deps.session.buildConversationText(),
+            outputText: fullConversationText,
         };
+        const protocolViolation = await evaluateExecutionProtocolCompliance({
+            preparedWorkRequest,
+            executionQuery,
+            toolsUsed: loopResult.toolsUsed,
+            outputText: protocolOutputText,
+            assessExecutionProtocol: deps.assessExecutionProtocol,
+        });
+        if (protocolViolation) {
+            const canReopenContract = canReopenForTrigger(
+                preparedWorkRequest,
+                protocolViolation.trigger,
+                contractReopenAttempts
+            );
+            if (canReopenContract) {
+                const reopenOutcome = await reopenAndRefreezePreparedContract({
+                    taskId,
+                    preparedWorkRequest,
+                    reason: protocolViolation.error,
+                    trigger: protocolViolation.trigger,
+                }, deps);
+                if (!reopenOutcome.refrozenPrepared) {
+                    return {
+                        success: false,
+                        summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
+                        error: protocolViolation.error,
+                        artifactsCreated: effectiveArtifacts,
+                    };
+                }
+                const refrozenPrepared = reopenOutcome.refrozenPrepared;
+                deps.markWorkRequestExecutionStarted(refrozenPrepared);
+                deps.emitPlanUpdated(taskId, refrozenPrepared);
+                return runPreparedAgentExecution({
+                    ...input,
+                    preparedWorkRequest: refrozenPrepared,
+                    extraSystemPrompt: [
+                        extraSystemPrompt,
+                        `Previous execution drifted from the required execution protocol. ` +
+                        `Resolve this before final delivery: ${protocolViolation.error}`,
+                    ].filter(Boolean).join('\n\n'),
+                    contractReopenAttempts: contractReopenAttempts + 1,
+                }, deps);
+            }
+
+            deps.markWorkRequestExecutionFailed(preparedWorkRequest, protocolViolation.error);
+            deps.reporter.failed({
+                error: protocolViolation.error,
+                errorCode: 'EXECUTION_PROTOCOL_UNMET',
+                recoverable: true,
+                suggestion: protocolViolation.suggestion,
+            });
+            return {
+                success: false,
+                summary: '',
+                error: protocolViolation.error,
+                artifactsCreated: effectiveArtifacts,
+            };
+        }
         const artifactEvaluation = deps.evaluateArtifactContract(artifactContract, contractEvidence);
-        const degradedOutput = deps.detectDegradedOutputs(artifactContract, mergedArtifacts);
+        const degradedOutput = deps.detectDegradedOutputs(artifactContract, effectiveArtifacts);
         deps.reporter.appendArtifactTelemetry(
             deps.buildArtifactTelemetry(artifactContract, contractEvidence, artifactEvaluation)
         );
@@ -677,13 +950,13 @@ async function runPreparedAgentExecution(input: {
                 }
                 deps.reporter.finished({
                     summary,
-                    artifactsCreated: mergedArtifacts,
+                    artifactsCreated: effectiveArtifacts,
                     duration: 0,
                 });
                 return {
                     success: true,
                     summary,
-                    artifactsCreated: mergedArtifacts,
+                    artifactsCreated: effectiveArtifacts,
                 };
             }
 
@@ -708,7 +981,7 @@ async function runPreparedAgentExecution(input: {
                         success: false,
                         summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
                         error: unmetMessage,
-                        artifactsCreated: mergedArtifacts,
+                        artifactsCreated: effectiveArtifacts,
                     };
                 }
                 const refrozenPrepared = reopenOutcome.refrozenPrepared;
@@ -738,7 +1011,7 @@ async function runPreparedAgentExecution(input: {
                     )
                     : input.missingArtifactSuggestionPrefix.replace(
                         '{artifacts}',
-                        mergedArtifacts.join(', ') || 'none'
+                        effectiveArtifacts.join(', ') || 'none'
                     ),
             });
 
@@ -754,7 +1027,7 @@ async function runPreparedAgentExecution(input: {
                 success: false,
                 summary: '',
                 error: unmetMessage,
-                artifactsCreated: mergedArtifacts,
+                artifactsCreated: effectiveArtifacts,
             };
         }
 
@@ -764,7 +1037,7 @@ async function runPreparedAgentExecution(input: {
         const reducedPresentation = deps.reduceWorkResult({
             canonicalResult: finalAssistantText,
             request: frozenWorkRequest,
-            artifacts: mergedArtifacts,
+            artifacts: effectiveArtifacts,
         });
         const finalSummary = reducedPresentation.uiSummary || reducedPresentation.canonicalResult || 'Task completed';
         markWorkRequestPresentationStarted(preparedWorkRequest);
@@ -775,13 +1048,13 @@ async function runPreparedAgentExecution(input: {
         }
         deps.reporter.finished({
             summary: finalSummary,
-            artifactsCreated: mergedArtifacts,
+            artifactsCreated: effectiveArtifacts,
             duration: input.emitFinishedStatus ? 0 : Date.now() - startedAt,
         });
         return {
             success: true,
             summary: finalSummary,
-            artifactsCreated: mergedArtifacts,
+            artifactsCreated: effectiveArtifacts,
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -947,6 +1220,31 @@ function getPrimaryLocalTaskHint(preparedWorkRequest: PreparedWorkRequestContext
     return preparedWorkRequest.frozenWorkRequest.tasks[0]?.localPlanHint;
 }
 
+function hasExplicitCommandFirstDirective(preparedWorkRequest: PreparedWorkRequestContext): boolean {
+    const mergedText = [
+        preparedWorkRequest.frozenWorkRequest.sourceText,
+        preparedWorkRequest.executionQuery,
+    ]
+        .filter((segment): segment is string => typeof segment === 'string')
+        .join('\n')
+        .toLowerCase();
+
+    if (!mergedText.trim()) {
+        return false;
+    }
+
+    const asksCommandFirst =
+        /execute (?:this |the )?(?:exact )?command first/.test(mergedText) ||
+        /run (?:this |the )?command first/.test(mergedText) ||
+        /先(?:执行|运行).{0,12}命令/.test(mergedText);
+
+    if (!asksCommandFirst) {
+        return false;
+    }
+
+    return /\b(?:python|python3|bash|sh|node|npm|pnpm|yarn|bun)\b\s+["'`]?[^"'`\n]+/.test(mergedText);
+}
+
 function getEntryRelativePath(entry: DirectoryEntry): string {
     return entry.path || entry.name;
 }
@@ -984,6 +1282,10 @@ async function tryExecuteDeterministicLocalWorkflow(input: {
     startedAt: number;
     emitFinishedStatus: boolean;
 }, deps: ExecutionRuntimeDeps): Promise<ExecutionRuntimeResult | null> {
+    if (hasExplicitCommandFirstDirective(input.preparedWorkRequest)) {
+        return null;
+    }
+
     const localHint = getPrimaryLocalTaskHint(input.preparedWorkRequest);
     const targetPath = localHint?.targetFolder?.resolvedPath;
     const fileKind = localHint ? getSupportedFileKind(localHint.fileKinds) : null;

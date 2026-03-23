@@ -1,0 +1,331 @@
+{
+  "timestamp": "2026-03-23T04:59:05.164Z",
+  "before": [
+    {
+      "skillId": "coding-standards",
+      "name": "coding-standards",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "frontend-patterns",
+      "name": "frontend-patterns",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "backend-patterns",
+      "name": "backend-patterns",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "tdd-workflow",
+      "name": "tdd-workflow",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "security-review",
+      "name": "security-review",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "verification-loop",
+      "name": "verification-loop",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "iterative-retrieval",
+      "name": "iterative-retrieval",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "continuous-learning-v2",
+      "name": "continuous-learning-v2",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "brainstorming",
+      "name": "brainstorming",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "writing-plans",
+      "name": "writing-plans",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "systematic-debugging",
+      "name": "systematic-debugging",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "system-analysis",
+      "name": "system-analysis",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "voice-tts",
+      "name": "voice-tts",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "task-orchestrator",
+      "name": "task-orchestrator",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "coworkany-self-management",
+      "name": "coworkany-self-management",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "superpowers-workflow",
+      "name": "superpowers-workflow",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "planning-with-files",
+      "name": "planning-with-files",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "stock-research",
+      "name": "stock-research",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "browser-automation",
+      "name": "browser-automation",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "polymarket",
+      "name": "polymarket",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "skill-vetter",
+      "name": "skill-vetter",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "investoday-finance-data",
+      "name": "investoday-finance-data",
+      "sourceType": "local_folder",
+      "enabled": false
+    },
+    {
+      "skillId": "custom-desktop-qa-guard",
+      "name": "custom-desktop-qa-guard",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "custom-desktop-release-check",
+      "name": "custom-desktop-release-check",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "custom-desktop-runbook",
+      "name": "custom-desktop-runbook",
+      "sourceType": "local_folder",
+      "enabled": true
+    }
+  ],
+  "after": [
+    {
+      "skillId": "coding-standards",
+      "name": "coding-standards",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "frontend-patterns",
+      "name": "frontend-patterns",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "backend-patterns",
+      "name": "backend-patterns",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "tdd-workflow",
+      "name": "tdd-workflow",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "security-review",
+      "name": "security-review",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "verification-loop",
+      "name": "verification-loop",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "iterative-retrieval",
+      "name": "iterative-retrieval",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "continuous-learning-v2",
+      "name": "continuous-learning-v2",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "brainstorming",
+      "name": "brainstorming",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "writing-plans",
+      "name": "writing-plans",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "systematic-debugging",
+      "name": "systematic-debugging",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "system-analysis",
+      "name": "system-analysis",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "voice-tts",
+      "name": "voice-tts",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "task-orchestrator",
+      "name": "task-orchestrator",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "coworkany-self-management",
+      "name": "coworkany-self-management",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "superpowers-workflow",
+      "name": "superpowers-workflow",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "planning-with-files",
+      "name": "planning-with-files",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "stock-research",
+      "name": "stock-research",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "browser-automation",
+      "name": "browser-automation",
+      "sourceType": "built_in",
+      "enabled": true
+    },
+    {
+      "skillId": "polymarket",
+      "name": "polymarket",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "skill-vetter",
+      "name": "skill-vetter",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "investoday-finance-data",
+      "name": "investoday-finance-data",
+      "sourceType": "local_folder",
+      "enabled": false
+    },
+    {
+      "skillId": "custom-desktop-qa-guard",
+      "name": "custom-desktop-qa-guard",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "custom-desktop-release-check",
+      "name": "custom-desktop-release-check",
+      "sourceType": "local_folder",
+      "enabled": true
+    },
+    {
+      "skillId": "custom-desktop-runbook",
+      "name": "custom-desktop-runbook",
+      "sourceType": "local_folder",
+      "enabled": true
+    }
+  ],
+  "installResults": [
+    {
+      "skillId": "custom-desktop-qa-guard",
+      "success": true,
+      "error": null
+    },
+    {
+      "skillId": "custom-desktop-release-check",
+      "success": true,
+      "error": null
+    },
+    {
+      "skillId": "custom-desktop-runbook",
+      "success": true,
+      "error": null
+    }
+  ],
+  "counts": {
+    "beforeTotal": 25,
+    "afterTotal": 25,
+    "builtin": 19,
+    "custom": 6,
+    "fixtureCustom": 3
+  }
+}

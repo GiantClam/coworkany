@@ -1,0 +1,11 @@
+{
+  "scenario": "replace-file-content",
+  "toolName": "replace_file_content",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

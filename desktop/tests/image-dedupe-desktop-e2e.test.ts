@@ -11,6 +11,7 @@
 import { test, expect, type Locator } from './tauriFixtureNoChrome';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { spawnSync } from 'child_process';
 
 const TASK_TIMEOUT_MS = 8 * 60 * 1000;
@@ -34,6 +35,17 @@ function countImageFiles(folder: string): number {
     return fs.readdirSync(folder).filter((name) => /\.(png|jpg|jpeg|webp|bmp)$/i.test(name)).length;
 }
 
+function resolvePythonCommand(): string {
+    const candidates = ['python', 'python3'];
+    for (const command of candidates) {
+        const probe = spawnSync(command, ['--version'], { encoding: 'utf-8' });
+        if (probe.status === 0) {
+            return command;
+        }
+    }
+    throw new Error('Neither python nor python3 is available in PATH');
+}
+
 async function findChatInput(page: any): Promise<Locator | null> {
     for (const selector of INPUT_SELECTORS) {
         const candidate = page.locator(selector).first();
@@ -50,12 +62,16 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
 
     test('send message via desktop chat and actually remove duplicate images', async ({ page, tauriLogs }) => {
         const sidecarDir = path.resolve(process.cwd(), '..', 'sidecar');
-        const workspaceRoot = path.join(sidecarDir, '.coworkany', 'test-workspace');
-        const imageFolder = path.join(workspaceRoot, `desktop-image-dedupe-${Date.now()}`);
-        const dedupeScript = path.join(sidecarDir, 'remove_similar_images.py');
+        const scenarioRoot = path.join(os.tmpdir(), `desktop-image-dedupe-${Date.now()}`);
+        const imageFolder = path.join(scenarioRoot, 'images');
+        const dedupeScript = path.join(scenarioRoot, 'remove_similar_images.py');
+        const dedupeScriptSource = path.join(sidecarDir, 'remove_similar_images.py');
         const testResultsDir = path.join(process.cwd(), 'test-results');
+        const pythonCommand = resolvePythonCommand();
+        ensureDir(scenarioRoot);
         ensureDir(imageFolder);
         ensureDir(testResultsDir);
+        fs.copyFileSync(dedupeScriptSource, dedupeScript);
 
         const onePixelPng = Buffer.from(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP4DwABAQEAG7XkVQAAAABJRU5ErkJggg==',
@@ -66,7 +82,7 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
         fs.writeFileSync(path.join(imageFolder, 'img_c.png'), onePixelPng);
         const beforeCount = countImageFiles(imageFolder);
 
-        const uninstall = spawnSync('python', ['-m', 'pip', 'uninstall', '-y', 'imagehash', 'Pillow'], {
+        const uninstall = spawnSync(pythonCommand, ['-m', 'pip', 'uninstall', '-y', 'imagehash', 'Pillow'], {
             cwd: sidecarDir,
             encoding: 'utf-8',
         });
@@ -81,9 +97,10 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
         expect(input, 'desktop UI should expose chat input').not.toBeNull();
 
         const taskQuery = [
-            `Clean duplicate images in folder: ${imageFolder}`,
-            `Run this exact command first: python "${dedupeScript}" "${imageFolder}" --delete --threshold 0`,
-            'If import fails for PIL/imagehash, install once: python -m pip install Pillow imagehash, then rerun.',
+            `Clean duplicate images in folder: ${imageFolder}.`,
+            `Execute this exact command first and do not install skills: ${pythonCommand} "${dedupeScript}" "${imageFolder}" --delete --threshold 0`,
+            `If import fails for PIL/imagehash, install once: ${pythonCommand} -m pip install Pillow imagehash, then rerun.`,
+            'Do not call marketplace or skill installation tools.',
             'Finish only after command output contains DEDUPE_DONE.',
         ].join('\n');
 
@@ -102,7 +119,7 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
         }
 
         let submitted = false;
-        let runCommandDetected = false;
+        let executionToolDetected = false;
         let scriptInvoked = false;
         let dedupeDone = false;
         let taskFinished = false;
@@ -125,10 +142,11 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
                 lower.includes('start_task command received') ||
                 lower.includes('"type":"start_task"');
 
-            runCommandDetected =
-                runCommandDetected ||
+            executionToolDetected =
+                executionToolDetected ||
                 lower.includes('"name":"run_command"') ||
-                lower.includes('tool_call') && lower.includes('run_command');
+                lower.includes('"name":"execute_python"') ||
+                (lower.includes('tool_call') && (lower.includes('run_command') || lower.includes('execute_python')));
 
             scriptInvoked = scriptInvoked || lower.includes('remove_similar_images.py');
 
@@ -169,7 +187,7 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
             beforeCount,
             afterCount,
             submitted,
-            runCommandDetected,
+            executionToolDetected,
             scriptInvoked,
             dedupeDone,
             taskFinished,
@@ -191,7 +209,7 @@ test.describe('Desktop GUI E2E - similar image cleanup', () => {
         console.log('[Test] summary:', summary);
 
         expect(submitted, 'message should be submitted from desktop UI').toBe(true);
-        expect(runCommandDetected, 'agent should use run_command').toBe(true);
+        expect(executionToolDetected, 'agent should use an execution tool (run_command/execute_python)').toBe(true);
         expect(scriptInvoked, 'should invoke remove_similar_images.py').toBe(true);
         expect(taskFailed, 'task should not fail').toBe(false);
         expect(dedupeDone, 'script output should contain DEDUPE_DONE').toBe(true);

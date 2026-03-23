@@ -13,7 +13,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::platform_asr;
@@ -562,6 +562,15 @@ async fn send_command_and_wait(
     command: Value,
     timeout_ms: u64,
 ) -> Result<Value, String> {
+    send_command_and_wait_with_timeout_policy(state, command, timeout_ms, true).await
+}
+
+async fn send_command_and_wait_with_timeout_policy(
+    state: &State<'_, SidecarState>,
+    command: Value,
+    timeout_ms: u64,
+    invalidate_transport_on_timeout: bool,
+) -> Result<Value, String> {
     let command_id = command
         .get("id")
         .and_then(Value::as_str)
@@ -603,15 +612,17 @@ async fn send_command_and_wait(
                 return Err(error_message);
             }
 
-            Ok(response)
+        Ok(response)
         }
         Err(error_message) => {
             if let Ok(mut manager) = state.0.lock() {
                 manager.clear_pending_response(&command_id);
-                manager.invalidate_transport(&format!(
-                    "command {} timed out waiting for sidecar ack",
-                    command_id
-                ));
+                if invalidate_transport_on_timeout {
+                    manager.invalidate_transport(&format!(
+                        "command {} timed out waiting for sidecar ack",
+                        command_id
+                    ));
+                }
             }
             Err(error_message)
         }
@@ -1543,9 +1554,21 @@ pub async fn send_task_message(
     ))
     .map_err(|e| e.to_string())?;
 
-    let response = match send_command_and_wait(&state, command, 5000).await {
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 30000, false).await {
         Ok(value) => value,
         Err(error_message) => {
+            if error_message.starts_with("response timeout:") {
+                warn!(
+                    "send_task_message ack timed out; keeping transport healthy and treating as queued: task_id={}, detail={}",
+                    task_id,
+                    error_message
+                );
+                return Ok(SendTaskMessageResult {
+                    success: true,
+                    task_id,
+                    error: None,
+                });
+            }
             error!(
                 "Failed to send send_task_message command: {}",
                 error_message

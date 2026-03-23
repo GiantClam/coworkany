@@ -1032,6 +1032,11 @@ fn handle_sidecar_command(
                     );
                     return;
                 };
+                let task_id = request
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.task_id.clone());
+                let effect_type = request.effect_type.clone();
 
                 let state = app_handle.state::<PolicyEngineState>();
                 let result =
@@ -1053,13 +1058,23 @@ fn handle_sidecar_command(
                     },
                 };
 
-                let payload = json!({ "response": response });
+                let payload = json!({
+                    "response": response,
+                    "taskId": task_id,
+                    "effectType": effect_type,
+                });
                 let response_msg = json!({
                     "type": "request_effect_response",
                     "commandId": command_id,
                     "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                     "payload": payload
                 });
+
+                // Surface the same IPC response to the renderer so task state can
+                // immediately reflect awaiting confirmations (no sidecar round-trip needed).
+                if let Err(error) = app_handle.emit("ipc-response", response_msg.clone()) {
+                    warn!("Failed to emit ipc-response for request_effect_response: {}", error);
+                }
 
                 send_raw(&stdin, response_msg);
             });

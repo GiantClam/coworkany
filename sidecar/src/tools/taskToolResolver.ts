@@ -1,8 +1,10 @@
 import { type ToolDefinition } from './standard';
 import { type MCPGateway } from '../mcp/gateway';
+import { applyDisabledToolFilter } from './disableTools';
 
 export type TaskToolResolverConfig = {
     enabledToolpacks?: string[];
+    disabledTools?: string[];
 };
 
 export type TaskToolResolverDeps = {
@@ -62,5 +64,5 @@ export function resolveToolsForTask(deps: TaskToolResolverDeps): ToolDefinition[
         });
     }
 
-    return tools;
+    return applyDisabledToolFilter(tools, deps.config?.disabledTools);
 }

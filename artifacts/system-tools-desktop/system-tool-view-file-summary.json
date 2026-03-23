@@ -1,0 +1,11 @@
+{
+  "scenario": "view-file",
+  "toolName": "view_file",
+  "submitted": true,
+  "called": true,
+  "successfulResult": true,
+  "markerSeen": true,
+  "expectedSatisfied": true,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

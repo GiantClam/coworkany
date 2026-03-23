@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { handleRuntimeCommand, handleRuntimeResponse, type RuntimeCommandDeps, type RuntimeResponseDeps } from '../src/handlers/runtime';
 import { setTaskIsolationPolicy } from '../src/execution/taskIsolationPolicyStore';
+import { IpcResponseSchema } from '../src/protocol';
 
 function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): RuntimeCommandDeps {
     return {
@@ -220,6 +221,69 @@ describe('runtime commands handler', () => {
         expect(emitted[0]?.type).toBe('cancel_task_response');
     });
 
+    test('clear_task_history cancels active execution, emits history cleared, and sets status idle', async () => {
+        const emitted: any[] = [];
+        const cancelled: Array<{ taskId: string; reason?: string }> = [];
+        const rawEvents: Array<{ taskId: string; type: string; payload: unknown }> = [];
+        const statusEvents: Array<{ taskId: string; status: string }> = [];
+        const clearedTaskIds: string[] = [];
+
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            cancelTaskExecution: async (taskId, reason) => {
+                cancelled.push({ taskId, reason });
+                return { success: true };
+            },
+            taskSessionStore: {
+                clearConversation: (taskId) => {
+                    clearedTaskIds.push(taskId);
+                },
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            taskEventBus: {
+                emitRaw: (taskId, type, payload) => {
+                    rawEvents.push({ taskId, type, payload });
+                },
+                emitChatMessage: () => {},
+                emitStatus: (taskId, payload) => {
+                    statusEvents.push({ taskId, status: payload.status });
+                },
+                reset: () => {},
+                emitStarted: () => {},
+                emitFinished: () => {},
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-clear-history',
+            type: 'clear_task_history',
+            payload: {
+                taskId: 'task-clear-1',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(cancelled).toEqual([{ taskId: 'task-clear-1', reason: 'Task cleared by user' }]);
+        expect(clearedTaskIds).toEqual(['task-clear-1']);
+        expect(rawEvents).toEqual([
+            {
+                taskId: 'task-clear-1',
+                type: 'TASK_HISTORY_CLEARED',
+                payload: { reason: 'user_requested' },
+            },
+        ]);
+        expect(statusEvents).toEqual([
+            { taskId: 'task-clear-1', status: 'idle' },
+        ]);
+        expect(emitted[0]?.type).toBe('clear_task_history_response');
+    });
+
     test('passes session task isolation context into autonomous task starts', async () => {
         const startCalls: any[] = [];
         const emitted: any[] = [];
@@ -373,6 +437,191 @@ describe('runtime commands handler', () => {
             'PLAN_UPDATED',
         ]);
         expect(continued).toBe(true);
+    });
+
+    test('does not emit running status before clarification blocks execution', async () => {
+        const emitted: any[] = [];
+        const statusEvents: Array<{ taskId: string; status: string }> = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            taskEventBus: {
+                emitRaw: () => {},
+                emitChatMessage: () => {},
+                emitStatus: (taskId, payload) => {
+                    statusEvents.push({ taskId, status: payload.status });
+                },
+                reset: () => {},
+                emitStarted: () => {},
+                emitFinished: () => {},
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    clarification: {
+                        required: true,
+                        reason: '当前请求缺少明确执行对象。',
+                        questions: ['请明确你要我继续处理的具体对象、文件、页面或任务目标。'],
+                        missingFields: ['task_scope'],
+                    },
+                    mode: 'immediate_task',
+                    tasks: [{ objective: '继续处理上一个任务' }],
+                    deliverables: [{
+                        id: 'deliverable-chat',
+                        title: 'Final response',
+                        type: 'chat_reply',
+                        description: 'Return response',
+                        required: true,
+                        format: 'chat_message',
+                    }],
+                    userActionsRequired: [{
+                        id: 'action-clarify',
+                        title: 'Provide missing task details',
+                        kind: 'clarify_input',
+                        description: '当前请求缺少明确执行对象。',
+                        riskTier: 'high',
+                        executionPolicy: 'hard_block',
+                        blocking: true,
+                        questions: ['请明确你要我继续处理的具体对象、文件、页面或任务目标。'],
+                        instructions: ['task_scope'],
+                    }],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-clarify',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze follow-up',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                    ],
+                },
+                executionQuery: '继续',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-clarify',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-clarify',
+                content: '继续',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(statusEvents).toEqual([]);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'TASK_USER_ACTION_REQUIRED',
+            'CHAT_MESSAGE',
+            'TASK_CLARIFICATION_REQUIRED',
+            'TASK_STATUS',
+        ]);
+        expect(emitted[7]?.payload?.status).toBe('idle');
+    });
+
+    test('treats approval follow-up as continuing prior non-chat deliverable objective', async () => {
+        const emitted: any[] = [];
+        const sourceTexts: string[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'assistant', content: '如果你同意，我现在就为你安排执行。' },
+                ],
+                getArtifactContract: () => ({ type: 'old-artifact-contract' }),
+                setArtifactContract: () => {},
+            },
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-old-approval',
+                    mode: 'immediate_task',
+                    sourceText: '生成周报并保存为 reports/1-clawbot-openclaw.md',
+                    tasks: [{ objective: '生成周报并保存为 reports/1-clawbot-openclaw.md' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-old',
+                        title: 'Weekly report',
+                        type: 'report_file',
+                        description: 'Write report markdown file',
+                        required: true,
+                        path: 'reports/1-clawbot-openclaw.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async ({ sourceText }) => {
+                sourceTexts.push(sourceText);
+                return {
+                    frozenWorkRequest: {
+                        id: 'wr-new-approval',
+                        mode: 'immediate_task',
+                        sourceText,
+                        tasks: [{ objective: '生成周报并保存为 reports/1-clawbot-openclaw.md' }],
+                        clarification: { required: false },
+                        deliverables: [{
+                            id: 'deliverable-new',
+                            title: 'Weekly report',
+                            type: 'report_file',
+                            description: 'Write report markdown file',
+                            required: true,
+                            path: 'reports/1-clawbot-openclaw.md',
+                            format: 'md',
+                        }],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-new-approval',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze approval follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Execute approved plan',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '生成周报并保存为 reports/1-clawbot-openclaw.md',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-approval-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-approval-followup',
+                content: '同意',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(sourceTexts[0]).toContain('用户确认：继续执行');
+        expect(sourceTexts[0]).not.toBe('同意');
+        expect(emitted.some((message) => message.type === 'TASK_CLARIFICATION_REQUIRED')).toBe(false);
     });
 
     test('emits contradictory-evidence reopen and rebuilds artifact contract when a follow-up corrects deliverables', async () => {
@@ -892,6 +1141,207 @@ describe('runtime commands handler', () => {
                 type: 'report_file',
             }),
         ]);
+    });
+
+    test('treats confirm-plan approval replies as execution approval context', async () => {
+        const preparedInputs: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: '用 skill-vetter 审核所有已安装技能',
+                    primaryObjective: '用 skill-vetter 审核所有已安装技能',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'chat_reply',
+                            format: 'chat_message',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '用 skill-vetter 审核所有已安装技能' },
+                    {
+                        role: 'assistant',
+                        content:
+                            'This high-risk task needs explicit approval before Coworkany starts execution.\n'
+                            + 'Confirm whether Coworkany should proceed with the current execution plan.\n'
+                            + 'Reply with approval to continue, or provide changes that should be applied before execution starts.',
+                    },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                        deliverables: [
+                            {
+                                id: 'deliverable-chat',
+                                title: 'Final response',
+                                type: 'chat_reply',
+                                description: 'Return a final response.',
+                                required: true,
+                                format: 'chat_message',
+                            },
+                        ],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-approved',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze request context',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Execute approved plan',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '用 skill-vetter 审核所有已安装技能',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-confirm-approval-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-confirm-approval-followup',
+                content: '确认',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：用 skill-vetter 审核所有已安装技能');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).not.toContain('需要补充：');
+        expect(preparedInputs[0]?.sourceText).not.toContain('用户补充：确认');
+        expect(continued).toBe(true);
+    });
+
+    test('treats generic continue replies as execution approval context for prior objective', async () => {
+        const preparedInputs: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: '检索微信发布 clawbot 的消息并分析对腾讯周一影响',
+                    primaryObjective: '检索微信发布 clawbot 的消息并分析对腾讯周一影响',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'chat_reply',
+                            format: 'chat_message',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '检索微信发布 clawbot 的消息并分析对腾讯周一影响' },
+                    { role: 'assistant', content: '已完成初步检索。' },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                        deliverables: [
+                            {
+                                id: 'deliverable-chat',
+                                title: 'Final response',
+                                type: 'chat_reply',
+                                description: 'Return a final response.',
+                                required: true,
+                                format: 'chat_message',
+                            },
+                        ],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-generic-continue',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze request context',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Execute approved plan',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '检索微信发布 clawbot 的消息并分析对腾讯周一影响',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-generic-continue-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-generic-continue-followup',
+                content: '继续',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：检索微信发布 clawbot 的消息并分析对腾讯周一影响');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).not.toContain('请明确你要我继续处理的具体对象');
+        expect(continued).toBe(true);
     });
 
     test('merges corrective follow-up input with the previous frozen contract context before analysis', async () => {
@@ -1599,6 +2049,50 @@ describe('runtime commands handler', () => {
 });
 
 describe('runtime responses handler', () => {
+    test('accepts request_effect_response payloads containing null optional fields', () => {
+        const parsed = IpcResponseSchema.safeParse({
+            type: 'request_effect_response',
+            commandId: '1f502266-10c2-4554-a141-134efeabce39',
+            timestamp: new Date().toISOString(),
+            payload: {
+                response: {
+                    requestId: '70de98df-af35-4537-8f46-4a0f93f8dbf4',
+                    timestamp: new Date().toISOString(),
+                    approved: false,
+                    denialReason: 'awaiting_confirmation',
+                    approvalType: null,
+                    expiresAt: null,
+                    denialCode: null,
+                    modifiedScope: null,
+                },
+            },
+        });
+
+        expect(parsed.success).toBe(true);
+    });
+
+    test('accepts request_effect_response payloads whose effect timestamp uses UTC offset format', () => {
+        const parsed = IpcResponseSchema.safeParse({
+            type: 'request_effect_response',
+            commandId: 'd3571c07-3933-433c-a744-8bcd9fdc931b',
+            timestamp: '2026-03-22T16:40:52.732Z',
+            payload: {
+                response: {
+                    requestId: '33632986-642b-4a04-acc1-7d8f06ba33f8',
+                    timestamp: '2026-03-22T16:40:52+00:00',
+                    approved: false,
+                    denialReason: 'awaiting_confirmation',
+                    approvalType: null,
+                    expiresAt: null,
+                    denialCode: null,
+                    modifiedScope: null,
+                },
+            },
+        });
+
+        expect(parsed.success).toBe(true);
+    });
+
     test('maps request_effect_response and apply_patch_response into task event bus raw events', async () => {
         const rawCalls: any[] = [];
         const confirmations: any[] = [];

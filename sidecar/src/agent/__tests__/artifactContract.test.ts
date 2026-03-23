@@ -129,6 +129,34 @@ describe('artifact contract', () => {
         expect(contract.requirements.some(r => r.kind === 'file')).toBe(false);
     });
 
+    test('does not infer hard docx output from generic report wording alone', () => {
+        const contract = buildArtifactContract('请做一个市场分析报告，并给出关键结论。');
+        const requiresDocx = contract.requirements.some((requirement) =>
+            requirement.kind === 'file' &&
+            String(requirement.payload.extension).toLowerCase() === '.docx'
+        );
+
+        expect(requiresDocx).toBe(false);
+    });
+
+    test('does not convert chat-reply report format into fake .report file requirements', () => {
+        const contract = buildArtifactContract('分析当前趋势并给出结论', [
+            {
+                id: 'deliverable-chat',
+                title: 'Final response',
+                type: 'chat_reply',
+                description: 'Return a final response.',
+                required: true,
+                format: 'report',
+            },
+        ]);
+
+        expect(contract.requirements.some((requirement) =>
+            requirement.kind === 'file' &&
+            String(requirement.payload.extension).toLowerCase() === '.report'
+        )).toBe(false);
+    });
+
     test('adds planned deliverable file requirements from planner contract', () => {
         const contract = buildArtifactContract('帮我分析项目并输出结论', [
             {

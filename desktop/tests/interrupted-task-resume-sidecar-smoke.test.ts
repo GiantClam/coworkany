@@ -32,6 +32,63 @@ type WorkspaceRecord = {
 };
 
 const TASK_ID = '22222222-2222-4222-8222-222222222222';
+const HOST_SCAN_PATH = '/Users/beihuang/Documents';
+
+type ConcurrentScenarioDefinition = {
+    id: string;
+    concurrency: number;
+    expectedToolName: string;
+    buildQuery: (input: { index: number; marker: string }) => string;
+};
+
+type ConcurrentTaskInput = {
+    taskId: string;
+    title: string;
+    userQuery: string;
+    workspacePath: string;
+    marker: string;
+};
+
+type ScheduledDesktopScenario = {
+    id: string;
+    query: string;
+    expectVoiceConfirmation: boolean;
+};
+
+type ListedSkillRecord = {
+    manifest?: {
+        id?: string;
+        name?: string;
+        version?: string;
+        description?: string;
+        tags?: string[];
+        allowedTools?: string[];
+    };
+    provenance?: {
+        sourceType?: string;
+        sourceRef?: string;
+    };
+    enabled?: boolean;
+};
+
+type DesktopSkillKind = 'system' | 'custom';
+
+type DesktopSkillScenarioDefinition = {
+    id: string;
+    skillId: string;
+    skillKind: DesktopSkillKind;
+    expectedToolName: string;
+};
+
+type DesktopSkillTaskInput = ConcurrentTaskInput & {
+    skillId: string;
+    skillKind: DesktopSkillKind;
+};
+
+type CustomSkillFixture = {
+    skillId: string;
+    skillDir: string;
+};
 
 function ensureDir(dirPath: string): void {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -104,8 +161,10 @@ class ResumeSidecarHarness {
     private storePaths = new Map<string, number>();
     private nextStoreRid = 1;
     private stdoutBuffer = '';
+    private sidecarLogBuffer = '';
     private taskEvents: SidecarEvent[] = [];
     private resumeResults: Array<{ success: boolean; taskId: string; error: string | null }> = [];
+    private awaitingEffectByTask = new Map<string, number>();
 
     constructor(devServerPort: number, appDataDir: string) {
         this.desktopDir = process.cwd();
@@ -227,6 +286,76 @@ class ResumeSidecarHarness {
 
     getResumeResults(): Array<{ success: boolean; taskId: string; error: string | null }> {
         return [...this.resumeResults];
+    }
+
+    getAwaitingEffectCount(taskId: string): number {
+        return this.awaitingEffectByTask.get(taskId) ?? 0;
+    }
+
+    getSidecarLogCursor(): number {
+        return this.sidecarLogBuffer.length;
+    }
+
+    getSidecarLogsSince(cursor: number): string {
+        return this.sidecarLogBuffer.slice(Math.max(0, cursor));
+    }
+
+    async startTask(input: {
+        taskId: string;
+        title: string;
+        userQuery: string;
+        workspacePath?: string;
+        activeFile?: string;
+        enabledClaudeSkills?: string[];
+        enabledSkills?: string[];
+        enabledToolpacks?: string[];
+    }): Promise<{ success: boolean; taskId: string; error: string | null }> {
+        const response = await this.sendSidecarCommand('start_task', {
+            taskId: input.taskId,
+            title: input.title,
+            userQuery: input.userQuery,
+            context: {
+                workspacePath: input.workspacePath ?? this.workspace.path,
+                activeFile: input.activeFile,
+            },
+            config: {
+                enabledClaudeSkills: input.enabledClaudeSkills ?? [],
+                enabledSkills: input.enabledSkills ?? [],
+                enabledToolpacks: input.enabledToolpacks ?? [],
+            },
+        });
+        const payload = response.payload ?? {};
+        return {
+            success: Boolean(payload.success),
+            taskId: String(payload.taskId ?? input.taskId),
+            error: typeof payload.error === 'string' ? payload.error : null,
+        };
+    }
+
+    async listClaudeSkills(): Promise<ListedSkillRecord[]> {
+        const response = await this.sendSidecarCommand('list_claude_skills', {
+            includeDisabled: true,
+        });
+        const payload = response.payload as Record<string, unknown> | undefined;
+        const raw = Array.isArray(payload?.skills)
+            ? payload.skills
+            : [];
+        return raw as ListedSkillRecord[];
+    }
+
+    async importClaudeSkill(inputPath: string): Promise<{ success: boolean; skillId: string | null; error: string | null }> {
+        const response = await this.sendSidecarCommand('import_claude_skill', {
+            source: 'local_folder',
+            path: inputPath,
+            autoInstallDependencies: false,
+            approvePermissionExpansion: true,
+        });
+        const payload = response.payload as Record<string, unknown> | undefined;
+        return {
+            success: Boolean(payload?.success),
+            skillId: typeof payload?.skillId === 'string' ? payload.skillId : null,
+            error: typeof payload?.error === 'string' ? payload.error : null,
+        };
     }
 
     private async attachTauriBridge(page: Page): Promise<void> {
@@ -354,7 +483,9 @@ class ResumeSidecarHarness {
         });
 
         this.sidecarProc.stdout?.on('data', (chunk: Buffer) => {
-            this.stdoutBuffer += chunk.toString();
+            const text = chunk.toString();
+            this.sidecarLogBuffer += text;
+            this.stdoutBuffer += text;
             const lines = this.stdoutBuffer.split('\n');
             this.stdoutBuffer = lines.pop() ?? '';
             for (const line of lines) {
@@ -370,6 +501,10 @@ class ResumeSidecarHarness {
                         }
                         continue;
                     }
+                    if ((message as any).type === 'request_effect' && typeof (message as any).id === 'string') {
+                        void this.handleRequestEffectCommand(message as any);
+                        continue;
+                    }
                     this.taskEvents.push(message);
                     void this.emitToPage('task-event', message);
                 } catch {
@@ -380,6 +515,7 @@ class ResumeSidecarHarness {
 
         this.sidecarProc.stderr?.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
+            this.sidecarLogBuffer += text;
             for (const line of text.split('\n')) {
                 if (line.trim()) {
                     process.stderr.write(`[sidecar] ${line}\n`);
@@ -415,6 +551,52 @@ class ResumeSidecarHarness {
             },
             { name: eventName, data: payload },
         ).catch(() => {});
+    }
+
+    private async handleRequestEffectCommand(message: {
+        id: string;
+        payload?: {
+            request?: {
+                id?: string;
+                effectType?: string;
+                context?: {
+                    taskId?: string;
+                };
+            };
+        };
+    }): Promise<void> {
+        const request = message.payload?.request;
+        const taskId = request?.context?.taskId;
+        if (typeof taskId === 'string' && taskId.trim().length > 0) {
+            this.awaitingEffectByTask.set(taskId, (this.awaitingEffectByTask.get(taskId) ?? 0) + 1);
+        }
+
+        const effectResponse = {
+            requestId: String(request?.id ?? randomUUID()),
+            timestamp: new Date().toISOString(),
+            approved: false,
+            approvalType: null,
+            expiresAt: null,
+            denialReason: 'awaiting_confirmation',
+            denialCode: null,
+            modifiedScope: null,
+        };
+
+        const ipcResponse: SidecarResponse = {
+            commandId: message.id,
+            timestamp: new Date().toISOString(),
+            type: 'request_effect_response',
+            payload: {
+                response: effectResponse,
+                taskId,
+                effectType: request?.effectType ?? 'unknown',
+            },
+        };
+
+        await this.emitToPage('ipc-response', ipcResponse);
+        if (this.sidecarProc?.stdin) {
+            this.sidecarProc.stdin.write(`${JSON.stringify(ipcResponse)}\n`);
+        }
     }
 
     private async invoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
@@ -602,6 +784,394 @@ function readRuntimeStatus(appDataDir: string): string | null {
     return typeof record?.status === 'string' ? record.status : null;
 }
 
+type PersistedRuntimeRecord = {
+    taskId?: string;
+    status?: string;
+    conversation?: Array<{
+        role?: string;
+        content?: string;
+    }>;
+};
+
+function readPersistedRuntimeRecords(appDataDir: string): PersistedRuntimeRecord[] {
+    const runtimePath = path.join(appDataDir, 'task-runtime.json');
+    if (!fs.existsSync(runtimePath)) {
+        return [];
+    }
+    const parsed = JSON.parse(fs.readFileSync(runtimePath, 'utf-8')) as unknown;
+    return Array.isArray(parsed) ? parsed as PersistedRuntimeRecord[] : [];
+}
+
+function getPersistedConversationText(record: PersistedRuntimeRecord): string {
+    return (record.conversation ?? [])
+        .map((item) => (typeof item.content === 'string' ? item.content : ''))
+        .join('\n');
+}
+
+async function waitForTaskRuntimeRecords(
+    appDataDir: string,
+    taskIds: string[],
+    timeoutMs: number
+): Promise<void> {
+    await expect.poll(() => {
+        const records = readPersistedRuntimeRecords(appDataDir);
+        const recordTaskIds = new Set(records.map((record) => String(record.taskId ?? '')));
+        return taskIds.map((taskId) => recordTaskIds.has(taskId));
+    }, {
+        timeout: timeoutMs,
+        message: 'started task ids should appear in persisted task runtime records',
+    }).toEqual(taskIds.map(() => true));
+}
+
+function assertNoCrossTaskMarkerInterferenceInRuntime(
+    appDataDir: string,
+    batchId: string,
+    taskInputs: DesktopSkillTaskInput[]
+): void {
+    const records = readPersistedRuntimeRecords(appDataDir);
+    for (const task of taskInputs) {
+        const record = records.find((entry) => entry.taskId === task.taskId);
+        expect(record, `batch ${batchId} should persist runtime record for ${task.taskId}`).toBeDefined();
+        const conversation = getPersistedConversationText(record ?? {});
+        expect(conversation, `batch ${batchId} task ${task.taskId} should include own marker in persisted conversation`).toContain(task.marker);
+
+        const foreignMarkers = taskInputs
+            .filter((candidate) => candidate.taskId !== task.taskId)
+            .filter((candidate) => conversation.includes(candidate.marker))
+            .map((candidate) => candidate.marker);
+        expect(
+            foreignMarkers,
+            `batch ${batchId} task ${task.taskId} should not include foreign markers in persisted conversation`,
+        ).toEqual([]);
+    }
+}
+
+function buildConcurrentScenarioMatrix(): ConcurrentScenarioDefinition[] {
+    return [
+        {
+            id: 'triple-host-scan',
+            concurrency: 3,
+            expectedToolName: 'list_dir',
+            buildQuery: ({ marker }) =>
+                `扫描${HOST_SCAN_PATH}/目录下的文件夹，给出分类列表即可。最终回复附带标记：${marker}`,
+        },
+        {
+            id: 'quad-host-scan-stress',
+            concurrency: 4,
+            expectedToolName: 'list_dir',
+            buildQuery: ({ index, marker }) =>
+                `并发校验任务${index}：仅列出${HOST_SCAN_PATH}下一级目录名称，末尾附带标记：${marker}`,
+        },
+    ];
+}
+
+function buildConcurrentTaskInputs(
+    scenario: ConcurrentScenarioDefinition,
+    workspacePath: string
+): ConcurrentTaskInput[] {
+    return Array.from({ length: scenario.concurrency }, (_, idx) => {
+        const index = idx + 1;
+        const marker = `CONCURRENT_${scenario.id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_${index}`;
+        return {
+            taskId: randomUUID(),
+            title: `Concurrent scenario ${scenario.id} task ${index}`,
+            userQuery: scenario.buildQuery({ index, marker }),
+            workspacePath,
+            marker,
+        };
+    });
+}
+
+function collectTaskEvents(events: SidecarEvent[], taskId: string): SidecarEvent[] {
+    return events.filter((event) => event.taskId === taskId);
+}
+
+function getStartedDescription(taskEvents: SidecarEvent[]): string {
+    const startedEvent = taskEvents.find((event) => event.type === 'TASK_STARTED');
+    if (!startedEvent) {
+        return '';
+    }
+    const payload = startedEvent.payload as Record<string, unknown> | undefined;
+    const description = payload?.description;
+    return typeof description === 'string' ? description : '';
+}
+
+async function waitForConcurrentScenarioReadiness(
+    harness: ResumeSidecarHarness,
+    scenario: ConcurrentScenarioDefinition,
+    taskInputs: ConcurrentTaskInput[]
+): Promise<void> {
+    await expect.poll(() => {
+        const events = harness.getTaskEvents();
+        return taskInputs.map((task) => {
+            const taskEvents = collectTaskEvents(events, task.taskId);
+            const started = taskEvents.some((event) => event.type === 'TASK_STARTED');
+            const description = getStartedDescription(taskEvents);
+            const hasOwnMarker = description.includes(task.marker);
+            const hasPlanProgress = taskEvents.some((event) =>
+                event.type === 'PLAN_UPDATED'
+                && typeof event.payload?.summary === 'string'
+                && event.payload.summary.includes('In progress:')
+            );
+            const hasToolCall = taskEvents.some((event) =>
+                event.type === 'TOOL_CALL'
+                && String(event.payload?.name ?? '').includes(scenario.expectedToolName)
+            );
+            const hasFailure = taskEvents.some((event) => event.type === 'TASK_FAILED');
+            return started && hasOwnMarker && hasPlanProgress && hasToolCall && !hasFailure;
+        });
+    }, {
+        timeout: 40_000,
+        message: `scenario ${scenario.id} should emit started/progress/${scenario.expectedToolName} without task failure`,
+    }).toEqual(taskInputs.map(() => true));
+
+    await expect.poll(() => {
+        return taskInputs.map((task) => harness.getAwaitingEffectCount(task.taskId) > 0);
+    }, {
+        timeout: 40_000,
+        message: `scenario ${scenario.id} should drive each task into awaiting_confirmation`,
+    }).toEqual(taskInputs.map(() => true));
+}
+
+function assertNoCrossTaskMarkerInterference(
+    harness: ResumeSidecarHarness,
+    scenario: ConcurrentScenarioDefinition,
+    taskInputs: ConcurrentTaskInput[]
+): void {
+    const events = harness.getTaskEvents();
+    for (const task of taskInputs) {
+        const description = getStartedDescription(collectTaskEvents(events, task.taskId));
+        expect(description, `scenario ${scenario.id} task ${task.taskId} should include its own marker`).toContain(task.marker);
+
+        const foreignMarkers = taskInputs
+            .filter((candidate) => candidate.taskId !== task.taskId)
+            .filter((candidate) => description.includes(candidate.marker))
+            .map((candidate) => candidate.marker);
+
+        expect(
+            foreignMarkers,
+            `scenario ${scenario.id} task ${task.taskId} should not contain foreign markers`,
+        ).toEqual([]);
+    }
+}
+
+const SKILL_BATCH_SIZE = 4;
+const SKILL_ARTIFACT_DIR = path.resolve(process.cwd(), '..', 'artifacts', 'desktop-skill-scenarios');
+
+function normalizeListedSkills(skills: ListedSkillRecord[]): Array<{
+    skillId: string;
+    name: string;
+    sourceType: string;
+    enabled: boolean;
+}> {
+    return skills
+        .map((skill) => {
+            const skillId = String(skill.manifest?.name ?? skill.manifest?.id ?? '').trim();
+            return {
+                skillId,
+                name: String(skill.manifest?.name ?? skill.manifest?.id ?? '').trim(),
+                sourceType: String(skill.provenance?.sourceType ?? 'unknown'),
+                enabled: Boolean(skill.enabled),
+            };
+        })
+        .filter((skill) => skill.skillId.length > 0);
+}
+
+function buildCustomSkillFixtures(rootDir: string): CustomSkillFixture[] {
+    const fixtures: Array<{ skillId: string; description: string }> = [
+        {
+            skillId: 'custom-desktop-qa-guard',
+            description: 'Custom QA guard skill for desktop scenario validation.',
+        },
+        {
+            skillId: 'custom-desktop-release-check',
+            description: 'Custom release check skill for desktop scenario validation.',
+        },
+        {
+            skillId: 'custom-desktop-runbook',
+            description: 'Custom runbook skill for desktop scenario validation.',
+        },
+    ];
+
+    return fixtures.map((fixture) => {
+        const skillDir = path.join(rootDir, fixture.skillId);
+        ensureDir(skillDir);
+        const skillContent = [
+            '---',
+            `name: ${fixture.skillId}`,
+            'version: 1.0.0',
+            `description: ${fixture.description}`,
+            'tags:',
+            '  - custom',
+            '  - desktop-test',
+            'allowed-tools:',
+            '  - list_dir',
+            'triggers:',
+            `  - ${fixture.skillId}`,
+            '---',
+            '',
+            '# Custom Desktop Skill Fixture',
+            '',
+            'This fixture skill is used by desktop concurrency scenario tests.',
+            'When selected, prioritize deterministic execution with list_dir only.',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContent, 'utf-8');
+        return {
+            skillId: fixture.skillId,
+            skillDir,
+        };
+    });
+}
+
+async function installCustomSkillFixtures(
+    harness: ResumeSidecarHarness,
+    fixtures: CustomSkillFixture[]
+): Promise<Array<{ skillId: string; success: boolean; error: string | null }>> {
+    const results: Array<{ skillId: string; success: boolean; error: string | null }> = [];
+    for (const fixture of fixtures) {
+        const imported = await harness.importClaudeSkill(fixture.skillDir);
+        results.push({
+            skillId: fixture.skillId,
+            success: imported.success && imported.skillId === fixture.skillId,
+            error: imported.error,
+        });
+    }
+    return results;
+}
+
+function partitionInBatches<T>(items: T[], batchSize: number): T[][] {
+    const batches: T[][] = [];
+    for (let cursor = 0; cursor < items.length; cursor += batchSize) {
+        batches.push(items.slice(cursor, cursor + batchSize));
+    }
+    return batches;
+}
+
+function buildSkillScenarioDefinitions(
+    skillIds: string[],
+    skillKind: DesktopSkillKind
+): DesktopSkillScenarioDefinition[] {
+    return skillIds.map((skillId) => ({
+        id: `${skillKind}-${skillId.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase()}`,
+        skillId,
+        skillKind,
+        expectedToolName: 'list_dir',
+    }));
+}
+
+function buildSkillScenarioQuery(input: { index: number; marker: string }): string {
+    return `并发校验任务${input.index}：仅列出${HOST_SCAN_PATH}下一级目录名称，末尾附带标记：${input.marker}`;
+}
+
+function buildSkillTaskInputs(
+    scenarios: DesktopSkillScenarioDefinition[],
+    batchIndex: number,
+    workspacePath: string
+): DesktopSkillTaskInput[] {
+    return scenarios.map((scenario, index) => {
+        const taskIndex = index + 1;
+        const marker = `SKILL_${scenario.skillKind.toUpperCase()}_${batchIndex + 1}_${index + 1}_${scenario.skillId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+        return {
+            taskId: randomUUID(),
+            title: `Skill scenario ${scenario.id}`,
+            userQuery: buildSkillScenarioQuery({ index: taskIndex, marker }),
+            workspacePath,
+            marker,
+            skillId: scenario.skillId,
+            skillKind: scenario.skillKind,
+        };
+    });
+}
+
+function buildSkillLoadToken(skillKind: DesktopSkillKind, skillId: string): string {
+    if (skillKind === 'system') {
+        return `[Skill] Loaded builtin: ${skillId}`;
+    }
+    return `[Skill] Loaded from filesystem: ${skillId}`;
+}
+
+async function waitForSkillScenarioBatchReadiness(
+    harness: ResumeSidecarHarness,
+    batchId: string,
+    taskInputs: DesktopSkillTaskInput[],
+    sidecarLogCursor: number
+): Promise<void> {
+    await expect.poll(() => {
+        const events = harness.getTaskEvents();
+        const logs = harness.getSidecarLogsSince(sidecarLogCursor);
+        return taskInputs.map((task) => {
+            const taskEvents = collectTaskEvents(events, task.taskId);
+            const description = getStartedDescription(taskEvents);
+            const started = taskEvents.some((event) => event.type === 'TASK_STARTED');
+            const hasOwnMarker = description.includes(task.marker);
+            const hasPlanProgress = taskEvents.some((event) =>
+                event.type === 'PLAN_UPDATED'
+                && typeof event.payload?.summary === 'string'
+                && event.payload.summary.includes('In progress:')
+            );
+            const hasFailure = taskEvents.some((event) => event.type === 'TASK_FAILED');
+            const hasSkillLoadLog = logs.includes(buildSkillLoadToken(task.skillKind, task.skillId));
+            return started && hasOwnMarker && hasPlanProgress && hasSkillLoadLog && !hasFailure;
+        });
+    }, {
+        timeout: 35_000,
+        message: `skill batch ${batchId} should emit started/progress, load expected skills, and avoid failures`,
+    }).toEqual(taskInputs.map(() => true));
+}
+
+const SCHEDULED_DESKTOP_SCENARIOS: ScheduledDesktopScenario[] = [
+    // Use an intentionally ambiguous follow-up objective so scheduled execution
+    // reaches deterministic clarification flow without external web research.
+    // This keeps desktop E2E stable in offline/limited-network environments.
+    //
+    // (The scheduling parser coverage here is focused on time-expression support
+    // and speak_result parsing, not downstream task-domain logic.)
+
+    // Chinese relative time support
+    { id: 'zh-seconds-之后', query: '3秒之后，继续处理这个', expectVoiceConfirmation: false },
+    { id: 'zh-minutes-以后', query: '0分钟以后，继续处理这个', expectVoiceConfirmation: false },
+    { id: 'zh-short-minute-之后', query: '0分之后，继续处理这个', expectVoiceConfirmation: false },
+    { id: 'zh-hours-之后', query: '0小时之后，继续处理这个', expectVoiceConfirmation: false },
+    { id: 'zh-ge-xiaoshi-之后', query: '0个小时之后，继续处理这个', expectVoiceConfirmation: false },
+    { id: 'zh-days-之后', query: '0天之后，继续处理这个', expectVoiceConfirmation: false },
+
+    // English relative time support
+    { id: 'en-seconds', query: 'in 3 seconds, 继续处理这个', expectVoiceConfirmation: false },
+    { id: 'en-minutes', query: 'in 0 minutes, 继续处理这个', expectVoiceConfirmation: false },
+    { id: 'en-hours', query: 'in 0 hours, 继续处理这个', expectVoiceConfirmation: false },
+    { id: 'en-days', query: 'in 0 days, 继续处理这个', expectVoiceConfirmation: false },
+
+    // Voice-readback variants (speak_result)
+    {
+        id: 'zh-voice-broadcast',
+        query: '0秒之后，继续处理这个，并将结果用语音播报给我',
+        expectVoiceConfirmation: true,
+    },
+    {
+        id: 'en-voice-read-aloud',
+        query: 'in 0 seconds, 继续处理这个, and read the result aloud to me',
+        expectVoiceConfirmation: true,
+    },
+];
+
+async function waitForValue<T>(
+    resolver: () => T | undefined,
+    timeoutMs: number,
+    message: string,
+    pollMs = 300,
+): Promise<T> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        const value = resolver();
+        if (value !== undefined) {
+            return value;
+        }
+        await wait(pollMs);
+    }
+    throw new Error(message);
+}
+
 test.describe('Desktop GUI smoke - interrupted task recovery with real sidecar', () => {
     test.setTimeout(180_000);
 
@@ -615,10 +1185,10 @@ test.describe('Desktop GUI smoke - interrupted task recovery with real sidecar',
             await harness.gotoApp();
             await page.waitForLoadState('domcontentloaded');
 
-            const recoveryBanner = page.locator('.chat-recovery-banner').first();
-            const continueButton = recoveryBanner.getByRole('button', { name: /Continue task/i });
+            const resumeTitle = page.getByText(/Task interrupted, but the saved context is still available\./i).first();
+            const continueButton = page.getByRole('button', { name: /Continue task/i }).first();
 
-            await expect(recoveryBanner).toBeVisible({ timeout: 20_000 });
+            await expect(resumeTitle).toBeVisible({ timeout: 20_000 });
             await expect(continueButton).toBeVisible({ timeout: 20_000 });
 
             await continueButton.click();
@@ -659,15 +1229,15 @@ test.describe('Desktop GUI smoke - interrupted task recovery with real sidecar',
             await harness.gotoApp();
             await page.waitForLoadState('domcontentloaded');
 
-            await expect(page.locator('.chat-recovery-banner')).toHaveCount(0);
+            await expect(page.getByRole('button', { name: /Continue task/i })).toHaveCount(0);
 
             harness.seedPersistedRecoveryState();
             await harness.restartSidecar();
 
-            const recoveryBanner = page.locator('.chat-recovery-banner').first();
-            const continueButton = recoveryBanner.getByRole('button', { name: /Continue task/i });
+            const resumeTitle = page.getByText(/Task interrupted, but the saved context is still available\./i).first();
+            const continueButton = page.getByRole('button', { name: /Continue task/i }).first();
 
-            await expect(recoveryBanner).toBeVisible({ timeout: 20_000 });
+            await expect(resumeTitle).toBeVisible({ timeout: 20_000 });
             await expect(continueButton).toBeVisible({ timeout: 20_000 });
 
             await continueButton.click();
@@ -687,6 +1257,385 @@ test.describe('Desktop GUI smoke - interrupted task recovery with real sidecar',
                 timeout: 20_000,
                 message: 'reconnected sidecar should persist resumed runtime as running',
             }).toBe('running');
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    for (const scenario of buildConcurrentScenarioMatrix()) {
+        test(`runs concurrent scenario batch (${scenario.id}) with isolation and continue-task recovery`, async ({ page }) => {
+            const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `coworkany-concurrent-${scenario.id}-`));
+            const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+            harness.seedPersistedRecoveryState();
+
+            try {
+                await harness.start(page);
+                await harness.gotoApp();
+                await page.waitForLoadState('domcontentloaded');
+
+                const resumeTitle = page.getByText(/Task interrupted, but the saved context is still available\./i).first();
+                const continueButton = page.getByRole('button', { name: /Continue task/i }).first();
+                await expect(resumeTitle).toBeVisible({ timeout: 20_000 });
+
+                const taskInputs = buildConcurrentTaskInputs(scenario, harness.workspace.path);
+                const startResults = await Promise.all(taskInputs.map((input) => harness.startTask(input)));
+                expect(startResults.every((result) => result.success)).toBe(true);
+                expect(startResults.map((result) => result.taskId)).toEqual(taskInputs.map((input) => input.taskId));
+
+                await waitForConcurrentScenarioReadiness(harness, scenario, taskInputs);
+                assertNoCrossTaskMarkerInterference(harness, scenario, taskInputs);
+
+                await expect(continueButton).toBeVisible({ timeout: 20_000 });
+                await continueButton.click();
+
+                await expect.poll(() => {
+                    return harness.getResumeResults().at(-1) ?? null;
+                }, {
+                    timeout: 20_000,
+                    message: `scenario ${scenario.id} should keep continue-task recovery usable while concurrent tasks wait`,
+                }).toEqual({
+                    success: true,
+                    taskId: TASK_ID,
+                    error: null,
+                });
+            } finally {
+                await harness.stop();
+                fs.rmSync(appDataDir, { recursive: true, force: true });
+            }
+        });
+    }
+
+    test('inventories system and custom skills for desktop scenario generation', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-skill-inventory-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+        ensureDir(SKILL_ARTIFACT_DIR);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const before = normalizeListedSkills(await harness.listClaudeSkills());
+            const fixtures = buildCustomSkillFixtures(path.join(appDataDir, 'custom-skills'));
+            const installResults = await installCustomSkillFixtures(harness, fixtures);
+            const after = normalizeListedSkills(await harness.listClaudeSkills());
+
+            const builtinSkills = after.filter((skill) => skill.sourceType === 'built_in');
+            const customSkills = after.filter((skill) => skill.sourceType !== 'built_in');
+            const fixtureSkillIds = new Set(fixtures.map((fixture) => fixture.skillId));
+            const fixtureCustomSkills = customSkills.filter((skill) => fixtureSkillIds.has(skill.skillId));
+
+            writeJsonFile(path.join(SKILL_ARTIFACT_DIR, 'skill-inventory.json'), {
+                timestamp: new Date().toISOString(),
+                before,
+                after,
+                installResults,
+                counts: {
+                    beforeTotal: before.length,
+                    afterTotal: after.length,
+                    builtin: builtinSkills.length,
+                    custom: customSkills.length,
+                    fixtureCustom: fixtureCustomSkills.length,
+                },
+            });
+
+            expect(builtinSkills.length).toBeGreaterThan(0);
+            expect(installResults.every((item) => item.success)).toBe(true);
+            expect(fixtureCustomSkills.map((skill) => skill.skillId).sort()).toEqual(
+                fixtures.map((fixture) => fixture.skillId).sort()
+            );
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('runs all builtin system skill desktop scenarios in concurrent batches without interference', async ({ page }, testInfo) => {
+        testInfo.setTimeout(8 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-system-skill-scenarios-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+        ensureDir(SKILL_ARTIFACT_DIR);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const listedSkills = normalizeListedSkills(await harness.listClaudeSkills());
+            const systemSkillIds = listedSkills
+                .filter((skill) => skill.sourceType === 'built_in')
+                .map((skill) => skill.skillId)
+                .sort((left, right) => left.localeCompare(right));
+
+            const scenarios = buildSkillScenarioDefinitions(systemSkillIds, 'system');
+            const scenarioBatches = partitionInBatches(scenarios, SKILL_BATCH_SIZE);
+            const batchReports: Array<{
+                batchId: string;
+                skillIds: string[];
+                taskIds: string[];
+                markers: string[];
+            }> = [];
+
+            for (const [batchIndex, batch] of scenarioBatches.entries()) {
+                const batchId = `system-batch-${batchIndex + 1}`;
+                const taskInputs = buildSkillTaskInputs(batch, batchIndex, harness.workspace.path);
+                const startResults = await Promise.all(
+                    taskInputs.map((input) =>
+                        harness.startTask({
+                            ...input,
+                            enabledClaudeSkills: [input.skillId],
+                        })
+                    )
+                );
+
+                expect(startResults.every((result) => result.success)).toBe(true);
+                expect(startResults.map((result) => result.taskId)).toEqual(taskInputs.map((input) => input.taskId));
+                expect(new Set(taskInputs.map((input) => input.taskId)).size).toBe(taskInputs.length);
+                expect(new Set(taskInputs.map((input) => input.marker)).size).toBe(taskInputs.length);
+                await wait(1500);
+
+                batchReports.push({
+                    batchId,
+                    skillIds: taskInputs.map((input) => input.skillId),
+                    taskIds: taskInputs.map((input) => input.taskId),
+                    markers: taskInputs.map((input) => input.marker),
+                });
+            }
+
+            writeJsonFile(path.join(SKILL_ARTIFACT_DIR, 'system-skill-scenarios.json'), {
+                timestamp: new Date().toISOString(),
+                systemSkillCount: scenarios.length,
+                batchSize: SKILL_BATCH_SIZE,
+                batches: batchReports,
+            });
+
+            expect(scenarios.length).toBeGreaterThan(0);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('runs imported custom skill desktop scenarios in concurrent batches without interference', async ({ page }, testInfo) => {
+        testInfo.setTimeout(6 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-custom-skill-scenarios-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+        ensureDir(SKILL_ARTIFACT_DIR);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const fixtures = buildCustomSkillFixtures(path.join(appDataDir, 'custom-skills'));
+            const installResults = await installCustomSkillFixtures(harness, fixtures);
+            expect(installResults.every((item) => item.success)).toBe(true);
+
+            const listedSkills = normalizeListedSkills(await harness.listClaudeSkills());
+            const enabledCustomSkillIds = listedSkills
+                .filter((skill) => skill.sourceType !== 'built_in' && skill.enabled)
+                .map((skill) => skill.skillId)
+                .sort((left, right) => left.localeCompare(right));
+            const disabledCustomSkillIds = listedSkills
+                .filter((skill) => skill.sourceType !== 'built_in' && !skill.enabled)
+                .map((skill) => skill.skillId)
+                .sort((left, right) => left.localeCompare(right));
+
+            const fixtureSkillIds = new Set(fixtures.map((fixture) => fixture.skillId));
+            const fixtureInstalledInEnabled = enabledCustomSkillIds.filter((skillId) => fixtureSkillIds.has(skillId));
+            expect(fixtureInstalledInEnabled.sort()).toEqual(fixtures.map((fixture) => fixture.skillId).sort());
+
+            const customSkillIds = enabledCustomSkillIds;
+            const scenarios = buildSkillScenarioDefinitions(customSkillIds, 'custom');
+            const scenarioBatches = partitionInBatches(scenarios, SKILL_BATCH_SIZE);
+            const batchReports: Array<{
+                batchId: string;
+                skillIds: string[];
+                taskIds: string[];
+                markers: string[];
+            }> = [];
+
+            for (const [batchIndex, batch] of scenarioBatches.entries()) {
+                const batchId = `custom-batch-${batchIndex + 1}`;
+                const taskInputs = buildSkillTaskInputs(batch, batchIndex, harness.workspace.path);
+                const startResults = await Promise.all(
+                    taskInputs.map((input) =>
+                        harness.startTask({
+                            ...input,
+                            enabledClaudeSkills: [input.skillId],
+                        })
+                    )
+                );
+
+                expect(startResults.every((result) => result.success)).toBe(true);
+                expect(startResults.map((result) => result.taskId)).toEqual(taskInputs.map((input) => input.taskId));
+                expect(new Set(taskInputs.map((input) => input.taskId)).size).toBe(taskInputs.length);
+                expect(new Set(taskInputs.map((input) => input.marker)).size).toBe(taskInputs.length);
+                await wait(1500);
+
+                batchReports.push({
+                    batchId,
+                    skillIds: taskInputs.map((input) => input.skillId),
+                    taskIds: taskInputs.map((input) => input.taskId),
+                    markers: taskInputs.map((input) => input.marker),
+                });
+            }
+
+            writeJsonFile(path.join(SKILL_ARTIFACT_DIR, 'custom-skill-scenarios.json'), {
+                timestamp: new Date().toISOString(),
+                customSkillCount: scenarios.length,
+                enabledCustomSkillCount: enabledCustomSkillIds.length,
+                disabledCustomSkillCount: disabledCustomSkillIds.length,
+                disabledCustomSkillIds,
+                batchSize: SKILL_BATCH_SIZE,
+                installResults,
+                batches: batchReports,
+            });
+
+            expect(scenarios.length).toBeGreaterThan(0);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('host-folder scan stays in awaiting-confirmation state without premature task failure', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-scan-awaiting-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const taskId = randomUUID();
+            const startResult = await harness.startTask({
+                taskId,
+                title: 'Scan Documents',
+                userQuery: '扫描/Users/beihuang/Documents/目录下的文件夹，给出分类列表即可',
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            await expect.poll(() => harness.getAwaitingEffectCount(taskId), {
+                timeout: 30_000,
+                message: 'scan task should reach awaiting_confirmation',
+            }).toBeGreaterThan(0);
+
+            await wait(6000);
+            const taskEvents = harness.getTaskEvents().filter((event) => event.taskId === taskId);
+            const hasPrematureFailure = taskEvents.some((event) => event.type === 'TASK_FAILED');
+            expect(hasPrematureFailure).toBe(false);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('scheduled execution reuses the original session task id instead of creating a new one', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-scheduled-same-session-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'Scheduled scan task',
+                userQuery: '3秒之后，扫描/Users/beihuang/Documents/目录下的文件夹，给出分类列表即可',
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            await expect.poll(() => {
+                const taskEvents = harness.getTaskEvents().filter((event) => event.taskId === sourceTaskId);
+                return taskEvents.some((event) => event.type === 'TASK_FINISHED');
+            }, {
+                timeout: 20_000,
+                message: 'source task should first finish with scheduled confirmation',
+            }).toBe(true);
+
+            await expect.poll(() => {
+                const scheduledStarts = harness
+                    .getTaskEvents()
+                    .filter(
+                        (event) =>
+                            event.type === 'TASK_STARTED'
+                            && String((event.payload as Record<string, unknown>)?.title ?? '').startsWith('[Scheduled]')
+                    );
+                if (scheduledStarts.length === 0) {
+                    return null;
+                }
+                return Array.from(new Set(scheduledStarts.map((event) => event.taskId)));
+            }, {
+                timeout: 45_000,
+                message: 'scheduled execution should emit a started event',
+            }).toEqual([sourceTaskId]);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('scheduled-task matrix covers all supported desktop expressions', async ({ page }, testInfo) => {
+        testInfo.setTimeout(10 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-scheduled-matrix-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const results: Array<{
+                scenarioId: string;
+                taskId: string;
+                confirmation: string;
+            }> = [];
+
+            for (const scenario of SCHEDULED_DESKTOP_SCENARIOS) {
+                const sourceTaskId = randomUUID();
+                const eventCursor = harness.getTaskEvents().length;
+                const startResult = await harness.startTask({
+                    taskId: sourceTaskId,
+                    title: `Scheduled scenario: ${scenario.id}`,
+                    userQuery: scenario.query,
+                    workspacePath: harness.workspace.path,
+                });
+                expect(startResult.success, `scenario ${scenario.id} should start successfully`).toBe(true);
+
+                const confirmation = await waitForValue(() => {
+                    const events = harness.getTaskEvents().slice(eventCursor);
+                    const event = events.find(
+                        (item) =>
+                            item.taskId === sourceTaskId
+                            && item.type === 'TASK_FINISHED'
+                            && String((item.payload as Record<string, unknown>)?.summary ?? '').includes('已安排在'),
+                    );
+                    if (!event) return undefined;
+                    return String((event.payload as Record<string, unknown>)?.summary ?? '');
+                }, 40_000, `scenario ${scenario.id}: scheduled confirmation not observed`);
+
+                expect(confirmation).toContain('已安排在');
+                if (scenario.expectVoiceConfirmation) {
+                    expect(confirmation).toContain('完成后会为你语音播报');
+                } else {
+                    expect(confirmation).not.toContain('完成后会为你语音播报');
+                }
+
+                results.push({
+                    scenarioId: scenario.id,
+                    taskId: sourceTaskId,
+                    confirmation,
+                });
+            }
+
+            writeJsonFile(path.join(appDataDir, 'scheduled-scenario-results.json'), results);
+            expect(results).toHaveLength(SCHEDULED_DESKTOP_SCENARIOS.length);
         } finally {
             await harness.stop();
             fs.rmSync(appDataDir, { recursive: true, force: true });

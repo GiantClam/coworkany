@@ -131,7 +131,7 @@ export function createEnhancedBrowserTools(
                 ...tool,
                 handler: async (args: any, context: ToolContext) => {
                     const { signal, cleanup } = createCancellationSignal(context);
-                    const taskId = taskIdGetter();
+                    const taskId = context.taskId || taskIdGetter();
 
                     try {
                         // Call original navigate

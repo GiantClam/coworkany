@@ -1,0 +1,11 @@
+{
+  "scenario": "write-to-file",
+  "toolName": "write_to_file",
+  "submitted": true,
+  "called": false,
+  "successfulResult": false,
+  "markerSeen": true,
+  "expectedSatisfied": false,
+  "taskFailed": false,
+  "taskFailedError": ""
+}

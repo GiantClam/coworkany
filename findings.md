@@ -307,3 +307,45 @@
   - if `--require-canary-evidence` is not set, missing evidence file does not fail the run
   - malformed evidence files still surface explicit findings
 - Added a template artifact in `docs/releases/canary-evidence.template.json` so release owners can fill evidence in a machine-checkable format instead of ad-hoc comments.
+
+## 2026-03-23 Desktop Concurrency Scenario Inventory
+
+- Existing desktop-sidecar smoke coverage already validates one concurrent case (`desktop/tests/interrupted-task-resume-sidecar-smoke.test.ts`) with 3 simultaneous long-running tasks and a continue-task recovery action.
+- The current concurrent case is hardcoded and not reusable; there is no shared scenario abstraction for batch generation.
+- The repo already has a strong data-driven scenario pattern in `desktop/tests/system-tools-desktop-e2e.test.ts` (`buildScenarios` + looped `test(...)` generation), which can be applied to concurrent-task coverage.
+- Current non-interference checks are partial (started/progress/tool/effect observed), but do not yet assert marker isolation per task or per-task absence of `TASK_FAILED` in a reusable framework.
+- The existing real-sidecar harness (`ResumeSidecarHarness`) is suitable as the foundation for a unified desktop concurrency scenario framework because it exercises desktop-triggered IPC and real sidecar behavior.
+- The concurrent desktop smoke path is now formalized as a data-driven framework in `desktop/tests/interrupted-task-resume-sidecar-smoke.test.ts` with:
+  - `ConcurrentScenarioDefinition`
+  - scenario matrix builder
+  - batch task-input generator
+  - shared readiness/assertion helpers
+- The concurrent suite now batch-generates two desktop-triggered scenarios:
+  - `triple-host-scan` (3 parallel tasks)
+  - `quad-host-scan-stress` (4 parallel tasks)
+- Non-interference validation now explicitly asserts marker isolation per task:
+  - each task started description contains only its own marker
+  - no foreign marker leakage from sibling concurrent tasks
+- Each concurrent task must independently satisfy:
+  - `TASK_STARTED`
+  - `PLAN_UPDATED` with in-progress summary
+  - `TOOL_CALL` for `list_dir`
+  - `request_effect` awaiting-confirmation state
+  - no `TASK_FAILED`
+- Continue-task recovery is now validated inside each concurrent scenario batch, proving interruption recovery remains available under concurrent load.
+- Verification evidence:
+  - `cd desktop && npx playwright test tests/interrupted-task-resume-sidecar-smoke.test.ts --grep "concurrent scenario batch" --workers=1` -> 2 passed
+  - `cd desktop && npx playwright test tests/interrupted-task-resume-sidecar-smoke.test.ts --workers=1` -> 6 passed
+  - `cd desktop && npx tsc --noEmit` -> exit 0
+
+## 2026-03-23 Desktop 股票检索分析场景框架
+
+- desktop 侧股票测试已存在大量重复实现（输入框查找、日志轮询、关键词断言、产物落盘），缺统一抽象导致扩展新标的成本高。
+- `stock-research` 能力在 sidecar 已有覆盖，但 desktop 触发路径缺矩阵化测试，不利于验证用户真实入口质量。
+- 新增统一框架 `desktop/tests/utils/stockScenarioFramework.ts` 后，核心收益：
+  - 场景 schema + matrix 自动生成
+  - 统一 runner（提交、事件解析、证据抽取、完成判定）
+  - 统一质量断言（search_web 调用、标的覆盖、建议关键词、预测关键词）
+  - 统一外部依赖失败识别
+- 首版矩阵覆盖 4 组场景，并显式纳入 `parallel-minimax-yankuang-glm-nvidia`。
+- 初版外部失败规则曾误判成功场景（过宽匹配 `401|402|403`）；已改为仅在任务失败上下文生效，并收窄为 HTTP 语义模式匹配。
