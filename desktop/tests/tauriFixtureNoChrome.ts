@@ -26,6 +26,42 @@ const CDP_READY_TIMEOUT_MS = 120_000;
 const CDP_POLL_MS = 2000;
 
 const INPUT_READY_TIMEOUT_MS = 120_000;
+const DEFAULT_SHARED_CDP_PORT = 9224;
+
+function readBooleanEnv(name: string, defaultValue: boolean): boolean {
+    const raw = process.env[name]?.trim().toLowerCase();
+    if (!raw) return defaultValue;
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function resolveSharedCdpPort(): number {
+    const raw = Number(process.env.COWORKANY_TEST_SHARED_CDP_PORT ?? DEFAULT_SHARED_CDP_PORT);
+    if (!Number.isFinite(raw) || raw <= 0) {
+        return DEFAULT_SHARED_CDP_PORT;
+    }
+    return Math.floor(raw);
+}
+
+function resolveDarwinChromeExecutable(): string | null {
+    const explicitPath = process.env.COWORKANY_TEST_CHROME_PATH?.trim();
+    if (explicitPath && fs.existsSync(explicitPath)) {
+        return explicitPath;
+    }
+
+    const candidates = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ];
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
 
 function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,9 +159,12 @@ class DarwinBrowserHarness {
     readonly disabledTools: string[];
 
     private readonly logs: TauriLogCollector;
+    private readonly workerIndex: number;
     private page: Page | null = null;
     private devServerProc: childProcess.ChildProcess | null = null;
     private sidecarProc: childProcess.ChildProcess | null = null;
+    private sharedChromeProc: childProcess.ChildProcess | null = null;
+    private sharedChromePort: number | null = null;
     private pending = new Map<string, {
         resolve: (value: SidecarResponse) => void;
         reject: (error: Error) => void;
@@ -136,6 +175,7 @@ class DarwinBrowserHarness {
     private nextStoreRid = 1;
     private stdoutBuffer = '';
     private autoApprovedPlanTaskIds = new Set<string>();
+    private cleanupAppDataOnStop = false;
     private sessionsSnapshot: { sessions: Array<Record<string, unknown>>; activeTaskId: string | null } = {
         sessions: [],
         activeTaskId: null,
@@ -143,9 +183,21 @@ class DarwinBrowserHarness {
 
     constructor(logs: TauriLogCollector, workerIndex: number, devServerPort: number) {
         this.logs = logs;
+        this.workerIndex = workerIndex;
         this.desktopDir = DESKTOP_DIR;
         this.sidecarDir = SIDECAR_DIR;
-        this.appDataDir = path.join(os.homedir(), 'Library', 'Application Support', 'com.coworkany.desktop');
+        const primaryAppDataDir = path.join(os.homedir(), 'Library', 'Application Support', 'com.coworkany.desktop');
+        const isolatedAppDataEnabled = readBooleanEnv('COWORKANY_TEST_ISOLATE_APP_DATA', false);
+        if (isolatedAppDataEnabled) {
+            this.appDataDir = path.join(
+                fs.realpathSync(os.tmpdir()),
+                `coworkany-nochrome-appdata-${workerIndex}`,
+            );
+            this.prepareIsolatedAppData(primaryAppDataDir, this.appDataDir);
+            this.cleanupAppDataOnStop = true;
+        } else {
+            this.appDataDir = primaryAppDataDir;
+        }
         this.devServerPort = devServerPort;
         this.devServerUrl = `http://127.0.0.1:${devServerPort}/`;
         this.skillhubPath = path.join(os.homedir(), '.local', 'bin', 'skillhub');
@@ -179,6 +231,7 @@ class DarwinBrowserHarness {
         this.page = page;
         await this.attachTauriBridge(page);
         await this.startDevServer();
+        await this.ensureSharedChromeCdpIfEnabled();
         await this.startSidecar();
         await this.page.goto(this.devServerUrl, { waitUntil: 'domcontentloaded' });
         await this.page.waitForTimeout(3000);
@@ -198,6 +251,24 @@ class DarwinBrowserHarness {
         if (this.devServerProc) {
             this.devServerProc.kill('SIGTERM');
             this.devServerProc = null;
+        }
+        if (this.sharedChromeProc?.pid) {
+            try {
+                process.kill(this.sharedChromeProc.pid, 'SIGTERM');
+                this.logs.push(`[Fixture-NoChrome] Stopped shared Chrome (PID: ${this.sharedChromeProc.pid})\n`);
+            } catch {
+                // Ignore process shutdown failures.
+            } finally {
+                this.sharedChromeProc = null;
+            }
+        }
+        if (this.cleanupAppDataOnStop) {
+            try {
+                fs.rmSync(this.appDataDir, { recursive: true, force: true });
+                this.logs.push(`[Fixture-NoChrome] Removed isolated app data dir: ${this.appDataDir}\n`);
+            } catch {
+                // Ignore cleanup failures.
+            }
         }
 
         // Keep real app data dir intact.
@@ -316,13 +387,115 @@ class DarwinBrowserHarness {
         await waitForHttp(this.devServerUrl, INPUT_READY_TIMEOUT_MS);
     }
 
+    private prepareIsolatedAppData(sourceDir: string, targetDir: string): void {
+        fs.rmSync(targetDir, { recursive: true, force: true });
+        fs.mkdirSync(targetDir, { recursive: true });
+
+        const settingsPath = path.join(targetDir, 'settings.json');
+        fs.writeFileSync(settingsPath, JSON.stringify({ setupCompleted: true }, null, 2), 'utf-8');
+
+        const sourceConfigPath = path.join(sourceDir, 'llm-config.json');
+        if (!fs.existsSync(sourceConfigPath)) {
+            this.logs.push(`[Fixture-NoChrome] No source llm-config.json found at ${sourceConfigPath}; isolated app data uses setup-only mode\n`);
+            return;
+        }
+
+        try {
+            const raw = fs.readFileSync(sourceConfigPath, 'utf-8');
+            const config = JSON.parse(raw) as Record<string, unknown>;
+            delete config.proxy;
+
+            const explicitServiceUrl = process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL?.trim();
+            const browserUsePort = Number(process.env.BROWSER_USE_PORT ?? 8100);
+            const browserUseServiceUrl = explicitServiceUrl && explicitServiceUrl.length > 0
+                ? explicitServiceUrl
+                : `http://127.0.0.1:${Number.isFinite(browserUsePort) ? browserUsePort : 8100}`;
+
+            const existingBrowserUse = (
+                typeof config.browserUse === 'object'
+                && config.browserUse !== null
+            ) ? config.browserUse as Record<string, unknown> : {};
+
+            config.browserUse = {
+                ...existingBrowserUse,
+                enabled: true,
+                serviceUrl: browserUseServiceUrl,
+            };
+
+            const targetConfigPath = path.join(targetDir, 'llm-config.json');
+            fs.writeFileSync(targetConfigPath, JSON.stringify(config, null, 2), 'utf-8');
+            this.logs.push(`[Fixture-NoChrome] Isolated app data prepared with browser-use URL ${browserUseServiceUrl}\n`);
+        } catch (error) {
+            this.logs.push(`[Fixture-NoChrome] Failed to prepare isolated app data: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
+    }
+
+    private isSharedChromeCdpEnabled(): boolean {
+        return readBooleanEnv('COWORKANY_TEST_ENABLE_BROWSER_SHARED_CDP', false);
+    }
+
+    private async ensureSharedChromeCdpIfEnabled(): Promise<void> {
+        if (!this.isSharedChromeCdpEnabled()) {
+            return;
+        }
+
+        const cdpPort = resolveSharedCdpPort();
+        this.sharedChromePort = cdpPort;
+
+        const alreadyReady = await waitForCdp(cdpPort, 3000);
+        if (alreadyReady) {
+            this.logs.push(`[Fixture-NoChrome] Shared CDP already available on port ${cdpPort}; reusing existing Chrome\n`);
+            return;
+        }
+
+        const chromePath = resolveDarwinChromeExecutable();
+        if (!chromePath) {
+            this.logs.push(`[Fixture-NoChrome] Shared CDP requested but Chrome executable not found on macOS\n`);
+            return;
+        }
+
+        const userDataDir = path.join(
+            fs.realpathSync(os.tmpdir()),
+            `coworkany-shared-cdp-chrome-${this.workerIndex}`,
+        );
+        fs.mkdirSync(userDataDir, { recursive: true });
+
+        const chromeProc = childProcess.spawn(
+            chromePath,
+            [
+                `--remote-debugging-port=${cdpPort}`,
+                `--user-data-dir=${userDataDir}`,
+                '--no-first-run',
+                '--no-default-browser-check',
+                'about:blank',
+            ],
+            {
+                detached: true,
+                stdio: 'ignore',
+            },
+        );
+        chromeProc.unref();
+        this.sharedChromeProc = chromeProc;
+        this.logs.push(`[Fixture-NoChrome] Starting shared CDP Chrome on port ${cdpPort} (PID: ${chromeProc.pid ?? 'unknown'})\n`);
+
+        const ready = await waitForCdp(cdpPort, 30_000);
+        if (!ready) {
+            this.logs.push(`[Fixture-NoChrome] Shared CDP Chrome failed to open port ${cdpPort} within timeout\n`);
+            return;
+        }
+
+        this.logs.push(`[Fixture-NoChrome] Shared CDP Chrome ready on port ${cdpPort}\n`);
+    }
+
     private async startSidecar(): Promise<void> {
+        const disableBrowserCdp = process.env.COWORKANY_DISABLE_BROWSER_CDP
+            ?? (this.isSharedChromeCdpEnabled() ? 'false' : 'true');
         this.sidecarProc = childProcess.spawn('bun', ['run', 'src/main.ts'], {
             cwd: this.sidecarDir,
             env: {
                 ...process.env,
                 COWORKANY_APP_DATA_DIR: this.appDataDir,
-                COWORKANY_DISABLE_BROWSER_CDP: 'true',
+                COWORKANY_DISABLE_BROWSER_CDP: disableBrowserCdp,
                 PATH: `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH || ''}`,
             },
             stdio: ['pipe', 'pipe', 'pipe'],

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "social-mixed-triple",
+    "title": "X/Reddit/Xiaohongshu mixed parallel run (agentbrowser + playwright)",
+    "tasks": [
+      {
+        "id": "x-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "x",
+        "targetUrl": "https://x.com/home",
+        "loginSensitive": true,
+        "expectedDomains": [
+          "x.com",
+          "twitter.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) to open X, support login suspend/resume, then continue extraction."
+      },
+      {
+        "id": "reddit-playwright",
+        "backend": "playwright",
+        "site": "reddit",
+        "targetUrl": "https://www.reddit.com/r/artificial/",
+        "loginSensitive": false,
+        "expectedDomains": [
+          "reddit.com"
+        ],
+        "summary": "Use precise mode (Playwright) on Reddit and extract first visible post title."
+      },
+      {
+        "id": "xiaohongshu-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "xiaohongshu",
+        "targetUrl": "https://www.xiaohongshu.com/explore",
+        "loginSensitive": true,
+        "expectedDomains": [
+          "xiaohongshu.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) on Xiaohongshu, request login when needed, then continue."
+      }
+    ]
+  },
+  {
+    "id": "social-mixed-quad",
+    "title": "Cross-backend social stress run (4 parallel tasks)",
+    "tasks": [
+      {
+        "id": "x-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "x",
+        "targetUrl": "https://x.com/home",
+        "loginSensitive": true,
+        "expectedDomains": [
+          "x.com",
+          "twitter.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) to open X, support login suspend/resume, then continue extraction."
+      },
+      {
+        "id": "reddit-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "reddit",
+        "targetUrl": "https://www.reddit.com/r/artificial/",
+        "loginSensitive": false,
+        "expectedDomains": [
+          "reddit.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) on Reddit and extract first visible post title."
+      },
+      {
+        "id": "xiaohongshu-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "xiaohongshu",
+        "targetUrl": "https://www.xiaohongshu.com/explore",
+        "loginSensitive": true,
+        "expectedDomains": [
+          "xiaohongshu.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) on Xiaohongshu, request login when needed, then continue."
+      },
+      {
+        "id": "reddit-playwright",
+        "backend": "playwright",
+        "site": "reddit",
+        "targetUrl": "https://www.reddit.com/r/artificial/",
+        "loginSensitive": false,
+        "expectedDomains": [
+          "reddit.com"
+        ],
+        "summary": "Use precise mode (Playwright) on Reddit and extract first visible post title."
+      }
+    ]
+  }
+]

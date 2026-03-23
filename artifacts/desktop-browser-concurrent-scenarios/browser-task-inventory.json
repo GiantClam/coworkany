@@ -1,0 +1,70 @@
+[
+  {
+    "id": "x-agentbrowser",
+    "backend": "agentbrowser",
+    "site": "x",
+    "targetUrl": "https://x.com/home",
+    "loginSensitive": true,
+    "expectedDomains": [
+      "x.com",
+      "twitter.com"
+    ],
+    "summary": "Use smart mode (agentbrowser) to open X, support login suspend/resume, then continue extraction."
+  },
+  {
+    "id": "x-playwright",
+    "backend": "playwright",
+    "site": "x",
+    "targetUrl": "https://x.com/explore",
+    "loginSensitive": true,
+    "expectedDomains": [
+      "x.com",
+      "twitter.com"
+    ],
+    "summary": "Use precise mode (Playwright selectors/tools) on X and keep login-collaboration behavior."
+  },
+  {
+    "id": "reddit-agentbrowser",
+    "backend": "agentbrowser",
+    "site": "reddit",
+    "targetUrl": "https://www.reddit.com/r/artificial/",
+    "loginSensitive": false,
+    "expectedDomains": [
+      "reddit.com"
+    ],
+    "summary": "Use smart mode (agentbrowser) on Reddit and extract first visible post title."
+  },
+  {
+    "id": "reddit-playwright",
+    "backend": "playwright",
+    "site": "reddit",
+    "targetUrl": "https://www.reddit.com/r/artificial/",
+    "loginSensitive": false,
+    "expectedDomains": [
+      "reddit.com"
+    ],
+    "summary": "Use precise mode (Playwright) on Reddit and extract first visible post title."
+  },
+  {
+    "id": "xiaohongshu-agentbrowser",
+    "backend": "agentbrowser",
+    "site": "xiaohongshu",
+    "targetUrl": "https://www.xiaohongshu.com/explore",
+    "loginSensitive": true,
+    "expectedDomains": [
+      "xiaohongshu.com"
+    ],
+    "summary": "Use smart mode (agentbrowser) on Xiaohongshu, request login when needed, then continue."
+  },
+  {
+    "id": "xiaohongshu-playwright",
+    "backend": "playwright",
+    "site": "xiaohongshu",
+    "targetUrl": "https://www.xiaohongshu.com/explore",
+    "loginSensitive": true,
+    "expectedDomains": [
+      "xiaohongshu.com"
+    ],
+    "summary": "Use precise mode (Playwright) on Xiaohongshu with login suspend/resume path."
+  }
+]

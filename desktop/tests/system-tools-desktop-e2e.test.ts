@@ -228,6 +228,8 @@ function buildScenarios(rootDir: string): Scenario[] {
             id: 'write-to-file',
             toolName: 'write_to_file',
             marker: 'WRITE_FILE_SCENARIO_DONE',
+            bypassDeterministicWorkflow: true,
+            bypassCommand: "python3 -c \"print('WRITE_FILE_BYPASS')\"",
             args: {
                 path: writeFilePath,
                 content: 'WRITE_FILE_MARKER_OK',

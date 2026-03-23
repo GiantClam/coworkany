@@ -1,0 +1,107 @@
+{
+  "generatedAt": "2026-03-23T06:10:09.631Z",
+  "allPassed": true,
+  "total": 11,
+  "passed": 11,
+  "rows": [
+    {
+      "scenario": "batch-delete-paths",
+      "toolName": "batch_delete_paths",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "batch-move-files",
+      "toolName": "batch_move_files",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "compute-file-hash",
+      "toolName": "compute_file_hash",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "create-directory",
+      "toolName": "create_directory",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "delete-path",
+      "toolName": "delete_path",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "list-dir",
+      "toolName": "list_dir",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "move-file",
+      "toolName": "move_file",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "replace-file-content",
+      "toolName": "replace_file_content",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "run-command",
+      "toolName": "run_command",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "view-file",
+      "toolName": "view_file",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    },
+    {
+      "scenario": "write-to-file",
+      "toolName": "write_to_file",
+      "called": true,
+      "successfulResult": true,
+      "expectedSatisfied": true,
+      "taskFailed": false,
+      "markerSeen": true
+    }
+  ]
+}

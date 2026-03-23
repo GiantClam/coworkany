@@ -1,0 +1,310 @@
+{
+  "scenario": {
+    "id": "social-mixed-triple",
+    "title": "X/Reddit/Xiaohongshu mixed parallel run (agentbrowser + playwright)",
+    "tasks": [
+      {
+        "id": "x-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "x",
+        "targetUrl": "https://x.com/home",
+        "loginSensitive": true,
+        "expectedDomains": [
+          "x.com",
+          "twitter.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) to open X, support login suspend/resume, then continue extraction."
+      },
+      {
+        "id": "reddit-playwright",
+        "backend": "playwright",
+        "site": "reddit",
+        "targetUrl": "https://www.reddit.com/r/artificial/",
+        "loginSensitive": false,
+        "expectedDomains": [
+          "reddit.com"
+        ],
+        "summary": "Use precise mode (Playwright) on Reddit and extract first visible post title."
+      },
+      {
+        "id": "xiaohongshu-agentbrowser",
+        "backend": "agentbrowser",
+        "site": "xiaohongshu",
+        "targetUrl": "https://www.xiaohongshu.com/explore",
+        "loginSensitive": true,
+        "expectedDomains": [
+          "xiaohongshu.com"
+        ],
+        "summary": "Use smart mode (agentbrowser) on Xiaohongshu, request login when needed, then continue."
+      }
+    ]
+  },
+  "browserUseBootstrap": {
+    "available": true,
+    "startedByTest": true,
+    "reason": "browser-use-service started by test with /Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
+    "process": {
+      "_events": {},
+      "_eventsCount": 0,
+      "_closesNeeded": 3,
+      "_closesGot": 0,
+      "connected": false,
+      "signalCode": null,
+      "exitCode": null,
+      "killed": false,
+      "spawnfile": "/Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
+      "_handle": {
+        "pid": 22477
+      },
+      "spawnargs": [
+        "/Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
+        "/Users/beihuang/Documents/github/coworkany/browser-use-service/main.py"
+      ],
+      "pid": 22477,
+      "stdin": null,
+      "stdout": {
+        "connecting": false,
+        "_hadError": false,
+        "_parent": null,
+        "_host": null,
+        "_closeAfterHandlingError": false,
+        "_events": {},
+        "_readableState": {
+          "highWaterMark": 65536,
+          "buffer": [],
+          "bufferIndex": 0,
+          "length": 0,
+          "pipes": [],
+          "awaitDrainWriters": null
+        },
+        "_writableState": {
+          "highWaterMark": 65536,
+          "length": 0,
+          "corked": 0,
+          "writelen": 0,
+          "bufferedIndex": 0,
+          "pendingcb": 0
+        },
+        "allowHalfOpen": false,
+        "_eventsCount": 3,
+        "_sockname": null,
+        "_pendingData": null,
+        "_pendingEncoding": "",
+        "server": null,
+        "_server": null
+      },
+      "stderr": {
+        "connecting": false,
+        "_hadError": false,
+        "_parent": null,
+        "_host": null,
+        "_closeAfterHandlingError": false,
+        "_events": {},
+        "_readableState": {
+          "highWaterMark": 65536,
+          "buffer": [],
+          "bufferIndex": 0,
+          "length": 0,
+          "pipes": [],
+          "awaitDrainWriters": null
+        },
+        "_writableState": {
+          "highWaterMark": 65536,
+          "length": 0,
+          "corked": 0,
+          "writelen": 0,
+          "bufferedIndex": 0,
+          "pendingcb": 0
+        },
+        "allowHalfOpen": false,
+        "_eventsCount": 3,
+        "_sockname": null,
+        "_pendingData": null,
+        "_pendingEncoding": "",
+        "server": null,
+        "_server": null
+      },
+      "stdio": [
+        null,
+        {
+          "connecting": false,
+          "_hadError": false,
+          "_parent": null,
+          "_host": null,
+          "_closeAfterHandlingError": false,
+          "_events": {},
+          "_readableState": {
+            "highWaterMark": 65536,
+            "buffer": [],
+            "bufferIndex": 0,
+            "length": 0,
+            "pipes": [],
+            "awaitDrainWriters": null
+          },
+          "_writableState": {
+            "highWaterMark": 65536,
+            "length": 0,
+            "corked": 0,
+            "writelen": 0,
+            "bufferedIndex": 0,
+            "pendingcb": 0
+          },
+          "allowHalfOpen": false,
+          "_eventsCount": 3,
+          "_sockname": null,
+          "_pendingData": null,
+          "_pendingEncoding": "",
+          "server": null,
+          "_server": null
+        },
+        {
+          "connecting": false,
+          "_hadError": false,
+          "_parent": null,
+          "_host": null,
+          "_closeAfterHandlingError": false,
+          "_events": {},
+          "_readableState": {
+            "highWaterMark": 65536,
+            "buffer": [],
+            "bufferIndex": 0,
+            "length": 0,
+            "pipes": [],
+            "awaitDrainWriters": null
+          },
+          "_writableState": {
+            "highWaterMark": 65536,
+            "length": 0,
+            "corked": 0,
+            "writelen": 0,
+            "bufferedIndex": 0,
+            "pendingcb": 0
+          },
+          "allowHalfOpen": false,
+          "_eventsCount": 3,
+          "_sockname": null,
+          "_pendingData": null,
+          "_pendingEncoding": "",
+          "server": null,
+          "_server": null
+        }
+      ]
+    },
+    "stderrTail": ""
+  },
+  "result": {
+    "scenarioId": "social-mixed-triple",
+    "scenarioTitle": "X/Reddit/Xiaohongshu mixed parallel run (agentbrowser + playwright)",
+    "taskCount": 3,
+    "allSubmitted": true,
+    "allStarted": true,
+    "allNoFailure": true,
+    "isolationOk": true,
+    "backendCoverageOk": true,
+    "loginCollaborationOk": true,
+    "completionOk": true,
+    "allTasksPassed": true,
+    "externalFailure": true,
+    "tasks": [
+      {
+        "taskId": "49786d0f-0e0d-4ad7-aa23-bf8cf887ed0c",
+        "taskLabel": "x-agentbrowser",
+        "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_TRIPLE_1",
+        "backend": "agentbrowser",
+        "site": "x",
+        "submitted": true,
+        "started": true,
+        "finished": false,
+        "failed": false,
+        "failedError": "",
+        "browserToolCallCount": 4,
+        "browserNavigateCallCount": 1,
+        "browserAiActionCallCount": 1,
+        "modeSetSmart": true,
+        "modeSetPrecise": false,
+        "targetDomainSeen": true,
+        "markerSeen": true,
+        "loginPrompted": true,
+        "suspendedCount": 1,
+        "resumedCount": 0,
+        "followUpSent": false,
+        "followUpSendError": "",
+        "resumedAfterFollowUp": false,
+        "browserCallsAfterResume": 0,
+        "ownMarkerOnly": true,
+        "foreignMarkersSeen": [],
+        "evidenceTextLength": 2229,
+        "externalFailure": true,
+        "backendExpectationMet": true,
+        "loginExpectationMet": true,
+        "completionExpectationMet": true
+      },
+      {
+        "taskId": "b1c9be09-3178-47f4-81e8-060604f48cfa",
+        "taskLabel": "reddit-playwright",
+        "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_TRIPLE_2",
+        "backend": "playwright",
+        "site": "reddit",
+        "submitted": true,
+        "started": true,
+        "finished": true,
+        "failed": false,
+        "failedError": "",
+        "browserToolCallCount": 3,
+        "browserNavigateCallCount": 1,
+        "browserAiActionCallCount": 0,
+        "modeSetSmart": false,
+        "modeSetPrecise": true,
+        "targetDomainSeen": true,
+        "markerSeen": true,
+        "loginPrompted": false,
+        "suspendedCount": 0,
+        "resumedCount": 0,
+        "followUpSent": false,
+        "followUpSendError": "",
+        "resumedAfterFollowUp": false,
+        "browserCallsAfterResume": 0,
+        "ownMarkerOnly": true,
+        "foreignMarkersSeen": [],
+        "evidenceTextLength": 1648,
+        "externalFailure": false,
+        "backendExpectationMet": true,
+        "loginExpectationMet": true,
+        "completionExpectationMet": true
+      },
+      {
+        "taskId": "fa7b7236-0823-4794-aa1e-61bfff728797",
+        "taskLabel": "xiaohongshu-agentbrowser",
+        "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_TRIPLE_3",
+        "backend": "agentbrowser",
+        "site": "xiaohongshu",
+        "submitted": true,
+        "started": true,
+        "finished": true,
+        "failed": false,
+        "failedError": "",
+        "browserToolCallCount": 4,
+        "browserNavigateCallCount": 1,
+        "browserAiActionCallCount": 1,
+        "modeSetSmart": true,
+        "modeSetPrecise": false,
+        "targetDomainSeen": true,
+        "markerSeen": true,
+        "loginPrompted": false,
+        "suspendedCount": 0,
+        "resumedCount": 0,
+        "followUpSent": false,
+        "followUpSendError": "",
+        "resumedAfterFollowUp": false,
+        "browserCallsAfterResume": 0,
+        "ownMarkerOnly": true,
+        "foreignMarkersSeen": [],
+        "evidenceTextLength": 2134,
+        "externalFailure": true,
+        "backendExpectationMet": true,
+        "loginExpectationMet": true,
+        "completionExpectationMet": true
+      }
+    ]
+  }
+}
