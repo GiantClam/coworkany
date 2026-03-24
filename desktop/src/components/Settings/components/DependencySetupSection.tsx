@@ -12,6 +12,7 @@ export function DependencySetupSection() {
         activeAction,
         refresh,
         installSkillhub,
+        installOpencli,
         prepareServiceRuntime,
         startDependencyService,
         stopDependencyService,
@@ -24,6 +25,15 @@ export function DependencySetupSection() {
             toast.success('Skillhub CLI ready');
         } catch (err) {
             toast.error('Skillhub install failed', err instanceof Error ? err.message : String(err));
+        }
+    };
+
+    const handleInstallOpencli = async () => {
+        try {
+            await installOpencli();
+            toast.success('OpenCLI ready');
+        } catch (err) {
+            toast.error('OpenCLI install failed', err instanceof Error ? err.message : String(err));
         }
     };
 
@@ -47,6 +57,8 @@ export function DependencySetupSection() {
             toast.error('Service action failed', err instanceof Error ? err.message : String(err));
         }
     };
+
+    const isCliDependency = (id: string) => id === 'skillhub-cli' || id === 'opencli-cli';
 
     return (
         <div className={styles.runtimeSection}>
@@ -92,8 +104,11 @@ export function DependencySetupSection() {
                                         <span className={styles.runtimeChipInfo}>Optional</span>
                                     )}
                                     <span className={dependency.installed ? styles.runtimeChipReady : styles.runtimeChipMuted}>
-                                        Bundled
+                                        Installed
                                     </span>
+                                    {dependency.bundled && (
+                                        <span className={styles.runtimeChipInfo}>Bundled</span>
+                                    )}
                                     <span className={dependency.ready ? styles.runtimeChipReady : styles.runtimeChipMuted}>
                                         Runtime Ready
                                     </span>
@@ -125,14 +140,24 @@ export function DependencySetupSection() {
                         </div>
 
                         <div className={styles.runtimeDependencyActions}>
-                            {dependency.id === 'skillhub-cli' ? (
+                            {isCliDependency(dependency.id) ? (
                                 <button
                                     type="button"
                                     className={styles.verifyButton}
-                                    onClick={() => void handleInstallSkillhub()}
+                                    onClick={() => {
+                                        if (dependency.id === 'skillhub-cli') {
+                                            void handleInstallSkillhub();
+                                        } else {
+                                            void handleInstallOpencli();
+                                        }
+                                    }}
                                     disabled={activeAction === dependency.id}
                                 >
-                                    {dependency.ready ? 'Reinstall CLI' : 'Install Skillhub CLI'}
+                                    {dependency.ready
+                                        ? 'Reinstall CLI'
+                                        : dependency.id === 'skillhub-cli'
+                                            ? 'Install Skillhub CLI'
+                                            : 'Install OpenCLI'}
                                 </button>
                             ) : (
                                 <>

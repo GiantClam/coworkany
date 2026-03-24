@@ -19,7 +19,9 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::platform_asr;
-use crate::platform_runtime::{build_runtime_snapshot, resolve_skillhub_executable};
+use crate::platform_runtime::{
+    build_runtime_snapshot, resolve_opencli_executable, resolve_skillhub_executable,
+};
 use crate::process_manager::{ProcessManagerState, ServiceInfo};
 use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
 
@@ -29,6 +31,7 @@ static RECENT_SEND_TASK_MESSAGE_KEYS: OnceLock<std::sync::Mutex<HashMap<(String,
     OnceLock::new();
 const SKILLHUB_INSTALL_SCRIPT_URL: &str =
     "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh";
+const OPENCLI_NPM_PACKAGE: &str = "@jackwener/opencli";
 const SEND_TASK_MESSAGE_DEDUP_WINDOW: Duration = Duration::from_secs(8);
 
 pub fn init_startup_clock() {
@@ -537,6 +540,27 @@ fn run_skillhub(args: &[String]) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Err(if !stderr.is_empty() { stderr } else { stdout })
+}
+
+fn install_opencli_via_npm() -> Result<PathBuf, String> {
+    info!("install_opencli_via_npm: npm install -g {}", OPENCLI_NPM_PACKAGE);
+    let npm_output = Command::new("npm")
+        .args(["install", "-g", OPENCLI_NPM_PACKAGE])
+        .output()
+        .map_err(|e| format!("Failed to run npm: {e}. Make sure Node.js is installed."))?;
+
+    if !npm_output.status.success() {
+        let stderr = String::from_utf8_lossy(&npm_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&npm_output.stdout).to_string();
+        let message = if !stderr.is_empty() { stderr } else { stdout };
+        error!("install_opencli_via_npm: npm install failed: {}", message);
+        return Err(format!("npm install failed: {message}"));
+    }
+
+    resolve_opencli_executable().map_err(|_| {
+        "OpenCLI installed via npm but executable was not found. Try restarting the application."
+            .to_string()
+    })
 }
 
 fn sanitize_skillhub_name(slug: &str, raw_name: Option<&str>) -> String {
@@ -2941,6 +2965,37 @@ pub async fn install_skillhub_cli(app_handle: AppHandle) -> Result<GenericIpcRes
                     "errors": Value::Null,
                 }))
             }
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    Ok(GenericIpcResult {
+        success: true,
+        payload: runtime_snapshot_payload(&app_handle, None, extras),
+    })
+}
+
+#[tauri::command]
+pub async fn install_opencli_cli(app_handle: AppHandle) -> Result<GenericIpcResult, String> {
+    let extras =
+        tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+            info!("install_opencli_cli: starting installer");
+            if let Ok(path) = resolve_opencli_executable() {
+                info!("install_opencli_cli: already installed at {:?}", path);
+                return Ok(json!({
+                    "message": "OpenCLI already installed",
+                    "path": path,
+                    "errors": Value::Null,
+                }));
+            }
+
+            let executable = install_opencli_via_npm()?;
+            info!("install_opencli_cli: completed at {:?}", executable);
+            Ok(json!({
+                "message": "OpenCLI installed",
+                "path": executable,
+                "errors": Value::Null,
+            }))
         })
         .await
         .map_err(|e| e.to_string())??;

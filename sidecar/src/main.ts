@@ -99,7 +99,7 @@ import {
 import { applyProxySettingsToProcessEnv, type ProxySettings } from './utils/proxy';
 import { detectPackageManager, getPackageManagerCommands } from './utils/packageManagerDetector';
 import { runPostEditHooks, formatHookResults } from './hooks/codeQualityHooks';
-import { STANDARD_TOOLS, ToolDefinition } from './tools/standard';
+import { STANDARD_TOOLS, ToolDefinition, type ToolContext } from './tools/standard';
 import { STUB_TOOLS } from './tools/stubs';
 import { globalToolRegistry } from './tools/registry';
 import { MCPGateway, type McpSessionIsolationPolicy } from './mcp/gateway';
@@ -121,7 +121,7 @@ import {
 import { CONTROL_PLANE_TOOLS } from './tools/controlPlane';
 import { createEnhancedBrowserTools } from './tools/browserEnhanced';
 import { DATABASE_TOOLS } from './tools/database';
-import { createAppManagementTools } from './tools/appManagement';
+import { createAppManagementTools, discoverOpencliCapabilities } from './tools/appManagement';
 import { xiaohongshuPostTool } from './tools/xiaohongshuPost';
 import { BrowserService } from './services/browserService';
 import { getCalendarManager } from './integrations/calendar/calendarManager';
@@ -130,7 +130,12 @@ import { CODE_EXECUTION_TOOLS } from './tools/codeExecution';
 import { KNOWLEDGE_TOOLS } from './agent/knowledgeUpdater';
 import { executeJavaScriptTool, executePythonTool } from './tools/codeExecution';
 import { createPersonalTools } from './tools/personal';
-import { resolveToolsForTask } from './tools/taskToolResolver';
+import {
+    resolveToolsForTask,
+    type DuplicateResolutionPolicy,
+    type OpencliCapabilityEntry,
+    type OverlapResolutionPolicy,
+} from './tools/taskToolResolver';
 import {
     continuePreparedAgentFlow,
     executePreparedTaskFlow,
@@ -297,7 +302,11 @@ import * as os from 'os';
 // NOTE: fs and path are imported at the top of the file (log file setup)
 import { getCurrentPlatform } from './utils/commandAlternatives';
 import { buildBuiltinEffectRequest } from './tools/builtinPolicy';
-import { HostAccessGrantManager, deriveHostAccessRequest } from './security/hostAccessGrantManager';
+import {
+    HostAccessGrantManager,
+    deriveBinaryAccessRequest,
+    deriveHostAccessRequest,
+} from './security/hostAccessGrantManager';
 
 // ============================================================================
 // Event Emitter
@@ -780,6 +789,7 @@ type DesktopRuntimeContext = {
     sidecarLaunchMode?: string;
     python: DesktopRuntimeBinaryInfo;
     skillhub: DesktopRuntimeBinaryInfo;
+    opencli?: DesktopRuntimeBinaryInfo;
     managedServices: DesktopManagedServiceCapability[];
 };
 
@@ -1842,6 +1852,7 @@ const APP_MANAGEMENT_TOOLS = createAppManagementTools({
     searchClawHubSkills: (query, limit) => openclawCompat.searchClawHub(query, limit),
     installSkillFromClawHub: (skillName, targetDir) => openclawCompat.installFromClawHub(skillName, targetDir),
     getSkillhubExecutable: () => desktopRuntimeContext?.skillhub?.path,
+    getOpencliExecutable: () => desktopRuntimeContext?.opencli?.path,
     onSkillsUpdated: () => emitAny({
         commandId: `skills-updated-${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -1851,6 +1862,44 @@ const APP_MANAGEMENT_TOOLS = createAppManagementTools({
         },
     }),
 });
+
+const OPENCLI_CAPABILITY_CACHE_TTL_MS = 60_000;
+let opencliCapabilityCache: {
+    executable: string;
+    fetchedAtMs: number;
+    capabilities: OpencliCapabilityEntry[];
+} | null = null;
+
+function getOpencliCapabilitiesForResolver(): OpencliCapabilityEntry[] {
+    const executable = desktopRuntimeContext?.opencli?.path?.trim() || 'opencli';
+    const now = Date.now();
+    if (
+        opencliCapabilityCache
+        && opencliCapabilityCache.executable === executable
+        && (now - opencliCapabilityCache.fetchedAtMs) < OPENCLI_CAPABILITY_CACHE_TTL_MS
+    ) {
+        return opencliCapabilityCache.capabilities;
+    }
+
+    const discovered = discoverOpencliCapabilities({ executable });
+    const capabilities = discovered.success
+        ? discovered.capabilities
+            .filter((entry) => Boolean(entry.id?.trim()))
+            .slice(0, 64)
+            .map((entry) => ({
+                id: entry.id.trim(),
+                description: entry.description,
+                sourceId: entry.sourceId,
+            }))
+        : [];
+
+    opencliCapabilityCache = {
+        executable,
+        fetchedAtMs: now,
+        capabilities,
+    };
+    return capabilities;
+}
 
 configureVoiceProviders({
     listEnabledSkills: () => skillStore.listEnabled(),
@@ -2117,6 +2166,10 @@ type LlmConfig = {
         serviceUrl?: string;
         defaultMode?: 'precise' | 'smart' | 'auto';
         llmModel?: string;
+    };
+    toolResolution?: {
+        duplicateResolution?: DuplicateResolutionPolicy;
+        overlapResolution?: OverlapResolutionPolicy;
     };
 };
 
@@ -3068,6 +3121,8 @@ function toScheduledTaskConfig(config: unknown): ScheduledTaskConfig | undefined
         enabledToolpacks: Array.isArray(candidate.enabledToolpacks) ? candidate.enabledToolpacks as string[] : undefined,
         enabledSkills: Array.isArray(candidate.enabledSkills) ? candidate.enabledSkills as string[] : undefined,
         disabledTools: Array.isArray(candidate.disabledTools) ? candidate.disabledTools as string[] : undefined,
+        duplicateResolution: normalizeDuplicateResolutionPolicy(candidate.duplicateResolution),
+        overlapResolution: normalizeOverlapResolutionPolicy(candidate.overlapResolution),
     };
 }
 
@@ -3460,7 +3515,7 @@ async function executeFreshTask(args: {
     const promptUserQuery = parsedUserInput.promptText || userQuery;
     const conversationUserContent = parsedUserInput.conversationContent;
     // Ensure search/browser/provider config is loaded before any pre-execution research resolves.
-    loadLlmConfig(workspacePath);
+    const llmConfig = loadLlmConfig(workspacePath);
     const preparedWorkRequest = args.preparedWorkRequestOverride
         ? args.preparedWorkRequestOverride
         : await prepareWorkRequestContext({
@@ -3480,10 +3535,17 @@ async function executeFreshTask(args: {
     } = preparedWorkRequest;
 
     taskEventBus.reset(taskId);
-    const effectiveConfig = applyFrozenWorkRequestSessionPolicy(taskId, frozenWorkRequest, {
-        ...(config ?? {}),
-        workspacePath,
-    });
+    const effectiveConfig = applyFrozenWorkRequestSessionPolicy(
+        taskId,
+        frozenWorkRequest,
+        applyToolResolutionPolicyDefaults(
+            {
+                ...(config ?? {}),
+                workspacePath,
+            },
+            llmConfig,
+        ),
+    );
 
     const startLimit = effectiveConfig?.maxHistoryMessages;
     taskSessionStore.setHistoryLimit(
@@ -4273,6 +4335,91 @@ function getStandardToolDefinitions(): any[] {
     }));
 }
 
+type PreparedToolExecutionContext = {
+    context: ToolContext;
+    deniedResult?: { error: string };
+};
+
+async function prepareToolExecutionContext(input: {
+    taskId: string;
+    tool: ToolDefinition;
+    args: Record<string, unknown>;
+    workspacePath: string;
+    onCancel?: ToolContext['onCancel'];
+}): Promise<PreparedToolExecutionContext> {
+    const { taskId, tool, args, workspacePath, onCancel } = input;
+    const effectRequest = buildBuiltinEffectRequest({
+        tool,
+        args,
+        context: { workspacePath, taskId },
+    });
+    const hostAccessRequest = deriveHostAccessRequest(effectRequest);
+    const binaryAccessRequest = deriveBinaryAccessRequest(effectRequest);
+
+    if (effectRequest) {
+        const grantManager = getHostAccessGrantManager();
+        const hasExistingHostGrant = hostAccessRequest
+            ? grantManager.hasGrant(hostAccessRequest)
+            : false;
+        const hasExistingBinaryGrant = binaryAccessRequest
+            ? grantManager.hasBinaryGrant({
+                binaryPath: binaryAccessRequest.binaryPath,
+                command: typeof args.command === 'string' ? args.command : undefined,
+            })
+            : false;
+        const hasExistingGrant = hasExistingHostGrant || hasExistingBinaryGrant;
+
+        if (!hasExistingGrant) {
+            const policyResponse = await policyBridge.requestEffect(effectRequest);
+            if (!policyResponse.approved) {
+                return {
+                    context: { workspacePath, taskId, onCancel },
+                    deniedResult: {
+                        error: `Tool execution denied: ${policyResponse.denialReason || 'policy denied'}`,
+                    },
+                };
+            }
+
+            if (
+                hostAccessRequest &&
+                (policyResponse.approvalType === 'session' || policyResponse.approvalType === 'permanent')
+            ) {
+                grantManager.recordGrant({
+                    targetPath: hostAccessRequest.targetPath,
+                    access: hostAccessRequest.access,
+                    scope: policyResponse.approvalType === 'permanent' ? 'persistent' : 'session',
+                });
+            }
+
+            if (
+                binaryAccessRequest &&
+                (policyResponse.approvalType === 'session' || policyResponse.approvalType === 'permanent')
+            ) {
+                grantManager.recordBinaryGrant({
+                    binaryPath: binaryAccessRequest.binaryPath,
+                    allowedArgPatterns: [binaryAccessRequest.commandPattern],
+                    scope: policyResponse.approvalType === 'permanent' ? 'persistent' : 'session',
+                });
+            }
+        }
+    }
+
+    return {
+        context: {
+            workspacePath,
+            taskId,
+            onCancel,
+            commandBinaryPolicy: binaryAccessRequest
+                ? {
+                    requireAllowlist: true,
+                    allowedBinaries: [binaryAccessRequest.binaryPath],
+                    allowedCommandPatterns: [binaryAccessRequest.commandPattern],
+                }
+                : undefined,
+        },
+    };
+}
+
 async function executeInternalTool(
     taskId: string,
     toolName: string,
@@ -4284,80 +4431,25 @@ async function executeInternalTool(
     const registeredTool = globalToolRegistry.getTool(toolName);
     if (registeredTool) {
         try {
-            const effectRequest = buildBuiltinEffectRequest({
+            const normalizedArgs = typeof args === 'object' && args !== null
+                ? args as Record<string, unknown>
+                : {};
+            const prepared = await prepareToolExecutionContext({
+                taskId,
                 tool: registeredTool,
-                args: typeof args === 'object' && args !== null ? args : {},
-                context: { workspacePath: context.workspacePath, taskId },
+                args: normalizedArgs,
+                workspacePath: context.workspacePath,
             });
-            const hostAccessRequest = deriveHostAccessRequest(effectRequest);
-            if (effectRequest) {
-                const grantManager = getHostAccessGrantManager();
-                const hasExistingGrant = hostAccessRequest
-                    ? grantManager.hasGrant(hostAccessRequest)
-                    : false;
-
-                if (!hasExistingGrant) {
-                    const policyResponse = await policyBridge.requestEffect(effectRequest);
-                    if (!policyResponse.approved) {
-                        return { error: `Tool execution denied: ${policyResponse.denialReason || 'policy denied'}` };
-                    }
-
-                    if (
-                        hostAccessRequest &&
-                        (policyResponse.approvalType === 'session' ||
-                            policyResponse.approvalType === 'permanent')
-                    ) {
-                        grantManager.recordGrant({
-                            targetPath: hostAccessRequest.targetPath,
-                            access: hostAccessRequest.access,
-                            scope: policyResponse.approvalType === 'permanent' ? 'persistent' : 'session',
-                        });
-                    }
-                }
+            if (prepared.deniedResult) {
+                return prepared.deniedResult;
             }
-            const result = await registeredTool.handler(args, { workspacePath: context.workspacePath, taskId });
+
+            const result = await registeredTool.handler(normalizedArgs, prepared.context);
             return result;
         } catch (error: any) {
             return { error: `Tool execution failed: ${error.message}` };
         }
     }
-
-    // Check MCP Gateway (if getToolsForTask passed a handler that calls gateway, this function might not be called directly for it?
-    // Wait, streamLlmResponse receives `tools` with `handler`.
-    // It calls `tool.handler(...)`.
-    // `getToolsForTask` defines the handler for MCP tools!
-    // So if the tool comes from `getToolsForTask`, its handler connects to Gateway.
-    // `executeInternalTool` is only used if `streamLlmResponse` (or legacy code) calls it manually?
-    // `streamLlmResponse` in line 533 (in standard.ts view? No, main.ts)
-    // Let's check `streamLlmResponse` to see how it executes tools.
-    // Copied from my previous view: `streamAnthropicResponse` returns message. It DOES NOT execute tools.
-    // The consumer `start_task` loop iterates and CALLS tools.
-    // `start_task` loop (lines 1025+) calls `executeInternalTool`.
-
-    // SO `executeInternalTool` MUST delegate to Gateway if the tool is not standard.
-    // OR `start_task` loop should use the `handler` on the tool definition if available.
-
-    // Strategy: Update `start_task` loop (caller) to prefer `tool.handler` if available.
-    // If I update `executeInternalTool` to use Gateway, I need access to `mcpGateway` instance.
-    // `mcpGateway` is in scope here (module scope).
-
-    // Let's update `executeInternalTool` to look up the tool in Gateway.
-    // But Gateway requires `serverName`. We only have `toolName`.
-    // We can iterate/find any server facilitating this tool.
-
-    // Better: Update `start_task` loop to use the `tools` array (definitions) to find the handler.
-    // The `tools` array is passed to `start_task`.
-    // `getToolsForTask` builds definitions with handlers.
-    // The loop should use them.
-
-    // For now, I will add generic Gateway lookup to `executeInternalTool` as a catch-all.
-    // But since I don't know the server name easily map from tool name (unless unique),
-    // I will rely on `getToolsForTask` handlers injection update in `start_task`.
-    // I need to update the LOOP in `start_task` to look up handler from `getToolsForTask(taskId)`.
-
-    // Actually, `executeInternalTool` is `handleCommand` internal helper?
-    // No, it's a standalone function `executeInternalTool`.
-    // I will try to look up via `mcpGateway`.
 
     const availableTools = mcpGateway.getAvailableTools();
     const mcpTool = availableTools.find(t => t.tool.name === toolName);
@@ -5030,6 +5122,48 @@ function loadLlmConfig(workspaceRootPath: string): LlmConfig {
         console.warn('[LlmConfig] Failed to load llm-config.json:', error);
         return defaultConfig;
     }
+}
+
+function normalizeDuplicateResolutionPolicy(value: unknown): DuplicateResolutionPolicy | undefined {
+    switch (value) {
+        case 'prefer_mcp':
+        case 'prefer_builtin':
+        case 'prefer_opencli':
+        case 'skip_conflicts':
+            return value;
+        default:
+            return undefined;
+    }
+}
+
+function normalizeOverlapResolutionPolicy(value: unknown): OverlapResolutionPolicy | undefined {
+    switch (value) {
+        case 'keep_all':
+        case 'prefer_mcp':
+        case 'prefer_builtin':
+        case 'prefer_opencli':
+        case 'prefer_non_interactive':
+        case 'skip_overlaps':
+            return value;
+        default:
+            return undefined;
+    }
+}
+
+function applyToolResolutionPolicyDefaults(
+    baseConfig: TaskSessionConfig,
+    llmConfig: LlmConfig,
+): TaskSessionConfig {
+    const duplicateResolution = normalizeDuplicateResolutionPolicy(baseConfig.duplicateResolution)
+        ?? normalizeDuplicateResolutionPolicy(llmConfig.toolResolution?.duplicateResolution);
+    const overlapResolution = normalizeOverlapResolutionPolicy(baseConfig.overlapResolution)
+        ?? normalizeOverlapResolutionPolicy(llmConfig.toolResolution?.overlapResolution);
+
+    return {
+        ...baseConfig,
+        ...(duplicateResolution ? { duplicateResolution } : {}),
+        ...(overlapResolution ? { overlapResolution } : {}),
+    };
 }
 
 function resolveHistoryLimit(config: LlmConfig): number {
@@ -6881,8 +7015,11 @@ async function runAgentLoop(
                 result = `Error: Tool ${toolUse.name} not found`;
                 isError = true;
             } else {
+                const normalizedToolInput = typeof toolUse.input === 'object' && toolUse.input !== null
+                    ? toolUse.input as Record<string, unknown>
+                    : {};
                 // Check for empty input (from JSON parsing failure recovery)
-                const inputKeys = Object.keys(toolUse.input || {});
+                const inputKeys = Object.keys(normalizedToolInput);
                 const schema = tool.input_schema as any;
                 const requiredParams = schema?.required || [];
                 const missingParams = requiredParams.filter((p: string) => !inputKeys.includes(p));
@@ -6895,6 +7032,8 @@ async function runAgentLoop(
                     console.error(`[Tool] ${toolUse.name} called with incomplete input, missing: ${missingParams.join(', ')}`);
                 } else {
                     const isRetryable = RETRYABLE_TOOL_PREFIXES.some(p => toolUse.name.startsWith(p));
+                    const onCancel = (waiter: (reason: string) => void) =>
+                        taskCancellationRegistry.onCancellation(taskId, waiter);
 
                     if (isRetryable) {
                         try {
@@ -6902,20 +7041,26 @@ async function runAgentLoop(
                                 id: toolUse.id,
                                 description: `Execute ${toolUse.name}`,
                                 toolName: toolUse.name,
-                                args: toolUse.input || {},
+                                args: normalizedToolInput,
                             };
                             const adaptiveResult = await withTaskControl(
                                 taskId,
                                 adaptiveExecutor.executeWithRetry(
                                 executionStep,
                                 async (_name: string, args: Record<string, unknown>) => {
+                                    const prepared = await prepareToolExecutionContext({
+                                        taskId,
+                                        tool,
+                                        args,
+                                        workspacePath: workspaceRoot,
+                                        onCancel,
+                                    });
+                                    if (prepared.deniedResult) {
+                                        return prepared.deniedResult;
+                                    }
                                     return await withTaskControl(
                                         taskId,
-                                        tool.handler(args, {
-                                            taskId,
-                                            workspacePath: workspaceRoot,
-                                            onCancel: (waiter) => taskCancellationRegistry.onCancellation(taskId, waiter),
-                                        }),
+                                        tool.handler(args, prepared.context),
                                         TOOL_EXECUTION_TIMEOUT_MS,
                                         `tool_${toolUse.name}`
                                     );
@@ -6939,16 +7084,24 @@ async function runAgentLoop(
                         }
                     } else {
                         try {
-                            result = await withTaskControl(
+                            const prepared = await prepareToolExecutionContext({
                                 taskId,
-                                tool.handler(toolUse.input, {
+                                tool,
+                                args: normalizedToolInput,
+                                workspacePath: workspaceRoot,
+                                onCancel,
+                            });
+                            if (prepared.deniedResult) {
+                                result = prepared.deniedResult;
+                                isError = true;
+                            } else {
+                                result = await withTaskControl(
                                     taskId,
-                                    workspacePath: workspaceRoot,
-                                    onCancel: (waiter) => taskCancellationRegistry.onCancellation(taskId, waiter),
-                                }),
-                                TOOL_EXECUTION_TIMEOUT_MS,
-                                `tool_${toolUse.name}`
-                            );
+                                    tool.handler(normalizedToolInput, prepared.context),
+                                    TOOL_EXECUTION_TIMEOUT_MS,
+                                    `tool_${toolUse.name}`
+                                );
+                            }
                         } catch (e) {
                             if (e instanceof TaskCancelledError) {
                                 throw e;
@@ -7693,6 +7846,7 @@ function getToolsForTask(taskId: string): ToolDefinition[] {
         enhancedBrowserTools: ENHANCED_BROWSER_TOOLS,
         selfLearningTools: SELF_LEARNING_TOOLS,
         extraBuiltinTools: [xiaohongshuPostTool],
+        opencliCapabilities: getOpencliCapabilitiesForResolver(),
         mcpGateway,
     });
 }

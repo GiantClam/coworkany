@@ -32,6 +32,7 @@ export function RuntimeSetupStep({ apiKeyConfigured, onStatusChange }: RuntimeSe
         error,
         activeAction,
         installSkillhub,
+        installOpencli,
         prepareServiceRuntime,
     } = useDependencyManager();
     const [preparingAll, setPreparingAll] = useState(false);
@@ -59,6 +60,14 @@ export function RuntimeSetupStep({ apiKeyConfigured, onStatusChange }: RuntimeSe
                     'Installing Skillhub CLI. This can take a few minutes and the window should remain responsive.'
                 ));
                 await installSkillhub();
+                return;
+            }
+            if (dependency.id === 'opencli-cli') {
+                setProgressMessage(t(
+                    'setup.runtimeInstallingOpencliNotice',
+                    'Installing OpenCLI. This can take a few minutes and the window should remain responsive.'
+                ));
+                await installOpencli();
                 return;
             }
             setProgressMessage(
@@ -125,7 +134,7 @@ export function RuntimeSetupStep({ apiKeyConfigured, onStatusChange }: RuntimeSe
                     <span>
                         {t(
                             'setup.runtimeHeroText',
-                            'Install Skillhub CLI and prepare the local RAG runtime so marketplace installs and memory features work on first use.'
+                            'Install Skillhub CLI and prepare the local RAG runtime so marketplace installs and memory features work on first use. OpenCLI can be enabled from the optional section.'
                         )}
                     </span>
                 </div>
@@ -164,6 +173,8 @@ export function RuntimeSetupStep({ apiKeyConfigured, onStatusChange }: RuntimeSe
                             ? t('setup.runtimeRefresh', 'Refresh runtime')
                             : dependency.id === 'skillhub-cli'
                                 ? t('setup.runtimeInstallSkillhub', 'Install Skillhub CLI')
+                                : dependency.id === 'opencli-cli'
+                                    ? t('setup.runtimeInstallOpencli', 'Install OpenCLI')
                                 : t('setup.runtimePrepare', 'Prepare runtime')}
                     />
                 ))}
@@ -188,6 +199,8 @@ export function RuntimeSetupStep({ apiKeyConfigured, onStatusChange }: RuntimeSe
                             onAction={runDependencyAction}
                             actionLabel={dependency.ready
                                 ? t('setup.runtimeRefresh', 'Refresh runtime')
+                                : dependency.id === 'opencli-cli'
+                                    ? t('setup.runtimeInstallOpencli', 'Install OpenCLI')
                                 : t('setup.runtimePrepareOptional', 'Enable capability')}
                             optional
                         />
@@ -228,7 +241,7 @@ function RuntimeCard({
 
             <div className={styles.runtimeMetaRow}>
                 <span className={dependency.installed ? styles.runtimeBadgeReady : styles.runtimeBadgePending}>
-                    {dependency.installed ? 'Bundled' : 'Missing'}
+                    {dependency.installed ? 'Installed' : 'Missing'}
                 </span>
                 {typeof dependency.running === 'boolean' && (
                     <span className={dependency.running ? styles.runtimeBadgeReady : styles.runtimeBadgeMuted}>

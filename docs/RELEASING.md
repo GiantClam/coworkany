@@ -7,6 +7,7 @@ This document summarizes the repository's current release flow.
 The repository already contains GitHub Actions workflows for:
 
 - CI: `.github/workflows/ci.yml`
+- CLI commercial gate: `.github/workflows/cli-commercial-gate.yml`
 - release builds: `.github/workflows/release.yml`
 - manual packaging: `.github/workflows/package-desktop.yml`
 
@@ -18,6 +19,7 @@ Confirm the following:
 - release notes are prepared or the changelog has been updated
 - desktop and sidecar dependency installs succeed
 - CI is green on the target branch
+- CLI commercial gate is green on the target branch
 - any signing / notarization secrets required for macOS are available
 
 Recommended validation:
@@ -33,6 +35,13 @@ cd sidecar
 bun install
 npm run typecheck
 npm run test:ci
+```
+
+For CLI-first release readiness, also run:
+
+```bash
+cd sidecar
+bun run scripts/release-readiness.ts --build-desktop
 ```
 
 ## Release Paths
@@ -105,3 +114,4 @@ After a release:
 - [README.md](../README.md)
 - [TECHNICAL_DESIGN.md](./TECHNICAL_DESIGN.md)
 - [macos-distribution.md](./macos-distribution.md)
+- [docs/releases/cli-commercial-small-rollout-7d.md](./releases/cli-commercial-small-rollout-7d.md)

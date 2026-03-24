@@ -29,7 +29,9 @@ function buildTools(options?: {
     downloadSkillFromGitHub?: (source: string, workspacePath: string) => Promise<any>;
     searchClawHubSkills?: (query: string, limit?: number) => Promise<any>;
     installSkillFromClawHub?: (skillName: string, targetDir: string) => Promise<any>;
+    getNpmExecutable?: () => string | undefined;
     getSkillhubExecutable?: () => string | undefined;
+    getOpencliExecutable?: () => string | undefined;
     getExtensionGovernanceStore?: () => { get: (...args: any[]) => any; markApproved: (...args: any[]) => any };
     onSkillsUpdated?: () => void;
 }) {
@@ -48,7 +50,9 @@ function buildTools(options?: {
         downloadSkillFromGitHub: options?.downloadSkillFromGitHub,
         searchClawHubSkills: options?.searchClawHubSkills,
         installSkillFromClawHub: options?.installSkillFromClawHub,
+        getNpmExecutable: options?.getNpmExecutable,
         getSkillhubExecutable: options?.getSkillhubExecutable,
+        getOpencliExecutable: options?.getOpencliExecutable,
         onSkillsUpdated: options?.onSkillsUpdated,
     });
 
@@ -94,6 +98,92 @@ triggers:
 
 # ${slug}
 EOF
+  exit 0
+fi
+echo "unsupported" >&2
+exit 1
+`,
+        'utf-8'
+    );
+    fs.chmodSync(cliPath, 0o755);
+    return cliPath;
+}
+
+function createFakeOpencliCli(): string {
+    const cliDir = makeTempDir('coworkany-fake-opencli-');
+    const cliPath = path.join(cliDir, 'opencli');
+    fs.writeFileSync(
+        cliPath,
+        `#!/bin/sh
+set -eu
+if [ "$1" = "--version" ]; then
+  echo "opencli 0.0.1-test"
+  exit 0
+fi
+if [ "$1" = "doctor" ]; then
+  if [ "\${2:-}" = "--json" ]; then
+    echo '{"ok":true,"checks":[{"name":"runtime","status":"pass"}]}'
+  else
+    echo "runtime: pass"
+  fi
+  exit 0
+fi
+if [ "$1" = "list" ]; then
+  if [ "\${2:-}" = "--json" ] || [ "\${2:-}" = "-f" ]; then
+    echo '{"capabilities":[{"id":"gh.repo.list","description":"List repositories"}]}'
+  else
+    echo "gh.repo.list - List repositories"
+  fi
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  CAPABILITY="\${2:-}"
+  shift 2 || true
+  if [ "$CAPABILITY" = "gh.repo.list" ]; then
+    echo '{"ok":true,"capability":"gh.repo.list"}'
+    exit 0
+  fi
+  echo "unknown capability: $CAPABILITY" >&2
+  exit 2
+fi
+echo "unsupported" >&2
+exit 1
+`,
+        'utf-8'
+    );
+    fs.chmodSync(cliPath, 0o755);
+    return cliPath;
+}
+
+function createFakeNpmCli(): string {
+    const cliDir = makeTempDir('coworkany-fake-npm-');
+    const cliPath = path.join(cliDir, 'npm');
+    fs.writeFileSync(
+        cliPath,
+        `#!/bin/sh
+set -eu
+if [ "$1" = "install" ] && [ "$2" = "-g" ]; then
+  echo "installed $3"
+  exit 0
+fi
+echo "unsupported npm command: $*" >&2
+exit 1
+`,
+        'utf-8'
+    );
+    fs.chmodSync(cliPath, 0o755);
+    return cliPath;
+}
+
+function createFakeVersionCli(name = 'demo-cli', version = '0.0.1-test'): string {
+    const cliDir = makeTempDir(`coworkany-fake-${name}-`);
+    const cliPath = path.join(cliDir, name);
+    fs.writeFileSync(
+        cliPath,
+        `#!/bin/sh
+set -eu
+if [ "$1" = "--version" ]; then
+  echo "${name} ${version}"
   exit 0
 fi
 echo "unsupported" >&2
@@ -572,5 +662,190 @@ triggers:
         expect(Array.isArray(response.usageGuidance)).toBe(true);
         expect(response.message).toContain('clawhub');
         expect(response.message).toContain('SKILL.md');
+    });
+
+    test('check_opencli_runtime reports version and doctor output when opencli is available', async () => {
+        const fixture = buildTools({
+            getOpencliExecutable: () => createFakeOpencliCli(),
+        });
+
+        const tool = getTool(fixture.tools, 'check_opencli_runtime');
+        const response = await tool.handler({ include_doctor: true }, TOOL_CONTEXT);
+
+        expect(response.available).toBe(true);
+        expect(response.version).toContain('opencli');
+        expect(response.doctor).toBeTruthy();
+    });
+
+    test('list_opencli_capabilities returns parsed capability payload', async () => {
+        const fixture = buildTools({
+            getOpencliExecutable: () => createFakeOpencliCli(),
+        });
+
+        const tool = getTool(fixture.tools, 'list_opencli_capabilities');
+        const response = await tool.handler({}, TOOL_CONTEXT);
+
+        expect(response.success).toBe(true);
+        expect(response.capabilities).toBeTruthy();
+        const capabilities = response.capabilities as Array<{ id?: string }>;
+        expect(capabilities?.[0]?.id).toBe('gh.repo.list');
+    });
+
+    test('execute_opencli_capability executes opencli exec and returns parsed output', async () => {
+        const fixture = buildTools({
+            getOpencliExecutable: () => createFakeOpencliCli(),
+        });
+
+        const tool = getTool(fixture.tools, 'execute_opencli_capability');
+        const response = await tool.handler({
+            capability: 'gh.repo.list',
+            arguments: ['--owner', 'openai'],
+            timeout_ms: 5000,
+        }, TOOL_CONTEXT);
+
+        expect(response.success).toBe(true);
+        expect(response.commandTried).toEqual(['exec', 'gh.repo.list', '--owner', 'openai']);
+        expect(response.output).toBeTruthy();
+        const payload = response.output as { capability?: string; ok?: boolean };
+        expect(payload.ok).toBe(true);
+        expect(payload.capability).toBe('gh.repo.list');
+    });
+
+    test('install_cli_from_registry installs allowlisted OpenCLI via npm and verifies version', async () => {
+        const opencliPath = createFakeOpencliCli();
+        const fakeNpmPath = createFakeNpmCli();
+        const fixture = buildTools({
+            getOpencliExecutable: () => opencliPath,
+            getNpmExecutable: () => fakeNpmPath,
+        });
+        const tool = getTool(fixture.tools, 'install_cli_from_registry');
+        const response = await tool.handler({
+            cli_id: 'opencli-cli',
+            reinstall: true,
+        }, TOOL_CONTEXT);
+
+        expect(response.success).toBe(true);
+        expect(response.cliId).toBe('opencli-cli');
+        expect(response.installed).toBe(true);
+        expect(String(response.installCommand)).toContain('@jackwener/opencli');
+        expect(String(response.version)).toContain('opencli');
+    });
+
+    test('list_managed_cli_registry returns built-in defaults and config-defined custom entries', async () => {
+        const fakeNpmPath = createFakeNpmCli();
+        const customCliPath = createFakeVersionCli('acme-cli', '1.2.3');
+        const fixture = buildTools({
+            getNpmExecutable: () => fakeNpmPath,
+        });
+        const updateTool = getTool(fixture.tools, 'update_coworkany_config');
+        const listTool = getTool(fixture.tools, 'list_managed_cli_registry');
+
+        await updateTool.handler({
+            merge: {
+                managedCliRegistry: {
+                    'acme-cli': {
+                        displayName: 'Acme CLI',
+                        defaultExecutable: customCliPath,
+                        installCommand: {
+                            executable: fakeNpmPath,
+                            args: ['install', '-g', 'acme-cli'],
+                        },
+                        verifyArgs: ['--version'],
+                    },
+                },
+            },
+        }, TOOL_CONTEXT);
+
+        const response = await listTool.handler({}, TOOL_CONTEXT);
+        expect(response.success).toBe(true);
+        const entries = response.entries as Array<{ cliId?: string }>;
+        const cliIds = entries.map((entry) => entry.cliId);
+        expect(cliIds).toContain('opencli-cli');
+        expect(cliIds).toContain('skillhub-cli');
+        expect(cliIds).toContain('acme-cli');
+    });
+
+    test('install_cli_from_registry installs custom CLI configured in llm-config managedCliRegistry', async () => {
+        const fakeNpmPath = createFakeNpmCli();
+        const customCliPath = createFakeVersionCli('acme-cli', '1.2.3');
+        const fixture = buildTools({
+            getNpmExecutable: () => fakeNpmPath,
+        });
+        const updateTool = getTool(fixture.tools, 'update_coworkany_config');
+        const installTool = getTool(fixture.tools, 'install_cli_from_registry');
+
+        await updateTool.handler({
+            merge: {
+                managedCliRegistry: {
+                    'acme-cli': {
+                        displayName: 'Acme CLI',
+                        defaultExecutable: customCliPath,
+                        installCommand: {
+                            executable: fakeNpmPath,
+                            args: ['install', '-g', 'acme-cli'],
+                        },
+                        verifyArgs: ['--version'],
+                    },
+                },
+            },
+        }, TOOL_CONTEXT);
+
+        const response = await installTool.handler({
+            cli_id: 'acme-cli',
+            reinstall: true,
+        }, TOOL_CONTEXT);
+
+        expect(response.success).toBe(true);
+        expect(response.cliId).toBe('acme-cli');
+        expect(response.installed).toBe(true);
+        expect(String(response.version)).toContain('acme-cli 1.2.3');
+        expect(String(response.installCommand)).toContain('acme-cli');
+    });
+
+    test('install_cli_from_registry rejects invalid configured entries with unsafe tokens', async () => {
+        const fakeNpmPath = createFakeNpmCli();
+        const fixture = buildTools({
+            getNpmExecutable: () => fakeNpmPath,
+        });
+        const updateTool = getTool(fixture.tools, 'update_coworkany_config');
+        const installTool = getTool(fixture.tools, 'install_cli_from_registry');
+
+        await updateTool.handler({
+            merge: {
+                managedCliRegistry: {
+                    'unsafe-cli': {
+                        displayName: 'Unsafe CLI',
+                        defaultExecutable: 'unsafe-cli',
+                        installCommand: {
+                            executable: 'npm',
+                            args: ['install', '-g', 'unsafe-cli&&rm-rf'],
+                        },
+                    },
+                },
+            },
+        }, TOOL_CONTEXT);
+
+        const response = await installTool.handler({
+            cli_id: 'unsafe-cli',
+            reinstall: true,
+        }, TOOL_CONTEXT);
+
+        expect(response.success).toBe(false);
+        expect(response.error).toBe('unsupported_cli_id');
+        expect(response.supportedCliIds).not.toContain('unsafe-cli');
+        expect(Array.isArray(response.registryWarnings)).toBe(true);
+    });
+
+    test('install_cli_from_registry rejects unsupported cli ids', async () => {
+        const fixture = buildTools();
+        const tool = getTool(fixture.tools, 'install_cli_from_registry');
+        const response = await tool.handler({
+            cli_id: 'brew-cli',
+        }, TOOL_CONTEXT);
+
+        expect(response.success).toBe(false);
+        expect(response.error).toBe('unsupported_cli_id');
+        expect(response.supportedCliIds).toContain('opencli-cli');
+        expect(response.supportedCliIds).toContain('skillhub-cli');
     });
 });

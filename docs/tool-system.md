@@ -4,13 +4,19 @@
 
 ## 1. 架构概览
 
-工具系统采用注册表模式，统一管理内置工具、MCP 外部工具和存根工具。
+工具系统采用注册表 + 能力目录模式，统一管理内置工具、MCP 外部工具和存根工具。
 
 ```
-ToolRegistry (优先级解析)
-  ├── MCP Tools (最高优先级)     -- 外部 MCP Server 提供
-  ├── Builtin Tools (中优先级)   -- 内置实现
-  └── Stub Tools (最低优先级)    -- 占位/降级实现
+ToolRegistry + Capability Catalog (策略路由)
+  ├── MCP Tools                 -- 外部 MCP Server 提供
+  ├── Builtin Tools             -- 内置实现
+  └── Stub Tools                -- 占位/降级实现
+
+Conflict Analyzer
+  ├── duplicate      -- 同名能力
+  ├── overlap        -- 语义重叠能力
+  ├── mutex          -- 交互模式互斥
+  └── replaceable    -- 可被策略替换路由
 ```
 
 ## 2. 工具定义格式
@@ -115,7 +121,9 @@ MCP Server 作为子进程运行，Gateway 管理其生命周期。
 
 ### 4.2 工具发现
 
-MCP Server 启动后，Gateway 通过 MCP 协议发现其提供的工具，自动注册到 ToolRegistry。MCP 工具优先级最高，可覆盖同名内置工具。
+MCP Server 启动后，Gateway 通过 MCP 协议发现其提供的工具，自动注册到 ToolRegistry 与 Capability Catalog。
+
+当出现同名或语义重叠工具时，系统不再只依赖固定优先级覆盖，而是按任务级策略进行冲突仲裁（例如 `prefer_mcp`、`prefer_builtin`、`skip_conflicts`）。
 
 ### 4.3 策略执行
 
@@ -184,12 +192,91 @@ Chain Registry → 查找链 → Chain Executor → 逐步执行
 | chain_completed | 链执行完成 |
 | chain_failed | 链执行失败 |
 
-## 6. 工具注册优先级
+## 6. 工具冲突仲裁
+
+默认策略：
 
 ```
-1. MCP Tools      -- 外部工具，最高优先级，可覆盖内置
-2. Builtin Tools  -- 内置实现，标准功能
-3. Stub Tools     -- 占位实现，返回"功能未配置"提示
+duplicateResolution = prefer_mcp
 ```
+
+可选策略：
+
+```
+1. prefer_mcp      -- 同名冲突时优先 MCP（兼容历史行为）
+2. prefer_builtin  -- 同名冲突时优先内置工具
+3. prefer_opencli  -- 同名冲突时优先 OpenCLI 虚拟工具
+4. skip_conflicts  -- 同名冲突时跳过冲突工具，避免误调用
+```
+
+语义重叠仲裁（不同工具名但语义相同）：
+
+```
+overlapResolution:
+  - keep_all                # 默认，保持所有候选
+  - prefer_mcp              # 语义冲突时优先 MCP
+  - prefer_builtin          # 语义冲突时优先内置
+  - prefer_opencli          # 语义冲突时优先 OpenCLI 虚拟工具
+  - prefer_non_interactive  # 优先无交互工具
+  - skip_overlaps           # 跳过语义冲突组
+```
+
+无论采用哪种策略，系统都会输出冲突诊断（duplicate/overlap/mutex/replaceable），供治理和调试使用。
+
+OpenCLI 接入补充：
+
+```
+opencliCapabilities -> resolver 会生成 opencli_<capability_id> 虚拟工具
+执行入口统一转发到 execute_opencli_capability（opencli exec）
+这些虚拟工具与 Builtin/MCP 一起参与 overlap/mutex/replaceable 判定
+```
+
+命令执行补充治理：
+
+```
+checkCommandWithBinaryPolicy(command, policy)
+  - requireAllowlist
+  - allowedBinaries / deniedBinaries
+  - allowedCommandPatterns
+```
+
+该机制用于把命令安全从“危险词检测”扩展到“二进制与参数模式授权”。
+
+策略配置来源：
+
+```json
+{
+  "toolResolution": {
+    "duplicateResolution": "prefer_opencli",
+    "overlapResolution": "prefer_opencli"
+  }
+}
+```
+
+- `llm-config.json` 的 `toolResolution` 作为默认值
+- `start_task/send_task_message/resume_interrupted_task` 的 `config` 可按任务覆盖默认值
+
+Managed CLI 注册表配置（用于 `install_cli_from_registry`）：
+
+```json
+{
+  "managedCliRegistry": {
+    "acme-cli": {
+      "displayName": "Acme CLI",
+      "defaultExecutable": "acme",
+      "installCommand": {
+        "executable": "npm",
+        "args": ["install", "-g", "@acme/cli"]
+      },
+      "verifyArgs": ["--version"],
+      "enabled": true
+    }
+  }
+}
+```
+
+- 默认内置 `opencli-cli` 与 `skillhub-cli`
+- `managedCliRegistry` 可新增、覆盖或通过 `"enabled": false` 下线条目
+- token 采用安全校验（禁止空白与 shell 元字符），无效条目会被忽略并返回 warnings
 
 热重载：`reload_tools` 命令触发从磁盘重新加载工具定义，无需重启 Sidecar。

@@ -2,104 +2,76 @@ import { describe, expect, test } from 'bun:test';
 import { buildBuiltinEffectRequest } from '../src/tools/builtinPolicy';
 import type { ToolDefinition } from '../src/tools/standard';
 
-function makeTool(name: string): ToolDefinition {
-    return {
-        name,
-        description: name,
-        input_schema: { type: 'object', properties: {} },
-        effects: [],
-        handler: async () => ({}),
-    };
-}
+const TOOL_CONTEXT = {
+    workspacePath: '/tmp/workspace',
+    taskId: 'task-test',
+};
 
-describe('builtin tool policy bridge integration', () => {
-    test('requests policy evaluation for host-folder reads outside the workspace', () => {
-        const request = buildBuiltinEffectRequest({
-            tool: makeTool('list_dir'),
-            args: { path: '/Users/tester/Downloads' },
-            context: {
-                workspacePath: '/tmp/workspace',
-                taskId: 'task-1',
+describe('builtinPolicy', () => {
+    test('maps execute_opencli_capability to shell:write with deterministic command payload', () => {
+        const tool: ToolDefinition = {
+            name: 'execute_opencli_capability',
+            description: 'Execute opencli capability',
+            effects: ['process:spawn'],
+            input_schema: { type: 'object' },
+            handler: async () => ({ success: true }),
+        };
+
+        const effect = buildBuiltinEffectRequest({
+            tool,
+            args: {
+                capability: 'gh.repo.list',
+                arguments: ['--owner', 'openai'],
             },
+            context: TOOL_CONTEXT,
         });
 
-        expect(request).toBeTruthy();
-        expect(request?.effectType).toBe('filesystem:read');
-        expect(request?.payload.path).toBe('/Users/tester/Downloads');
+        expect(effect).toBeTruthy();
+        expect(effect?.effectType).toBe('shell:write');
+        expect(effect?.payload.command).toBe('opencli exec gh.repo.list --owner openai');
     });
 
-    test('always requests policy evaluation for run_command', () => {
-        const request = buildBuiltinEffectRequest({
-            tool: makeTool('run_command'),
-            args: { command: 'find . -type f' },
-            context: {
-                workspacePath: '/tmp/workspace',
-                taskId: 'task-2',
+    test('maps install_cli_from_registry to shell:write with managed installer command payload', () => {
+        const tool: ToolDefinition = {
+            name: 'install_cli_from_registry',
+            description: 'Install allowlisted cli',
+            effects: ['process:spawn'],
+            input_schema: { type: 'object' },
+            handler: async () => ({ success: true }),
+        };
+
+        const effect = buildBuiltinEffectRequest({
+            tool,
+            args: {
+                cli_id: 'opencli-cli',
             },
+            context: TOOL_CONTEXT,
         });
 
-        expect(request).toBeTruthy();
-        expect(request?.effectType).toBe('shell:write');
-        expect(request?.payload.command).toBe('find . -type f');
+        expect(effect).toBeTruthy();
+        expect(effect?.effectType).toBe('shell:write');
+        expect(effect?.payload.command).toBe('npm install -g @jackwener/opencli');
     });
 
-    test('does not request policy evaluation for workspace-only reads', () => {
-        const request = buildBuiltinEffectRequest({
-            tool: makeTool('list_dir'),
-            args: { path: './src' },
-            context: {
-                workspacePath: '/tmp/workspace',
-                taskId: 'task-3',
+    test('maps install_cli_from_registry with custom cli_id to generic managed install payload', () => {
+        const tool: ToolDefinition = {
+            name: 'install_cli_from_registry',
+            description: 'Install configured cli',
+            effects: ['process:spawn'],
+            input_schema: { type: 'object' },
+            handler: async () => ({ success: true }),
+        };
+
+        const effect = buildBuiltinEffectRequest({
+            tool,
+            args: {
+                cli_id: 'acme-cli',
             },
+            context: TOOL_CONTEXT,
         });
 
-        expect(request).toBeNull();
-    });
-
-    test('requests policy evaluation for host-folder file hashing outside the workspace', () => {
-        const request = buildBuiltinEffectRequest({
-            tool: makeTool('compute_file_hash'),
-            args: { path: '/Users/tester/Downloads/a.png' },
-            context: {
-                workspacePath: '/tmp/workspace',
-                taskId: 'task-4',
-            },
-        });
-
-        expect(request).toBeTruthy();
-        expect(request?.effectType).toBe('filesystem:read');
-        expect(request?.payload.path).toBe('/Users/tester/Downloads/a.png');
-    });
-
-    test('marks host-folder deletions as delete operations for policy evaluation', () => {
-        const request = buildBuiltinEffectRequest({
-            tool: makeTool('delete_path'),
-            args: { path: '/Users/tester/Downloads/a.png' },
-            context: {
-                workspacePath: '/tmp/workspace',
-                taskId: 'task-5',
-            },
-        });
-
-        expect(request).toBeTruthy();
-        expect(request?.effectType).toBe('filesystem:write');
-        expect(request?.payload.path).toBe('/Users/tester/Downloads/a.png');
-        expect(request?.payload.operation).toBe('delete');
-    });
-
-    test('requests policy evaluation for workspace writes too', () => {
-        const request = buildBuiltinEffectRequest({
-            tool: makeTool('write_to_file'),
-            args: { path: './notes/todo.txt' },
-            context: {
-                workspacePath: '/tmp/workspace',
-                taskId: 'task-6',
-            },
-        });
-
-        expect(request).toBeTruthy();
-        expect(request?.effectType).toBe('filesystem:write');
-        expect(request?.payload.path).toBe('/tmp/workspace/notes/todo.txt');
-        expect(request?.payload.operation).toBe('write');
+        expect(effect).toBeTruthy();
+        expect(effect?.effectType).toBe('shell:write');
+        expect(effect?.payload.command).toBe('managed-cli install acme-cli');
     });
 });

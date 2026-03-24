@@ -27,10 +27,52 @@ function inferEffectType(toolName: string): EffectType | undefined {
         case 'batch_delete_paths':
             return 'filesystem:write';
         case 'run_command':
+        case 'execute_opencli_capability':
+        case 'install_cli_from_registry':
             return 'shell:write';
         default:
             return undefined;
     }
+}
+
+function resolveManagedCliInstallCommand(cliId: string): string | undefined {
+    switch (cliId) {
+        case 'opencli-cli':
+            return 'npm install -g @jackwener/opencli';
+        case 'skillhub-cli':
+            return 'npm install -g @skills-hub-ai/cli';
+        default:
+            return cliId ? `managed-cli install ${cliId}` : 'managed-cli install <missing-cli-id>';
+    }
+}
+
+function buildCommandPayload(toolName: string, args: Record<string, unknown>): string | undefined {
+    if (toolName === 'run_command') {
+        return typeof args.command === 'string' ? args.command : undefined;
+    }
+
+    if (toolName === 'execute_opencli_capability') {
+        const capability = typeof args.capability === 'string' ? args.capability.trim() : '';
+        if (!capability) {
+            return undefined;
+        }
+
+        const capabilityArgs = Array.isArray(args.arguments)
+            ? args.arguments
+                .filter((entry): entry is string => typeof entry === 'string')
+                .map((entry) => entry.trim())
+                .filter(Boolean)
+            : [];
+
+        return ['opencli', 'exec', capability, ...capabilityArgs].join(' ');
+    }
+
+    if (toolName === 'install_cli_from_registry') {
+        const cliId = typeof args.cli_id === 'string' ? args.cli_id.trim() : '';
+        return resolveManagedCliInstallCommand(cliId);
+    }
+
+    return undefined;
 }
 
 function buildReasoning(toolName: string, targetPath: string | undefined, workspacePath: string): string {
@@ -40,6 +82,10 @@ function buildReasoning(toolName: string, targetPath: string | undefined, worksp
 
     if (toolName === 'run_command') {
         return 'Builtin shell execution requires policy approval before the command runs.';
+    }
+
+    if (toolName === 'install_cli_from_registry') {
+        return 'Managed CLI installation requires policy approval before execution.';
     }
 
     if (
@@ -113,7 +159,7 @@ export function buildBuiltinEffectRequest(input: {
                         ? 'delete'
                         : 'write')
                 : undefined,
-            command: typeof args.command === 'string' ? args.command : undefined,
+            command: buildCommandPayload(tool.name, args),
             cwd: resolveTargetPath(context.workspacePath, args.cwd),
             description: `Builtin tool call: ${tool.name}`,
         },

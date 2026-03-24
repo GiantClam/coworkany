@@ -64,6 +64,11 @@ type ManagedLlmConfig = {
         defaultMode?: BrowserMode;
         llmModel?: string;
     };
+    toolResolution?: {
+        duplicateResolution?: 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'skip_conflicts';
+        overlapResolution?: 'keep_all' | 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'prefer_non_interactive' | 'skip_overlaps';
+    };
+    managedCliRegistry?: Record<string, unknown>;
     [key: string]: unknown;
 };
 
@@ -98,7 +103,9 @@ export type AppManagementToolDeps = {
         skillName: string,
         targetDir: string
     ) => Promise<{ success: boolean; path?: string; error?: string }>;
+    getNpmExecutable?: () => string | undefined;
     getSkillhubExecutable?: () => string | undefined;
+    getOpencliExecutable?: () => string | undefined;
     onSkillsUpdated?: () => void;
     applyLlmConfig?: (config: ManagedLlmConfig) => void;
 };
@@ -118,6 +125,176 @@ type MarketplaceSkillRecord = {
     path: string;
     marketplace: MarketplaceKind;
 };
+
+export type OpencliCapabilitySummary = {
+    id: string;
+    description?: string;
+    sourceId?: string;
+};
+
+type ManagedCliRegistryEntry = {
+    id: string;
+    displayName: string;
+    defaultExecutable: string;
+    installCommand: {
+        executable: string;
+        args: string[];
+    };
+    verifyArgs: string[];
+};
+
+const MANAGED_CLI_REGISTRY_DEFAULTS: Record<string, ManagedCliRegistryEntry> = {
+    'skillhub-cli': {
+        id: 'skillhub-cli',
+        displayName: 'Skillhub CLI',
+        defaultExecutable: 'skillhub',
+        installCommand: {
+            executable: 'npm',
+            args: ['install', '-g', '@skills-hub-ai/cli'],
+        },
+        verifyArgs: ['--version'],
+    },
+    'opencli-cli': {
+        id: 'opencli-cli',
+        displayName: 'OpenCLI',
+        defaultExecutable: 'opencli',
+        installCommand: {
+            executable: 'npm',
+            args: ['install', '-g', '@jackwener/opencli'],
+        },
+        verifyArgs: ['--version'],
+    },
+};
+
+type ManagedCliRegistryResolution = {
+    registry: Record<string, ManagedCliRegistryEntry>;
+    warnings: string[];
+    source: ConfigLoadResult['source'];
+    configPath: string;
+};
+
+const CLI_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/i;
+const CLI_TOKEN_PATTERN = /^[A-Za-z0-9@._/:+=\\-]+$/;
+
+function cloneManagedCliRegistry(
+    registry: Record<string, ManagedCliRegistryEntry>,
+): Record<string, ManagedCliRegistryEntry> {
+    return Object.fromEntries(
+        Object.entries(registry).map(([id, entry]) => [
+            id,
+            {
+                ...entry,
+                installCommand: {
+                    executable: entry.installCommand.executable,
+                    args: [...entry.installCommand.args],
+                },
+                verifyArgs: [...entry.verifyArgs],
+            },
+        ]),
+    );
+}
+
+function normalizeCliToken(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || !CLI_TOKEN_PATTERN.test(trimmed)) {
+        return undefined;
+    }
+    return trimmed;
+}
+
+function normalizeCliTokenList(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+    const normalized: string[] = [];
+    for (const item of value) {
+        const token = normalizeCliToken(item);
+        if (!token) {
+            return undefined;
+        }
+        normalized.push(token);
+    }
+    return normalized;
+}
+
+function resolveManagedCliRegistry(workspaceRoot: string, appDataRoot: string): ManagedCliRegistryResolution {
+    const loaded = loadManagedLlmConfig(workspaceRoot, appDataRoot);
+    const registry = cloneManagedCliRegistry(MANAGED_CLI_REGISTRY_DEFAULTS);
+    const warnings: string[] = [];
+    const configured = loaded.config.managedCliRegistry;
+
+    if (!isPlainObject(configured)) {
+        return {
+            registry,
+            warnings,
+            source: loaded.source,
+            configPath: loaded.configPath,
+        };
+    }
+
+    for (const [rawId, rawEntry] of Object.entries(configured)) {
+        const cliId = rawId.trim();
+        if (!CLI_ID_PATTERN.test(cliId)) {
+            warnings.push(`Skipped managedCliRegistry entry "${rawId}" because cli_id is invalid.`);
+            continue;
+        }
+
+        if (!isPlainObject(rawEntry)) {
+            warnings.push(`Skipped managedCliRegistry.${cliId} because entry is not an object.`);
+            continue;
+        }
+
+        if (rawEntry.enabled === false) {
+            delete registry[cliId];
+            continue;
+        }
+
+        const existing = registry[cliId];
+        const displayName = typeof rawEntry.displayName === 'string' && rawEntry.displayName.trim()
+            ? rawEntry.displayName.trim()
+            : existing?.displayName ?? cliId;
+        const defaultExecutable = normalizeCliToken(rawEntry.defaultExecutable)
+            ?? existing?.defaultExecutable;
+
+        let installCommand = existing?.installCommand;
+        if (isPlainObject(rawEntry.installCommand)) {
+            const executable = normalizeCliToken(rawEntry.installCommand.executable);
+            const args = normalizeCliTokenList(rawEntry.installCommand.args);
+            if (!executable || !args || args.length === 0) {
+                warnings.push(`Skipped managedCliRegistry.${cliId} because installCommand is invalid.`);
+                continue;
+            }
+            installCommand = { executable, args };
+        }
+
+        const verifyArgs = normalizeCliTokenList(rawEntry.verifyArgs)
+            ?? existing?.verifyArgs
+            ?? ['--version'];
+
+        if (!defaultExecutable || !installCommand || verifyArgs.length === 0) {
+            warnings.push(`Skipped managedCliRegistry.${cliId} because required fields are missing.`);
+            continue;
+        }
+
+        registry[cliId] = {
+            id: cliId,
+            displayName,
+            defaultExecutable,
+            installCommand,
+            verifyArgs,
+        };
+    }
+
+    return {
+        registry,
+        warnings,
+        source: loaded.source,
+        configPath: loaded.configPath,
+    };
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -420,13 +597,20 @@ function sanitizeSkillhubName(slug: string, rawName?: string): string {
     return candidate;
 }
 
-function runSkillhubCommand(
+function runProcessCommand(
     executable: string,
-    args: string[]
+    args: string[],
+    options?: {
+        cwd?: string;
+        timeoutMs?: number;
+    },
+    label?: string,
 ): { success: boolean; stdout: string; stderr: string; error?: string } {
     try {
         const result = spawnSync(executable, args, {
             encoding: 'utf-8',
+            ...(options?.cwd ? { cwd: options.cwd } : {}),
+            ...(typeof options?.timeoutMs === 'number' ? { timeout: options.timeoutMs } : {}),
         });
 
         if (result.error) {
@@ -443,7 +627,11 @@ function runSkillhubCommand(
                 success: false,
                 stdout: result.stdout ?? '',
                 stderr: result.stderr ?? '',
-                error: (result.stderr || result.stdout || `skillhub exited with status ${result.status}`).trim(),
+                error: (
+                    result.stderr
+                    || result.stdout
+                    || `${label || executable} exited with status ${result.status}`
+                ).trim(),
             };
         }
 
@@ -460,6 +648,341 @@ function runSkillhubCommand(
             error: error instanceof Error ? error.message : String(error),
         };
     }
+}
+
+function runSkillhubCommand(
+    executable: string,
+    args: string[],
+    options?: {
+        cwd?: string;
+        timeoutMs?: number;
+    }
+): { success: boolean; stdout: string; stderr: string; error?: string } {
+    return runProcessCommand(executable, args, options, 'skillhub');
+}
+
+function parseJsonSafe(value: string): { parsed?: unknown; error?: string } {
+    try {
+        return {
+            parsed: JSON.parse(value),
+        };
+    } catch (error) {
+        return {
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+function runOpencliListCommand(
+    executable: string,
+    query?: string
+): {
+    success: boolean;
+    parsed?: unknown;
+    rawOutput?: string;
+    commandTried?: string[];
+    error?: string;
+} {
+    const queryTokens = query?.trim() ? query.trim().split(/\s+/) : [];
+    const attempts: string[][] = [
+        ['list', '--json', ...queryTokens],
+        ['list', '-f', 'json', ...queryTokens],
+        ['list', ...queryTokens],
+    ];
+
+    let fallbackRaw: string | undefined;
+    for (const args of attempts) {
+        const result = runSkillhubCommand(executable, args);
+        if (!result.success) {
+            continue;
+        }
+
+        const stdout = result.stdout.trim();
+        if (!stdout) {
+            continue;
+        }
+
+        const parsed = parseJsonSafe(stdout);
+        if (typeof parsed.parsed !== 'undefined') {
+            return {
+                success: true,
+                parsed: parsed.parsed,
+                rawOutput: stdout,
+                commandTried: args,
+            };
+        }
+
+        fallbackRaw = stdout;
+        if (!args.includes('--json') && !args.includes('-f')) {
+            return {
+                success: true,
+                rawOutput: stdout,
+                commandTried: args,
+            };
+        }
+    }
+
+    if (fallbackRaw) {
+        return {
+            success: true,
+            rawOutput: fallbackRaw,
+            commandTried: attempts[attempts.length - 1],
+        };
+    }
+
+    return {
+        success: false,
+        error: `Failed to list opencli capabilities via ${executable}.`,
+    };
+}
+
+function normalizeOpencliCapabilities(parsed: unknown, rawOutput?: string): OpencliCapabilitySummary[] {
+    const candidates: OpencliCapabilitySummary[] = [];
+    const seen = new Set<string>();
+
+    const pushCapability = (id: unknown, description?: unknown) => {
+        const normalizedId = typeof id === 'string' ? id.trim() : '';
+        if (!normalizedId || seen.has(normalizedId)) {
+            return;
+        }
+        seen.add(normalizedId);
+        candidates.push({
+            id: normalizedId,
+            description: typeof description === 'string' && description.trim() ? description.trim() : undefined,
+            sourceId: normalizedId,
+        });
+    };
+
+    if (Array.isArray(parsed)) {
+        for (const entry of parsed) {
+            if (!isPlainObject(entry)) {
+                continue;
+            }
+            pushCapability(entry.id ?? entry.name ?? entry.capability, entry.description ?? entry.summary);
+        }
+    } else if (isPlainObject(parsed)) {
+        const arrays = [
+            parsed.capabilities,
+            parsed.tools,
+            parsed.results,
+            parsed.items,
+        ];
+        for (const bucket of arrays) {
+            if (!Array.isArray(bucket)) {
+                continue;
+            }
+            for (const entry of bucket) {
+                if (!isPlainObject(entry)) {
+                    continue;
+                }
+                pushCapability(entry.id ?? entry.name ?? entry.capability, entry.description ?? entry.summary);
+            }
+        }
+    }
+
+    if (candidates.length > 0) {
+        return candidates;
+    }
+
+    if (!rawOutput) {
+        return [];
+    }
+
+    for (const line of rawOutput.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            continue;
+        }
+        const [idPart, ...descParts] = trimmed.split(/\s+-\s+/);
+        const id = idPart?.trim();
+        if (!id) {
+            continue;
+        }
+        pushCapability(id, descParts.join(' - ').trim());
+    }
+
+    return candidates;
+}
+
+export function discoverOpencliCapabilities(input: {
+    executable?: string;
+    query?: string;
+} = {}): {
+    success: boolean;
+    executable: string;
+    query?: string;
+    commandTried?: string[];
+    capabilities: OpencliCapabilitySummary[];
+    rawOutput?: string;
+    error?: string;
+} {
+    const executable = input.executable?.trim() || 'opencli';
+    const listed = runOpencliListCommand(executable, input.query);
+    const capabilities = normalizeOpencliCapabilities(listed.parsed, listed.rawOutput);
+    return {
+        success: listed.success,
+        executable,
+        query: input.query,
+        commandTried: listed.commandTried,
+        capabilities,
+        rawOutput: listed.rawOutput,
+        error: listed.error,
+    };
+}
+
+function resolveManagedCliExecutable(
+    cli: ManagedCliRegistryEntry,
+    deps: AppManagementToolDeps,
+): string {
+    const explicit = cli.id === 'opencli-cli'
+        ? deps.getOpencliExecutable?.()
+        : cli.id === 'skillhub-cli'
+            ? deps.getSkillhubExecutable?.()
+            : undefined;
+    const trimmed = typeof explicit === 'string' ? explicit.trim() : '';
+    return trimmed || cli.defaultExecutable;
+}
+
+function installManagedCli(input: {
+    cli: ManagedCliRegistryEntry;
+    deps: AppManagementToolDeps;
+    reinstall: boolean;
+    verifyAfterInstall: boolean;
+    timeoutMs: number;
+}): Record<string, unknown> {
+    const executable = resolveManagedCliExecutable(input.cli, input.deps);
+    const npmExecutable = input.deps.getNpmExecutable?.();
+    const installerExecutable = typeof npmExecutable === 'string' && npmExecutable.trim()
+        ? npmExecutable.trim()
+        : input.cli.installCommand.executable;
+    const installCommandText = [installerExecutable, ...input.cli.installCommand.args].join(' ');
+    const verifyCommandText = [executable, ...input.cli.verifyArgs].join(' ');
+    const beforeCheck = runProcessCommand(executable, input.cli.verifyArgs, undefined, input.cli.id);
+    const alreadyInstalled = beforeCheck.success;
+
+    if (alreadyInstalled && !input.reinstall) {
+        return {
+            success: true,
+            cliId: input.cli.id,
+            cliName: input.cli.displayName,
+            executable,
+            alreadyInstalled: true,
+            installed: true,
+            version: beforeCheck.stdout.trim() || undefined,
+            installSkipped: true,
+            installCommand: installCommandText,
+            verifyCommand: verifyCommandText,
+        };
+    }
+
+    const installResult = runProcessCommand(
+        installerExecutable,
+        input.cli.installCommand.args,
+        { timeoutMs: input.timeoutMs },
+        input.cli.id,
+    );
+
+    if (!installResult.success) {
+        return {
+            success: false,
+            cliId: input.cli.id,
+            cliName: input.cli.displayName,
+            executable,
+            installCommand: installCommandText,
+            verifyCommand: verifyCommandText,
+            error: installResult.error ?? 'managed_cli_install_failed',
+            stdout: installResult.stdout.trim() || undefined,
+            stderr: installResult.stderr.trim() || undefined,
+        };
+    }
+
+    if (!input.verifyAfterInstall) {
+        return {
+            success: true,
+            cliId: input.cli.id,
+            cliName: input.cli.displayName,
+            executable,
+            alreadyInstalled,
+            installed: true,
+            installCommand: installCommandText,
+            verifyCommand: verifyCommandText,
+            stdout: installResult.stdout.trim() || undefined,
+        };
+    }
+
+    const verifyExecutable = resolveManagedCliExecutable(input.cli, input.deps);
+    const verifyResult = runProcessCommand(verifyExecutable, input.cli.verifyArgs, undefined, input.cli.id);
+    return {
+        success: verifyResult.success,
+        cliId: input.cli.id,
+        cliName: input.cli.displayName,
+        executable: verifyExecutable,
+        alreadyInstalled,
+        installed: verifyResult.success,
+        installCommand: installCommandText,
+        verifyCommand: [verifyExecutable, ...input.cli.verifyArgs].join(' '),
+        version: verifyResult.success ? (verifyResult.stdout.trim() || undefined) : undefined,
+        error: verifyResult.success ? undefined : (verifyResult.error ?? 'managed_cli_verify_failed'),
+        stdout: installResult.stdout.trim() || undefined,
+        stderr: verifyResult.success ? undefined : (verifyResult.stderr.trim() || undefined),
+    };
+}
+
+function normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+}
+
+function runOpencliExecCommand(input: {
+    executable: string;
+    capability: string;
+    capabilityArgs?: string[];
+    cwd?: string;
+    timeoutMs?: number;
+}): {
+    success: boolean;
+    commandTried: string[];
+    parsed?: unknown;
+    rawOutput?: string;
+    parseError?: string;
+    error?: string;
+} {
+    const args = ['exec', input.capability, ...(input.capabilityArgs ?? [])];
+    const result = runSkillhubCommand(input.executable, args, {
+        cwd: input.cwd,
+        timeoutMs: input.timeoutMs,
+    });
+    if (!result.success) {
+        return {
+            success: false,
+            commandTried: args,
+            error: result.error ?? 'opencli_exec_failed',
+            rawOutput: result.stdout || result.stderr,
+        };
+    }
+
+    const stdout = result.stdout.trim();
+    if (!stdout) {
+        return {
+            success: true,
+            commandTried: args,
+            rawOutput: '',
+        };
+    }
+
+    const parsed = parseJsonSafe(stdout);
+    return {
+        success: true,
+        commandTried: args,
+        parsed: parsed.parsed,
+        rawOutput: stdout,
+        parseError: parsed.error,
+    };
 }
 
 function searchSkillhubSkills(
@@ -667,6 +1190,266 @@ export function createAppManagementTools(deps: AppManagementToolDeps): ToolDefin
                     workspaceRegistryPath: path.join(appDataRoot, 'workspaces.json'),
                     workspaceRootSkillsPath: path.join(deps.workspaceRoot, '.coworkany', 'skills'),
                     workspaceRootSkillRegistryPath: path.join(deps.workspaceRoot, '.coworkany', 'skills.json'),
+                };
+            },
+        },
+        {
+            name: 'list_managed_cli_registry',
+            description: 'List managed CLI registry entries resolved from built-in defaults and optional llm-config managedCliRegistry overrides.',
+            effects: ['filesystem:read'],
+            input_schema: {
+                type: 'object',
+                properties: {},
+            },
+            handler: async () => {
+                const appDataRoot = deps.getResolvedAppDataRoot();
+                const resolved = resolveManagedCliRegistry(deps.workspaceRoot, appDataRoot);
+                const entries = Object.values(resolved.registry)
+                    .map((entry) => ({
+                        cliId: entry.id,
+                        displayName: entry.displayName,
+                        executable: entry.defaultExecutable,
+                        installCommand: [entry.installCommand.executable, ...entry.installCommand.args].join(' '),
+                        verifyCommand: [entry.defaultExecutable, ...entry.verifyArgs].join(' '),
+                    }))
+                    .sort((left, right) => left.cliId.localeCompare(right.cliId));
+
+                return {
+                    success: true,
+                    entries,
+                    configPath: resolved.configPath,
+                    configSource: resolved.source,
+                    warnings: resolved.warnings,
+                };
+            },
+        },
+        {
+            name: 'install_cli_from_registry',
+            description: 'Install a managed CLI by cli_id from the resolved managed registry (built-in defaults + optional llm-config managedCliRegistry overrides).',
+            effects: ['process:spawn'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    cli_id: {
+                        type: 'string',
+                        description: 'Managed CLI id from list_managed_cli_registry.',
+                    },
+                    reinstall: {
+                        type: 'boolean',
+                        description: 'When true, run installer even if the CLI already exists.',
+                    },
+                    verify_after_install: {
+                        type: 'boolean',
+                        description: 'When true (default), validate installation by running `<cli> --version`.',
+                    },
+                    timeout_ms: {
+                        type: 'number',
+                        description: 'Installer timeout in milliseconds (10000-300000).',
+                    },
+                },
+                required: ['cli_id'],
+            },
+            handler: async (
+                args: {
+                    cli_id: string;
+                    reinstall?: boolean;
+                    verify_after_install?: boolean;
+                    timeout_ms?: number;
+                },
+            ) => {
+                const cliId = typeof args.cli_id === 'string' ? args.cli_id.trim() : '';
+                const appDataRoot = deps.getResolvedAppDataRoot();
+                const resolved = resolveManagedCliRegistry(deps.workspaceRoot, appDataRoot);
+                const cli = resolved.registry[cliId];
+                if (!cli) {
+                    return {
+                        success: false,
+                        error: 'unsupported_cli_id',
+                        cliId,
+                        supportedCliIds: Object.keys(resolved.registry).sort((left, right) => left.localeCompare(right)),
+                        registryWarnings: resolved.warnings,
+                    };
+                }
+
+                const timeoutMs = typeof args.timeout_ms === 'number' && Number.isFinite(args.timeout_ms)
+                    ? Math.max(10000, Math.min(300000, Math.floor(args.timeout_ms)))
+                    : 180000;
+                const reinstall = args.reinstall === true;
+                const verifyAfterInstall = args.verify_after_install !== false;
+
+                const result = installManagedCli({
+                    cli,
+                    deps,
+                    reinstall,
+                    verifyAfterInstall,
+                    timeoutMs,
+                });
+                return {
+                    ...result,
+                    registryWarnings: resolved.warnings,
+                };
+            },
+        },
+        {
+            name: 'check_opencli_runtime',
+            description: 'Check whether OpenCLI is installed on the host, return its version, and optionally run an OpenCLI doctor probe.',
+            effects: ['process:spawn'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    include_doctor: {
+                        type: 'boolean',
+                        description: 'Whether to run opencli doctor after version detection.',
+                    },
+                },
+            },
+            handler: async (args: { include_doctor?: boolean }) => {
+                const executable = deps.getOpencliExecutable?.() ?? 'opencli';
+                const versionResult = runSkillhubCommand(executable, ['--version']);
+                if (!versionResult.success) {
+                    return {
+                        available: false,
+                        executable,
+                        error: versionResult.error ?? 'opencli_not_found',
+                    };
+                }
+
+                if (args.include_doctor === false) {
+                    return {
+                        available: true,
+                        executable,
+                        version: versionResult.stdout.trim(),
+                    };
+                }
+
+                const doctorResult = runSkillhubCommand(executable, ['doctor', '--json']);
+                if (doctorResult.success) {
+                    const parsed = parseJsonSafe(doctorResult.stdout);
+                    return {
+                        available: true,
+                        executable,
+                        version: versionResult.stdout.trim(),
+                        doctor: typeof parsed.parsed !== 'undefined' ? parsed.parsed : doctorResult.stdout.trim(),
+                        doctorParseError: parsed.error,
+                    };
+                }
+
+                const doctorFallback = runSkillhubCommand(executable, ['doctor']);
+                return {
+                    available: true,
+                    executable,
+                    version: versionResult.stdout.trim(),
+                    doctor: doctorFallback.success
+                        ? doctorFallback.stdout.trim()
+                        : undefined,
+                    doctorError: doctorFallback.success
+                        ? undefined
+                        : (doctorFallback.error ?? doctorResult.error ?? 'opencli_doctor_failed'),
+                };
+            },
+        },
+        {
+            name: 'list_opencli_capabilities',
+            description: 'List capabilities exposed by OpenCLI. Returns parsed JSON when available, otherwise returns raw textual output.',
+            effects: ['process:spawn'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'Optional keyword filter passed to opencli list.',
+                    },
+                },
+            },
+            handler: async (args: { query?: string }) => {
+                const discovered = discoverOpencliCapabilities({
+                    executable: deps.getOpencliExecutable?.() ?? 'opencli',
+                    query: args.query,
+                });
+
+                return {
+                    success: discovered.success,
+                    executable: discovered.executable,
+                    query: discovered.query,
+                    commandTried: discovered.commandTried,
+                    capabilities: discovered.capabilities,
+                    rawOutput: discovered.rawOutput,
+                    error: discovered.error,
+                };
+            },
+        },
+        {
+            name: 'execute_opencli_capability',
+            description: 'Execute a specific OpenCLI capability via `opencli exec`. Use this when the task needs a concrete OpenCLI action against local software or connected tooling.',
+            effects: ['process:spawn'],
+            input_schema: {
+                type: 'object',
+                properties: {
+                    capability: {
+                        type: 'string',
+                        description: 'Capability id passed to opencli exec, for example gh.repo.list.',
+                    },
+                    arguments: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional positional arguments forwarded to the capability.',
+                    },
+                    cwd: {
+                        type: 'string',
+                        description: 'Optional working directory for opencli execution. Relative paths are resolved against workspace root.',
+                    },
+                    timeout_ms: {
+                        type: 'number',
+                        description: 'Optional timeout in milliseconds for opencli exec (1000-120000).',
+                    },
+                },
+                required: ['capability'],
+            },
+            handler: async (
+                args: {
+                    capability: string;
+                    arguments?: unknown;
+                    cwd?: string;
+                    timeout_ms?: number;
+                },
+                context
+            ) => {
+                const capability = typeof args.capability === 'string' ? args.capability.trim() : '';
+                if (!capability) {
+                    return {
+                        success: false,
+                        error: 'capability_required',
+                    };
+                }
+
+                const executable = deps.getOpencliExecutable?.() ?? 'opencli';
+                const capabilityArgs = normalizeStringArray(args.arguments);
+                const resolvedCwd = typeof args.cwd === 'string' && args.cwd.trim()
+                    ? path.resolve(context.workspacePath, args.cwd)
+                    : undefined;
+                const timeoutMs = typeof args.timeout_ms === 'number' && Number.isFinite(args.timeout_ms)
+                    ? Math.max(1000, Math.min(120000, Math.floor(args.timeout_ms)))
+                    : 15000;
+                const executed = runOpencliExecCommand({
+                    executable,
+                    capability,
+                    capabilityArgs,
+                    cwd: resolvedCwd,
+                    timeoutMs,
+                });
+
+                return {
+                    success: executed.success,
+                    executable,
+                    capability,
+                    capabilityArgs,
+                    cwd: resolvedCwd,
+                    timeoutMs,
+                    commandTried: executed.commandTried,
+                    output: typeof executed.parsed !== 'undefined' ? executed.parsed : executed.rawOutput,
+                    rawOutput: executed.rawOutput,
+                    parseError: executed.parseError,
+                    error: executed.error,
                 };
             },
         },

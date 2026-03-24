@@ -59,6 +59,8 @@ export function buildStartTaskCommand(opts: {
     enabledSkills?: string[];
     enabledToolpacks?: string[];
     disabledTools?: string[];
+    duplicateResolution?: 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'skip_conflicts';
+    overlapResolution?: 'keep_all' | 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'prefer_non_interactive' | 'skip_overlaps';
     workspacePath?: string;
     modelId?: string;
 }): string {
@@ -78,6 +80,8 @@ export function buildStartTaskCommand(opts: {
                 enabledToolpacks: opts.enabledToolpacks || [],
                 enabledSkills: opts.enabledSkills || [],
                 disabledTools: opts.disabledTools || [],
+                duplicateResolution: opts.duplicateResolution,
+                overlapResolution: opts.overlapResolution,
                 modelId,
             },
         },
@@ -88,6 +92,8 @@ export function buildSendTaskMessageCommand(opts: {
     taskId: string;
     content: string;
     disabledTools?: string[];
+    duplicateResolution?: 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'skip_conflicts';
+    overlapResolution?: 'keep_all' | 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'prefer_non_interactive' | 'skip_overlaps';
 }): string {
     return JSON.stringify({
         type: 'send_task_message',
@@ -98,6 +104,8 @@ export function buildSendTaskMessageCommand(opts: {
             content: opts.content,
             config: {
                 disabledTools: opts.disabledTools || [],
+                duplicateResolution: opts.duplicateResolution,
+                overlapResolution: opts.overlapResolution,
             },
         },
     });

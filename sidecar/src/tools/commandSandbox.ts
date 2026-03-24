@@ -17,6 +17,13 @@ export interface CommandCheckResult {
     interactionHint?: string;    // Hint for user about what to input
 }
 
+export interface CommandBinaryPolicy {
+    allowedBinaries?: string[];
+    deniedBinaries?: string[];
+    allowedCommandPatterns?: string[];
+    requireAllowlist?: boolean;
+}
+
 /** Dangerous command patterns with risk levels */
 const DANGEROUS_PATTERNS: Array<{
     pattern: RegExp;
@@ -102,6 +109,76 @@ export function checkCommand(command: string): CommandCheckResult {
     return worstResult;
 }
 
+export function checkCommandWithBinaryPolicy(
+    command: string,
+    policy: CommandBinaryPolicy,
+): CommandCheckResult {
+    const baseline = checkCommand(command);
+    if (!baseline.allowed) {
+        return baseline;
+    }
+
+    const binary = extractCommandBinary(command);
+    if (!binary) {
+        return {
+            ...baseline,
+            allowed: false,
+            riskLevel: 'medium',
+            reason: 'Unable to parse executable from command',
+        };
+    }
+
+    const denied = new Set(
+        (policy.deniedBinaries ?? [])
+            .map((item) => normalizeBinaryToken(item))
+            .filter(Boolean),
+    );
+    if (denied.has(binary)) {
+        return {
+            ...baseline,
+            allowed: false,
+            riskLevel: 'high',
+            reason: `Binary "${binary}" is denied by policy`,
+        };
+    }
+
+    const allowed = new Set(
+        (policy.allowedBinaries ?? [])
+            .map((item) => normalizeBinaryToken(item))
+            .filter(Boolean),
+    );
+    if (policy.requireAllowlist === true && !allowed.has(binary)) {
+        return {
+            ...baseline,
+            allowed: false,
+            riskLevel: 'high',
+            reason: `Binary "${binary}" is not in the command allowlist`,
+        };
+    }
+
+    const patternSources = (policy.allowedCommandPatterns ?? []).map((item) => item.trim()).filter(Boolean);
+    if (patternSources.length > 0) {
+        const matches = patternSources.some((patternSource) => {
+            try {
+                return new RegExp(patternSource).test(command);
+            } catch {
+                return false;
+            }
+        });
+
+        if (!matches) {
+            return {
+                ...baseline,
+                allowed: false,
+                riskLevel: 'medium',
+                reason: 'Command does not match any allowed command pattern',
+            };
+        }
+    }
+
+    return baseline;
+}
+
 /**
  * Get all dangerous patterns for display in settings UI.
  */
@@ -110,4 +187,41 @@ export function getDangerousPatterns(): Array<{ riskLevel: string; reason: strin
         riskLevel: p.riskLevel,
         reason: p.reason,
     }));
+}
+
+function extractCommandBinary(command: string): string | null {
+    const trimmed = command.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (trimmed.startsWith('"')) {
+        const end = trimmed.indexOf('"', 1);
+        if (end <= 1) {
+            return null;
+        }
+        return normalizeBinaryToken(trimmed.slice(1, end));
+    }
+
+    if (trimmed.startsWith("'")) {
+        const end = trimmed.indexOf("'", 1);
+        if (end <= 1) {
+            return null;
+        }
+        return normalizeBinaryToken(trimmed.slice(1, end));
+    }
+
+    const token = trimmed.split(/\s+/)[0];
+    return token ? normalizeBinaryToken(token) : null;
+}
+
+function normalizeBinaryToken(token: string): string {
+    const normalized = token.trim();
+    if (!normalized) {
+        return normalized;
+    }
+
+    const slashNormalized = normalized.replace(/\\/g, '/');
+    const lastSegment = slashNormalized.split('/').filter(Boolean).pop();
+    return (lastSegment ?? normalized).trim();
 }

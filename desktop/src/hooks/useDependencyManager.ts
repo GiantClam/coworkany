@@ -97,6 +97,26 @@ export function useDependencyManager() {
         }
     }, [applySnapshot]);
 
+    const installOpencli = useCallback(async () => {
+        setActiveAction('opencli-cli');
+        setError(null);
+        try {
+            await nextPaint();
+            const result = await invoke<DependencyStatusResponse>('install_opencli_cli');
+            applySnapshot(result.payload);
+            const actionError = resolveActionError(result);
+            if (actionError) {
+                setError(actionError);
+                throw new Error(actionError);
+            }
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            throw err;
+        } finally {
+            setActiveAction(null);
+        }
+    }, [applySnapshot]);
+
     const prepareServiceRuntime = useCallback(async (name: string) => {
         setActiveAction(name);
         setError(null);
@@ -165,6 +185,7 @@ export function useDependencyManager() {
         activeAction,
         refresh,
         installSkillhub,
+        installOpencli,
         prepareServiceRuntime,
         startDependencyService,
         stopDependencyService,

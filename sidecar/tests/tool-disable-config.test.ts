@@ -32,6 +32,20 @@ describe('buildStartTaskCommand', () => {
         const parsed = JSON.parse(command);
         expect(parsed.payload.config.disabledTools).toEqual(['browser_ai_action']);
     });
+
+    test('serializes tool resolution policy into start_task config', () => {
+        const command = buildStartTaskCommand({
+            taskId: '11111111-1111-4111-8111-111111111111',
+            title: 'x-learning',
+            userQuery: 'test',
+            duplicateResolution: 'prefer_opencli',
+            overlapResolution: 'prefer_opencli',
+        } as any);
+
+        const parsed = JSON.parse(command);
+        expect(parsed.payload.config.duplicateResolution).toBe('prefer_opencli');
+        expect(parsed.payload.config.overlapResolution).toBe('prefer_opencli');
+    });
 });
 
 describe('buildSendTaskMessageCommand', () => {
@@ -44,5 +58,18 @@ describe('buildSendTaskMessageCommand', () => {
 
         const parsed = JSON.parse(command);
         expect(parsed.payload.config.disabledTools).toEqual(['browser_ai_action']);
+    });
+
+    test('serializes tool resolution policy into send_task_message config', () => {
+        const command = buildSendTaskMessageCommand({
+            taskId: '11111111-1111-4111-8111-111111111111',
+            content: 'continue',
+            duplicateResolution: 'prefer_opencli',
+            overlapResolution: 'prefer_builtin',
+        });
+
+        const parsed = JSON.parse(command);
+        expect(parsed.payload.config.duplicateResolution).toBe('prefer_opencli');
+        expect(parsed.payload.config.overlapResolution).toBe('prefer_builtin');
     });
 });

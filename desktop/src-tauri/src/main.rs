@@ -158,6 +158,7 @@ fn main() {
             ipc::install_from_skillhub,
             ipc::get_dependency_statuses,
             ipc::install_skillhub_cli,
+            ipc::install_opencli_cli,
             ipc::prepare_service_runtime,
             // Scanning commands
             ipc::scan_default_repos,

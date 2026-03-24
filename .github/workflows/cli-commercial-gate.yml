@@ -1,0 +1,126 @@
+name: CLI Commercial Gate
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "sidecar/**"
+      - "desktop/**"
+      - ".github/workflows/cli-commercial-gate.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sidecar/**"
+      - "desktop/**"
+      - ".github/workflows/cli-commercial-gate.yml"
+  workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: "Run stricter release-candidate gate (requires canary evidence)"
+        required: true
+        default: false
+        type: boolean
+      canary_evidence_path:
+        description: "Optional path to canary evidence JSON"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-commercial-gate-${{ github.event_name }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  cli-core-gate:
+    name: cli-core-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
+
+      - name: TypeScript typecheck (desktop)
+        working-directory: desktop
+        run: npx tsc --noEmit
+
+      - name: TypeScript typecheck (sidecar)
+        working-directory: sidecar
+        run: npm run typecheck
+
+      - name: CLI/MCP/OpenCLI resolver and safety tests
+        working-directory: sidecar
+        run: |
+          bun test \
+            tests/app-management-tools.test.ts \
+            tests/task-tool-resolver.test.ts \
+            tests/capability-catalog.test.ts \
+            tests/mcp-toolpack.test.ts \
+            tests/runtime-commands.test.ts \
+            tests/capability-commands.test.ts \
+            tests/workspace-commands.test.ts \
+            tests/command-sandbox.test.ts \
+            tests/command-sandbox-policy.test.ts \
+            tests/builtin-policy.test.ts
+
+      - name: Desktop acceptance (CI subset)
+        working-directory: desktop
+        run: npm run test:ci
+
+  release-readiness-gate:
+    name: release-readiness-gate
+    needs: [cli-core-gate]
+    runs-on: ubuntu-latest
+    env:
+      COWORKANY_REQUIRE_CANARY_EVIDENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate && 'true' || 'false' }}
+      COWORKANY_CANARY_EVIDENCE_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.canary_evidence_path || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
+
+      - name: Run release readiness gate
+        working-directory: sidecar
+        run: bun run scripts/release-readiness.ts --build-desktop
+
+      - name: Upload release readiness artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-commercial-readiness-${{ github.run_id }}
+          path: artifacts/release-readiness/**
+          if-no-files-found: error
+          retention-days: 14

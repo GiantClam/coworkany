@@ -34,6 +34,7 @@ pub struct PlatformRuntimeContext {
     pub sidecar_launch_mode: Option<String>,
     pub python: RuntimeBinaryInfo,
     pub skillhub: RuntimeBinaryInfo,
+    pub opencli: RuntimeBinaryInfo,
     pub managed_services: Vec<ManagedServiceCapability>,
 }
 
@@ -243,6 +244,57 @@ pub fn resolve_skillhub_executable() -> Result<PathBuf, String> {
     Err("skillhub CLI not found. Install it first via the official installer.".to_string())
 }
 
+pub fn resolve_opencli_executable() -> Result<PathBuf, String> {
+    // Check HOME environment variable (Unix)
+    if let Some(home) = std::env::var_os("HOME") {
+        let candidate = PathBuf::from(home).join(".local/bin/opencli");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // Check USERPROFILE environment variable (Windows)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+            let base = PathBuf::from(&userprofile);
+
+            // Check .local/bin (manual install location)
+            let candidate = base.join(".local/bin/opencli.exe");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+
+            // Check npm global install location
+            let npm_global = base.join("AppData").join("Roaming").join("npm");
+            let candidate = npm_global.join("opencli.cmd");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    if let Some(path_env) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            let candidate = dir.join(opencli_binary_name());
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+
+            // Also check for npm-style names on Windows
+            #[cfg(target_os = "windows")]
+            {
+                let candidate = dir.join("opencli.cmd");
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+
+    Err("opencli not found. Install it from Settings -> Runtime Setup.".to_string())
+}
+
 #[cfg(target_os = "windows")]
 fn skillhub_binary_name() -> &'static str {
     "skillhub.exe"
@@ -251,6 +303,16 @@ fn skillhub_binary_name() -> &'static str {
 #[cfg(not(target_os = "windows"))]
 fn skillhub_binary_name() -> &'static str {
     "skillhub"
+}
+
+#[cfg(target_os = "windows")]
+fn opencli_binary_name() -> &'static str {
+    "opencli.exe"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn opencli_binary_name() -> &'static str {
+    "opencli"
 }
 
 fn detect_shell() -> String {
@@ -275,6 +337,7 @@ pub fn build_platform_runtime_context(
 ) -> PlatformRuntimeContext {
     let python = find_system_python();
     let skillhub = resolve_skillhub_executable().ok();
+    let opencli = resolve_opencli_executable().ok();
 
     PlatformRuntimeContext {
         platform: std::env::consts::OS.to_string(),
@@ -292,6 +355,7 @@ pub fn build_platform_runtime_context(
             }),
         ),
         skillhub: binary_info(skillhub, Some("path_lookup")),
+        opencli: binary_info(opencli, Some("path_lookup")),
         managed_services: ["rag-service", "browser-use-service"]
             .into_iter()
             .map(|service_name| ManagedServiceCapability {
@@ -312,6 +376,20 @@ pub fn build_runtime_snapshot(
 
     let skillhub_path = resolve_skillhub_executable().ok();
     let skillhub_version = skillhub_path.as_ref().and_then(|path| {
+        Command::new(path)
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+    });
+    let opencli_path = resolve_opencli_executable().ok();
+    let opencli_version = opencli_path.as_ref().and_then(|path| {
         Command::new(path)
             .arg("--version")
             .output()
@@ -354,6 +432,25 @@ pub fn build_runtime_snapshot(
                         "skillhub CLI not found. Install it first via the official installer."
                             .to_string(),
                     )
+                } else {
+                    None
+                },
+            },
+            RuntimeDependencyStatus {
+                id: "opencli-cli".to_string(),
+                name: "OpenCLI".to_string(),
+                description:
+                    "Used to discover and execute OpenCLI capabilities for local software automation."
+                        .to_string(),
+                installed: opencli_path.is_some(),
+                ready: opencli_path.is_some(),
+                running: None,
+                bundled: false,
+                optional: true,
+                path: opencli_path.map(|path| path.to_string_lossy().to_string()),
+                version: opencli_version,
+                error: if resolve_opencli_executable().is_err() {
+                    Some("OpenCLI not found. Install it in Settings -> Runtime Setup.".to_string())
                 } else {
                     None
                 },

@@ -11,6 +11,8 @@ export interface ScheduledTaskConfig {
     enabledToolpacks?: string[];
     enabledSkills?: string[];
     disabledTools?: string[];
+    duplicateResolution?: 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'skip_conflicts';
+    overlapResolution?: 'keep_all' | 'prefer_mcp' | 'prefer_builtin' | 'prefer_opencli' | 'prefer_non_interactive' | 'skip_overlaps';
 }
 
 export type ScheduledTaskStatus = 'scheduled' | 'running' | 'completed' | 'failed' | 'cancelled';

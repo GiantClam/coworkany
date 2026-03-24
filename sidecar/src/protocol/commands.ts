@@ -31,6 +31,15 @@ const BaseResponseSchema = z.object({
 });
 
 const VoiceProviderModeSchema = z.enum(['auto', 'system', 'custom']);
+const DuplicateResolutionPolicySchema = z.enum(['prefer_mcp', 'prefer_builtin', 'prefer_opencli', 'skip_conflicts']);
+const OverlapResolutionPolicySchema = z.enum([
+    'keep_all',
+    'prefer_mcp',
+    'prefer_builtin',
+    'prefer_opencli',
+    'prefer_non_interactive',
+    'skip_overlaps',
+]);
 
 // ============================================================================
 // Task Commands
@@ -60,6 +69,8 @@ export const StartTaskCommandSchema = BaseCommandSchema.extend({
             // Backward-compatible alias
             enabledSkills: z.array(z.string()).optional(),
             disabledTools: z.array(z.string()).optional(),
+            duplicateResolution: DuplicateResolutionPolicySchema.optional(),
+            overlapResolution: OverlapResolutionPolicySchema.optional(),
             voiceProviderMode: VoiceProviderModeSchema.optional(),
         }).optional(),
     }),
@@ -135,6 +146,8 @@ export const SendTaskMessageCommandSchema = BaseCommandSchema.extend({
             enabledToolpacks: z.array(z.string()).optional(),
             enabledSkills: z.array(z.string()).optional(),
             disabledTools: z.array(z.string()).optional(),
+            duplicateResolution: DuplicateResolutionPolicySchema.optional(),
+            overlapResolution: OverlapResolutionPolicySchema.optional(),
             voiceProviderMode: VoiceProviderModeSchema.optional(),
         }).optional(),
     }),
@@ -164,6 +177,8 @@ export const ResumeInterruptedTaskCommandSchema = BaseCommandSchema.extend({
             enabledToolpacks: z.array(z.string()).optional(),
             enabledSkills: z.array(z.string()).optional(),
             disabledTools: z.array(z.string()).optional(),
+            duplicateResolution: DuplicateResolutionPolicySchema.optional(),
+            overlapResolution: OverlapResolutionPolicySchema.optional(),
             voiceProviderMode: VoiceProviderModeSchema.optional(),
         }).optional(),
     }),
@@ -199,6 +214,7 @@ export const PlatformRuntimeContextSchema = z.object({
     sidecarLaunchMode: z.string().optional(),
     python: RuntimeBinaryInfoSchema,
     skillhub: RuntimeBinaryInfoSchema,
+    opencli: RuntimeBinaryInfoSchema.optional(),
     managedServices: z.array(ManagedServiceCapabilitySchema),
 });
 

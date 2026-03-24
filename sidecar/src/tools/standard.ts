@@ -3,7 +3,11 @@ import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import { getAlternativeCommands, extractBaseCommand } from '../utils/commandAlternatives';
-import { checkCommand } from './commandSandbox';
+import {
+    checkCommand,
+    checkCommandWithBinaryPolicy,
+    type CommandBinaryPolicy,
+} from './commandSandbox';
 
 // ============================================================================
 // Types
@@ -38,6 +42,7 @@ export type ToolContext = {
     workspacePath: string;
     taskId: string;
     onCancel?: (waiter: (reason: string) => void) => (() => void);
+    commandBinaryPolicy?: CommandBinaryPolicy;
 };
 
 // ============================================================================
@@ -684,7 +689,9 @@ const runCommand: ToolDefinition = {
     },
     handler: async (args: { command: string; cwd?: string; timeout_ms?: number }, context) => {
         // Command sandbox: check for dangerous patterns before execution
-        const safetyCheck = checkCommand(args.command);
+        const safetyCheck = context.commandBinaryPolicy
+            ? checkCommandWithBinaryPolicy(args.command, context.commandBinaryPolicy)
+            : checkCommand(args.command);
         
         // BLOCKED commands - never execute, return instructions
         if (!safetyCheck.allowed) {
