@@ -68,6 +68,7 @@ export interface NavigateOptions {
     waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
     timeout?: number;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface NavigateResult {
@@ -81,6 +82,7 @@ export interface ClickOptions {
     text?: string;
     timeout?: number;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface ClickResult {
@@ -92,6 +94,7 @@ export interface FillOptions {
     value: string;
     clearFirst?: boolean;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface FillResult {
@@ -103,6 +106,7 @@ export interface ScreenshotOptions {
     selector?: string;
     fullPage?: boolean;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface ScreenshotResult {
@@ -116,6 +120,7 @@ export interface WaitOptions {
     state?: 'visible' | 'hidden' | 'attached' | 'detached';
     timeout?: number;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface WaitResult {
@@ -137,6 +142,7 @@ export interface UploadFileOptions {
     /** Natural language instruction for finding upload element (smart mode) */
     instruction?: string;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface UploadResult {
@@ -151,6 +157,7 @@ export interface AiActionOptions {
     /** Additional context about the current page */
     context?: string;
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 export interface AiActionResult {
@@ -161,6 +168,7 @@ export interface AiActionResult {
 
 export interface BrowserOperationControl {
     signal?: AbortSignal;
+    taskId?: string;
 }
 
 function getAbortReason(signal?: AbortSignal, fallback: string = 'Browser operation cancelled'): string {
@@ -273,6 +281,7 @@ export interface BrowserBackend {
 export class PlaywrightBackend implements BrowserBackend {
     readonly name = 'playwright';
     private connection: BrowserConnection | null = null;
+    private readonly taskPages = new Map<string, Page>();
 
     isConnected(): boolean {
         if (!this.connection) return false;
@@ -614,8 +623,9 @@ export class PlaywrightBackend implements BrowserBackend {
             );
             const contexts = browser.contexts();
             const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
-            const pages = context.pages();
-            const page = pages.length > 0 ? pages[0] : await context.newPage();
+            // Always open a fresh tab for CoworkAny operations so each automation
+            // session starts from a clean surface instead of hijacking existing tabs.
+            const page = await context.newPage();
 
             return {
                 browser,
@@ -1078,13 +1088,17 @@ export class PlaywrightBackend implements BrowserBackend {
      * Create a proxy object that implements the Page interface methods
      * by delegating to the bridge process via IPC.
      */
-    private _bridgeLastUrl = 'about:blank';
-    private _bridgeLastNavMeta: any = null;
-
-    private _createBridgePageProxy(): any {
+    private _createBridgePageProxy(taskKey?: string): any {
         const self = this;
+        const attachTaskKey = <T extends Record<string, unknown>>(payload: T): T & { taskKey?: string } => (
+            taskKey ? { ...payload, taskKey } : payload
+        );
+        let localLastUrl = 'about:blank';
+        let localLastNavMeta: any = null;
         return {
             _isBridgeProxy: true,
+            _taskKey: taskKey,
+            __lastNavMeta: null as any,
             goto: async (url: string, options?: any) => {
                 // Pass the page-level timeout to the IPC layer so it doesn't
                 // cut off long navigation waits (e.g., networkidle on X.com).
@@ -1093,18 +1107,20 @@ export class PlaywrightBackend implements BrowserBackend {
                     url,
                     waitUntil: options?.waitUntil,
                     timeout: options?.timeout,
+                    ...attachTaskKey({}),
                 }, ipcTimeout, options?.signal);
                 if (!result.success) throw new Error(result.error);
                 // Store the actual URL returned by the bridge (page.url() after goto)
-                self._bridgeLastUrl = result.result?.url || url;
-                self._bridgeLastNavMeta = result.result || null;
+                localLastUrl = result.result?.url || url;
+                localLastNavMeta = result.result || null;
+                (this as any).__lastNavMeta = localLastNavMeta;
                 return { status: () => result.result?.status };
             },
-            url: () => self._bridgeLastUrl,
+            url: () => localLastUrl,
             title: async () => {
-                const r = await self._bridgeSend('getUrl', {});
+                const r = await self._bridgeSend('getUrl', attachTaskKey({}), undefined, undefined);
                 if (r.success && r.result.url) {
-                    self._bridgeLastUrl = r.result.url; // Keep URL in sync
+                    localLastUrl = r.result.url; // Keep URL in sync
                 }
                 return r.success ? r.result.title : '';
             },
@@ -1112,31 +1128,33 @@ export class PlaywrightBackend implements BrowserBackend {
                 const result = await self._bridgeSend('click', {
                     selector,
                     timeout: options?.timeout,
+                    ...attachTaskKey({}),
                 }, undefined, options?.signal);
                 if (!result.success) throw new Error(result.error);
             },
             textContent: async (selector?: string) => {
-                const result = await self._bridgeSend('getContent', { selector });
+                const result = await self._bridgeSend('getContent', attachTaskKey({ selector }));
                 return result.success ? result.result.content : null;
             },
             innerText: async (selector: string) => {
-                const result = await self._bridgeSend('getContent', { selector });
+                const result = await self._bridgeSend('getContent', attachTaskKey({ selector }));
                 return result.success ? result.result.content : '';
             },
             content: async () => {
-                const result = await self._bridgeSend('getContent', {});
+                const result = await self._bridgeSend('getContent', attachTaskKey({}));
                 return result.success ? result.result.content : '';
             },
             screenshot: async (options?: any) => {
                 const result = await self._bridgeSend('screenshot', {
                     fullPage: options?.fullPage,
+                    ...attachTaskKey({}),
                 }, undefined, options?.signal);
                 if (!result.success) throw new Error(result.error);
                 return Buffer.from(result.result.base64, 'base64');
             },
             evaluate: async (script: string | Function) => {
                 const scriptStr = typeof script === 'function' ? `(${script.toString()})()` : script;
-                const result = await self._bridgeSend('executeScript', { script: scriptStr });
+                const result = await self._bridgeSend('executeScript', attachTaskKey({ script: scriptStr }));
                 if (!result.success) throw new Error(result.error);
                 return result.result?.result;
             },
@@ -1145,6 +1163,7 @@ export class PlaywrightBackend implements BrowserBackend {
                     selector,
                     timeout: options?.timeout,
                     state: options?.state,
+                    ...attachTaskKey({}),
                 }, undefined, options?.signal);
                 if (!result.success) throw new Error(result.error);
             },
@@ -1153,6 +1172,7 @@ export class PlaywrightBackend implements BrowserBackend {
                 const delay = Math.max(0, Number(ms) || 0);
                 const result = await self._bridgeSend('executeScript', {
                     script: `new Promise(resolve => setTimeout(resolve, ${delay}))`,
+                    ...attachTaskKey({}),
                 }, delay + 5000);
                 if (!result.success) throw new Error(result.error);
             },
@@ -1169,6 +1189,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             const params: any = { timeout: options?.timeout };
                             if (opts.text) params.text = opts.text;
                             else if (opts.selector) params.selector = opts.selector;
+                            if (taskKey) params.taskKey = taskKey;
                             const result = await self._bridgeSend('click', params, undefined, options?.signal);
                             if (!result.success) throw new Error(result.error);
                         },
@@ -1176,6 +1197,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             const params: any = { value, timeout: options?.timeout };
                             if (opts.text) params.text = opts.text;
                             else if (opts.selector) params.selector = opts.selector;
+                            if (taskKey) params.taskKey = taskKey;
                             const result = await self._bridgeSend('fill', params, undefined, options?.signal);
                             if (!result.success) throw new Error(result.error);
                         },
@@ -1183,6 +1205,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             // Simulate typing by inserting text via fill
                             const params: any = { value: text };
                             if (opts.selector) params.selector = opts.selector;
+                            if (taskKey) params.taskKey = taskKey;
                             const result = await self._bridgeSend('fill', params, undefined, _options?.signal);
                             if (!result.success) throw new Error(result.error);
                         },
@@ -1190,6 +1213,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             // Element screenshots fall back to full page
                             const result = await self._bridgeSend('screenshot', {
                                 fullPage: options?.fullPage,
+                                ...attachTaskKey({}),
                             }, undefined, options?.signal);
                             if (!result.success) throw new Error(result.error);
                             return Buffer.from(result.result.base64, 'base64');
@@ -1200,6 +1224,7 @@ export class PlaywrightBackend implements BrowserBackend {
                                     selector: opts.selector,
                                     timeout: options?.timeout,
                                     state: options?.state,
+                                    ...attachTaskKey({}),
                                 }, undefined, options?.signal);
                                 if (!result.success) throw new Error(result.error);
                             }
@@ -1208,6 +1233,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             const result = await self._bridgeSend('uploadFile', {
                                 selector: opts.selector || 'input[type="file"]',
                                 filePath: Array.isArray(files) ? files[0] : files,
+                                ...attachTaskKey({}),
                             });
                             if (!result.success) throw new Error(result.error);
                         },
@@ -1216,6 +1242,7 @@ export class PlaywrightBackend implements BrowserBackend {
                                 try {
                                     const result = await self._bridgeSend('executeScript', {
                                         script: `document.querySelectorAll('${opts.selector.replace(/'/g, "\\'")}').length`,
+                                        ...attachTaskKey({}),
                                     });
                                     return result.success ? (result.result?.result || 0) : 0;
                                 } catch { return 0; }
@@ -1273,6 +1300,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             selector,
                             value,
                             timeout: options?.timeout,
+                            ...attachTaskKey({}),
                         });
                         if (!result.success) throw new Error(result.error);
                     },
@@ -1287,6 +1315,7 @@ export class PlaywrightBackend implements BrowserBackend {
                             const el = document.querySelector('${selector.replace(/'/g, "\\'")}');
                             return el ? true : false;
                         })()`,
+                        ...attachTaskKey({}),
                     });
                     if (!result.success) return null;
                     return result.result?.result ? { _exists: true } : null;
@@ -1301,6 +1330,7 @@ export class PlaywrightBackend implements BrowserBackend {
                         script: `(() => {
                             return document.querySelectorAll('${selector.replace(/'/g, "\\'")}').length;
                         })()`,
+                        ...attachTaskKey({}),
                     });
                     if (!result.success) return [];
                     const count = result.result?.result || 0;
@@ -1311,12 +1341,13 @@ export class PlaywrightBackend implements BrowserBackend {
             },
             keyboard: {
                 insertText: async (text: string) => {
-                    const result = await self._bridgeSend('fill', { value: text });
+                    const result = await self._bridgeSend('fill', attachTaskKey({ value: text }));
                     if (!result.success) throw new Error(result.error);
                 },
                 press: async (key: string) => {
                     const result = await self._bridgeSend('executeScript', {
                         script: `document.dispatchEvent(new KeyboardEvent('keydown', { key: '${key}' }))`,
+                        ...attachTaskKey({}),
                     });
                     if (!result.success) throw new Error(result.error);
                 },
@@ -1526,6 +1557,20 @@ export class PlaywrightBackend implements BrowserBackend {
         if (this.connection) {
             console.error('[PlaywrightBackend] Disconnecting from browser');
             try {
+                const basePage = this.connection.page;
+                for (const [, taskPage] of this.taskPages) {
+                    if (taskPage === basePage) {
+                        continue;
+                    }
+                    if ((taskPage as any)?._isBridgeProxy) {
+                        continue;
+                    }
+                    if (typeof (taskPage as any)?.close === 'function' && !this.isPageClosed(taskPage)) {
+                        await (taskPage as any).close({ runBeforeUnload: false }).catch(() => {});
+                    }
+                }
+                this.taskPages.clear();
+
                 // If we used launchPersistentContext (browser is null), close the context
                 if (!this.connection.browser) {
                     await this.connection.context.close();
@@ -1533,6 +1578,13 @@ export class PlaywrightBackend implements BrowserBackend {
                     // For CDP connections, just disconnect (don't close the browser)
                     await this.connection.browser.close();
                 }
+                // Ensure any dedicated CoworkAny Chrome profile processes are cleaned
+                // up after disconnect to avoid lingering extra instances in test runs.
+                await this._killChromeByProfileDir().catch((error) => {
+                    console.error(
+                        `[PlaywrightBackend] Post-disconnect profile cleanup failed (non-critical): ${error instanceof Error ? error.message : String(error)}`
+                    );
+                });
             } catch (error) {
                 console.error('[PlaywrightBackend] Error closing:', error);
             }
@@ -1563,20 +1615,65 @@ export class PlaywrightBackend implements BrowserBackend {
         return this.connection;
     }
 
-    async getPage(): Promise<Page> {
+    private normalizeTaskKey(taskId?: string): string | null {
+        if (!taskId) return null;
+        const normalized = taskId.trim();
+        return normalized.length > 0 ? normalized : null;
+    }
+
+    private isPageClosed(page: Page): boolean {
+        try {
+            if (typeof (page as any)?.isClosed === 'function') {
+                return Boolean((page as any).isClosed());
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    }
+
+    private async getOrCreateTaskPage(taskKey: string): Promise<Page> {
         if (!this.connection) {
             throw new Error('Browser not connected. Call browser_connect first.');
         }
-        return this.connection.page;
+
+        const existing = this.taskPages.get(taskKey);
+        if (existing && !this.isPageClosed(existing)) {
+            return existing;
+        }
+
+        const basePage = this.connection.page;
+        if ((basePage as any)?._isBridgeProxy) {
+            const taskScopedBridgePage = this._createBridgePageProxy(taskKey) as unknown as Page;
+            this.taskPages.set(taskKey, taskScopedBridgePage);
+            return taskScopedBridgePage;
+        }
+
+        const nextPage = await this.connection.context.newPage();
+        this.taskPages.set(taskKey, nextPage);
+        return nextPage;
+    }
+
+    async getPage(taskId?: string): Promise<Page> {
+        if (!this.connection) {
+            throw new Error('Browser not connected. Call browser_connect first.');
+        }
+
+        const taskKey = this.normalizeTaskKey(taskId);
+        if (!taskKey) {
+            return this.connection.page;
+        }
+
+        return this.getOrCreateTaskPage(taskKey);
     }
 
     async navigate(url: string, options: NavigateOptions = {}): Promise<NavigateResult> {
-        const page = await this.getPage();
+        const page = await this.getPage(options.taskId);
         if ((page as any)?._isBridgeProxy) {
             // Bridge handles SPA hydration and retry logic internally.
             const { waitUntil = 'domcontentloaded', timeout = 30000, signal } = options;
             await (page as any).goto(url, { waitUntil, timeout, signal });
-            const navMeta = this._bridgeLastNavMeta || {};
+            const navMeta = (page as any).__lastNavMeta || {};
             return {
                 url: page.url(),
                 title: await page.title(),
@@ -1674,11 +1771,11 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async click(options: ClickOptions): Promise<ClickResult> {
-        const page = await this.getPage();
-        const { selector, text, timeout = 10000, signal } = options;
+        const page = await this.getPage(options.taskId);
+        const { selector, text, timeout = 10000, signal, taskId } = options;
 
         if ((page as any)?._isBridgeProxy) {
-            const result = await this._bridgeSend('click', { selector, text, timeout }, undefined, signal);
+            const result = await this._bridgeSend('click', { selector, text, timeout, ...(taskId ? { taskKey: taskId } : {}) }, undefined, signal);
             if (!result.success) {
                 throw new Error(result.error);
             }
@@ -1834,8 +1931,8 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async fill(options: FillOptions): Promise<FillResult> {
-        const page = await this.getPage();
-        const { selector, value, clearFirst = true, signal } = options;
+        const page = await this.getPage(options.taskId);
+        const { selector, value, clearFirst = true, signal, taskId } = options;
 
         if ((page as any)?._isBridgeProxy) {
             const result = await this._bridgeSend('fill', {
@@ -1843,6 +1940,7 @@ export class PlaywrightBackend implements BrowserBackend {
                 value,
                 clearFirst,
                 timeout: 10000,
+                ...(taskId ? { taskKey: taskId } : {}),
             }, undefined, signal);
             if (!result.success) {
                 throw new Error(result.error);
@@ -1862,13 +1960,14 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async screenshot(options: ScreenshotOptions = {}): Promise<ScreenshotResult> {
-        const page = await this.getPage();
-        const { selector, fullPage = false, signal } = options;
+        const page = await this.getPage(options.taskId);
+        const { selector, fullPage = false, signal, taskId } = options;
 
         if ((page as any)?._isBridgeProxy) {
             const result = await this._bridgeSend('screenshot', {
                 selector,
                 fullPage,
+                ...(taskId ? { taskKey: taskId } : {}),
             }, undefined, signal);
             if (!result.success) {
                 throw new Error(result.error);
@@ -1898,14 +1997,15 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async wait(options: WaitOptions): Promise<WaitResult> {
-        const page = await this.getPage();
-        const { selector, state = 'visible', timeout = 30000, signal } = options;
+        const page = await this.getPage(options.taskId);
+        const { selector, state = 'visible', timeout = 30000, signal, taskId } = options;
 
         if ((page as any)?._isBridgeProxy) {
             const result = await this._bridgeSend('waitForSelector', {
                 selector,
                 state,
                 timeout,
+                ...(taskId ? { taskKey: taskId } : {}),
             }, undefined, signal);
             if (!result.success) {
                 return { found: false, selector };
@@ -1925,11 +2025,13 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async getContent(asText: boolean = true, control?: BrowserOperationControl): Promise<ContentResult> {
-        const page = await this.getPage();
+        const page = await this.getPage(control?.taskId);
         const signal = control?.signal;
 
         if ((page as any)?._isBridgeProxy) {
-            const result = await this._bridgeSend('getContent', {}, undefined, signal);
+            const result = await this._bridgeSend('getContent', {
+                ...(control?.taskId ? { taskKey: control.taskId } : {}),
+            }, undefined, signal);
             if (!result.success) {
                 throw new Error(result.error);
             }
@@ -1952,10 +2054,13 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async executeScript<T>(script: string, control?: BrowserOperationControl): Promise<T> {
-        const page = await this.getPage();
+        const page = await this.getPage(control?.taskId);
         console.error('[PlaywrightBackend] Executing script in page context');
         if ((page as any)?._isBridgeProxy) {
-            const result = await this._bridgeSend('executeScript', { script }, undefined, control?.signal);
+            const result = await this._bridgeSend('executeScript', {
+                script,
+                ...(control?.taskId ? { taskKey: control.taskId } : {}),
+            }, undefined, control?.signal);
             if (!result.success) {
                 throw new Error(result.error);
             }
@@ -1965,13 +2070,14 @@ export class PlaywrightBackend implements BrowserBackend {
     }
 
     async uploadFile(options: UploadFileOptions): Promise<UploadResult> {
-        const page = await this.getPage();
-        const { selector, filePath, signal } = options;
+        const page = await this.getPage(options.taskId);
+        const { selector, filePath, signal, taskId } = options;
 
         if ((page as any)?._isBridgeProxy) {
             const result = await this._bridgeSend('uploadFile', {
                 selector,
                 filePath,
+                ...(taskId ? { taskKey: taskId } : {}),
             }, undefined, signal);
             if (!result.success) {
                 throw new Error(result.error);
@@ -2156,6 +2262,7 @@ export class BrowserUseBackend implements BrowserBackend {
             url,
             wait_until: options.waitUntil || 'domcontentloaded',
             timeout_ms: options.timeout || 30000,
+            ...(options.taskId ? { task_key: options.taskId } : {}),
         }, {
             signal: options.signal,
             timeoutMs: (options.timeout || 30000) + 10000,
@@ -2178,6 +2285,7 @@ export class BrowserUseBackend implements BrowserBackend {
         const result = await this.post<{ success: boolean; result?: string; error?: string }>('/click', {
             instruction,
             selector: options.selector,
+            ...(options.taskId ? { task_key: options.taskId } : {}),
         }, {
             signal: options.signal,
         });
@@ -2194,6 +2302,7 @@ export class BrowserUseBackend implements BrowserBackend {
             instruction: `type "${options.value}" into the field matching selector "${options.selector}"`,
             selector: options.selector,
             value: options.value,
+            ...(options.taskId ? { task_key: options.taskId } : {}),
         }, {
             signal: options.signal,
         });
@@ -2212,7 +2321,9 @@ export class BrowserUseBackend implements BrowserBackend {
             width: number;
             height: number;
             error?: string;
-        }>('/screenshot', {}, {
+        }>('/screenshot', {
+            ...(options.taskId ? { task_key: options.taskId } : {}),
+        }, {
             signal: options.signal,
         });
 
@@ -2241,6 +2352,7 @@ export class BrowserUseBackend implements BrowserBackend {
                 // Ask the AI to check if element is present
                 const result = await this.post<{ success: boolean; result?: string; error?: string }>('/action', {
                     action: `Check if an element matching "${options.selector}" is ${options.state || 'visible'} on the page. Reply with just "yes" or "no".`,
+                    ...(options.taskId ? { task_key: options.taskId } : {}),
                 }, {
                     signal: options.signal,
                     timeoutMs: interval + 5000,
@@ -2266,7 +2378,9 @@ export class BrowserUseBackend implements BrowserBackend {
             url: string;
             title: string;
             error?: string;
-        }>(`/content?as_text=${asText}`, {}, {
+        }>(`/content?as_text=${asText}`, {
+            ...(control?.taskId ? { task_key: control.taskId } : {}),
+        }, {
             signal: control?.signal,
             timeoutMs: 30000,
         });
@@ -2284,6 +2398,7 @@ export class BrowserUseBackend implements BrowserBackend {
         console.error('[BrowserUseBackend] executeScript not directly supported, attempting via action');
         const result = await this.post<{ success: boolean; result?: string; error?: string }>('/action', {
             action: `Execute this JavaScript in the page console and report the result: ${script}`,
+            ...(control?.taskId ? { task_key: control.taskId } : {}),
         }, {
             signal: control?.signal,
         });
@@ -2305,6 +2420,7 @@ export class BrowserUseBackend implements BrowserBackend {
             file_path: options.filePath,
             instruction: options.instruction || 'click the file upload button and upload the file',
             selector: options.selector,
+            ...(options.taskId ? { task_key: options.taskId } : {}),
         }, {
             signal: options.signal,
         });
@@ -2317,6 +2433,7 @@ export class BrowserUseBackend implements BrowserBackend {
         return await this.post<AiActionResult>('/action', {
             action: options.action,
             context: options.context,
+            ...(options.taskId ? { task_key: options.taskId } : {}),
         }, {
             signal: options.signal,
         });
@@ -2329,6 +2446,7 @@ export class BrowserUseBackend implements BrowserBackend {
         url?: string;
         maxSteps?: number;
         llmModel?: string;
+        taskId?: string;
     } = {}): Promise<{ success: boolean; result?: string; stepsTaken?: number; error?: string }> {
         const raw = await this.post<{
             success: boolean;
@@ -2340,6 +2458,7 @@ export class BrowserUseBackend implements BrowserBackend {
             url: options.url,
             max_steps: options.maxSteps || 20,
             llm_model: options.llmModel,
+            ...(options.taskId ? { task_key: options.taskId } : {}),
         });
 
         return {
@@ -2612,8 +2731,8 @@ export class BrowserService {
         return connection;
     }
 
-    async getPage(): Promise<Page> {
-        return this.playwrightBackend.getPage();
+    async getPage(taskId?: string): Promise<Page> {
+        return this.playwrightBackend.getPage(taskId);
     }
 
     async navigate(url: string, options: NavigateOptions = {}): Promise<NavigateResult> {
@@ -2705,24 +2824,44 @@ export class BrowserService {
         }
 
         const ensureSmartSession = async (): Promise<void> => {
-            if (this.browserUseBackend.isConnected()) {
-                return;
+            if (!this.playwrightBackend.isConnected()) {
+                await this.playwrightBackend.connect({
+                    headless: false,
+                    signal: options.signal,
+                });
             }
 
             const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
-            const connectOptions: ConnectOptions = activeCdpPort
-                ? { cdpUrl: `http://localhost:${activeCdpPort}` }
-                : { headless: false };
+            if (activeCdpPort) {
+                // Always present the active CDP endpoint to browser-use so it can
+                // reuse the same Chrome instance as Playwright (or switch to it).
+                await this.browserUseBackend.connect({
+                    cdpUrl: `http://localhost:${activeCdpPort}`,
+                    signal: options.signal,
+                });
+                return;
+            }
 
-            await this.browserUseBackend.connect(connectOptions);
+            if (!this.browserUseBackend.isConnected()) {
+                await this.browserUseBackend.connect({
+                    headless: false,
+                    signal: options.signal,
+                });
+            }
 
             // If smart mode had to launch its own browser session, sync it to the
             // currently active Playwright page so ai_action works on the same URL.
             if (!activeCdpPort && this.playwrightBackend.isConnected()) {
                 try {
-                    const currentPage = await this.playwrightBackend.getContent(true);
+                    const currentPage = await this.playwrightBackend.getContent(true, {
+                        signal: options.signal,
+                        taskId: options.taskId,
+                    });
                     if (currentPage.url) {
-                        await this.browserUseBackend.navigate(currentPage.url);
+                        await this.browserUseBackend.navigate(currentPage.url, {
+                            signal: options.signal,
+                            taskId: options.taskId,
+                        });
                     }
                 } catch (error) {
                     console.error('[BrowserService] Failed to sync URL to browser-use session:', error);

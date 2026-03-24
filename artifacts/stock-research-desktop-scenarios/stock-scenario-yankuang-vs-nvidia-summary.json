@@ -17,13 +17,12 @@
     "taskFinished": true,
     "taskFailed": false,
     "taskFailedError": "",
-    "searchWebCallCount": 5,
+    "searchWebCallCount": 6,
     "adviceKeywordHits": [
-      "买入",
       "持有",
-      "buy",
-      "sell",
-      "评级"
+      "hold",
+      "评级",
+      "建议"
     ],
     "predictionKeywordHits": [
       "预测",
@@ -32,7 +31,7 @@
       "走势",
       "概率",
       "forecast",
-      "upside",
+      "projection",
       "next 6 months"
     ],
     "entityCoverage": [
@@ -42,8 +41,8 @@
         "matchedAliases": [
           "兖矿能源",
           "yankuang",
-          "yanzhou",
-          "600188"
+          "600188",
+          "1171"
         ]
       },
       {
@@ -51,8 +50,7 @@
         "displayName": "NVIDIA",
         "matchedAliases": [
           "nvidia",
-          "nvda",
-          "cuda"
+          "nvda"
         ]
       }
     ],
@@ -62,7 +60,7 @@
     "completedBySilence": false,
     "completed": true,
     "externalFailure": false,
-    "evidenceTextLength": 19773,
-    "rawLogLength": 293245
+    "evidenceTextLength": 13530,
+    "rawLogLength": 303747
   }
 }

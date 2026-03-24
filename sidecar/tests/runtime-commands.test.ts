@@ -8,6 +8,12 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         emit: () => {},
         onBootstrapRuntimeContext: () => {},
         restorePersistedTasks: () => {},
+        getRuntimeSnapshot: () => ({
+            generatedAt: new Date().toISOString(),
+            activeTaskId: 'task-active',
+            tasks: [],
+            count: 0,
+        }),
         runDoctorPreflight: () => ({
             report: { overallStatus: 'healthy' },
             markdown: '# Doctor Report',
@@ -151,6 +157,44 @@ describe('runtime commands handler', () => {
         expect(bootstrapped).toHaveLength(1);
         expect(restored).toBe(true);
         expect(emitted[0]?.type).toBe('bootstrap_runtime_context_response');
+    });
+
+    test('handles get_runtime_snapshot and emits snapshot response', async () => {
+        const emitted: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getRuntimeSnapshot: () => ({
+                generatedAt: '2026-03-23T08:00:00.000Z',
+                activeTaskId: 'task-123',
+                tasks: [
+                    {
+                        taskId: 'task-123',
+                        title: 'Analyze browser state',
+                        workspacePath: '/tmp/workspace',
+                        createdAt: '2026-03-23T07:59:00.000Z',
+                        status: 'running',
+                        suspended: false,
+                    },
+                ],
+                count: 1,
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-runtime-snapshot',
+            type: 'get_runtime_snapshot',
+            payload: {},
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(emitted[0]?.type).toBe('get_runtime_snapshot_response');
+        expect(emitted[0]?.payload).toMatchObject({
+            success: true,
+            snapshot: {
+                activeTaskId: 'task-123',
+                count: 1,
+            },
+        });
     });
 
     test('handles doctor_preflight and emits a structured report response', async () => {
@@ -437,6 +481,54 @@ describe('runtime commands handler', () => {
             'PLAN_UPDATED',
         ]);
         expect(continued).toBe(true);
+    });
+
+    test('loads llm config before preparing follow-up work request in send_task_message', async () => {
+        const callOrder: string[] = [];
+        const deps = createRuntimeCommandDeps({
+            loadLlmConfig: () => {
+                callOrder.push('load');
+                return {};
+            },
+            prepareWorkRequestContext: async () => {
+                callOrder.push('prepare');
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-followup-order',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: 'help me',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-config-order',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-config-order',
+                content: 'help me',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(callOrder).toEqual(['load', 'prepare']);
     });
 
     test('does not emit running status before clarification blocks execution', async () => {
@@ -1143,6 +1235,75 @@ describe('runtime commands handler', () => {
         ]);
     });
 
+    test('blocks send_task_message execution when required research remains blocking_unknown', async () => {
+        const emitted: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-blocking-research',
+                    schemaVersion: 1,
+                    mode: 'immediate_task',
+                    sourceText: '根据上述信息，给我兖矿能源的买入价格',
+                    workspacePath: '/tmp/workspace',
+                    tasks: [],
+                    clarification: {
+                        required: false,
+                        questions: [],
+                        missingFields: [],
+                        canDefault: true,
+                        assumptions: [],
+                    },
+                    presentation: {
+                        uiFormat: 'chat_message',
+                        ttsEnabled: false,
+                        ttsMode: 'summary',
+                        ttsMaxChars: 500,
+                        language: 'zh-CN',
+                    },
+                    uncertaintyRegistry: [{
+                        id: 'u-required-research',
+                        topic: 'required_research:web-price-snapshot',
+                        status: 'blocking_unknown',
+                        statement: 'Required pre-freeze research did not complete successfully.',
+                        whyItMatters: 'Cannot safely continue execution without required price data.',
+                        question: '请补齐最新价格快照后继续。',
+                        supportingEvidenceIds: [],
+                    }],
+                    createdAt: new Date().toISOString(),
+                    frozenAt: new Date().toISOString(),
+                },
+                executionPlan: {
+                    workRequestId: 'wr-blocking-research',
+                    runMode: 'single',
+                    steps: [],
+                },
+                executionQuery: '根据上述信息，给我兖矿能源的买入价格',
+                workRequestExecutionPrompt: 'prompt',
+            } as any),
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-blocking-research',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-blocking-research',
+                content: '继续',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(continued).toBe(false);
+        expect(emitted.some((event) => event.type === 'TASK_USER_ACTION_REQUIRED')).toBe(true);
+        expect(emitted.some((event) =>
+            event.type === 'TASK_STATUS' && event.payload?.status === 'idle'
+        )).toBe(true);
+    });
+
     test('treats confirm-plan approval replies as execution approval context', async () => {
         const preparedInputs: any[] = [];
         let continued = false;
@@ -1247,6 +1408,199 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(true);
     });
 
+    test('treats compact numeric approval replies as execution approval when assistant requested authorization', async () => {
+        const preparedInputs: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: '检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+                    primaryObjective: '检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'report_file',
+                            path: 'reports/1-x.md',
+                            format: 'md',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '继续执行' },
+                    {
+                        role: 'assistant',
+                        content:
+                            '我这边可立即进入最后流程，但属于外部实际操作，需要你给一句最终授权口令。\n'
+                            + '请直接回复：确认发布',
+                    },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                        deliverables: [
+                            {
+                                id: 'deliverable-report',
+                                title: 'Report file',
+                                type: 'report_file',
+                                description: 'Save final report.',
+                                required: true,
+                                path: 'reports/1-x.md',
+                                format: 'md',
+                            },
+                        ],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-approval-compact',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze approval reply',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Execute approved plan',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-compact-approval-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-compact-approval-followup',
+                content: '1',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).not.toContain('需要补充：');
+        expect(preparedInputs[0]?.sourceText).not.toContain('用户补充：1');
+        expect(continued).toBe(true);
+    });
+
+    test('uses full scheduled chain source text for approval follow-ups in scheduled_multi_task mode', async () => {
+        const preparedInputs: any[] = [];
+        let continued = false;
+        const chainSourceText = '1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上。';
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'scheduled_multi_task',
+                    sourceText: chainSourceText,
+                    primaryObjective: '检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'report_file',
+                            path: 'reports/chain_stage1_result.md',
+                            format: 'md',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: chainSourceText },
+                    {
+                        role: 'assistant',
+                        content:
+                            '该任务包含外部发布环节，请先确认执行计划。\n'
+                            + '请直接回复：确认 或 同意，收到后我将继续执行。',
+                    },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'scheduled_multi_task',
+                        deliverables: [],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-chain-approval-followup',
+                        runMode: 'dag',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze approval reply',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: chainSourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-chain-approval-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-chain-approval-followup',
+                content: '同意',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上。');
+        expect(preparedInputs[0]?.sourceText).toContain('发布到 X 上');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).not.toContain('用户补充：同意');
+        expect(continued).toBe(true);
+    });
+
     test('treats generic continue replies as execution approval context for prior objective', async () => {
         const preparedInputs: any[] = [];
         let continued = false;
@@ -1342,6 +1696,96 @@ describe('runtime commands handler', () => {
         expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
         expect(preparedInputs[0]?.sourceText).not.toContain('请明确你要我继续处理的具体对象');
         expect(continued).toBe(true);
+    });
+
+    test('rebuilds artifact contract on follow-up even when a stored contract exists', async () => {
+        const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];
+        const setContracts: any[] = [];
+        const continued: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [],
+                getArtifactContract: () => ({ type: 'stale-artifact-contract' }),
+                setArtifactContract: (_taskId, contract) => {
+                    setContracts.push(contract);
+                },
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    clarification: { required: false },
+                    mode: 'immediate_task',
+                    deliverables: [
+                        {
+                            id: 'deliverable-new',
+                            title: 'Report file',
+                            type: 'report_file',
+                            description: 'Save report markdown.',
+                            required: true,
+                            path: '/tmp/new-report.md',
+                            format: 'md',
+                        },
+                    ],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-followup-refresh-contract',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze follow-up',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute task',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: '生成总结并保存到 /tmp/new-report.md',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+            buildArtifactContract: (query, deliverables) => {
+                artifactContractCalls.push({ query, deliverables });
+                return { type: 'fresh-artifact-contract' };
+            },
+            continuePreparedAgentFlow: async (input) => {
+                continued.push(input);
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-refresh-contract-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-refresh-contract-followup',
+                content: '继续执行',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(artifactContractCalls).toEqual([{
+            query: '生成总结并保存到 /tmp/new-report.md',
+            deliverables: [
+                expect.objectContaining({
+                    path: '/tmp/new-report.md',
+                    format: 'md',
+                }),
+            ],
+        }]);
+        expect(setContracts).toEqual([{ type: 'fresh-artifact-contract' }]);
+        expect(continued[0]?.artifactContract).toEqual({ type: 'fresh-artifact-contract' });
     });
 
     test('merges corrective follow-up input with the previous frozen contract context before analysis', async () => {
@@ -1869,12 +2313,121 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(false);
     });
 
+    test('schedules only the first stage for sequential scheduled_multi_task requests', async () => {
+        const emitted: any[] = [];
+        const pushed: any[] = [];
+        const scheduledCalls: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            pushConversationMessage: (taskId, message) => {
+                pushed.push({ taskId, message });
+                return [];
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-multi',
+                    mode: 'scheduled_multi_task',
+                    schedule: {
+                        executeAt: '2026-03-23T05:35:08.000Z',
+                        stages: [
+                            {
+                                taskId: 'task-stage-1',
+                                executeAt: '2026-03-23T05:35:08.000Z',
+                            },
+                            {
+                                taskId: 'task-stage-2',
+                                executeAt: '2026-03-23T05:36:08.000Z',
+                                delayMsFromPrevious: 60000,
+                                originalTimeExpression: '1分钟',
+                            },
+                        ],
+                    },
+                    presentation: { ttsEnabled: false },
+                    tasks: [
+                        {
+                            id: 'task-stage-1',
+                            title: '阶段 1',
+                            objective: '检索并保存分析结果',
+                            constraints: [],
+                            acceptanceCriteria: [],
+                            dependencies: [],
+                        },
+                        {
+                            id: 'task-stage-2',
+                            title: '阶段 2',
+                            objective: '发布到 X',
+                            constraints: ['优先复用上一阶段已产出的结果与文件，不要重复前一阶段工作。'],
+                            acceptanceCriteria: [],
+                            dependencies: ['task-stage-1'],
+                        },
+                    ],
+                    clarification: { required: false },
+                    deliverables: [],
+                    checkpoints: [],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-multi',
+                    runMode: 'dag',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze scheduled request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                    ],
+                },
+                executionQuery: 'ignored',
+                workRequestExecutionPrompt: undefined,
+            }),
+            scheduleTaskInternal: (input) => {
+                scheduledCalls.push(input);
+                return { id: `scheduled-${scheduledCalls.length}` };
+            },
+            buildScheduledConfirmationMessage: (record) => `scheduled:${record.id}`,
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4b-multi',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-4-multi',
+                content: '1 分钟后，先做 A。然后再等 1 分钟，做 B',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(scheduledCalls).toHaveLength(1);
+        expect(scheduledCalls[0]?.title).toBe('阶段 1');
+        expect(scheduledCalls[0]?.executeAt.toISOString()).toBe('2026-03-23T05:35:08.000Z');
+        expect(scheduledCalls[0]?.stageIndex).toBe(0);
+        expect(scheduledCalls[0]?.totalStages).toBe(2);
+        expect(pushed).toHaveLength(1);
+        expect(pushed[0]?.message?.content).toContain('已拆解为 2 个链式阶段任务');
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'CHAT_MESSAGE',
+            'TASK_FINISHED',
+        ]);
+        expect(continued).toBe(false);
+    });
+
     test('handles resume_interrupted_task with saved context and continues agent flow', async () => {
         const emitted: any[] = [];
         const pushed: any[] = [];
         const ensured: any[] = [];
         const continued: any[] = [];
         const preparedInputs: any[] = [];
+        const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];
 
         const deps = createRuntimeCommandDeps({
             emit: (message) => emitted.push(message),
@@ -1905,6 +2458,17 @@ describe('runtime commands handler', () => {
                     frozenWorkRequest: {
                         clarification: { required: false },
                         mode: 'immediate_task',
+                        deliverables: [
+                            {
+                                id: 'deliverable-resume-report',
+                                title: 'Resume report',
+                                type: 'report_file',
+                                description: 'Save resumed report',
+                                required: true,
+                                path: '/tmp/ws/resume.md',
+                                format: 'md',
+                            },
+                        ],
                     },
                     executionPlan: {
                         workRequestId: 'wr-resume',
@@ -1931,6 +2495,10 @@ describe('runtime commands handler', () => {
                     executionQuery: input.sourceText,
                     workRequestExecutionPrompt: 'resume prompt',
                 };
+            },
+            buildArtifactContract: (query, deliverables) => {
+                artifactContractCalls.push({ query, deliverables });
+                return { type: 'rebuilt-artifact-contract' };
             },
             continuePreparedAgentFlow: async (input) => {
                 continued.push(input);
@@ -1959,6 +2527,74 @@ describe('runtime commands handler', () => {
         expect(pushed[0]?.message?.content).toContain('[RESUME_REQUESTED]');
         expect(preparedInputs[0]?.sourceText).toBe('Post to Xiaohongshu with the saved draft');
         expect(continued[0]?.userMessage).toBe('Post to Xiaohongshu with the saved draft');
+        expect(artifactContractCalls).toEqual([{
+            query: 'Post to Xiaohongshu with the saved draft',
+            deliverables: [
+                expect.objectContaining({
+                    path: '/tmp/ws/resume.md',
+                    format: 'md',
+                }),
+            ],
+        }]);
+        expect(continued[0]?.artifactContract).toEqual({ type: 'rebuilt-artifact-contract' });
+    });
+
+    test('loads llm config before preparing work request in resume_interrupted_task', async () => {
+        const callOrder: string[] = [];
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({ workspacePath: '/tmp/ws' }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => ({ workspacePath: '/tmp/ws' }),
+                getConversation: () => [{ role: 'user', content: 'resume this task' }],
+                getArtifactContract: () => ({ type: 'artifact' }),
+                setArtifactContract: () => {},
+            },
+            loadLlmConfig: () => {
+                callOrder.push('load');
+                return {};
+            },
+            prepareWorkRequestContext: async () => {
+                callOrder.push('prepare');
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-resume-order',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze resume request',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: 'resume this task',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-resume-config-order',
+            type: 'resume_interrupted_task',
+            payload: {
+                taskId: 'task-resume-order',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(callOrder).toEqual(['load', 'prepare']);
     });
 
     test('returns an error when resume_interrupted_task has no saved context', async () => {

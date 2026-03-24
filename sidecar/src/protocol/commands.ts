@@ -1161,6 +1161,35 @@ export const GetTasksResponseSchema = BaseResponseSchema.extend({
     }),
 });
 
+const RuntimeSnapshotTaskSchema = z.object({
+    taskId: z.string(),
+    title: z.string(),
+    workspacePath: z.string(),
+    createdAt: z.string(),
+    status: z.enum(['running', 'idle', 'finished', 'failed', 'interrupted', 'suspended']),
+    suspended: z.boolean().optional(),
+    suspensionReason: z.string().optional(),
+});
+
+export const GetRuntimeSnapshotCommandSchema = BaseCommandSchema.extend({
+    type: z.literal('get_runtime_snapshot'),
+    payload: z.object({}).optional(),
+});
+
+export const GetRuntimeSnapshotResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('get_runtime_snapshot_response'),
+    payload: z.object({
+        success: z.boolean(),
+        snapshot: z.object({
+            generatedAt: z.string().datetime(),
+            activeTaskId: z.string().optional(),
+            tasks: z.array(RuntimeSnapshotTaskSchema),
+            count: z.number(),
+        }),
+        error: z.string().optional(),
+    }),
+});
+
 const VoicePlaybackStateSchema = z.object({
     isSpeaking: z.boolean(),
     canStop: z.boolean(),
@@ -1355,6 +1384,7 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
 
     ReloadToolsCommandSchema,
     GetTasksCommandSchema,
+    GetRuntimeSnapshotCommandSchema,
     GetVoiceStateCommandSchema,
     StopVoiceCommandSchema,
     GetVoiceProviderStatusCommandSchema,
@@ -1413,6 +1443,7 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ReloadToolsCommandSchema,
     ReloadToolsResponseSchema,
     GetTasksResponseSchema,
+    GetRuntimeSnapshotResponseSchema,
     GetVoiceStateResponseSchema,
     StopVoiceResponseSchema,
     GetVoiceProviderStatusResponseSchema,
@@ -1507,6 +1538,8 @@ export type InstallFromGitHubCommand = z.infer<typeof InstallFromGitHubCommandSc
 export type InstallFromGitHubResponse = z.infer<typeof InstallFromGitHubResponseSchema>;
 export type GetTasksCommand = z.infer<typeof GetTasksCommandSchema>;
 export type GetTasksResponse = z.infer<typeof GetTasksResponseSchema>;
+export type GetRuntimeSnapshotCommand = z.infer<typeof GetRuntimeSnapshotCommandSchema>;
+export type GetRuntimeSnapshotResponse = z.infer<typeof GetRuntimeSnapshotResponseSchema>;
 export type GetVoiceStateCommand = z.infer<typeof GetVoiceStateCommandSchema>;
 export type GetVoiceStateResponse = z.infer<typeof GetVoiceStateResponseSchema>;
 export type StopVoiceCommand = z.infer<typeof StopVoiceCommandSchema>;

@@ -10,6 +10,9 @@ import {
     markWorkRequestExecutionResumed,
     markWorkRequestExecutionStarted,
     markWorkRequestExecutionSuspended,
+    prepareExecutionContextFromFrozen,
+    planNextScheduledExecutionStage,
+    planScheduledExecutionStages,
     markWorkRequestPresentationStarted,
     markWorkRequestReductionStarted,
     prepareWorkRequestContext,
@@ -87,6 +90,298 @@ describe('workRequestRuntime', () => {
         });
 
         expect(getScheduledTaskExecutionQuery({ record, workRequestStore: store })).toContain('只回复：HELLO');
+    });
+
+    test('strips synthesized deliverable/checkpoint clauses from scheduled execution query', async () => {
+        const dir = makeTempDir();
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+        const scheduledTaskStore = new ScheduledTaskStore(path.join(dir, 'app-data', 'scheduled-tasks.json'));
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+            workspacePath: dir,
+            workRequestStore: store,
+        });
+
+        const record = scheduledTaskStore.create({
+            title: prepared.frozenWorkRequest.tasks[0]?.title || 'Task',
+            taskQuery: 'legacy raw query',
+            workRequestId: prepared.frozenWorkRequest.id,
+            workspacePath: dir,
+            executeAt: new Date(prepared.frozenWorkRequest.schedule?.executeAt || new Date().toISOString()),
+            speakResult: false,
+        });
+
+        const query = getScheduledTaskExecutionQuery({ record, workRequestStore: store });
+        expect(query).toContain('将结果保存到文件中');
+        expect(query).not.toContain('交付物：');
+        expect(query).not.toContain('检查点：');
+    });
+
+    test('sanitizes legacy scheduled query fallback when no frozen work request is linked', () => {
+        const dir = makeTempDir();
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+        const scheduledTaskStore = new ScheduledTaskStore(path.join(dir, 'app-data', 'scheduled-tasks.json'));
+
+        const record = scheduledTaskStore.create({
+            title: 'legacy',
+            taskQuery: [
+                '检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+                '交付物：Planned output artifact (reports/1-x.md)',
+                '检查点：Checkpoint before final delivery',
+            ].join('\n'),
+            workspacePath: dir,
+            executeAt: new Date('2026-03-23T05:36:08.000Z'),
+            speakResult: false,
+        });
+
+        const query = getScheduledTaskExecutionQuery({ record, workRequestStore: store });
+        expect(query).toContain('将结果保存到文件中');
+        expect(query).not.toContain('交付物：');
+        expect(query).not.toContain('检查点：');
+    });
+
+    test('prefers record taskQuery for scheduled_multi_task stage records', async () => {
+        const dir = makeTempDir();
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+        const scheduledTaskStore = new ScheduledTaskStore(path.join(dir, 'app-data', 'scheduled-tasks.json'));
+
+        const record = scheduledTaskStore.create({
+            title: '发布阶段',
+            taskQuery: '发布到 X 并附上上一阶段文件摘要',
+            workRequestId: 'wr-multi',
+            workspacePath: dir,
+            executeAt: new Date('2026-03-23T05:36:08.000Z'),
+            speakResult: false,
+            frozenWorkRequest: {
+                schemaVersion: 1,
+                id: 'wr-multi',
+                frozenAt: '2026-03-23T05:34:08.000Z',
+                mode: 'scheduled_multi_task',
+                sourceText: '1 分钟后做 A，然后再等 1 分钟做 B',
+                workspacePath: dir,
+                schedule: {
+                    executeAt: '2026-03-23T05:35:08.000Z',
+                    timezone: 'Asia/Shanghai',
+                    recurrence: null,
+                    stages: [
+                        {
+                            taskId: 'task-1',
+                            executeAt: '2026-03-23T05:35:08.000Z',
+                        },
+                        {
+                            taskId: 'task-2',
+                            executeAt: '2026-03-23T05:36:08.000Z',
+                            delayMsFromPrevious: 60000,
+                            originalTimeExpression: '1分钟',
+                        },
+                    ],
+                },
+                tasks: [
+                    {
+                        id: 'task-1',
+                        title: 'A',
+                        objective: '先做 A',
+                        constraints: [],
+                        acceptanceCriteria: [],
+                        dependencies: [],
+                        preferredSkills: [],
+                        preferredTools: [],
+                    },
+                    {
+                        id: 'task-2',
+                        title: 'B',
+                        objective: '再做 B',
+                        constraints: [],
+                        acceptanceCriteria: [],
+                        dependencies: ['task-1'],
+                        preferredSkills: [],
+                        preferredTools: [],
+                    },
+                ],
+                clarification: {
+                    required: false,
+                    questions: [],
+                    missingFields: [],
+                    canDefault: true,
+                    assumptions: [],
+                },
+                presentation: {
+                    uiFormat: 'chat_message',
+                    ttsEnabled: false,
+                    ttsMode: 'full',
+                    ttsMaxChars: 0,
+                    language: 'zh-CN',
+                },
+                createdAt: '2026-03-23T05:34:08.000Z',
+            },
+        });
+
+        expect(getScheduledTaskExecutionQuery({ record, workRequestStore: store })).toBe('发布到 X 并附上上一阶段文件摘要');
+    });
+
+    test('derives execution-scoped context from frozen scheduled stage without re-scheduling', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '1分钟后，先把结论写入 reports/a.md。然后再等1分钟，把结果发布到 X 上',
+            workspacePath,
+            workRequestStore: store,
+        });
+        const frozen = prepared.frozenWorkRequest;
+        const stage0TaskId = frozen.tasks[0]?.id;
+        const stage1TaskId = frozen.tasks[1]?.id;
+        expect(stage0TaskId).toBeTruthy();
+        expect(stage1TaskId).toBeTruthy();
+
+        const stage0Scoped = prepareExecutionContextFromFrozen({
+            request: frozen,
+            stageTaskId: stage0TaskId,
+            stageIndex: 0,
+        });
+        expect(stage0Scoped.frozenWorkRequest.mode).toBe('immediate_task');
+        expect(stage0Scoped.frozenWorkRequest.schedule).toBeUndefined();
+        expect(stage0Scoped.frozenWorkRequest.tasks).toHaveLength(1);
+        expect(stage0Scoped.frozenWorkRequest.tasks[0]?.id).toBe(stage0TaskId);
+        expect(stage0Scoped.frozenWorkRequest.deliverables?.length ?? 0).toBeGreaterThan(0);
+        expect(stage0Scoped.frozenWorkRequest.userActionsRequired ?? []).toHaveLength(0);
+
+        const stage1Scoped = prepareExecutionContextFromFrozen({
+            request: frozen,
+            stageTaskId: stage1TaskId,
+            stageIndex: 1,
+        });
+        expect(stage1Scoped.frozenWorkRequest.mode).toBe('immediate_task');
+        expect(stage1Scoped.frozenWorkRequest.schedule).toBeUndefined();
+        expect(stage1Scoped.frozenWorkRequest.tasks).toHaveLength(1);
+        expect(stage1Scoped.frozenWorkRequest.tasks[0]?.id).toBe(stage1TaskId);
+        expect(stage1Scoped.frozenWorkRequest.deliverables ?? []).toHaveLength(0);
+        expect(stage1Scoped.frozenWorkRequest.userActionsRequired ?? []).toHaveLength(0);
+        expect(stage1Scoped.executionQuery).toContain('发布到 X');
+        expect(stage1Scoped.executionQuery).not.toContain('写入 reports/a.md');
+    });
+
+    test('plans only the first stage for sequential scheduled multi-task execution', () => {
+        const request = {
+            tasks: [
+                {
+                    id: 'task-1',
+                    title: '阶段 1',
+                    objective: '先做 A',
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: [],
+                    preferredSkills: [],
+                    preferredTools: [],
+                },
+                {
+                    id: 'task-2',
+                    title: '阶段 2',
+                    objective: '再做 B',
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: ['task-1'],
+                    preferredSkills: [],
+                    preferredTools: [],
+                },
+            ],
+            schedule: {
+                executeAt: '2026-03-23T05:35:08.000Z',
+                timezone: 'Asia/Shanghai',
+                recurrence: null,
+                stages: [
+                    {
+                        taskId: 'task-1',
+                        executeAt: '2026-03-23T05:35:08.000Z',
+                    },
+                    {
+                        taskId: 'task-2',
+                        executeAt: '2026-03-23T05:36:08.000Z',
+                        delayMsFromPrevious: 60_000,
+                        originalTimeExpression: '1分钟',
+                    },
+                ],
+            },
+            deliverables: [],
+            checkpoints: [],
+        } as any;
+
+        const plans = planScheduledExecutionStages({
+            request,
+            fallbackTitle: 'Scheduled Task',
+            fallbackQuery: 'fallback',
+        });
+
+        expect(plans).toHaveLength(1);
+        expect(plans[0]).toMatchObject({
+            taskId: 'task-1',
+            taskQuery: '先做 A',
+            stageIndex: 0,
+            totalStages: 2,
+            executionMode: 'sequential',
+        });
+    });
+
+    test('plans next sequential stage relative to completion time without mutating stage task query', () => {
+        const request = {
+            tasks: [
+                {
+                    id: 'task-1',
+                    title: '阶段 1',
+                    objective: '先做 A',
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: [],
+                    preferredSkills: [],
+                    preferredTools: [],
+                },
+                {
+                    id: 'task-2',
+                    title: '阶段 2',
+                    objective: '再做 B',
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: ['task-1'],
+                    preferredSkills: [],
+                    preferredTools: [],
+                },
+            ],
+            schedule: {
+                executeAt: '2026-03-23T05:35:08.000Z',
+                timezone: 'Asia/Shanghai',
+                recurrence: null,
+                stages: [
+                    {
+                        taskId: 'task-1',
+                        executeAt: '2026-03-23T05:35:08.000Z',
+                    },
+                    {
+                        taskId: 'task-2',
+                        executeAt: '2026-03-23T05:36:08.000Z',
+                        delayMsFromPrevious: 60_000,
+                        originalTimeExpression: '1分钟',
+                    },
+                ],
+            },
+            deliverables: [],
+            checkpoints: [],
+        } as any;
+
+        const nextStage = planNextScheduledExecutionStage({
+            request,
+            fallbackTitle: 'Scheduled Task',
+            fallbackQuery: 'fallback',
+            completedAt: new Date('2026-03-23T05:40:00.000Z'),
+            completedStageIndex: 0,
+            completedStageTaskId: 'task-1',
+        });
+
+        expect(nextStage).not.toBeNull();
+        expect(nextStage?.stageIndex).toBe(1);
+        expect(nextStage?.executionMode).toBe('sequential');
+        expect(nextStage?.executeAt).toBe('2026-03-23T05:41:00.000Z');
+        expect(nextStage?.taskQuery).toBe('再做 B');
     });
 
     test('migrates legacy scheduled task presentation to full TTS on read', () => {
@@ -189,6 +484,13 @@ describe('workRequestRuntime', () => {
             sourceText: '登录 X 后查看时间线并整理一份总结报告',
             workspacePath,
             workRequestStore: store,
+            researchResolvers: {
+                connectedAppStatus: async () => ({
+                    success: true,
+                    summary: 'Connected-app adapter: X login state checked',
+                    connectedApps: ['browser:x-auth'],
+                }),
+            },
         });
 
         expect(prepared.workRequestExecutionPrompt).toContain('User Actions Required');
@@ -233,7 +535,7 @@ describe('workRequestRuntime', () => {
         expect(prepared.frozenWorkRequest.frozenResearchSummary?.sourcesChecked).toContain('connected_app');
     });
 
-    test('times out slow web research and still freezes the contract', async () => {
+    test('times out required web research and freezes with blocking unknowns', async () => {
         const dir = makeTempDir();
         const workspacePath = path.join(dir, 'workspace');
         fs.mkdirSync(workspacePath, { recursive: true });
@@ -262,6 +564,16 @@ describe('workRequestRuntime', () => {
         expect(durationMs).toBeLessThan(500);
         expect(webQuery?.status).toBe('failed');
         expect(prepared.frozenWorkRequest.knownRisks?.some((risk) => risk.includes('Web research failed'))).toBe(true);
+        expect(prepared.frozenWorkRequest.knownRisks?.some((risk) =>
+            risk.includes('Required pre-freeze research is incomplete')
+        )).toBe(true);
+        expect(prepared.frozenWorkRequest.uncertaintyRegistry?.some((item) =>
+            item.status === 'blocking_unknown' && item.topic.startsWith('required_research:')
+        )).toBe(true);
+        expect(prepared.frozenWorkRequest.frozenResearchSummary?.blockingUnknownCount).toBeGreaterThan(0);
+        expect(prepared.executionPlan.steps.some((step) =>
+            step.kind === 'execution' && step.status === 'blocked'
+        )).toBe(true);
         expect(prepared.frozenWorkRequest.frozenResearchSummary?.evidenceCount).toBeGreaterThan(0);
     });
 
@@ -334,6 +646,13 @@ describe('workRequestRuntime', () => {
             sourceText: '登录 X 后查看时间线并整理一份总结报告',
             workspacePath,
             workRequestStore: store,
+            researchResolvers: {
+                connectedAppStatus: async () => ({
+                    success: true,
+                    summary: 'Connected-app adapter: X login status checked',
+                    connectedApps: ['browser:x-auth'],
+                }),
+            },
         });
 
         expect(buildPlanUpdatedPayload(prepared).summary).toContain('Queued');

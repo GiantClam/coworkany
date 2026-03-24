@@ -403,7 +403,29 @@ class DarwinBrowserHarness {
         try {
             const raw = fs.readFileSync(sourceConfigPath, 'utf-8');
             const config = JSON.parse(raw) as Record<string, unknown>;
-            delete config.proxy;
+
+            const existingProxy = (
+                typeof config.proxy === 'object'
+                && config.proxy !== null
+            ) ? config.proxy as Record<string, unknown> : null;
+            if (existingProxy && existingProxy.enabled === true && typeof existingProxy.url === 'string' && existingProxy.url.trim().length > 0) {
+                const existingBypassRaw = typeof existingProxy.bypass === 'string'
+                    ? existingProxy.bypass
+                    : '';
+                const requiredBypassEntries = ['localhost', '127.0.0.1', '::1'];
+                const mergedBypass = Array.from(
+                    new Set(
+                        `${existingBypassRaw},${requiredBypassEntries.join(',')}`
+                            .split(',')
+                            .map((item) => item.trim())
+                            .filter((item) => item.length > 0),
+                    ),
+                );
+                config.proxy = {
+                    ...existingProxy,
+                    bypass: mergedBypass.join(','),
+                };
+            }
 
             const explicitServiceUrl = process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL?.trim();
             const browserUsePort = Number(process.env.BROWSER_USE_PORT ?? 8100);

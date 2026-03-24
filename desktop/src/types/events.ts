@@ -183,6 +183,7 @@ export interface ContractReopenDiff {
 export interface TaskSession {
     taskId: string;
     status: TaskStatus;
+    taskMode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
     isDraft?: boolean;
     title?: string;
     summary?: string;
@@ -208,6 +209,13 @@ export interface TaskSession {
     contractReopenReasons?: string[];
     contractReopenDiff?: ContractReopenDiff;
     contractReopenCount?: number;
+    plannedTasks?: Array<{
+        id: string;
+        title: string;
+        objective: string;
+        dependencies: string[];
+        status?: PlanStep['status'];
+    }>;
     plannedDeliverables?: PlannedDeliverable[];
     plannedCheckpoints?: PlannedCheckpoint[];
     plannedUserActions?: PlannedUserAction[];
@@ -275,8 +283,39 @@ export interface SystemEventItem extends BaseEvent {
 
 export interface TaskCardItem extends BaseEvent {
     type: 'task_card';
+    taskId?: string;
     title: string;
     subtitle?: string;
+    status?: TaskStatus;
+    workflow?: 'single' | 'sequential' | 'parallel' | 'dag';
+    tasks?: Array<{
+        id: string;
+        title: string;
+        status: PlanStep['status'];
+        dependencies: string[];
+    }>;
+    collaboration?: {
+        actionId?: string;
+        title: string;
+        description?: string;
+        blocking?: boolean;
+        questions: string[];
+        instructions: string[];
+        input?: {
+            placeholder?: string;
+            submitLabel?: string;
+        };
+        action?: {
+            label: string;
+        };
+    };
+    result?: {
+        summary?: string;
+        artifacts?: string[];
+        files?: string[];
+        error?: string;
+        suggestion?: string;
+    };
     sections: Array<{
         label: string;
         lines: string[];
@@ -313,6 +352,13 @@ export interface TaskStartedPayload {
 export interface PlanUpdatedPayload {
     summary: string;
     steps: PlanStep[];
+    taskProgress?: Array<{
+        taskId: string;
+        title: string;
+        status: PlanStep['status'];
+        dependencies: string[];
+    }>;
+    currentStepId?: string;
 }
 
 export interface ChatMessagePayload {
@@ -328,6 +374,13 @@ export interface TaskClarificationRequiredPayload {
 
 export interface TaskPlanReadyPayload {
     summary: string;
+    mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    tasks?: Array<{
+        id: string;
+        title: string;
+        objective: string;
+        dependencies: string[];
+    }>;
     deliverables: PlannedDeliverable[];
     checkpoints: PlannedCheckpoint[];
     userActionsRequired: PlannedUserAction[];

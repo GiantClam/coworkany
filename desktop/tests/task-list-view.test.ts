@@ -95,4 +95,79 @@ describe('buildBoardTasks', () => {
         expect(task?.title).toBe('从 skillhub 中安装 skill-vetter');
         expect(task?.description).toBe('从 skillhub 中安装 skill-vetter');
     });
+
+    test('projects task center card for task-mode sessions', () => {
+        const [task] = buildBoardTasks([
+            makeSession({
+                taskId: 'task-card',
+                status: 'running',
+                events: [
+                    {
+                        id: 'event-1',
+                        taskId: 'task-card',
+                        sequence: 1,
+                        type: 'TASK_PLAN_READY',
+                        timestamp: '2026-03-24T09:00:00.000Z',
+                        payload: {
+                            summary: 'Plan ready',
+                            mode: 'immediate_task',
+                            tasks: [
+                                {
+                                    id: 'subtask-1',
+                                    title: 'Collect data',
+                                    objective: 'Collect data',
+                                    dependencies: [],
+                                },
+                            ],
+                            deliverables: [],
+                            checkpoints: [],
+                            userActionsRequired: [],
+                            missingInfo: [],
+                        },
+                    },
+                ],
+            }),
+        ]);
+
+        expect(task?.taskCard?.title).toBe('Task center');
+        expect(task?.taskCard?.tasks?.length).toBe(1);
+    });
+
+    test('builds conversation card for chat-mode sessions', () => {
+        const [task] = buildBoardTasks([
+            makeSession({
+                taskId: 'chat-task',
+                status: 'finished',
+                events: [
+                    {
+                        id: 'event-1',
+                        taskId: 'chat-task',
+                        sequence: 1,
+                        type: 'TASK_PLAN_READY',
+                        timestamp: '2026-03-24T09:00:00.000Z',
+                        payload: {
+                            summary: 'Chat mode plan',
+                            mode: 'chat',
+                            deliverables: [],
+                            checkpoints: [],
+                            userActionsRequired: [],
+                            missingInfo: [],
+                        },
+                    },
+                    {
+                        id: 'event-2',
+                        taskId: 'chat-task',
+                        sequence: 2,
+                        type: 'TEXT_DELTA',
+                        timestamp: '2026-03-24T09:00:01.000Z',
+                        payload: { role: 'assistant', delta: 'hello' },
+                    },
+                ],
+            }),
+        ]);
+
+        expect(task?.taskCard?.title.length).toBeGreaterThan(0);
+        expect(task?.taskCard?.sections.some((section) => section.label.startsWith('Conversation ·'))).toBe(true);
+        expect(task?.taskCard?.tasks).toBeUndefined();
+    });
 });

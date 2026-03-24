@@ -89,11 +89,12 @@ describe('buildTimelineItems', () => {
             .map((item) => item);
 
         expect(taskCards).toHaveLength(1);
-        expect(taskCards[0]?.title).toBe('Task update');
+        expect(taskCards[0]?.title).toBe('Task center');
         expect(taskCards[0]?.subtitle).toBe('Allow Coworkany to continue the PDF export.');
         expect(taskCards[0]?.sections.some((section) => section.label === 'Contract · Changed fields')).toBe(true);
         expect(taskCards[0]?.sections.some((section) => section.label === 'Research · Sources checked')).toBe(true);
         expect(taskCards[0]?.sections.some((section) => section.label === 'Action · Instructions')).toBe(true);
+        expect(taskCards[0]?.collaboration?.input?.submitLabel).toBe('Submit and continue');
     });
 
     test('respects recent-event truncation while reporting hidden count', () => {
@@ -137,12 +138,23 @@ describe('buildTimelineItems', () => {
         expect(result.items[0]?.type).toBe('task_card');
     });
 
-    test('adds a final assistant message when a task finishes without streamed assistant output', () => {
+    test('stores task result in task center card when task finishes', () => {
         const session = makeSession({
             status: 'finished',
             events: [
                 makeEvent({
                     sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Plan ready.',
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
                     type: 'CHAT_MESSAGE',
                     payload: {
                         role: 'user',
@@ -150,7 +162,7 @@ describe('buildTimelineItems', () => {
                     },
                 }),
                 makeEvent({
-                    sequence: 2,
+                    sequence: 3,
                     type: 'TOOL_RESULT',
                     payload: {
                         toolId: 'tool-1',
@@ -159,7 +171,7 @@ describe('buildTimelineItems', () => {
                     },
                 }),
                 makeEvent({
-                    sequence: 3,
+                    sequence: 4,
                     type: 'TASK_FINISHED',
                     payload: {
                         summary: '已从 skillhub 安装并启用技能 `skill-vetter`。',
@@ -169,11 +181,123 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const assistantContents = result.items
+        const taskCards = result.items
+            .filter((item) => item.type === 'task_card')
+            .map((item) => item);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.result?.summary).toBe('已从 skillhub 安装并启用技能 `skill-vetter`。');
+        expect(taskCards[0]?.sections.some((section) => section.label === 'Result · Summary')).toBe(true);
+    });
+
+    test('renders multi-task sequential workflow and task progress in task card', () => {
+        const session = makeSession({
+            status: 'running',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Plan with staged tasks.',
+                        tasks: [
+                            {
+                                id: 'task-a',
+                                title: 'Collect data',
+                                objective: 'Collect required source data.',
+                                dependencies: [],
+                            },
+                            {
+                                id: 'task-b',
+                                title: 'Generate report',
+                                objective: 'Generate final report.',
+                                dependencies: ['task-a'],
+                            },
+                        ],
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'PLAN_UPDATED',
+                    payload: {
+                        summary: 'Execution is running.',
+                        steps: [],
+                        taskProgress: [
+                            {
+                                taskId: 'task-a',
+                                title: 'Collect data',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                taskId: 'task-b',
+                                title: 'Generate report',
+                                status: 'in_progress',
+                                dependencies: ['task-a'],
+                            },
+                        ],
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = result.items
+            .filter((item) => item.type === 'task_card')
+            .map((item) => item);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.workflow).toBe('sequential');
+        expect(taskCards[0]?.tasks?.[0]?.status).toBe('completed');
+        expect(taskCards[0]?.tasks?.[1]?.status).toBe('in_progress');
+    });
+
+    test('keeps chat-mode conversations in message timeline without task card', () => {
+        const session = makeSession({
+            status: 'finished',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Chat mode plan.',
+                        mode: 'chat',
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TEXT_DELTA',
+                    payload: {
+                        role: 'assistant',
+                        delta: '你好，',
+                    },
+                }),
+                makeEvent({
+                    sequence: 3,
+                    type: 'TEXT_DELTA',
+                    payload: {
+                        role: 'assistant',
+                        delta: '今天需要我帮你做什么？',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = result.items.filter((item) => item.type === 'task_card');
+        const assistantMessages = result.items
             .filter((item) => item.type === 'assistant_message')
             .map((item) => item.content);
 
-        expect(assistantContents).toEqual(['已从 skillhub 安装并启用技能 `skill-vetter`。']);
+        expect(taskCards).toHaveLength(0);
+        expect(assistantMessages).toEqual(['你好，今天需要我帮你做什么？']);
     });
 
     test('renders task status updates as system events', () => {

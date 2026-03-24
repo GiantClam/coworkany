@@ -5,6 +5,7 @@ import {
     type NormalizedWorkRequest,
     type ResearchEvidence,
     type ResearchQuery,
+    type UncertaintyItem,
 } from './workRequestSchema';
 import { WorkRequestStore } from './workRequestStore';
 
@@ -35,6 +36,7 @@ export type ResearchLoopOptions = {
 
 const DEFAULT_WEB_RESEARCH_TIMEOUT_MS = 4000;
 const DEFAULT_CONNECTED_APP_TIMEOUT_MS = 2500;
+const REQUIRED_RESEARCH_BLOCKING_TOPIC_PREFIX = 'required_research:';
 
 function dedupeStrings(values: string[]): string[] {
     return Array.from(new Set(values.filter(Boolean)));
@@ -57,6 +59,33 @@ function appendEvidence(evidence: ResearchEvidence[], next: Omit<ResearchEvidenc
             ...next,
         },
     ];
+}
+
+function toRequiredResearchBlockingTopic(query: ResearchQuery): string {
+    return `${REQUIRED_RESEARCH_BLOCKING_TOPIC_PREFIX}${query.id}`;
+}
+
+function isRequiredResearchBlocking(query: ResearchQuery): boolean {
+    return query.required && (query.status === 'failed' || query.status === 'skipped');
+}
+
+function buildRequiredResearchBlockingUnknowns(input: {
+    queries: ResearchQuery[];
+    evidence: ResearchEvidence[];
+}): UncertaintyItem[] {
+    const supportingEvidenceIds = input.evidence.map((item) => item.id);
+
+    return input.queries
+        .filter(isRequiredResearchBlocking)
+        .map((query) => ({
+            id: randomUUID(),
+            topic: toRequiredResearchBlockingTopic(query),
+            status: 'blocking_unknown' as const,
+            statement: `Required pre-freeze research did not complete successfully: ${query.objective}`,
+            whyItMatters: 'Coworkany cannot safely continue execution without the required research evidence.',
+            question: `Please provide the missing data or allow Coworkany to retry this research step: ${query.objective}`,
+            supportingEvidenceIds,
+        }));
 }
 
 function completeConversationResearch(
@@ -367,10 +396,21 @@ async function runPreFreezeResearchLoopInternal(input: {
         }
     }
 
+    const nonResearchBlockingUnknowns = (request.uncertaintyRegistry ?? [])
+        .filter((item) => !item.topic.startsWith(REQUIRED_RESEARCH_BLOCKING_TOPIC_PREFIX));
+    const requiredResearchBlockingUnknowns = buildRequiredResearchBlockingUnknowns({
+        queries: updatedQueries,
+        evidence,
+    });
+    if (requiredResearchBlockingUnknowns.length > 0) {
+        risks.push('Required pre-freeze research is incomplete; execution contract remains blocked until missing research is resolved.');
+    }
+
     return {
         ...request,
         researchQueries: updatedQueries,
         researchEvidence: evidence,
+        uncertaintyRegistry: [...nonResearchBlockingUnknowns, ...requiredResearchBlockingUnknowns],
         knownRisks: dedupeStrings(risks),
     };
 }

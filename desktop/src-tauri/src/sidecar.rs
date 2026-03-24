@@ -7,14 +7,21 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
+use std::net::Shutdown;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
@@ -49,6 +56,17 @@ struct SidecarProxySettings {
 #[serde(rename_all = "camelCase")]
 struct SidecarLlmConfig {
     proxy: Option<SidecarProxySettings>,
+}
+
+const STDERR_NOISE_LOG_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SidecarStderrCategory {
+    Heartbeat,
+    LlmConfig,
+    IpcDebug,
+    RoutineInfo,
+    Important,
 }
 
 // ============================================================================
@@ -258,11 +276,62 @@ fn chrono_now() -> String {
 
 pub struct SidecarManager {
     child: Option<Child>,
-    stdin: Option<Arc<Mutex<ChildStdin>>>,
+    command_writer: Option<SharedCommandWriter>,
     stdout_handle: Option<thread::JoinHandle<()>>,
     stderr_handle: Option<thread::JoinHandle<()>>,
     pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
     transport_healthy: Arc<AtomicBool>,
+}
+
+enum CommandWriter {
+    Child(std::process::ChildStdin),
+    #[cfg(unix)]
+    Unix(UnixStream),
+    #[cfg(windows)]
+    WindowsPipe(std::fs::File),
+}
+
+impl CommandWriter {
+    fn shutdown(&mut self) {
+        #[cfg(unix)]
+        if let Self::Unix(stream) = self {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        #[cfg(windows)]
+        if let Self::WindowsPipe(file) = self {
+            let _ = file.flush();
+        }
+    }
+}
+
+impl Write for CommandWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Child(stdin) => stdin.write(buf),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.write(buf),
+            #[cfg(windows)]
+            Self::WindowsPipe(file) => file.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Child(stdin) => stdin.flush(),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.flush(),
+            #[cfg(windows)]
+            Self::WindowsPipe(file) => file.flush(),
+        }
+    }
+}
+
+type SharedCommandWriter = Arc<Mutex<CommandWriter>>;
+
+struct AttachedSingletonTransport {
+    reader: Box<dyn Read + Send>,
+    writer: SharedCommandWriter,
+    descriptor: String,
 }
 
 impl SidecarManager {
@@ -286,7 +355,7 @@ impl SidecarManager {
     pub fn new() -> Self {
         Self {
             child: None,
-            stdin: None,
+            command_writer: None,
             stdout_handle: None,
             stderr_handle: None,
             pending_responses: Arc::new(Mutex::new(HashMap::new())),
@@ -296,19 +365,48 @@ impl SidecarManager {
 
     /// Spawn the sidecar process and start listening for events
     pub fn spawn(&mut self, app_handle: AppHandle) -> Result<(), SidecarError> {
-        if self.child.is_some() {
-            warn!("Sidecar already running, skipping spawn");
+        if self.transport_healthy.load(Ordering::SeqCst) && self.command_writer.is_some() {
+            warn!("Sidecar transport already running, skipping spawn");
             return Ok(());
         }
 
-        info!("Spawning sidecar process...");
+        info!("Ensuring sidecar transport...");
         self.transport_healthy = Arc::new(AtomicBool::new(true));
 
         let app_dir = resolve_app_dir();
         let app_data_dir = resolve_app_data_dir(&app_handle);
+        let mut launch_mode = "development".to_string();
+
+        if let Some(attached) = Self::try_attach_singleton_transport(&app_data_dir)? {
+            info!(
+                "Attached to existing sidecar singleton transport: {}",
+                attached.descriptor
+            );
+            launch_mode = "singleton_attach".to_string();
+            self.command_writer = Some(attached.writer.clone());
+            self.child = None;
+
+            let runtime_context = build_platform_runtime_context(&app_handle, Some(&launch_mode));
+            self.start_reader_threads(attached.reader, None, app_handle, attached.writer);
+
+            if let Err(error) = self.send_runtime_bootstrap(&runtime_context) {
+                self.invalidate_transport("failed to bootstrap attached sidecar runtime context");
+                return Err(error);
+            }
+            if let Err(error) = self.request_runtime_snapshot() {
+                warn!(
+                    "Failed to request runtime snapshot after sidecar attach: {}",
+                    error
+                );
+            }
+
+            return Ok(());
+        }
+
+        info!("No reusable sidecar transport found; spawning new sidecar process");
+
         let force_development = Self::force_development_sidecar();
         let prefer_packaged = Self::running_from_app_bundle();
-        let mut launch_mode = "development".to_string();
         let packaged = if force_development || !prefer_packaged {
             None
         } else {
@@ -336,37 +434,26 @@ impl SidecarManager {
         info!("Sidecar spawned with PID: {:?}", child.id());
 
         // Take ownership of stdin/stdout/stderr
-        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("Failed to get stdin")));
+        let command_writer: SharedCommandWriter = Arc::new(Mutex::new(CommandWriter::Child(
+            child.stdin.take().expect("Failed to get stdin"),
+        )));
         let stdout = child.stdout.take().expect("Failed to get stdout");
         let stderr = child.stderr.take().expect("Failed to get stderr");
-        self.stdin = Some(stdin.clone());
+        self.command_writer = Some(command_writer.clone());
+        self.child = Some(child);
 
         let runtime_context = build_platform_runtime_context(&app_handle, Some(&launch_mode));
-        let transport_healthy = self.transport_healthy.clone();
+        self.start_reader_threads(Box::new(stdout), Some(stderr), app_handle, command_writer);
 
-        // Spawn stdout reader thread
-        let pending_responses = self.pending_responses.clone();
-        let stdout_handle = thread::spawn(move || {
-            Self::stdout_reader_loop(
-                stdout,
-                app_handle,
-                stdin,
-                pending_responses,
-                transport_healthy,
-            );
-        });
-        self.stdout_handle = Some(stdout_handle);
-
-        // Spawn stderr reader thread
-        let stderr_handle = thread::spawn(move || {
-            Self::stderr_reader_loop(stderr);
-        });
-        self.stderr_handle = Some(stderr_handle);
-
-        self.child = Some(child);
         if let Err(error) = self.send_runtime_bootstrap(&runtime_context) {
             self.invalidate_transport("failed to bootstrap sidecar runtime context");
             return Err(error);
+        }
+        if let Err(error) = self.request_runtime_snapshot() {
+            warn!(
+                "Failed to request runtime snapshot after sidecar spawn: {}",
+                error
+            );
         }
 
         Ok(())
@@ -435,6 +522,16 @@ impl SidecarManager {
         self.send_raw_command(command)
     }
 
+    fn request_runtime_snapshot(&self) -> Result<(), SidecarError> {
+        let command = json!({
+            "id": Uuid::new_v4().to_string(),
+            "timestamp": chrono_now(),
+            "type": "get_runtime_snapshot",
+            "payload": {}
+        });
+        self.send_raw_command(command)
+    }
+
     /// Shutdown the sidecar process
     pub fn shutdown(&mut self) {
         self.transport_healthy.store(false, Ordering::SeqCst);
@@ -443,11 +540,10 @@ impl SidecarManager {
             "sidecar_shutdown",
             "Sidecar was shut down before the request completed",
         );
+        self.close_command_writer();
+
         if let Some(mut child) = self.child.take() {
             info!("Shutting down sidecar...");
-
-            // Drop stdin to signal EOF
-            drop(self.stdin.take());
 
             // Give it a moment to exit gracefully
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -469,7 +565,7 @@ impl SidecarManager {
         }
 
         fail_pending_responses(&self.pending_responses, "sidecar_disconnected", reason);
-        self.stdin = None;
+        self.close_command_writer();
 
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
@@ -480,7 +576,7 @@ impl SidecarManager {
     /// Check if sidecar is running
     pub fn is_running(&mut self) -> bool {
         if !self.transport_healthy.load(Ordering::SeqCst) {
-            if self.child.is_some() || self.stdin.is_some() {
+            if self.child.is_some() || self.command_writer.is_some() {
                 self.invalidate_transport("sidecar transport marked unhealthy");
             }
             return false;
@@ -494,7 +590,7 @@ impl SidecarManager {
                     warn!("Sidecar process exited with status: {:?}", status);
                     // Clean up the dead process
                     self.child = None;
-                    self.stdin = None;
+                    self.command_writer = None;
                     false
                 }
                 Ok(None) => {
@@ -507,8 +603,50 @@ impl SidecarManager {
                 }
             }
         } else {
-            false
+            self.command_writer.is_some()
         }
+    }
+
+    fn start_reader_threads(
+        &mut self,
+        reader: Box<dyn Read + Send>,
+        stderr: Option<std::process::ChildStderr>,
+        app_handle: AppHandle,
+        command_writer: SharedCommandWriter,
+    ) {
+        let transport_healthy = self.transport_healthy.clone();
+        let pending_responses = self.pending_responses.clone();
+
+        let stdout_handle = thread::spawn(move || {
+            Self::stdout_reader_loop(
+                reader,
+                app_handle,
+                command_writer,
+                pending_responses,
+                transport_healthy,
+            );
+        });
+        self.stdout_handle = Some(stdout_handle);
+
+        self.stderr_handle = stderr.map(|stderr| {
+            thread::spawn(move || {
+                Self::stderr_reader_loop(stderr);
+            })
+        });
+    }
+
+    fn close_command_writer(&mut self) {
+        let Some(command_writer) = self.command_writer.take() else {
+            return;
+        };
+
+        match command_writer.lock() {
+            Ok(mut guard) => guard.shutdown(),
+            Err(error) => warn!(
+                "Failed to lock sidecar command writer for shutdown: {}",
+                error
+            ),
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -516,9 +654,9 @@ impl SidecarManager {
     // -------------------------------------------------------------------------
 
     fn stdout_reader_loop(
-        stdout: ChildStdout,
+        stdout: Box<dyn Read + Send>,
         app_handle: AppHandle,
-        stdin: Arc<Mutex<ChildStdin>>,
+        command_writer: SharedCommandWriter,
         pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
         transport_healthy: Arc<AtomicBool>,
     ) {
@@ -564,7 +702,11 @@ impl SidecarManager {
                                 }
                             }
                             Some(SidecarMessageKind::IpcCommand) => {
-                                handle_sidecar_command(message, app_handle.clone(), stdin.clone());
+                                handle_sidecar_command(
+                                    message,
+                                    app_handle.clone(),
+                                    command_writer.clone(),
+                                );
                             }
                             None => warn!("Ignoring unclassified sidecar message: {}", line),
                         },
@@ -593,8 +735,81 @@ impl SidecarManager {
         let _ = app_handle.emit("sidecar-disconnected", ());
     }
 
+    fn classify_sidecar_stderr_line(line: &str) -> SidecarStderrCategory {
+        if line.contains("[Heartbeat]") {
+            return SidecarStderrCategory::Heartbeat;
+        }
+        if line.starts_with("[LlmConfig] Loaded config")
+            || line.starts_with("[LlmConfig] Search provider configured")
+        {
+            return SidecarStderrCategory::LlmConfig;
+        }
+        if line.starts_with("[DEBUG] stdin data chunk")
+            || line.starts_with("[DEBUG] Received line:")
+            || line.starts_with("[DEBUG] Parsed JSON")
+            || line.starts_with("[DEBUG] Valid command, handling:")
+        {
+            return SidecarStderrCategory::IpcDebug;
+        }
+        if line.starts_with("[INFO]") || line.starts_with("[LOG]") {
+            return SidecarStderrCategory::RoutineInfo;
+        }
+        SidecarStderrCategory::Important
+    }
+
+    fn is_noisy_sidecar_stderr_category(category: SidecarStderrCategory) -> bool {
+        matches!(
+            category,
+            SidecarStderrCategory::Heartbeat
+                | SidecarStderrCategory::LlmConfig
+                | SidecarStderrCategory::IpcDebug
+        )
+    }
+
+    fn sidecar_stderr_category_label(category: SidecarStderrCategory) -> &'static str {
+        match category {
+            SidecarStderrCategory::Heartbeat => "heartbeat",
+            SidecarStderrCategory::LlmConfig => "llm-config",
+            SidecarStderrCategory::IpcDebug => "ipc-debug",
+            SidecarStderrCategory::RoutineInfo => "info",
+            SidecarStderrCategory::Important => "important",
+        }
+    }
+
+    fn is_likely_error_stderr_line(line: &str) -> bool {
+        line.contains("[ERR]")
+            || line.contains("[ERROR]")
+            || line.to_ascii_lowercase().contains("error")
+            || line.to_ascii_lowercase().contains("failed")
+    }
+
+    fn log_sidecar_stderr_line(line: &str, category: SidecarStderrCategory) {
+        match category {
+            SidecarStderrCategory::Heartbeat
+            | SidecarStderrCategory::LlmConfig
+            | SidecarStderrCategory::IpcDebug => {
+                debug!(
+                    "Sidecar[{}] {}",
+                    Self::sidecar_stderr_category_label(category),
+                    line
+                );
+            }
+            SidecarStderrCategory::RoutineInfo => {
+                info!("Sidecar {}", line);
+            }
+            SidecarStderrCategory::Important => {
+                if Self::is_likely_error_stderr_line(line) {
+                    error!("Sidecar {}", line);
+                } else {
+                    warn!("Sidecar {}", line);
+                }
+            }
+        }
+    }
+
     fn stderr_reader_loop(stderr: std::process::ChildStderr) {
         let reader = BufReader::new(stderr);
+        let mut noisy_state: HashMap<SidecarStderrCategory, (Instant, usize)> = HashMap::new();
 
         for line_result in reader.lines() {
             match line_result {
@@ -602,14 +817,66 @@ impl SidecarManager {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    // Log as warn/info to keep it visible but distinct
-                    warn!("Sidecar stderr: {}", line);
+                    let category = Self::classify_sidecar_stderr_line(&line);
+                    if Self::is_noisy_sidecar_stderr_category(category) {
+                        let now = Instant::now();
+                        let entry = noisy_state
+                            .entry(category)
+                            .or_insert_with(|| (now - STDERR_NOISE_LOG_INTERVAL, 0));
+
+                        if category == SidecarStderrCategory::Heartbeat {
+                            if now.duration_since(entry.0) >= STDERR_NOISE_LOG_INTERVAL {
+                                if entry.1 > 0 {
+                                    debug!(
+                                        "Sidecar[{}]: suppressed {} similar lines in last {}s",
+                                        Self::sidecar_stderr_category_label(category),
+                                        entry.1,
+                                        STDERR_NOISE_LOG_INTERVAL.as_secs()
+                                    );
+                                    entry.1 = 0;
+                                }
+                                entry.0 = now;
+                            }
+                            // Fully silence heartbeat samples; keep only suppression summaries.
+                            entry.1 += 1;
+                            continue;
+                        }
+
+                        if now.duration_since(entry.0) < STDERR_NOISE_LOG_INTERVAL {
+                            entry.1 += 1;
+                            continue;
+                        }
+
+                        if entry.1 > 0 {
+                            debug!(
+                                "Sidecar[{}]: suppressed {} similar lines in last {}s",
+                                Self::sidecar_stderr_category_label(category),
+                                entry.1,
+                                STDERR_NOISE_LOG_INTERVAL.as_secs()
+                            );
+                            entry.1 = 0;
+                        }
+                        entry.0 = now;
+                    }
+
+                    Self::log_sidecar_stderr_line(&line, category);
                 }
                 Err(e) => {
                     error!("Error reading from sidecar stderr: {}", e);
                     break;
                 }
             }
+        }
+
+        for (category, (_last_logged, suppressed_count)) in noisy_state {
+            if suppressed_count == 0 {
+                continue;
+            }
+            debug!(
+                "Sidecar[{}]: suppressed {} similar lines before stderr closed",
+                Self::sidecar_stderr_category_label(category),
+                suppressed_count
+            );
         }
         debug!("Stderr reader loop ended");
     }
@@ -618,8 +885,107 @@ impl SidecarManager {
         if !self.transport_healthy.load(Ordering::SeqCst) {
             return Err(SidecarError::NotRunning);
         }
-        let stdin = self.stdin.as_ref().ok_or(SidecarError::NotRunning)?;
-        write_json_line(stdin, line)
+        let command_writer = self
+            .command_writer
+            .as_ref()
+            .ok_or(SidecarError::NotRunning)?;
+        write_json_line(command_writer, line)
+    }
+
+    fn try_attach_singleton_transport(
+        app_data_dir: &str,
+    ) -> Result<Option<AttachedSingletonTransport>, SidecarError> {
+        #[cfg(unix)]
+        {
+            let socket_path = Self::sidecar_singleton_socket_path(app_data_dir);
+            let stream = match UnixStream::connect(&socket_path) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    use std::io::ErrorKind;
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::NotFound
+                            | ErrorKind::ConnectionRefused
+                            | ErrorKind::ConnectionReset
+                            | ErrorKind::AddrNotAvailable
+                    ) {
+                        return Ok(None);
+                    }
+                    warn!(
+                        "Failed to connect sidecar singleton socket {}: {}",
+                        socket_path, error
+                    );
+                    return Ok(None);
+                }
+            };
+
+            let reader_stream = stream.try_clone()?;
+            let writer: SharedCommandWriter = Arc::new(Mutex::new(CommandWriter::Unix(stream)));
+
+            return Ok(Some(AttachedSingletonTransport {
+                reader: Box::new(reader_stream),
+                writer,
+                descriptor: format!("unix:{}", socket_path),
+            }));
+        }
+
+        #[cfg(windows)]
+        {
+            let socket_path = Self::sidecar_singleton_socket_path(app_data_dir);
+            let mut last_busy_error: Option<std::io::Error> = None;
+
+            for _ in 0..3 {
+                match std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&socket_path)
+                {
+                    Ok(pipe) => {
+                        let reader_pipe = pipe.try_clone()?;
+                        let writer: SharedCommandWriter =
+                            Arc::new(Mutex::new(CommandWriter::WindowsPipe(pipe)));
+
+                        return Ok(Some(AttachedSingletonTransport {
+                            reader: Box::new(reader_pipe),
+                            writer,
+                            descriptor: format!("pipe:{}", socket_path),
+                        }));
+                    }
+                    Err(error) => {
+                        use std::io::ErrorKind;
+                        if error.kind() == ErrorKind::NotFound || error.raw_os_error() == Some(2) {
+                            return Ok(None);
+                        }
+                        if error.raw_os_error() == Some(231) {
+                            // ERROR_PIPE_BUSY: retry briefly to avoid racing startup.
+                            last_busy_error = Some(error);
+                            std::thread::sleep(std::time::Duration::from_millis(40));
+                            continue;
+                        }
+                        warn!(
+                            "Failed to connect sidecar singleton pipe {}: {}",
+                            socket_path, error
+                        );
+                        return Ok(None);
+                    }
+                }
+            }
+
+            if let Some(error) = last_busy_error {
+                warn!(
+                    "Sidecar singleton pipe remained busy after retries {}: {}",
+                    socket_path, error
+                );
+            }
+
+            return Ok(None);
+        }
+
+        #[cfg(all(not(unix), not(windows)))]
+        {
+            let _ = app_data_dir;
+            Ok(None)
+        }
     }
 
     fn spawn_packaged_sidecar(
@@ -651,6 +1017,7 @@ impl SidecarManager {
             command.env("COWORKANY_PLAYWRIGHT_BRIDGE", bridge_script);
         }
 
+        Self::apply_singleton_env(&mut command, app_data_dir);
         Self::apply_proxy_env(&mut command, app_data_dir);
         command.spawn().map_err(SidecarError::from)
     }
@@ -678,6 +1045,7 @@ impl SidecarManager {
                 .stderr(Stdio::piped())
                 .env("COWORKANY_APP_DIR", app_dir)
                 .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+            Self::apply_singleton_env(&mut node_cmd, app_data_dir);
             Self::apply_proxy_env(&mut node_cmd, app_data_dir);
 
             return node_cmd.spawn().map_err(SidecarError::from);
@@ -697,6 +1065,7 @@ impl SidecarManager {
             .stderr(Stdio::piped())
             .env("COWORKANY_APP_DIR", app_dir)
             .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+        Self::apply_singleton_env(&mut npx_cmd, app_data_dir);
         Self::apply_proxy_env(&mut npx_cmd, app_data_dir);
 
         npx_cmd
@@ -711,6 +1080,7 @@ impl SidecarManager {
                     .stderr(Stdio::piped())
                     .env("COWORKANY_APP_DIR", app_dir)
                     .env("COWORKANY_APP_DATA_DIR", app_data_dir);
+                Self::apply_singleton_env(&mut bun_cmd, app_data_dir);
                 Self::apply_proxy_env(&mut bun_cmd, app_data_dir);
                 bun_cmd.spawn()
             })
@@ -781,6 +1151,32 @@ impl SidecarManager {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
         Some((url, bypass))
+    }
+
+    fn sidecar_singleton_socket_path(app_data_dir: &str) -> String {
+        let mut hasher = DefaultHasher::new();
+        app_data_dir.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+
+        #[cfg(target_os = "windows")]
+        {
+            return format!(r"\\.\pipe\coworkany-sidecar-{fingerprint:016x}");
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            return std::env::temp_dir()
+                .join(format!("coworkany-sidecar-{fingerprint:016x}.sock"))
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+
+    fn apply_singleton_env(command: &mut Command, app_data_dir: &str) {
+        let socket_path = Self::sidecar_singleton_socket_path(app_data_dir);
+        command
+            .env("COWORKANY_SIDECAR_SINGLETON", "1")
+            .env("COWORKANY_SIDECAR_SOCKET_PATH", socket_path);
     }
 
     fn apply_proxy_env(command: &mut Command, app_data_dir: &str) {
@@ -1000,7 +1396,7 @@ fn operation_as_str(operation: &PatchOperation) -> &'static str {
 fn handle_sidecar_command(
     message: serde_json::Value,
     app_handle: AppHandle,
-    stdin: Arc<Mutex<ChildStdin>>,
+    command_writer: SharedCommandWriter,
 ) {
     let msg_type = match message.get("type").and_then(|v| v.as_str()) {
         Some(value) => value.to_string(),
@@ -1023,7 +1419,7 @@ fn handle_sidecar_command(
 
                 let Some(request) = request else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "request_effect_response",
@@ -1073,10 +1469,13 @@ fn handle_sidecar_command(
                 // Surface the same IPC response to the renderer so task state can
                 // immediately reflect awaiting confirmations (no sidecar round-trip needed).
                 if let Err(error) = app_handle.emit("ipc-response", response_msg.clone()) {
-                    warn!("Failed to emit ipc-response for request_effect_response: {}", error);
+                    warn!(
+                        "Failed to emit ipc-response for request_effect_response: {}",
+                        error
+                    );
                 }
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "propose_patch" => {
@@ -1094,7 +1493,7 @@ fn handle_sidecar_command(
 
                 let Some(patch) = patch else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "propose_patch_response",
@@ -1131,7 +1530,7 @@ fn handle_sidecar_command(
                     Ok(value) => value,
                     Err(err) => {
                         send_raw(
-                            &stdin,
+                            &command_writer,
                             build_error_response(&command_id, "propose_patch_response", &err),
                         );
                         return;
@@ -1160,7 +1559,7 @@ fn handle_sidecar_command(
                     Err(err) => build_error_response(&command_id, "propose_patch_response", &err),
                 };
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "apply_patch" => {
@@ -1180,7 +1579,7 @@ fn handle_sidecar_command(
 
                 let Some(patch_id) = patch_id else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "apply_patch_response",
@@ -1221,7 +1620,7 @@ fn handle_sidecar_command(
                                         "error": response.denial_reason.clone().unwrap_or_else(|| "awaiting_confirmation".to_string())
                                     }
                                 });
-                                send_raw(&stdin, response_msg);
+                                send_raw(&command_writer, response_msg);
                                 return;
                             }
                         }
@@ -1270,7 +1669,7 @@ fn handle_sidecar_command(
                     }
                 }
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "reject_patch" => {
@@ -1300,7 +1699,7 @@ fn handle_sidecar_command(
                     }
                 });
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "register_agent_identity" => {
@@ -1317,7 +1716,7 @@ fn handle_sidecar_command(
 
                 let Some(identity) = identity else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "register_agent_identity_response",
@@ -1345,7 +1744,7 @@ fn handle_sidecar_command(
                     }
                 };
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "record_agent_delegation" => {
@@ -1371,7 +1770,7 @@ fn handle_sidecar_command(
 
                 let Some(delegation) = delegation else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "record_agent_delegation_response",
@@ -1400,7 +1799,7 @@ fn handle_sidecar_command(
                     }
                 };
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "report_mcp_gateway_decision" => {
@@ -1417,7 +1816,7 @@ fn handle_sidecar_command(
 
                 let Some(decision) = decision else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "report_mcp_gateway_decision_response",
@@ -1444,7 +1843,7 @@ fn handle_sidecar_command(
                     ),
                 };
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         "report_runtime_security_alert" => {
@@ -1461,7 +1860,7 @@ fn handle_sidecar_command(
 
                 let Some(alert) = alert else {
                     send_raw(
-                        &stdin,
+                        &command_writer,
                         build_error_response(
                             &command_id,
                             "report_runtime_security_alert_response",
@@ -1488,7 +1887,7 @@ fn handle_sidecar_command(
                     ),
                 };
 
-                send_raw(&stdin, response_msg);
+                send_raw(&command_writer, response_msg);
             });
         }
         _ => {
@@ -1497,8 +1896,8 @@ fn handle_sidecar_command(
     }
 }
 
-fn write_json_line(stdin: &Arc<Mutex<ChildStdin>>, line: &str) -> Result<(), SidecarError> {
-    let mut guard = stdin
+fn write_json_line(command_writer: &SharedCommandWriter, line: &str) -> Result<(), SidecarError> {
+    let mut guard = command_writer
         .lock()
         .map_err(|e| SidecarError::SendError(e.to_string()))?;
     writeln!(&mut *guard, "{}", line).map_err(|e| SidecarError::SendError(e.to_string()))?;
@@ -1508,11 +1907,11 @@ fn write_json_line(stdin: &Arc<Mutex<ChildStdin>>, line: &str) -> Result<(), Sid
     Ok(())
 }
 
-fn send_raw(stdin: &Arc<Mutex<ChildStdin>>, message: serde_json::Value) {
+fn send_raw(command_writer: &SharedCommandWriter, message: serde_json::Value) {
     if let Ok(line) = serde_json::to_string(&message) {
-        if let Err(error) = write_json_line(stdin, &line) {
+        if let Err(error) = write_json_line(command_writer, &line) {
             error!(
-                "Failed to write sidecar response to stdin bridge: {}",
+                "Failed to write sidecar response to transport bridge: {}",
                 error
             );
         }
@@ -1615,9 +2014,13 @@ mod tests {
     use super::SidecarManager;
     use std::collections::HashMap;
     use std::fs;
+    use std::io::{BufRead, BufReader};
+    #[cfg(unix)]
+    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::{LazyLock, Mutex};
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -1705,6 +2108,45 @@ mod tests {
             None => std::env::remove_var("COWORKANY_PROXY_URL"),
         }
 
+        let _ = fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_attach_singleton_transport_connects_existing_unix_socket() {
+        let app_data_dir = unique_temp_dir("sidecar-singleton-attach");
+        fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        let app_data_dir_str = app_data_dir.to_string_lossy().to_string();
+
+        let socket_path = SidecarManager::sidecar_singleton_socket_path(&app_data_dir_str);
+        let socket_path_buf = PathBuf::from(&socket_path);
+        if socket_path_buf.exists() {
+            let _ = fs::remove_file(&socket_path_buf);
+        }
+
+        let listener = UnixListener::bind(&socket_path_buf).expect("bind singleton socket");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept singleton connection");
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .expect("read command from singleton client");
+            line
+        });
+
+        let attached = SidecarManager::try_attach_singleton_transport(&app_data_dir_str)
+            .expect("attach to singleton transport")
+            .expect("singleton transport should exist");
+        assert!(attached.descriptor.contains("unix:"));
+        super::write_json_line(&attached.writer, "{\"type\":\"ping\"}")
+            .expect("write command through singleton transport");
+        drop(attached);
+
+        let line = server.join().expect("join socket server thread");
+        assert_eq!(line.trim(), "{\"type\":\"ping\"}");
+
+        let _ = fs::remove_file(&socket_path_buf);
         let _ = fs::remove_dir_all(&app_data_dir);
     }
 }

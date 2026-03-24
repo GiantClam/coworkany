@@ -192,6 +192,18 @@ const LOGIN_HINT_PATTERNS: RegExp[] = [
     /请先登录/,
 ];
 
+const LOGIN_HELP_SIGNAL_PATTERNS: RegExp[] = [
+    /please.*(login|log in|sign in)/i,
+    /manual (assist|assistance|intervention)/i,
+    /waiting for user/i,
+    /please.*reply/i,
+    /回复我/,
+    /已处理，继续/,
+    /已完成，继续/,
+    /请先登录/,
+    /请.*(手动|完成|继续)/,
+];
+
 const READY_FOR_FOLLOW_UP = 'ready for follow-up';
 
 function normalize(text: string): string {
@@ -267,6 +279,10 @@ function hasExternalFailureSignal(text: string): boolean {
 
 function hasLoginHint(text: string): boolean {
     return LOGIN_HINT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function hasLoginHelpSignal(text: string): boolean {
+    return LOGIN_HELP_SIGNAL_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 async function invokeTauri<T>(page: Page, cmd: string, input: Record<string, unknown>): Promise<T> {
@@ -379,6 +395,7 @@ function evaluateTaskResult(input: TaskInput, taskId: string, taskEvents: Sideca
 
     const markerSeen = lowerText.includes(input.marker.toLowerCase());
     const loginPrompted = hasLoginHint(mergedText);
+    const loginHelpSignal = hasLoginHelpSignal(mergedText);
 
     const targetDomainSeen = input.expectedDomains.some((domain) => {
         const fromNavigate = navigateCalls.some((event) => {
@@ -408,6 +425,7 @@ function evaluateTaskResult(input: TaskInput, taskId: string, taskEvents: Sideca
             !loginPrompted
             || suspendedCount > 0
             || resumedCount > 0
+            || loginHelpSignal
         );
 
     const completionExpectationMet = failed
@@ -422,7 +440,12 @@ function evaluateTaskResult(input: TaskInput, taskId: string, taskEvents: Sideca
             )
         );
 
-    const externalFailure = hasExternalFailureSignal(`${failedError}\n${mergedText}`);
+    const externalFailureSignal = hasExternalFailureSignal(`${failedError}\n${mergedText}`);
+    const externalFailure = externalFailureSignal && (
+        failed
+        || !started
+        || !completionExpectationMet
+    );
 
     return {
         taskId,

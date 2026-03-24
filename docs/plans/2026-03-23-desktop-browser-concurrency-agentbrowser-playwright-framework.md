@@ -79,3 +79,28 @@
 - 测试框架：`desktop/tests/utils/browserConcurrentScenarioFramework.ts`
 - 批量场景入口：`desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts`
 - 运行产物目录：`artifacts/desktop-browser-concurrent-scenarios/`
+
+---
+
+## 6) Darwin 稳定化与并发实跑结果（2026-03-23）
+
+### 关键稳定化
+1. `tauriFixtureNoChrome` 增加可选共享 CDP Chrome 启动（默认端口 `9224`），避免 smart backend 因无共享会话降级。
+2. 新增可选隔离 appData（`COWORKANY_TEST_ISOLATE_APP_DATA=true`）：
+   - 复制本机 `llm-config.json`
+   - 保留代理配置，但强制补齐 `localhost,127.0.0.1,::1` bypass
+   - 固定 `browserUse.serviceUrl` 到测试服务地址，避免端口漂移/用户本地配置干扰
+3. `externalFailure` 判定调整为“需伴随真实执行异常（失败/未启动/未完成）”，避免把成功任务中的瞬时告警误判成 external failure。
+
+### 并发实跑命令
+```bash
+cd desktop
+npx playwright test tests/browser-concurrent-desktop-scenarios.e2e.test.ts --workers=1
+```
+
+### 实跑结果
+- `social-mixed-triple`: passed
+- `social-mixed-quad`: passed
+- 汇总：`2 passed`
+
+说明：两组场景均完成 desktop 触发并发执行、agentbrowser/playwright 混跑、登录协作信号捕获与任务隔离校验。

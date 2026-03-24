@@ -13,10 +13,10 @@ import base64
 import logging
 import platform
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,9 @@ class NavigateRequest(BaseModel):
         default="domcontentloaded", description="load | domcontentloaded | networkidle"
     )
     timeout_ms: int = Field(default=30000)
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
+    )
 
 
 class NavigateResponse(BaseModel):
@@ -129,6 +132,9 @@ class ClickRequest(BaseModel):
     selector: Optional[str] = Field(
         default=None, description="Optional CSS selector as hint"
     )
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
+    )
 
 
 class FillRequest(BaseModel):
@@ -141,6 +147,9 @@ class FillRequest(BaseModel):
     value: Optional[str] = Field(
         default=None, description="Value to fill if not in instruction"
     )
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
+    )
 
 
 class UploadRequest(BaseModel):
@@ -151,6 +160,9 @@ class UploadRequest(BaseModel):
     )
     selector: Optional[str] = Field(
         default=None, description="Optional CSS selector for file input"
+    )
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
     )
 
 
@@ -173,6 +185,9 @@ class ExtractRequest(BaseModel):
         description="What data to extract, e.g. 'extract all product names and prices'"
     )
     output_format: str = Field(default="json", description="json | text | markdown")
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
+    )
 
 
 class ExtractResponse(BaseModel):
@@ -188,6 +203,9 @@ class TaskRequest(BaseModel):
     llm_model: Optional[str] = Field(
         default=None, description="Override LLM model for this task"
     )
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
+    )
 
 
 class TaskResponse(BaseModel):
@@ -201,6 +219,15 @@ class ActionRequest(BaseModel):
     action: str = Field(description="Natural language action to perform")
     context: Optional[str] = Field(
         default=None, description="Additional context about the current page"
+    )
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
+    )
+
+
+class TaskScopeRequest(BaseModel):
+    task_key: Optional[str] = Field(
+        default=None, description="Task/session key for tab isolation"
     )
 
 
@@ -235,6 +262,14 @@ class BrowserState:
         )
         self.connected = False
         self.profile_name = "Default"
+        self.task_pages: Dict[str, Any] = {}
+        self.current_cdp_url: Optional[str] = None
+
+    def _normalize_task_key(self, task_key: Optional[str]) -> Optional[str]:
+        if task_key is None:
+            return None
+        normalized = task_key.strip()
+        return normalized if normalized else None
 
     async def ensure_connected(self):
         if not self.connected or self.browser is None:
@@ -252,18 +287,30 @@ class BrowserState:
                 detail="browser_use library is not installed. Run: pip install browser-use",
             )
 
+        requested_cdp_url = req.cdp_url.strip() if req.cdp_url else None
+
         if self.connected and self.browser is not None:
-            return ConnectResponse(
-                success=True, message="Already connected", profile=self.profile_name
-            )
+            # If a CDP endpoint is requested and differs from current connection,
+            # reconnect so smart mode can share the exact same Chrome instance.
+            if requested_cdp_url and requested_cdp_url != self.current_cdp_url:
+                logger.info(
+                    "Reconnecting browser-use session to requested CDP endpoint: %s -> %s",
+                    self.current_cdp_url,
+                    requested_cdp_url,
+                )
+                await self.disconnect()
+            else:
+                return ConnectResponse(
+                    success=True, message="Already connected", profile=self.profile_name
+                )
 
         try:
             # browser-use >=0.12 switched to BrowserSession API.
             # Browser is now an alias of BrowserSession and takes cdp_url/headless directly.
             init_kwargs = {}
 
-            if req.cdp_url:
-                init_kwargs["cdp_url"] = req.cdp_url
+            if requested_cdp_url:
+                init_kwargs["cdp_url"] = requested_cdp_url
                 init_kwargs["is_local"] = False
             else:
                 init_kwargs["is_local"] = True
@@ -282,6 +329,7 @@ class BrowserState:
             self.context = self.browser
             self.connected = True
             self.profile_name = req.profile_name
+            self.current_cdp_url = requested_cdp_url
 
             logger.info(f"Connected to browser with profile: {req.profile_name}")
             return ConnectResponse(
@@ -293,11 +341,20 @@ class BrowserState:
             self.connected = False
             self.browser = None
             self.context = None
+            self.task_pages = {}
+            self.current_cdp_url = None
             raise HTTPException(
                 status_code=500, detail=f"Failed to connect to browser: {str(e)}"
             )
 
     async def disconnect(self):
+        for _, task_page in list(self.task_pages.items()):
+            try:
+                await task_page.close()
+            except Exception:
+                pass
+        self.task_pages = {}
+
         if self.browser:
             try:
                 await self.browser.stop()
@@ -307,10 +364,29 @@ class BrowserState:
                 self.browser = None
                 self.context = None
                 self.connected = False
+                self.current_cdp_url = None
 
-    async def get_page(self):
+    async def get_page(self, task_key: Optional[str] = None):
         """Get the current active page from the browser context."""
         await self.ensure_connected()
+        normalized_task_key = self._normalize_task_key(task_key)
+        if normalized_task_key:
+            existing_page = self.task_pages.get(normalized_task_key)
+            if existing_page is not None:
+                try:
+                    await existing_page.bring_to_front()
+                    return existing_page
+                except Exception:
+                    self.task_pages.pop(normalized_task_key, None)
+
+            page = await self.browser.new_page()
+            self.task_pages[normalized_task_key] = page
+            try:
+                await page.bring_to_front()
+            except Exception:
+                pass
+            return page
+
         page = await self.browser.get_current_page()
         if page is None:
             page = await self.browser.new_page()
@@ -377,6 +453,7 @@ async def health():
         "status": "ok",
         "service": "browser-use-service",
         "connected": state.connected,
+        "task_tabs": len(state.task_pages),
     }
 
 
@@ -394,7 +471,7 @@ async def disconnect():
 @app.post("/navigate", response_model=NavigateResponse)
 async def navigate(req: NavigateRequest):
     try:
-        page = await state.get_page()
+        page = await state.get_page(req.task_key)
         await page.goto(req.url)
         title = await page.get_title()
         url = await page.get_url()
@@ -411,6 +488,7 @@ async def click(req: ClickRequest):
         from browser_use import Agent
 
         await state.ensure_connected()
+        await state.get_page(req.task_key)
         llm = _get_llm()
 
         instruction = req.instruction
@@ -438,6 +516,7 @@ async def fill(req: FillRequest):
         from browser_use import Agent
 
         await state.ensure_connected()
+        await state.get_page(req.task_key)
         llm = _get_llm()
 
         instruction = req.instruction
@@ -464,7 +543,7 @@ async def fill(req: FillRequest):
 async def upload(req: UploadRequest):
     """Upload a file by finding the file input and setting files."""
     try:
-        page = await state.get_page()
+        page = await state.get_page(req.task_key)
 
         if not os.path.isfile(req.file_path):
             return UploadResponse(
@@ -509,10 +588,10 @@ async def upload(req: UploadRequest):
 
 
 @app.post("/screenshot", response_model=ScreenshotResponse)
-async def screenshot():
+async def screenshot(req: TaskScopeRequest = Body(default_factory=TaskScopeRequest)):
     """Take a screenshot of the current page."""
     try:
-        page = await state.get_page()
+        page = await state.get_page(req.task_key)
         image_b64 = await page.screenshot()
         return ScreenshotResponse(
             success=True,
@@ -532,6 +611,7 @@ async def extract(req: ExtractRequest):
         from browser_use import Agent
 
         await state.ensure_connected()
+        await state.get_page(req.task_key)
         llm = _get_llm()
 
         task = f"On the current page, {req.instruction}. Return the result as {req.output_format}."
@@ -551,10 +631,13 @@ async def extract(req: ExtractRequest):
 
 
 @app.post("/content", response_model=ContentResponse)
-async def get_content(as_text: bool = True):
+async def get_content(
+    as_text: bool = True,
+    req: TaskScopeRequest = Body(default_factory=TaskScopeRequest),
+):
     """Get page content as text or HTML."""
     try:
-        page = await state.get_page()
+        page = await state.get_page(req.task_key)
         if as_text:
             content = await page.evaluate(
                 "(...args) => document.body ? document.body.innerText : ''"
@@ -585,12 +668,12 @@ async def run_task(req: TaskRequest):
         from browser_use import Agent
 
         await state.ensure_connected()
+        task_page = await state.get_page(req.task_key)
         llm = _get_llm(req.llm_model)
 
         # Navigate to URL first if provided
         if req.url:
-            page = await state.get_page()
-            await page.goto(req.url)
+            await task_page.goto(req.url)
 
         agent = Agent(
             task=req.task,
@@ -616,6 +699,7 @@ async def perform_action(req: ActionRequest):
         from browser_use import Agent
 
         await state.ensure_connected()
+        await state.get_page(req.task_key)
         llm = _get_llm()
 
         task = f"On the current page, {req.action}. Do only this one action, then stop."

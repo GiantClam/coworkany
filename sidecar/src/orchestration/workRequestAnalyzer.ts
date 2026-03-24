@@ -27,13 +27,18 @@ import {
     type UncertaintyItem,
     type UserActionRequest,
 } from './workRequestSchema';
-import { detectScheduledIntent } from '../scheduling/scheduledTasks';
+import { detectScheduledIntent, type ParsedScheduledIntent } from '../scheduling/scheduledTasks';
 import { cleanScheduledTaskResultText, normalizeScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
 import { analyzeLocalTaskIntent } from './localTaskIntent';
 import type { SystemFolderResolutionOptions } from '../system/wellKnownFolders';
 
 function detectLanguage(text: string): string {
     return /[\u4e00-\u9fff]/.test(text) ? 'zh-CN' : 'en';
+}
+
+function isPriceSensitiveInvestmentTask(text: string): boolean {
+    return /(买入价|买入价格|买入区间|建仓价|建仓区间|入场价|买点|目标价|target price|entry price|buy price|buy range|entry range|price range|at what price)/i
+        .test(text);
 }
 
 function languageAwareQuestions(language: string): string[] {
@@ -44,7 +49,11 @@ function languageAwareQuestions(language: string): string[] {
 
 function isComplexPlanningTask(text: string, mode: NormalizedWorkRequest['mode']): boolean {
     if (mode === 'scheduled_task' || mode === 'scheduled_multi_task') {
-        return true;
+        if (text.length > 180) {
+            return true;
+        }
+        return /(计划|规划|拆分|分解|设计|方案|架构|多步|workflow|multi-step|plan|break down|decompose|best practice|调研|research|analysis)/i
+            .test(text);
     }
 
     if (text.length > 120) {
@@ -150,22 +159,38 @@ function isCodeChangeTask(text: string): boolean {
     return /(代码|code|refactor|修复|fix|实现功能|实现代码|实现一个.*功能|改这个 bug|修这个 bug)/i.test(text);
 }
 
+const SOCIAL_PLATFORM_CUE_PATTERN =
+    /(x\.com|twitter|推特|小红书|reddit|facebook|instagram|linkedin|社交平台|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i;
+const SOCIAL_PUBLISH_CUE_PATTERN = /(发布|发帖|发文|推文|tweet|post|publish|share)/i;
+const BROWSER_UI_CUE_PATTERN =
+    /(browser|playwright|网页|网站|页面|点击|填写|登录|timeline|时间线|click|form|navigate|导航)/i;
+const EXPLICIT_MANUAL_ACTION_PATTERN =
+    /(登录|login|sign in|验证码|2fa|upload|上传|approve|审批|人工操作|手动操作|confirm plan|确认方案|授权)/i;
+
+function isLikelySocialPublishingTask(text: string): boolean {
+    return SOCIAL_PLATFORM_CUE_PATTERN.test(text) && SOCIAL_PUBLISH_CUE_PATTERN.test(text);
+}
+
+function hasExplicitManualActionSignal(text: string): boolean {
+    return EXPLICIT_MANUAL_ACTION_PATTERN.test(text);
+}
+
 function requiresExternalAuthOrManualAction(text: string): boolean {
-    return /(登录|login|sign in|验证码|2fa|upload|上传|approve|审批|人工操作|手动操作|confirm plan|确认方案|授权)/i
-        .test(text);
+    return hasExplicitManualActionSignal(text)
+        || isLikelySocialPublishingTask(text);
 }
 
 function buildDefaultingPolicy(input: {
     text: string;
     language: string;
     presentation: PresentationContract;
-    hasManualAction: boolean;
+    hasBlockingManualAction: boolean;
 }): DefaultingPolicy {
     return {
         outputLanguage: input.language,
         uiFormat: input.presentation.uiFormat,
         artifactDirectory: inferArtifactDirectory(input.text),
-        checkpointStrategy: input.hasManualAction
+        checkpointStrategy: input.hasBlockingManualAction
             ? 'manual_action'
             : isComplexPlanningTask(input.text, 'immediate_task') || input.presentation.uiFormat !== 'chat_message'
                 ? 'review_before_completion'
@@ -213,10 +238,7 @@ function buildHitlPolicy(input: {
         riskTier = 'high';
     }
 
-    if (
-        riskTier === 'low' &&
-        /(browser|playwright|网页|网站|页面|timeline|时间线|click|点击|填写|form|登录后查看)/i.test(input.text)
-    ) {
+    if (riskTier === 'low' && requiresBrowserAutomationSkill(input.text)) {
         reasons.push('Execution likely involves browser navigation or UI interaction.');
         riskTier = 'medium';
     }
@@ -235,6 +257,35 @@ function buildHitlPolicy(input: {
         riskTier,
         requiresPlanConfirmation,
         reasons,
+    };
+}
+
+const HITL_RISK_SCORE: Record<HitlPolicy['riskTier'], number> = {
+    low: 0,
+    medium: 1,
+    high: 2,
+};
+
+function mergeHitlPolicies(policies: HitlPolicy[]): HitlPolicy {
+    if (policies.length === 0) {
+        return {
+            riskTier: 'low',
+            requiresPlanConfirmation: false,
+            reasons: [],
+        };
+    }
+
+    let selected = policies[0]!;
+    for (const policy of policies.slice(1)) {
+        if (HITL_RISK_SCORE[policy.riskTier] > HITL_RISK_SCORE[selected.riskTier]) {
+            selected = policy;
+        }
+    }
+
+    return {
+        riskTier: selected.riskTier,
+        requiresPlanConfirmation: policies.some((policy) => policy.requiresPlanConfirmation),
+        reasons: Array.from(new Set(policies.flatMap((policy) => policy.reasons))),
     };
 }
 
@@ -477,6 +528,7 @@ function buildCheckpoints(input: {
     mode: NormalizedWorkRequest['mode'];
     deliverables: DeliverableContract[];
     hasManualAction: boolean;
+    hasBlockingManualAction: boolean;
     hitlPolicy: HitlPolicy;
     clarification: ClarificationDecision;
 }): CheckpointContract[] {
@@ -501,13 +553,17 @@ function buildCheckpoints(input: {
     }
 
     if (input.hasManualAction) {
-        const executionPolicy: HitlExecutionPolicy = 'hard_block';
+        const executionPolicy: HitlExecutionPolicy = input.hasBlockingManualAction ? 'hard_block' : 'auto';
         checkpoints.push({
             id: randomUUID(),
             title: 'User action required',
             kind: 'manual_action',
-            reason: 'Execution depends on a manual step the user must complete.',
-            userMessage: 'Pause and ask the user to complete the required manual action before continuing.',
+            reason: input.hasBlockingManualAction
+                ? 'Execution depends on a manual step the user must complete.'
+                : 'Execution likely needs user-side preparation before the downstream stage.',
+            userMessage: input.hasBlockingManualAction
+                ? 'Pause and ask the user to complete the required manual action before continuing.'
+                : 'Ask the user to prepare any required account/auth state before the downstream stage starts.',
             riskTier: 'high',
             executionPolicy,
             requiresUserConfirmation: true,
@@ -541,6 +597,7 @@ function buildUserActionsRequired(input: {
     missingInfo: MissingInfoItem[];
     checkpoints: CheckpointContract[];
     hasManualAction: boolean;
+    hasBlockingManualAction: boolean;
     hitlPolicy: HitlPolicy;
     sourceText: string;
 }): UserActionRequest[] {
@@ -587,19 +644,24 @@ function buildUserActionsRequired(input: {
 
     if (input.hasManualAction) {
         const manualCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'manual_action');
-        const executionPolicy: HitlExecutionPolicy = 'hard_block';
+        const executionPolicy: HitlExecutionPolicy = input.hasBlockingManualAction ? 'hard_block' : 'auto';
+        const likelyExternalAuth =
+            hasExplicitManualActionSignal(input.sourceText) ||
+            isLikelySocialPublishingTask(input.sourceText);
         actions.push({
             id: randomUUID(),
             title: 'Complete required manual action',
-            kind: /登录|login|sign in|2fa|验证码/i.test(input.sourceText)
-                ? 'external_auth'
-                : 'manual_step',
-            description: 'A manual or external step is required before Coworkany can continue the task.',
+            kind: likelyExternalAuth ? 'external_auth' : 'manual_step',
+            description: input.hasBlockingManualAction
+                ? 'A manual or external step is required before Coworkany can continue the task.'
+                : 'A downstream stage likely depends on external auth/account preparation. Please prepare it in advance.',
             riskTier: 'high',
             executionPolicy,
             blocking: toBlocking(executionPolicy),
             questions: [],
-            instructions: ['Complete the manual step in the UI or external system, then resume the task.'],
+            instructions: input.hasBlockingManualAction
+                ? ['Complete the manual step in the UI or external system, then resume the task.']
+                : ['Prepare the required account/auth state before the downstream stage starts.'],
             fulfillsCheckpointId: manualCheckpoint?.id,
         });
     }
@@ -740,7 +802,7 @@ function buildResearchQueries(input: {
         });
     }
 
-    if (/(继续|resume|follow-up|接着|刚才|上面的)/i.test(normalizedText)) {
+    if (/(继续|resume|follow-up|接着|刚才|上面的|上述|前述)/i.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'context_research',
             source: 'conversation',
@@ -770,6 +832,16 @@ function buildResearchQueries(input: {
             source: 'template',
             objective: 'Look for similar historical tasks or templates to bootstrap the contract.',
             required: false,
+            status: 'pending',
+        });
+    }
+
+    if (isPriceSensitiveInvestmentTask(normalizedText)) {
+        appendResearchQuery(queries, seen, {
+            kind: 'domain_research',
+            source: 'web',
+            objective: 'Fetch the latest market price snapshot (price, currency, timestamp, and market session context) for the target before issuing buy-price guidance.',
+            required: true,
             status: 'pending',
         });
     }
@@ -1075,15 +1147,38 @@ function isCoworkanySelfManagementTask(text: string): boolean {
         && /(安装|install|启用|enable|禁用|disable|删除|remove|卸载|uninstall|查看|inspect|列出|list|配置|config)/i.test(text);
 }
 
+function requiresBrowserAutomationSkill(text: string): boolean {
+    return BROWSER_UI_CUE_PATTERN.test(text) || isLikelySocialPublishingTask(text);
+}
+
+function inferPreferredTools(text: string, baseTools: string[]): string[] {
+    const merged = new Set(baseTools);
+    if (requiresBrowserAutomationSkill(text)) {
+        [
+            'browser_connect',
+            'browser_navigate',
+            'browser_wait',
+            'browser_get_content',
+            'browser_click',
+            'browser_fill',
+            'browser_screenshot',
+        ].forEach((tool) => merged.add(tool));
+    }
+    return Array.from(merged);
+}
+
 function inferPreferredSkills(text: string, mode: NormalizedWorkRequest['mode']): string[] {
     const skills = ['task-orchestrator'];
     if (isCoworkanySelfManagementTask(text)) {
         skills.push('coworkany-self-management');
     }
+    if (requiresBrowserAutomationSkill(text)) {
+        skills.push('browser-automation');
+    }
     if (isComplexPlanningTask(text, mode)) {
         skills.push('superpowers-workflow', 'planning-with-files');
     }
-    return skills;
+    return Array.from(new Set(skills));
 }
 
 function isLikelyChat(text: string): boolean {
@@ -1169,6 +1264,30 @@ function buildTaskDefinition(
     const acceptanceCriteria = segments.filter((segment) =>
         /(只保留|必须|不要|输出|格式|每篇|唯一标识|summary|summarize|reply only|只回复)/i.test(segment)
     );
+    const language = detectLanguage(text);
+    if (isPriceSensitiveInvestmentTask(text)) {
+        const hasNumericPriceCriterion = acceptanceCriteria.some((criterion) =>
+            /(价格|价位|区间|买入|目标价|price|entry|buy)/i.test(criterion)
+        );
+        if (!hasNumericPriceCriterion) {
+            acceptanceCriteria.push(
+                language.startsWith('zh')
+                    ? '必须给出明确可执行的买入价格数值或价格区间，并标注货币单位。'
+                    : 'Provide an explicit buy-price value or buy-price range with currency units.'
+            );
+        }
+
+        const hasTimeAnchorCriterion = acceptanceCriteria.some((criterion) =>
+            /(截至|时间|日期|交易日|盘中|收盘|as of|timestamp|date|session)/i.test(criterion)
+        );
+        if (!hasTimeAnchorCriterion) {
+            acceptanceCriteria.push(
+                language.startsWith('zh')
+                    ? '必须说明价格依据的时间锚点（例如交易日、时区、盘中或收盘时点）。'
+                    : 'Anchor the quoted price to a concrete market timepoint (date/timezone/session).'
+            );
+        }
+    }
     const localTaskPlan = analyzeLocalTaskIntent({
         text,
         workspacePath,
@@ -1183,11 +1302,76 @@ function buildTaskDefinition(
         acceptanceCriteria,
         dependencies: [],
         preferredSkills: inferPreferredSkills(text, mode),
-        preferredTools: localTaskPlan?.preferredTools ?? [],
+        preferredTools: inferPreferredTools(text, localTaskPlan?.preferredTools ?? []),
         preferredWorkflow: localTaskPlan?.preferredWorkflow,
         resolvedTargets: localTaskPlan?.targetFolder ? [localTaskPlan.targetFolder] : undefined,
         localPlanHint: localTaskPlan,
     };
+}
+
+function buildScheduledTaskDefinitions(input: {
+    scheduledIntent: ParsedScheduledIntent;
+    mode: NormalizedWorkRequest['mode'];
+    workspacePath: string;
+    systemContext?: SystemFolderResolutionOptions;
+}): TaskDefinition[] {
+    const primaryTask = buildTaskDefinition(
+        input.scheduledIntent.taskQuery,
+        input.mode,
+        input.workspacePath,
+        input.systemContext,
+    );
+    const chainedStages = input.scheduledIntent.chainedStages ?? [];
+    if (chainedStages.length === 0) {
+        return [primaryTask];
+    }
+
+    const tasks: TaskDefinition[] = [primaryTask];
+    let previousTask = primaryTask;
+
+    for (const stage of chainedStages) {
+        const stageTask = buildTaskDefinition(
+            stage.taskQuery,
+            input.mode,
+            input.workspacePath,
+            input.systemContext,
+        );
+        stageTask.dependencies = [previousTask.id];
+        tasks.push(stageTask);
+        previousTask = stageTask;
+    }
+
+    return tasks;
+}
+
+function buildScheduledStages(input: {
+    scheduledIntent: ParsedScheduledIntent;
+    tasks: TaskDefinition[];
+}): NonNullable<NonNullable<NormalizedWorkRequest['schedule']>['stages']> {
+    if (input.tasks.length === 0) {
+        return [];
+    }
+
+    const chainedStages = input.scheduledIntent.chainedStages ?? [];
+    let executeAtMs = input.scheduledIntent.executeAt.getTime();
+
+    return input.tasks.map((task, index) => {
+        if (index > 0) {
+            const chainedStage = chainedStages[index - 1];
+            executeAtMs += chainedStage?.delayMsFromPrevious ?? 0;
+            return {
+                taskId: task.id,
+                executeAt: new Date(executeAtMs).toISOString(),
+                delayMsFromPrevious: chainedStage?.delayMsFromPrevious,
+                originalTimeExpression: chainedStage?.originalTimeExpression,
+            };
+        }
+        return {
+            taskId: task.id,
+            executeAt: new Date(executeAtMs).toISOString(),
+            originalTimeExpression: input.scheduledIntent.originalTimeExpression,
+        };
+    });
 }
 
 function buildPresentationContract(text: string, ttsEnabled: boolean): PresentationContract {
@@ -1208,9 +1392,15 @@ export function analyzeWorkRequest(input: {
 }): NormalizedWorkRequest {
     const sourceText = input.sourceText.trim();
     const scheduledIntent = detectScheduledIntent(sourceText, input.now);
+    const chainedScheduledStages = scheduledIntent?.chainedStages ?? [];
     const executableText = scheduledIntent?.taskQuery || sourceText;
+    const planningText = scheduledIntent
+        ? [scheduledIntent.taskQuery, ...chainedScheduledStages.map((stage) => stage.taskQuery)].join('。')
+        : executableText;
     const mode = scheduledIntent
-        ? 'scheduled_task'
+        ? chainedScheduledStages.length > 0
+            ? 'scheduled_multi_task'
+            : 'scheduled_task'
         : isLikelyChat(executableText)
             ? 'chat'
             : 'immediate_task';
@@ -1220,32 +1410,43 @@ export function analyzeWorkRequest(input: {
         executableText,
         mode,
     });
-    const presentation = buildPresentationContract(executableText, scheduledIntent?.speakResult ?? false);
-    const taskDefinition = buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext);
-    const hasManualAction = requiresExternalAuthOrManualAction(executableText);
-    const hitlPolicy = buildHitlPolicy({
-        text: executableText,
+    const presentation = buildPresentationContract(planningText, scheduledIntent?.speakResult ?? false);
+    const tasks = scheduledIntent
+        ? buildScheduledTaskDefinitions({
+            scheduledIntent,
+            mode,
+            workspacePath: input.workspacePath,
+            systemContext: input.systemContext,
+        })
+        : [buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext)];
+    const primaryTaskDefinition =
+        tasks[0] ?? buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext);
+    const hasManualAction = requiresExternalAuthOrManualAction(planningText);
+    const hasBlockingManualAction = hasExplicitManualActionSignal(planningText);
+    const hitlPolicy = mergeHitlPolicies(tasks.map((taskDefinition) => buildHitlPolicy({
+        text: planningText,
         taskDefinition,
         hasManualAction,
-    });
+    })));
     const defaultingPolicy = buildDefaultingPolicy({
-        text: executableText,
+        text: planningText,
         language,
         presentation,
-        hasManualAction,
+        hasBlockingManualAction,
     });
     const deliverables = buildDeliverables({
-        text: executableText,
+        text: planningText,
         workspacePath: input.workspacePath,
         presentation,
-        localPlanWorkflow: taskDefinition.preferredWorkflow,
-        localPlanRequiresHostAccess: taskDefinition.localPlanHint?.requiresHostAccessGrant,
+        localPlanWorkflow: primaryTaskDefinition.preferredWorkflow,
+        localPlanRequiresHostAccess: primaryTaskDefinition.localPlanHint?.requiresHostAccessGrant,
     });
     const checkpoints = buildCheckpoints({
         text: executableText,
         mode,
         deliverables,
         hasManualAction,
+        hasBlockingManualAction,
         hitlPolicy,
         clarification,
     });
@@ -1255,58 +1456,66 @@ export function analyzeWorkRequest(input: {
         missingInfo,
         checkpoints,
         hasManualAction,
+        hasBlockingManualAction,
         hitlPolicy,
-        sourceText: executableText,
+        sourceText: planningText,
     });
     const goalFrame = buildGoalFrame({
-        text: executableText,
+        text: planningText,
         mode,
-        taskDefinition,
+        taskDefinition: primaryTaskDefinition,
         deliverables,
     });
     const runtimeIsolationPolicy = buildRuntimeIsolationPolicy({
         workspacePath: input.workspacePath,
-        text: executableText,
-        taskDefinition,
+        text: planningText,
+        taskDefinition: primaryTaskDefinition,
         goalFrame,
     });
     const sessionIsolationPolicy = buildSessionIsolationPolicy();
     const memoryIsolationPolicy = buildMemoryIsolationPolicy({
-        text: executableText,
+        text: planningText,
         goalFrame,
     });
     const tenantIsolationPolicy = buildTenantIsolationPolicy();
     const researchQueries = buildResearchQueries({
-        text: executableText,
+        text: planningText,
         mode,
-        taskDefinition,
+        taskDefinition: primaryTaskDefinition,
         hasManualAction,
     });
     const researchEvidence = buildResearchEvidence({
         sourceText,
-        taskDefinition,
+        taskDefinition: primaryTaskDefinition,
         deliverables,
         defaultingPolicy,
     });
     const uncertaintyRegistry = buildUncertaintyRegistry({
         clarification,
-        taskDefinition,
+        taskDefinition: primaryTaskDefinition,
         defaultingPolicy,
         hasManualAction,
         evidence: researchEvidence,
     });
     const { strategyOptions, selectedStrategyId } = buildStrategyOptions({
-        text: executableText,
-        taskDefinition,
+        text: planningText,
+        taskDefinition: primaryTaskDefinition,
         deliverables,
         evidence: researchEvidence,
     });
     const knownRisks = buildKnownRisks({
         clarification,
-        taskDefinition,
+        taskDefinition: primaryTaskDefinition,
         hasManualAction,
         researchQueries,
     });
+
+    const scheduledStages = scheduledIntent
+        ? buildScheduledStages({
+            scheduledIntent,
+            tasks,
+        })
+        : [];
 
     return {
         schemaVersion: 1,
@@ -1318,9 +1527,10 @@ export function analyzeWorkRequest(input: {
                 executeAt: scheduledIntent.executeAt.toISOString(),
                 timezone: 'Asia/Shanghai',
                 recurrence: null,
+                stages: scheduledStages.length > 0 ? scheduledStages : undefined,
             }
             : undefined,
-        tasks: [taskDefinition],
+        tasks,
         clarification: {
             ...clarification,
             assumptions: [
@@ -1426,18 +1636,24 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
     });
 
     const executionDependencies = [contractFreezeStepId];
-    const executionStepIds: string[] = [];
-    for (const task of request.tasks) {
-        const stepId = randomUUID();
-        executionStepIds.push(stepId);
+    const executionSteps = request.tasks.map((task) => ({
+        task,
+        stepId: randomUUID(),
+    }));
+    const executionStepIds = executionSteps.map((entry) => entry.stepId);
+    const executionStepByTaskId = new Map(executionSteps.map((entry) => [entry.task.id, entry.stepId]));
+    for (const entry of executionSteps) {
+        const taskDependencyStepIds = entry.task.dependencies
+            .map((dependencyId) => executionStepByTaskId.get(dependencyId))
+            .filter((stepId): stepId is NonNullable<typeof stepId> => stepId !== undefined);
         steps.push({
-            stepId,
-            taskId: task.id,
+            stepId: entry.stepId,
+            taskId: entry.task.id,
             kind: 'execution',
-            title: task.title,
-            description: task.objective,
+            title: entry.task.title,
+            description: entry.task.objective,
             status: hasBlockingUnknowns ? 'blocked' : 'pending',
-            dependencies: [...executionDependencies, ...task.dependencies],
+            dependencies: [...executionDependencies, ...taskDependencyStepIds],
         });
     }
 
@@ -1467,8 +1683,19 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
     };
 }
 
-export function buildExecutionQuery(request: FrozenWorkRequest): string {
-    return request.tasks
+export function buildExecutionQueryForTaskIds(
+    request: Pick<FrozenWorkRequest, 'tasks' | 'deliverables' | 'checkpoints'>,
+    taskIds?: string[],
+    options?: {
+        includeGlobalContracts?: boolean;
+    },
+): string {
+    const includeGlobalContracts = options?.includeGlobalContracts ?? true;
+    const selectedTasks = taskIds && taskIds.length > 0
+        ? request.tasks.filter((task) => taskIds.includes(task.id))
+        : request.tasks;
+
+    return selectedTasks
         .map((task) => {
             const parts = [task.objective];
             if (task.constraints.length > 0) {
@@ -1477,7 +1704,7 @@ export function buildExecutionQuery(request: FrozenWorkRequest): string {
             if (task.acceptanceCriteria.length > 0) {
                 parts.push(`验收标准：${task.acceptanceCriteria.join('；')}`);
             }
-            if ((request.deliverables?.length ?? 0) > 0) {
+            if (includeGlobalContracts && (request.deliverables?.length ?? 0) > 0) {
                 const deliverableLine = request.deliverables!
                     .map((deliverable) => deliverable.path
                         ? `${deliverable.title} (${deliverable.path})`
@@ -1485,13 +1712,17 @@ export function buildExecutionQuery(request: FrozenWorkRequest): string {
                     .join('；');
                 parts.push(`交付物：${deliverableLine}`);
             }
-            if ((request.checkpoints?.length ?? 0) > 0) {
+            if (includeGlobalContracts && (request.checkpoints?.length ?? 0) > 0) {
                 const checkpointLine = request.checkpoints!.map((checkpoint) => checkpoint.title).join('；');
                 parts.push(`检查点：${checkpointLine}`);
             }
             return parts.join('\n');
         })
         .join('\n\n');
+}
+
+export function buildExecutionQuery(request: FrozenWorkRequest): string {
+    return buildExecutionQueryForTaskIds(request);
 }
 
 export function reduceWorkResult(input: {

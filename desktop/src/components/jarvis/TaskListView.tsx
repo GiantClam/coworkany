@@ -1,9 +1,15 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { useSkills } from '../../hooks/useSkills';
+import { useToolpacks } from '../../hooks/useToolpacks';
+import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
+import { getVoiceSettings } from '../../lib/configStore';
+import { TaskCardMessage } from '../Chat/Timeline/components/TaskCardMessage';
+import { buildTimelineItems } from '../Chat/Timeline/hooks/useTimelineItems';
 import { useTaskEventStore, type TaskSession } from '../../stores/useTaskEventStore';
-import type { TaskStatus } from '../../types';
+import type { TaskCardItem, TaskStatus } from '../../types';
 import './TaskListView.css';
 
 type SessionsSnapshot = {
@@ -18,6 +24,7 @@ type BoardTask = {
     result: string;
     status: TaskStatus;
     updatedAt: string;
+    taskCard: TaskCardItem;
 };
 
 const UNKNOWN_TASK_ID = 'unknown-task';
@@ -122,17 +129,63 @@ function formatUpdatedAt(timestamp: string): string {
     });
 }
 
+function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem {
+    const timeline = buildTimelineItems(session);
+    const projectedCard = timeline.items.find((item): item is TaskCardItem => item.type === 'task_card');
+    if (projectedCard) {
+        return { ...projectedCard, taskId };
+    }
+
+    const description = compactText(deriveUserPrompt(session), 180);
+    const result = deriveResult(session);
+    const sections: TaskCardItem['sections'] = [];
+    if (description) {
+        sections.push({
+            label: 'Conversation · Request',
+            lines: [description],
+        });
+    }
+    if (result) {
+        sections.push({
+            label: 'Conversation · Latest response',
+            lines: [result],
+        });
+    }
+    if (sections.length === 0) {
+        sections.push({
+            label: 'Conversation · Status',
+            lines: [`Status: ${formatStatus(session.status)}`],
+        });
+    }
+
+    return {
+        type: 'task_card',
+        id: `task-board-${taskId}`,
+        taskId,
+        title: deriveTitle(session),
+        subtitle: undefined,
+        status: session.status,
+        sections,
+        result: result ? { summary: result } : undefined,
+        timestamp: session.updatedAt || session.createdAt || new Date().toISOString(),
+    };
+}
+
 export function buildBoardTasks(sessions: Iterable<TaskSession>): BoardTask[] {
     return Array.from(sessions)
         .filter((session): session is TaskSession => Boolean(session && typeof session === 'object'))
-        .map((session) => ({
-            id: getSessionTaskId(session),
-            title: deriveTitle(session),
-            description: compactText(deriveUserPrompt(session), 180),
-            result: deriveResult(session),
-            status: session.status,
-            updatedAt: session.updatedAt || session.createdAt || '',
-        }))
+        .map((session) => {
+            const taskId = getSessionTaskId(session);
+            return {
+                id: taskId,
+                title: deriveTitle(session),
+                description: compactText(deriveUserPrompt(session), 180),
+                result: deriveResult(session),
+                status: session.status,
+                updatedAt: session.updatedAt || session.createdAt || '',
+                taskCard: buildBoardTaskCard(session, taskId),
+            };
+        })
         .sort((a, b) => {
             const aTime = new Date(a.updatedAt).getTime();
             const bTime = new Date(b.updatedAt).getTime();
@@ -144,6 +197,9 @@ export function buildBoardTasks(sessions: Iterable<TaskSession>): BoardTask[] {
 
 export const TaskListView: React.FC = () => {
     const { t } = useTranslation();
+    const { skills } = useSkills({ autoRefresh: true });
+    const { toolpacks } = useToolpacks({ autoRefresh: true });
+    const { sendMessage, error: sendMessageError } = useSendTaskMessage();
     const { voiceState, stopPlayback, isStopping, error: stopVoiceError } = useVoicePlayback();
     const sessions = useTaskEventStore((state) => state.sessions);
     const hydrate = useTaskEventStore((state) => state.hydrate);
@@ -175,6 +231,53 @@ export const TaskListView: React.FC = () => {
     const handleStopVoice = React.useCallback(async () => {
         await stopPlayback();
     }, [stopPlayback]);
+
+    const enabledSkills = React.useMemo(
+        () => skills.filter((skill) => skill.enabled).map((skill) => skill.manifest.id),
+        [skills]
+    );
+
+    const enabledToolpacks = React.useMemo(
+        () => toolpacks.filter((tp) => tp.enabled).map((tp) => tp.manifest.id),
+        [toolpacks]
+    );
+
+    const handleTaskCardCollaborationSubmit = React.useCallback(async (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+        value: string;
+    }) => {
+        const taskId = input.taskId || UNKNOWN_TASK_ID;
+        const message = input.value.trim();
+        if (!message || taskId === UNKNOWN_TASK_ID) {
+            return;
+        }
+
+        setActiveTask(taskId);
+        const voiceSettings = await getVoiceSettings();
+        await sendMessage({
+            taskId,
+            content: message,
+            config: {
+                enabledClaudeSkills: enabledSkills,
+                enabledToolpacks,
+                enabledSkills,
+                voiceProviderMode: voiceSettings.providerMode,
+            },
+        });
+    }, [enabledSkills, enabledToolpacks, sendMessage, setActiveTask]);
+
+    const handleTaskCardActionClick = React.useCallback(async (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+    }) => {
+        await handleTaskCardCollaborationSubmit({
+            ...input,
+            value: input.actionId ? `继续执行（${input.actionId}）` : '继续执行',
+        });
+    }, [handleTaskCardCollaborationSubmit]);
 
     const tasks = React.useMemo<BoardTask[]>(() => {
         return buildBoardTasks(sessions.values());
@@ -253,9 +356,9 @@ export const TaskListView: React.FC = () => {
                 </div>
             </div>
 
-            {stopVoiceError && (
+            {(stopVoiceError || sendMessageError) && (
                 <div className="task-list-inline-error" role="alert">
-                    {stopVoiceError}
+                    {stopVoiceError || sendMessageError}
                 </div>
             )}
 
@@ -271,7 +374,13 @@ export const TaskListView: React.FC = () => {
                     ) : (
                         <div className="task-list-card-grid">
                             {activeTasks.map((task) => (
-                                <TaskItem key={task.id} task={task} onSelect={setActiveTask} />
+                                <TaskBoardTaskCard
+                                    key={task.id}
+                                    task={task}
+                                    onSelect={setActiveTask}
+                                    onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
+                                    onTaskActionClick={handleTaskCardActionClick}
+                                />
                             ))}
                         </div>
                     )}
@@ -285,7 +394,13 @@ export const TaskListView: React.FC = () => {
                         </div>
                         <div className="task-list-card-grid subdued">
                             {historyTasks.map((task) => (
-                                <TaskItem key={task.id} task={task} onSelect={setActiveTask} />
+                                <TaskBoardTaskCard
+                                    key={task.id}
+                                    task={task}
+                                    onSelect={setActiveTask}
+                                    onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
+                                    onTaskActionClick={handleTaskCardActionClick}
+                                />
                             ))}
                         </div>
                     </section>
@@ -302,36 +417,44 @@ const statusTone: Record<TaskStatus, string> = {
     idle: 'pending',
 };
 
-const TaskItem: React.FC<{ task: BoardTask; onSelect: (taskId: string) => void }> = ({ task, onSelect }) => {
+const TaskBoardTaskCard: React.FC<{
+    task: BoardTask;
+    onSelect: (taskId: string) => void;
+    onTaskCollaborationSubmit: (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+        value: string;
+    }) => void;
+    onTaskActionClick: (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+    }) => void;
+}> = ({ task, onSelect, onTaskCollaborationSubmit, onTaskActionClick }) => {
     return (
-        <button
-            type="button"
-            className={`task-card ${task.status === 'finished' ? 'completed' : ''}`}
-            onClick={() => onSelect(task.id)}
-        >
-            <div className="task-card-header">
-                <div className="task-card-copy">
-                    <h3 className="task-card-title">{task.title}</h3>
-                    {task.description && (
-                        <p className="task-card-description">{task.description}</p>
-                    )}
+        <div className="task-board-card-shell">
+            <div className="task-board-card-toolbar">
+                <div className="task-board-card-toolbar-left">
+                    <span className={`task-priority-pill ${statusTone[task.status]}`}>
+                        {formatStatus(task.status)}
+                    </span>
+                    <span className="task-card-date">{formatUpdatedAt(task.updatedAt)}</span>
                 </div>
-                <div className={`task-status-dot ${statusTone[task.status]}`} title={task.status} />
+                <button
+                    type="button"
+                    className="task-board-open-button"
+                    onClick={() => onSelect(task.id)}
+                >
+                    Open task
+                </button>
             </div>
-
-            <div className="task-card-meta">
-                <span className={`task-priority-pill ${statusTone[task.status]}`}>
-                    {formatStatus(task.status)}
-                </span>
-                <span className="task-card-date">{formatUpdatedAt(task.updatedAt)}</span>
-            </div>
-
-            {task.result && (
-                <div className="task-card-result">
-                    <span className="task-card-result-label">Result</span>
-                    <p className="task-card-result-text">{task.result}</p>
-                </div>
-            )}
-        </button>
+            <TaskCardMessage
+                item={task.taskCard}
+                layout="board"
+                onTaskCollaborationSubmit={onTaskCollaborationSubmit}
+                onTaskActionClick={onTaskActionClick}
+            />
+        </div>
     );
 };

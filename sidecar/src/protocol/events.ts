@@ -184,6 +184,12 @@ export const PlanUpdatedEventSchema = BaseEventSchema.extend({
             description: z.string(),
             status: z.enum(['pending', 'in_progress', 'complete', 'completed', 'skipped', 'failed', 'blocked']),
         })),
+        taskProgress: z.array(z.object({
+            taskId: z.string(),
+            title: z.string(),
+            status: z.enum(['pending', 'in_progress', 'complete', 'completed', 'skipped', 'failed', 'blocked']),
+            dependencies: z.array(z.string()),
+        })).optional(),
         currentStepId: z.string().optional(),
     }),
 });
@@ -231,6 +237,13 @@ export const TaskPlanReadyEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_PLAN_READY'),
     payload: z.object({
         summary: z.string(),
+        mode: z.enum(['chat', 'immediate_task', 'scheduled_task', 'scheduled_multi_task']).optional(),
+        tasks: z.array(z.object({
+            id: z.string(),
+            title: z.string(),
+            objective: z.string(),
+            dependencies: z.array(z.string()),
+        })).optional(),
         deliverables: z.array(DeliverableContractSchema),
         checkpoints: z.array(CheckpointContractSchema),
         userActionsRequired: z.array(UserActionRequestSchema),

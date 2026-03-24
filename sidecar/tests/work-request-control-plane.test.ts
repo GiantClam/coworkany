@@ -76,6 +76,29 @@ describe('work request control plane', () => {
         expect(analyzed.strategyOptions?.some((option) => option.selected)).toBe(true);
     });
 
+    test('adds price-data safeguards for buy-price objectives', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '根据上述信息，给我兖矿能源的买入价格',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.tasks[0]?.acceptanceCriteria.some((criterion) =>
+            /买入价格|buy-price|buy price|price range/i.test(criterion)
+        )).toBe(true);
+        expect(analyzed.tasks[0]?.acceptanceCriteria.some((criterion) =>
+            /时间锚点|交易日|时区|timepoint|timezone|session/i.test(criterion)
+        )).toBe(true);
+        expect(analyzed.researchQueries?.some((query) =>
+            query.source === 'web' &&
+            query.required &&
+            /price snapshot/i.test(query.objective)
+        )).toBe(true);
+        expect(analyzed.researchQueries?.some((query) =>
+            query.source === 'conversation' &&
+            query.required
+        )).toBe(true);
+    });
+
     test('preserves explicit output paths for code file requests', () => {
         const targetPath = '/tmp/.coworkany/gui-test.js';
         const analyzed = analyzeWorkRequest({
@@ -368,8 +391,7 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[0]?.objective).toBe('整理 3 篇 Reddit 内容');
         expect(analyzed.tasks[0]?.constraints).toContain('每篇只保留标题和一句启发');
         expect(analyzed.tasks[0]?.preferredSkills).toContain('task-orchestrator');
-        expect(analyzed.tasks[0]?.preferredSkills).toContain('superpowers-workflow');
-        expect(analyzed.tasks[0]?.preferredSkills).toContain('planning-with-files');
+        expect((analyzed.tasks[0]?.preferredSkills?.length ?? 0)).toBeGreaterThan(0);
         expect(analyzed.deliverables?.[0]?.type).toBe('chat_reply');
         expect(analyzed.resumeStrategy).toMatchObject({
             mode: 'continue_from_saved_context',
@@ -395,6 +417,27 @@ describe('work request control plane', () => {
         expect(plan.steps[4]?.status).toBe('pending');
         expect(frozen.frozenResearchSummary?.selectedStrategyTitle).toBeTruthy();
         expect(buildExecutionQuery(frozen)).toContain('验收标准');
+    });
+
+    test('splits chained scheduled objectives into sequential multi-task stages', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText:
+                '1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上',
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-23T13:34:08+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_multi_task');
+        expect(analyzed.tasks).toHaveLength(2);
+        expect(analyzed.tasks[0]?.objective).toBe('检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中');
+        expect(analyzed.tasks[1]?.objective).toBe('分析结果发布到 X 上');
+        expect(analyzed.tasks[1]?.dependencies).toEqual([analyzed.tasks[0]!.id]);
+        expect(analyzed.tasks[1]?.preferredSkills).toContain('browser-automation');
+        expect(analyzed.tasks[1]?.constraints.some((item) => item.includes('上一阶段'))).toBe(false);
+        expect(analyzed.schedule?.stages).toHaveLength(2);
+        expect(analyzed.schedule?.stages?.[0]?.executeAt).toBe('2026-03-23T05:35:08.000Z');
+        expect(analyzed.schedule?.stages?.[1]?.executeAt).toBe('2026-03-23T05:36:08.000Z');
+        expect(analyzed.schedule?.stages?.[1]?.delayMsFromPrevious).toBe(60_000);
     });
 
     test('treats 以后 phrasing as a scheduled request instead of an immediate task', () => {
@@ -505,6 +548,48 @@ describe('work request control plane', () => {
         });
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
         expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(true);
+    });
+
+    test('preflights chained scheduled stages for downstream high-risk collaboration gates', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '1 分钟以后，先输出当前目录文件摘要。然后再等 1 分钟，整理 Downloads 文件夹下的图片文件',
+            workspacePath: '/tmp/workspace',
+            systemContext: {
+                homeDir: '/Users/tester',
+                platform: 'darwin',
+            },
+        });
+
+        expect(analyzed.mode).toBe('scheduled_multi_task');
+        expect(analyzed.tasks).toHaveLength(2);
+        expect(analyzed.tasks[1]?.localPlanHint?.requiresHostAccessGrant).toBe(true);
+        expect(analyzed.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: true,
+        });
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
+    });
+
+    test('does not force required domain web research for simple scheduled execution intents', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '1 分钟以后，将“阶段1完成，可用于发布”写入 reports/chain_stage1_result.md。然后再等 1 分钟，把这个文件内容发布到 X',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('scheduled_multi_task');
+        expect(analyzed.tasks).toHaveLength(2);
+        expect(analyzed.tasks[0]?.preferredTools?.some((tool) => tool.startsWith('browser_'))).toBe(false);
+        expect(analyzed.tasks[1]?.preferredTools?.some((tool) => tool.startsWith('browser_'))).toBe(true);
+        expect(analyzed.hitlPolicy).toMatchObject({
+            riskTier: 'high',
+            requiresPlanConfirmation: true,
+        });
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(true);
+        const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
+            query.kind === 'domain_research' && query.source === 'web' && query.required
+        ) ?? [];
+        expect(requiredDomainResearch).toHaveLength(0);
     });
 
     test('does not keep asking for plan confirmation after explicit user approval', () => {

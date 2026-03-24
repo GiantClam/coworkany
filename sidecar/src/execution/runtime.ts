@@ -38,6 +38,7 @@ export type ExecutionRuntimeResult = {
     summary: string;
     error?: string;
     artifactsCreated: string[];
+    toolsUsed?: string[];
 };
 
 type AgentLoopResult = {
@@ -203,6 +204,8 @@ export type ExecutionRuntimeDeps = {
     }) => Promise<{
         asksForAdditionalUserAction: boolean;
         objectiveRefusal?: boolean;
+        objectiveSatisfied?: boolean;
+        objectiveGap?: string;
         requestedEvidence: 'grounded' | 'standard' | 'unknown';
         deliveredEvidence: 'grounded' | 'metadata' | 'none' | 'unknown';
         completionClaim?: 'present' | 'absent' | 'unknown';
@@ -414,6 +417,81 @@ function collectPlannedArtifactFilesFromDisk(
     return Array.from(discovered);
 }
 
+function isPathWithinWorkspace(workspacePath: string, resolvedPath: string): boolean {
+    const relative = path.relative(workspacePath, resolvedPath);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function materializeMissingMarkdownDeliverables(input: {
+    preparedWorkRequest: PreparedWorkRequestContext;
+    workspacePath: string;
+    outputText: string;
+    knownArtifacts: string[];
+}): string[] {
+    const output = input.outputText.trim();
+    if (!output) {
+        return [];
+    }
+
+    const deliverables = input.preparedWorkRequest.frozenWorkRequest.deliverables ?? [];
+    if (deliverables.length === 0) {
+        return [];
+    }
+
+    const knownResolvedArtifacts = new Set(
+        input.knownArtifacts.map((artifactPath) =>
+            path.isAbsolute(artifactPath)
+                ? artifactPath
+                : path.resolve(input.workspacePath, artifactPath)
+        )
+    );
+    const createdArtifacts: string[] = [];
+
+    for (const deliverable of deliverables) {
+        if (!deliverable.required) {
+            continue;
+        }
+        if (deliverable.type !== 'report_file' && deliverable.type !== 'artifact_file') {
+            continue;
+        }
+        if (typeof deliverable.path !== 'string' || deliverable.path.trim().length === 0) {
+            continue;
+        }
+
+        const plannedPath = deliverable.path.trim();
+        const inferredExtension = path.extname(plannedPath).toLowerCase();
+        const deliverableFormat =
+            typeof deliverable.format === 'string'
+                ? deliverable.format.trim().toLowerCase()
+                : '';
+        const extension = inferredExtension || (deliverableFormat ? `.${deliverableFormat}` : '');
+        if (extension !== '.md') {
+            continue;
+        }
+
+        const resolvedPath = path.isAbsolute(plannedPath)
+            ? plannedPath
+            : path.resolve(input.workspacePath, plannedPath);
+        if (!isPathWithinWorkspace(input.workspacePath, resolvedPath)) {
+            continue;
+        }
+        if (knownResolvedArtifacts.has(resolvedPath)) {
+            continue;
+        }
+
+        try {
+            fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+            fs.writeFileSync(resolvedPath, output.endsWith('\n') ? output : `${output}\n`, 'utf-8');
+            createdArtifacts.push(resolvedPath);
+            knownResolvedArtifacts.add(resolvedPath);
+        } catch (error) {
+            console.warn('[ExecutionRuntime] Failed to materialize markdown deliverable:', error);
+        }
+    }
+
+    return createdArtifacts;
+}
+
 const GROUNDED_INSPECTION_TOOLS = new Set([
     'view_file',
     'list_dir',
@@ -449,12 +527,57 @@ function contractDemandsGroundedInspection(prepared: PreparedWorkRequestContext)
     );
 }
 
+function objectiveDemandsExplicitBuyPrice(prepared: PreparedWorkRequestContext, executionQuery: string): boolean {
+    const taskText = [
+        executionQuery,
+        ...((prepared.frozenWorkRequest.tasks ?? []).flatMap((task) => [
+            task.objective,
+            ...(task.acceptanceCriteria ?? []),
+        ])),
+    ].join('\n');
+
+    return /(买入价|买入价格|买入区间|建仓价|建仓区间|入场价|买点|目标价|target price|entry price|buy price|buy range|entry range|price range|at what price)/i
+        .test(taskText);
+}
+
+function extractPriceDeliverySignals(outputText: string): {
+    hasPriceValue: boolean;
+    hasBuyContext: boolean;
+    hasTimeAnchor: boolean;
+} {
+    const hasPriceValue = /(?:HK\$|US\$|CNY|RMB|USD|￥|¥|\$)?\s*\d{1,6}(?:\.\d{1,4})?(?:\s*(?:-|~|～|至|到)\s*(?:HK\$|US\$|CNY|RMB|USD|￥|¥|\$)?\s*\d{1,6}(?:\.\d{1,4})?)?/.test(outputText);
+    const hasBuyContext = /(买入|建仓|入场|买点|目标价|价格区间|buy|entry|accumulate|target)/i.test(outputText);
+    const hasTimeAnchor = /(截至|时间|日期|交易日|盘中|收盘|北京时间|UTC|today|as of|session|close|open|\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b)/i
+        .test(outputText);
+    return {
+        hasPriceValue,
+        hasBuyContext,
+        hasTimeAnchor,
+    };
+}
+
 function hasPlannedBlockingUserAction(prepared: PreparedWorkRequestContext): boolean {
     const request = prepared.frozenWorkRequest;
     if (request.clarification.required) {
         return true;
     }
     return Boolean(getBlockingUserAction(request));
+}
+
+function isLikelyCapabilityRefusal(outputText: string): boolean {
+    const trimmed = outputText.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const refusalPatterns = [
+        /\b(?:i|we)\s+(?:cannot|can't|am unable to)\s+(?:directly\s+)?(?:access|log\s*in|login|post|publish|operate|perform)\b/i,
+        /\b(?:cannot|can't|unable to)\b.{0,40}\b(?:account|twitter|x\.com|website|browser)\b/i,
+        /(?:我|当前).{0,8}(?:无法|不能|没法|不可以).{0,30}(?:替你|为你|直接)?(?:操作|发布|发帖|登录|访问|执行|处理)/u,
+        /(?:无法|不能).{0,30}(?:账号|账户).{0,20}(?:操作|发布|发帖|登录|访问)/u,
+    ];
+
+    return refusalPatterns.some((pattern) => pattern.test(trimmed));
 }
 
 async function evaluateExecutionProtocolCompliance(input: {
@@ -474,7 +597,8 @@ async function evaluateExecutionProtocolCompliance(input: {
         hasBlockingUserAction,
     });
     const asksForAdditionalUserAction = assessedProtocol?.asksForAdditionalUserAction === true;
-    const objectiveRefusal = assessedProtocol?.objectiveRefusal === true;
+    const objectiveRefusal = assessedProtocol?.objectiveRefusal === true || isLikelyCapabilityRefusal(input.outputText);
+    const objectiveSatisfied = assessedProtocol?.objectiveSatisfied;
     const completionClaim = assessedProtocol?.completionClaim ?? 'unknown';
     const requestsBlockingAdditionalAction =
         asksForAdditionalUserAction &&
@@ -505,6 +629,31 @@ async function evaluateExecutionProtocolCompliance(input: {
                 'Continue execution toward the requested objective with explicit uncertainty and risk language. ' +
                 'Do not stop at refusal unless a concrete technical blocker is surfaced.',
         };
+    }
+
+    if (objectiveSatisfied === false && !hasBlockingUserAction) {
+        return {
+            trigger: 'contradictory_evidence',
+            error:
+                `Execution protocol unmet: final response did not satisfy the frozen objective. ` +
+                `${assessedProtocol?.objectiveGap || 'Missing required objective deliverable.'}`,
+            suggestion:
+                'Re-run the task against the frozen acceptance criteria and deliver the missing objective output directly.',
+        };
+    }
+
+    if (objectiveDemandsExplicitBuyPrice(input.preparedWorkRequest, input.executionQuery) && !hasBlockingUserAction) {
+        const priceSignals = extractPriceDeliverySignals(input.outputText);
+        if (!priceSignals.hasPriceValue || !priceSignals.hasBuyContext || !priceSignals.hasTimeAnchor) {
+            return {
+                trigger: 'contradictory_evidence',
+                error:
+                    'Execution protocol unmet: buy-price objective requires explicit price values and a concrete market time anchor, ' +
+                    'but the final response did not provide complete pricing evidence.',
+                suggestion:
+                    'Provide a concrete buy-price value or range, include currency units, and anchor it to a specific market timepoint.',
+            };
+        }
     }
 
     const requestedGroundedEvidence =
@@ -836,6 +985,7 @@ async function runPreparedAgentExecution(input: {
                     success: true,
                     summary: pptGeneratorFastPathResult.summary,
                     artifactsCreated: pptGeneratorFastPathResult.artifactsCreated,
+                    toolsUsed: [],
                 };
             }
         }
@@ -873,11 +1023,6 @@ async function runPreparedAgentExecution(input: {
             typeof latestAssistantOutputText === 'string' && latestAssistantOutputText.trim().length > 0
                 ? latestAssistantOutputText
                 : fullConversationText;
-        const contractEvidence = {
-            files: effectiveArtifacts,
-            toolsUsed: loopResult.toolsUsed,
-            outputText: fullConversationText,
-        };
         const protocolViolation = await evaluateExecutionProtocolCompliance({
             preparedWorkRequest,
             executionQuery,
@@ -904,6 +1049,7 @@ async function runPreparedAgentExecution(input: {
                         summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
                         error: protocolViolation.error,
                         artifactsCreated: effectiveArtifacts,
+                        toolsUsed: loopResult.toolsUsed,
                     };
                 }
                 const refrozenPrepared = reopenOutcome.refrozenPrepared;
@@ -933,10 +1079,25 @@ async function runPreparedAgentExecution(input: {
                 summary: '',
                 error: protocolViolation.error,
                 artifactsCreated: effectiveArtifacts,
+                toolsUsed: loopResult.toolsUsed,
             };
         }
+        const autoMaterializedArtifacts = materializeMissingMarkdownDeliverables({
+            preparedWorkRequest,
+            workspacePath,
+            outputText: protocolOutputText,
+            knownArtifacts: effectiveArtifacts,
+        });
+        const artifactsAfterMaterialization = autoMaterializedArtifacts.length > 0
+            ? deps.session.mergeKnownArtifacts(autoMaterializedArtifacts)
+            : effectiveArtifacts;
+        const contractEvidence = {
+            files: artifactsAfterMaterialization,
+            toolsUsed: loopResult.toolsUsed,
+            outputText: fullConversationText,
+        };
         const artifactEvaluation = deps.evaluateArtifactContract(artifactContract, contractEvidence);
-        const degradedOutput = deps.detectDegradedOutputs(artifactContract, effectiveArtifacts);
+        const degradedOutput = deps.detectDegradedOutputs(artifactContract, artifactsAfterMaterialization);
         deps.reporter.appendArtifactTelemetry(
             deps.buildArtifactTelemetry(artifactContract, contractEvidence, artifactEvaluation)
         );
@@ -950,13 +1111,14 @@ async function runPreparedAgentExecution(input: {
                 }
                 deps.reporter.finished({
                     summary,
-                    artifactsCreated: effectiveArtifacts,
+                    artifactsCreated: artifactsAfterMaterialization,
                     duration: 0,
                 });
                 return {
                     success: true,
                     summary,
-                    artifactsCreated: effectiveArtifacts,
+                    artifactsCreated: artifactsAfterMaterialization,
+                    toolsUsed: loopResult.toolsUsed,
                 };
             }
 
@@ -981,7 +1143,8 @@ async function runPreparedAgentExecution(input: {
                         success: false,
                         summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
                         error: unmetMessage,
-                        artifactsCreated: effectiveArtifacts,
+                        artifactsCreated: artifactsAfterMaterialization,
+                        toolsUsed: loopResult.toolsUsed,
                     };
                 }
                 const refrozenPrepared = reopenOutcome.refrozenPrepared;
@@ -1011,7 +1174,7 @@ async function runPreparedAgentExecution(input: {
                     )
                     : input.missingArtifactSuggestionPrefix.replace(
                         '{artifacts}',
-                        effectiveArtifacts.join(', ') || 'none'
+                        artifactsAfterMaterialization.join(', ') || 'none'
                     ),
             });
 
@@ -1027,7 +1190,8 @@ async function runPreparedAgentExecution(input: {
                 success: false,
                 summary: '',
                 error: unmetMessage,
-                artifactsCreated: effectiveArtifacts,
+                artifactsCreated: artifactsAfterMaterialization,
+                toolsUsed: loopResult.toolsUsed,
             };
         }
 
@@ -1037,7 +1201,7 @@ async function runPreparedAgentExecution(input: {
         const reducedPresentation = deps.reduceWorkResult({
             canonicalResult: finalAssistantText,
             request: frozenWorkRequest,
-            artifacts: effectiveArtifacts,
+            artifacts: artifactsAfterMaterialization,
         });
         const finalSummary = reducedPresentation.uiSummary || reducedPresentation.canonicalResult || 'Task completed';
         markWorkRequestPresentationStarted(preparedWorkRequest);
@@ -1048,13 +1212,14 @@ async function runPreparedAgentExecution(input: {
         }
         deps.reporter.finished({
             summary: finalSummary,
-            artifactsCreated: effectiveArtifacts,
+            artifactsCreated: artifactsAfterMaterialization,
             duration: input.emitFinishedStatus ? 0 : Date.now() - startedAt,
         });
         return {
             success: true,
             summary: finalSummary,
-            artifactsCreated: effectiveArtifacts,
+            artifactsCreated: artifactsAfterMaterialization,
+            toolsUsed: loopResult.toolsUsed,
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1080,6 +1245,7 @@ async function runPreparedAgentExecution(input: {
                     summary: reopenOutcome.blockedSummary || reopenOutcome.reopenedSummary,
                     error: errorMessage,
                     artifactsCreated: [],
+                    toolsUsed: [],
                 };
             }
             const refrozenPrepared = reopenOutcome.refrozenPrepared;
@@ -1115,6 +1281,7 @@ async function runPreparedAgentExecution(input: {
             summary: '',
             error: errorMessage,
             artifactsCreated: [],
+            toolsUsed: [],
         };
     } finally {
         deps.clearPreparedWorkRequest(taskId);

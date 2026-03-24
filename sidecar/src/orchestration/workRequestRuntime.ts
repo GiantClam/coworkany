@@ -9,6 +9,7 @@ import {
     analyzeWorkRequest,
     buildExecutionPlan,
     buildExecutionQuery,
+    buildExecutionQueryForTaskIds,
     freezeWorkRequest,
 } from './workRequestAnalyzer';
 import {
@@ -36,12 +37,31 @@ export type PreparedWorkRequestContext = {
     workRequestExecutionPrompt?: string;
 };
 
+export type ScheduledExecutionStagePlan = {
+    taskId?: string;
+    title: string;
+    taskQuery: string;
+    executeAt: string;
+    stageIndex: number;
+    totalStages: number;
+    delayMsFromPrevious?: number;
+    executionMode: ScheduledExecutionMode;
+};
+
+export type ScheduledExecutionMode = 'sequential' | 'parallel';
+
 export type PlanUpdatedPayload = {
     summary: string;
     steps: Array<{
         id: string;
         description: string;
         status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+    }>;
+    taskProgress?: Array<{
+        taskId: string;
+        title: string;
+        status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+        dependencies: string[];
     }>;
     currentStepId?: string;
 };
@@ -180,6 +200,57 @@ export async function prepareWorkRequestContext(input: {
         executionQuery: buildExecutionQuery(frozenWorkRequest),
         preferredSkillIds: getPreferredSkillIdsFromWorkRequest(frozenWorkRequest),
         workRequestExecutionPrompt: buildWorkRequestExecutionPrompt(frozenWorkRequest),
+    };
+}
+
+export function prepareExecutionContextFromFrozen(input: {
+    request: FrozenWorkRequest;
+    stageTaskId?: string;
+    stageIndex?: number;
+    executionQueryOverride?: string;
+}): PreparedWorkRequestContext {
+    const allTasks = input.request.tasks ?? [];
+    const stageTask = input.stageTaskId
+        ? allTasks.find((task) => task.id === input.stageTaskId)
+        : allTasks[0];
+    const scopedTasks = stageTask ? [stageTask] : allTasks.slice(0, 1);
+    const selectedTaskIds = scopedTasks.map((task) => task.id);
+    const scopedRequest: FrozenWorkRequest = {
+        ...input.request,
+        mode: 'immediate_task',
+        sourceText: scopedTasks[0]?.objective || input.request.sourceText,
+        schedule: undefined,
+        tasks: scopedTasks,
+        clarification: {
+            ...input.request.clarification,
+            required: false,
+            reason: undefined,
+            questions: [],
+            missingFields: [],
+        },
+        // Execution-time user actions should be decided during initial planning, not mid-run.
+        userActionsRequired: [],
+        // Only the first stage keeps original deliverable requirements (e.g., output files).
+        deliverables: typeof input.stageIndex === 'number' && input.stageIndex > 0
+            ? []
+            : input.request.deliverables,
+    };
+    const executionQuery = (input.executionQueryOverride || '').trim()
+        || buildExecutionQueryForTaskIds(
+            input.request,
+            selectedTaskIds,
+            { includeGlobalContracts: false },
+        ).trim()
+        || buildExecutionQuery(scopedRequest).trim()
+        || scopedTasks[0]?.objective?.trim()
+        || input.request.sourceText.trim();
+
+    return {
+        frozenWorkRequest: scopedRequest,
+        executionPlan: buildExecutionPlan(scopedRequest),
+        executionQuery,
+        preferredSkillIds: getPreferredSkillIdsFromWorkRequest(scopedRequest, selectedTaskIds),
+        workRequestExecutionPrompt: buildWorkRequestExecutionPrompt(scopedRequest),
     };
 }
 
@@ -403,6 +474,17 @@ export function buildPlanUpdatedPayload(prepared: PreparedWorkRequestContext): P
         description: step.description,
         status: toPlanUpdatedStatus(step.status),
     }));
+    const taskProgress = prepared.executionPlan.steps
+        .filter((step) => step.kind === 'execution' && typeof step.taskId === 'string')
+        .map((step) => {
+            const task = prepared.frozenWorkRequest.tasks.find((candidate) => candidate.id === step.taskId);
+            return {
+                taskId: step.taskId as string,
+                title: task?.title || step.title,
+                status: toPlanUpdatedStatus(step.status),
+                dependencies: task?.dependencies ?? [],
+            };
+        });
     const currentStep = prepared.executionPlan.steps.find((step) => step.status === 'running')
         ?? prepared.executionPlan.steps.find((step) => step.status === 'blocked')
         ?? prepared.executionPlan.steps.find((step) => step.status === 'pending');
@@ -421,6 +503,7 @@ export function buildPlanUpdatedPayload(prepared: PreparedWorkRequestContext): P
     return {
         summary,
         steps,
+        taskProgress,
         currentStepId: currentStep?.stepId,
     };
 }
@@ -429,18 +512,211 @@ export function getScheduledTaskExecutionQuery(input: {
     record: ScheduledTaskRecord;
     workRequestStore: WorkRequestStore;
 }): string {
+    if (input.record.frozenWorkRequest?.mode === 'scheduled_multi_task' && input.record.taskQuery.trim().length > 0) {
+        return stripScheduledContractNoise(input.record.taskQuery);
+    }
+
     if (input.record.frozenWorkRequest) {
-        return buildExecutionQuery(input.record.frozenWorkRequest);
+        return stripScheduledContractNoise(
+            buildExecutionQueryForTaskIds(
+                input.record.frozenWorkRequest,
+                undefined,
+                { includeGlobalContracts: false },
+            )
+        );
     }
 
     if (input.record.workRequestId) {
         const stored = input.workRequestStore.getById(input.record.workRequestId);
         if (stored) {
-            return buildExecutionQuery(stored);
+            return stripScheduledContractNoise(
+                buildExecutionQueryForTaskIds(
+                    stored,
+                    undefined,
+                    { includeGlobalContracts: false },
+                )
+            );
         }
     }
 
-    return input.record.taskQuery;
+    return stripScheduledContractNoise(input.record.taskQuery);
+}
+
+type SchedulableRequest = Pick<FrozenWorkRequest, 'tasks' | 'schedule' | 'deliverables' | 'checkpoints'>;
+
+function inferScheduledExecutionMode(input: {
+    tasks: NonNullable<SchedulableRequest['tasks']>;
+    scheduleStages: NonNullable<NonNullable<SchedulableRequest['schedule']>['stages']>;
+}): ScheduledExecutionMode {
+    const { tasks, scheduleStages } = input;
+    if (scheduleStages.length <= 1) {
+        return 'parallel';
+    }
+
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const hasSequentialDependencies = scheduleStages
+        .slice(1)
+        .every((stage, index) => {
+            const previousStage = scheduleStages[index];
+            if (!previousStage?.taskId) {
+                return false;
+            }
+            const task = taskById.get(stage.taskId) ?? tasks[index + 1];
+            return Boolean(task?.dependencies?.includes(previousStage.taskId));
+        });
+
+    const hasRelativeDelays = scheduleStages
+        .slice(1)
+        .every((stage) => typeof stage.delayMsFromPrevious === 'number' && stage.delayMsFromPrevious >= 0);
+
+    return hasSequentialDependencies || hasRelativeDelays ? 'sequential' : 'parallel';
+}
+
+function buildAllScheduledExecutionStages(input: {
+    request: Pick<FrozenWorkRequest, 'tasks' | 'schedule' | 'deliverables' | 'checkpoints'>;
+    fallbackTitle: string;
+    fallbackQuery: string;
+}): ScheduledExecutionStagePlan[] {
+    const schedule = input.request.schedule;
+    if (!schedule?.executeAt) {
+        return [];
+    }
+
+    const tasks = input.request.tasks ?? [];
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const plannedStages: ScheduledExecutionStagePlan[] = [];
+    const scheduleStages = schedule.stages ?? [];
+    const executionMode = inferScheduledExecutionMode({
+        tasks,
+        scheduleStages,
+    });
+
+    if (scheduleStages.length > 0) {
+        let rollingExecuteAtMs = new Date(schedule.executeAt).getTime();
+        scheduleStages.forEach((stage, index) => {
+            const task = taskById.get(stage.taskId) ?? tasks[index];
+            const taskQuery = task?.objective?.trim() || input.fallbackQuery.trim();
+            const fallbackTaskTitle = input.fallbackTitle.trim() || 'Scheduled Task';
+            const explicitExecuteAtMs = new Date(stage.executeAt).getTime();
+            if (Number.isFinite(explicitExecuteAtMs)) {
+                rollingExecuteAtMs = explicitExecuteAtMs;
+            } else if (index > 0 && typeof stage.delayMsFromPrevious === 'number' && stage.delayMsFromPrevious >= 0) {
+                rollingExecuteAtMs += stage.delayMsFromPrevious;
+            }
+            plannedStages.push({
+                taskId: task?.id,
+                title: task?.title?.trim() || fallbackTaskTitle,
+                taskQuery: taskQuery || input.fallbackQuery.trim(),
+                executeAt: new Date(rollingExecuteAtMs).toISOString(),
+                stageIndex: index,
+                totalStages: scheduleStages.length,
+                delayMsFromPrevious: stage.delayMsFromPrevious,
+                executionMode,
+            });
+        });
+    }
+
+    if (plannedStages.length > 0) {
+        return plannedStages;
+    }
+
+    const fallbackTaskTitle = input.fallbackTitle.trim() || tasks[0]?.title?.trim() || 'Scheduled Task';
+    const fallbackQuery = input.fallbackQuery.trim()
+        || buildExecutionQueryForTaskIds(input.request, undefined, { includeGlobalContracts: false }).trim()
+        || tasks[0]?.objective?.trim()
+        || fallbackTaskTitle;
+
+    return [{
+        taskId: tasks[0]?.id,
+        title: fallbackTaskTitle,
+        taskQuery: fallbackQuery,
+        executeAt: schedule.executeAt,
+        stageIndex: 0,
+        totalStages: 1,
+        executionMode: 'parallel',
+    }];
+}
+
+export function planScheduledExecutionStages(input: {
+    request: Pick<FrozenWorkRequest, 'tasks' | 'schedule' | 'deliverables' | 'checkpoints'>;
+    fallbackTitle: string;
+    fallbackQuery: string;
+}): ScheduledExecutionStagePlan[] {
+    const allStages = buildAllScheduledExecutionStages(input);
+    if (allStages.length <= 1) {
+        return allStages;
+    }
+    const executionMode = allStages[0]?.executionMode ?? 'parallel';
+    return executionMode === 'sequential' ? [allStages[0]!] : allStages;
+}
+
+export function planNextScheduledExecutionStage(input: {
+    request: Pick<FrozenWorkRequest, 'tasks' | 'schedule' | 'deliverables' | 'checkpoints'>;
+    fallbackTitle: string;
+    fallbackQuery: string;
+    completedAt: Date;
+    completedStageIndex?: number;
+    completedStageTaskId?: string;
+}): ScheduledExecutionStagePlan | null {
+    const allStages = buildAllScheduledExecutionStages({
+        request: input.request,
+        fallbackTitle: input.fallbackTitle,
+        fallbackQuery: input.fallbackQuery,
+    });
+    if (allStages.length <= 1 || allStages[0]?.executionMode !== 'sequential') {
+        return null;
+    }
+
+    let completedStageIndex = Number.isInteger(input.completedStageIndex)
+        ? Math.max(0, input.completedStageIndex as number)
+        : -1;
+    if (completedStageIndex < 0 && input.completedStageTaskId) {
+        completedStageIndex = allStages.findIndex((stage) => stage.taskId === input.completedStageTaskId);
+    }
+    if (completedStageIndex < 0) {
+        return null;
+    }
+
+    const nextStage = allStages[completedStageIndex + 1];
+    if (!nextStage) {
+        return null;
+    }
+
+    const delayMs = typeof nextStage.delayMsFromPrevious === 'number'
+        ? Math.max(0, nextStage.delayMsFromPrevious)
+        : 0;
+    const executeAt = new Date(input.completedAt.getTime() + delayMs).toISOString();
+    return {
+        ...nextStage,
+        executeAt,
+    };
+}
+
+const SCHEDULED_CONTRACT_NOISE_LINE_PATTERNS: RegExp[] = [
+    /^\s*交付物[:：]/i,
+    /^\s*检查点[:：]/i,
+    /^\s*deliverables?[:：]/i,
+    /^\s*checkpoints?[:：]/i,
+];
+
+function stripScheduledContractNoise(query: string): string {
+    const lines = query
+        .split(/\r?\n/)
+        .map((line) => line.trimEnd());
+
+    const filteredLines = lines.filter((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            return true;
+        }
+        return !SCHEDULED_CONTRACT_NOISE_LINE_PATTERNS.some((pattern) => pattern.test(trimmed));
+    });
+
+    return filteredLines
+        .join('\n')
+        .replace(/(^|\n)\s*约束[:：]\s*约束[:：]/gi, '$1约束：')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
 function getPlanStepNumbersByKind(
@@ -501,9 +777,18 @@ function updateExecutionPlanByKind(
     }
 }
 
-function getPreferredSkillIdsFromWorkRequest(request: FrozenWorkRequest): string[] {
+function getPreferredSkillIdsFromWorkRequest(
+    request: FrozenWorkRequest,
+    taskIds?: string[],
+): string[] {
+    const selectedTaskIdSet = Array.isArray(taskIds) && taskIds.length > 0
+        ? new Set(taskIds)
+        : null;
     const ids = new Set<string>();
     for (const task of request.tasks) {
+        if (selectedTaskIdSet && !selectedTaskIdSet.has(task.id)) {
+            continue;
+        }
         for (const skillId of task.preferredSkills) {
             ids.add(skillId);
         }

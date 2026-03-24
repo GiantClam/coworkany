@@ -62,4 +62,20 @@ describe('scheduled task intent parsing', () => {
         expect(parsed?.originalTimeExpression).toBe('1分钟之后');
         expect(parsed?.executeAt.toISOString()).toBe('2026-03-20T01:18:12.000Z');
     });
+
+    test('extracts chained scheduled follow-up stages instead of folding them into constraints', () => {
+        const parsed = detectScheduledIntent(
+            '1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上',
+            new Date('2026-03-23T21:34:08+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中');
+        expect(parsed?.chainedStages).toHaveLength(1);
+        expect(parsed?.chainedStages?.[0]).toMatchObject({
+            taskQuery: '分析结果发布到 X 上',
+            originalTimeExpression: '1分钟',
+            delayMsFromPrevious: 60_000,
+        });
+    });
 });

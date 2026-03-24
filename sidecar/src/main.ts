@@ -204,12 +204,17 @@ import {
 } from './scheduling/scheduledTaskPresentation';
 import {
     buildExecutionQuery,
+    buildExecutionQueryForTaskIds,
     reduceWorkResult,
 } from './orchestration/workRequestAnalyzer';
-import { snapshotFrozenWorkRequest } from './orchestration/workRequestSnapshot';
+import {
+    snapshotFrozenWorkRequest,
+    type FrozenWorkRequestSnapshot,
+} from './orchestration/workRequestSnapshot';
 import { WorkRequestStore } from './orchestration/workRequestStore';
 import {
     type CheckpointContract,
+    type DeliverableContract,
     type FrozenWorkRequest,
     type UserActionRequest,
 } from './orchestration/workRequestSchema';
@@ -223,6 +228,8 @@ import {
     buildResearchUpdatedPayload,
     buildWorkRequestPlanSummary,
     buildClarificationMessage,
+    planScheduledExecutionStages,
+    planNextScheduledExecutionStage,
     createFrozenWorkRequestFromText,
     refreezePreparedWorkRequestForResearch,
     getBlockingCheckpoint,
@@ -234,6 +241,7 @@ import {
     markWorkRequestExecutionStarted,
     markWorkRequestExecutionSuspended,
     prepareWorkRequestContext,
+    prepareExecutionContextFromFrozen,
     type PreparedWorkRequestContext,
 } from './orchestration/workRequestRuntime';
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
@@ -284,6 +292,7 @@ import { getCorrectionCoordinator } from './agent/verification';
 import { formatErrorForAI } from './agent/selfCorrection';
 import { recoverMainLoopToolFailure } from './agent/mainLoopRecovery';
 import { createHeartbeatEngine } from './proactive';
+import * as net from 'net';
 import * as os from 'os';
 // NOTE: fs and path are imported at the top of the file (log file setup)
 import { getCurrentPlatform } from './utils/commandAlternatives';
@@ -296,9 +305,46 @@ import { HostAccessGrantManager, deriveHostAccessRequest } from './security/host
 
 type OutputMessage = IpcResponse | TaskEvent;
 
+const singletonEnabled = matchesEnabledFlag(process.env.COWORKANY_SIDECAR_SINGLETON);
+const singletonSocketPath =
+    process.env.COWORKANY_SIDECAR_SOCKET_PATH?.trim() || undefined;
+const singletonLockPath = singletonSocketPath
+    ? path.join(os.tmpdir(), `coworkany-sidecar-${Buffer.from(singletonSocketPath).toString('hex').slice(0, 24)}.lock`)
+    : undefined;
+let singletonIsPrimary = false;
+let singletonServer: net.Server | null = null;
+let singletonLockFd: number | null = null;
+const singletonClients = new Set<net.Socket>();
+let primaryStdinEnded = false;
+
+function matchesEnabledFlag(value?: string): boolean {
+    if (!value) return false;
+    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function broadcastSingletonLine(line: string): void {
+    for (const client of singletonClients) {
+        if (client.destroyed || !client.writable) {
+            singletonClients.delete(client);
+            continue;
+        }
+        try {
+            client.write(line);
+        } catch {
+            singletonClients.delete(client);
+            try {
+                client.destroy();
+            } catch {
+                // ignore
+            }
+        }
+    }
+}
+
 function emit(message: OutputMessage): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
+    broadcastSingletonLine(line + '\n');
 
     // Forward TaskEvents to post-execution learning manager
     if ('type' in message && 'taskId' in message && typeof postLearningManager !== 'undefined') {
@@ -342,6 +388,7 @@ function emit(message: OutputMessage): void {
 function emitAny(message: Record<string, unknown>): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
+    broadcastSingletonLine(line + '\n');
 }
 
 function sendIpcCommandAndWait(
@@ -1836,6 +1883,31 @@ const workspaceCommandDeps: WorkspaceCommandDeps = {
     getResolvedAppDataRoot,
 };
 
+function getRuntimeSnapshot() {
+    const tasks = Array.from(taskRuntimeMeta.entries())
+        .map(([taskId, meta]) => {
+            const suspended = meta.status === 'suspended' || Boolean(meta.suspension) || suspendResumeManager.isSuspended(taskId);
+            const status = suspended ? 'suspended' : meta.status;
+            return {
+                taskId,
+                title: meta.title,
+                workspacePath: meta.workspacePath,
+                createdAt: meta.createdAt,
+                status,
+                suspended,
+                suspensionReason: meta.suspension?.reason,
+            };
+        })
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+
+    return {
+        generatedAt: new Date().toISOString(),
+        activeTaskId: currentExecutingTaskId,
+        tasks,
+        count: tasks.length,
+    };
+}
+
 function getRuntimeCommandDeps(): RuntimeCommandDeps {
     return {
         emit: emitAny,
@@ -1848,6 +1920,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
             );
         },
         restorePersistedTasks,
+        getRuntimeSnapshot,
         runDoctorPreflight: (input) => {
             const repositoryRoot = path.basename(workspaceRoot) === 'sidecar'
                 ? path.resolve(workspaceRoot, '..')
@@ -2887,24 +2960,83 @@ const PERSONAL_TOOLS = createPersonalTools({
             workRequestStore.upsert(frozenWorkRequest);
         }
         const primaryTask = frozenWorkRequest.tasks[0];
-        const record = scheduleTaskInternal({
-            title: args.title?.trim() || primaryTask?.title || args.task_query.trim().slice(0, 60),
-            taskQuery: primaryTask ? buildExecutionQuery(frozenWorkRequest) : args.task_query,
-            executeAt: parseScheduledTimeExpression(args.time),
+        let stagePlans = planScheduledExecutionStages({
+            request: frozenWorkRequest,
+            fallbackTitle: args.title?.trim() || primaryTask?.title || args.task_query.trim().slice(0, 60),
+            fallbackQuery: primaryTask
+                ? buildExecutionQueryForTaskIds(
+                    frozenWorkRequest,
+                    undefined,
+                    { includeGlobalContracts: false },
+                )
+                : args.task_query,
+        });
+        if (stagePlans.length === 0) {
+            stagePlans = [{
+                taskId: primaryTask?.id,
+                title: args.title?.trim() || primaryTask?.title || args.task_query.trim().slice(0, 60) || 'Scheduled Task',
+                taskQuery: (
+                    primaryTask
+                        ? buildExecutionQueryForTaskIds(
+                            frozenWorkRequest,
+                            undefined,
+                            { includeGlobalContracts: false },
+                        )
+                        : args.task_query
+                ).trim(),
+                executeAt: parseScheduledTimeExpression(args.time).toISOString(),
+                stageIndex: 0,
+                totalStages: 1,
+                executionMode: 'parallel',
+            }];
+        }
+        const records = stagePlans.map((stage) => scheduleTaskInternal({
+            title: stage.title,
+            taskQuery: stage.taskQuery,
+            executeAt: new Date(stage.executeAt),
             workspacePath: context.workspacePath,
             speakResult: effectiveSpeakResult,
             sourceTaskId: context.taskId,
             config: toScheduledTaskConfig(taskSessionStore.getConfig(context.taskId)),
             workRequestId: frozenWorkRequest.id,
+            stageTaskId: stage.taskId,
+            stageIndex: stage.stageIndex,
+            totalStages: stage.totalStages,
+            delayMsFromPrevious: stage.delayMsFromPrevious,
             frozenWorkRequest,
-        });
+        }));
+        const firstRecord = records[0];
+        if (!firstRecord) {
+            return {
+                success: false,
+                error: 'unable_to_schedule_task',
+            };
+        }
+        const isSequentialChain = (stagePlans[0]?.executionMode === 'sequential') && (stagePlans[0]?.totalStages ?? 0) > 1;
+        const confirmationMessage = isSequentialChain
+            ? buildSequentialSchedulingConfirmationMessage({
+                firstRecord,
+                totalStages: stagePlans[0]?.totalStages ?? records.length,
+            })
+            : records.length <= 1
+                ? buildScheduledConfirmationMessage(firstRecord)
+                : [
+                    `已拆解为 ${records.length} 个定时任务：`,
+                    ...records.map((record, index) => `${index + 1}. ${buildScheduledConfirmationMessage(record)}`),
+                ].join('\n');
 
         return {
             success: true,
-            scheduledTaskId: record.id,
-            scheduledAt: record.executeAt,
-            humanReadableTime: formatScheduledTime(new Date(record.executeAt)),
-            confirmationMessage: buildScheduledConfirmationMessage(record),
+            scheduledTaskId: firstRecord.id,
+            scheduledAt: firstRecord.executeAt,
+            humanReadableTime: formatScheduledTime(new Date(firstRecord.executeAt)),
+            confirmationMessage,
+            scheduledTasks: records.map((record) => ({
+                id: record.id,
+                executeAt: record.executeAt,
+                humanReadableTime: formatScheduledTime(new Date(record.executeAt)),
+                title: record.title,
+            })),
         };
     },
 });
@@ -3005,6 +3137,12 @@ function scheduleTaskInternal(input: {
     sourceTaskId?: string;
     config?: ScheduledTaskConfig;
     workRequestId?: string;
+    stageTaskId?: string;
+    stageIndex?: number;
+    totalStages?: number;
+    delayMsFromPrevious?: number;
+    previousStageSummary?: string;
+    previousStageArtifacts?: string[];
     frozenWorkRequest?: FrozenWorkRequest;
 }): ScheduledTaskRecord {
     const title = input.title.trim() || input.taskQuery.trim().slice(0, 60) || 'Scheduled Task';
@@ -3012,6 +3150,12 @@ function scheduleTaskInternal(input: {
         title,
         taskQuery: input.taskQuery.trim(),
         workRequestId: input.workRequestId,
+        stageTaskId: input.stageTaskId,
+        stageIndex: input.stageIndex,
+        totalStages: input.totalStages,
+        delayMsFromPrevious: input.delayMsFromPrevious,
+        previousStageSummary: input.previousStageSummary,
+        previousStageArtifacts: input.previousStageArtifacts,
         frozenWorkRequest: input.frozenWorkRequest,
         workspacePath: input.workspacePath,
         executeAt: input.executeAt,
@@ -3027,6 +3171,33 @@ function buildScheduledConfirmationMessage(record: ScheduledTaskRecord): string 
     const timeText = formatScheduledTime(new Date(record.executeAt));
     const suffix = record.speakResult ? '，完成后会为你语音播报。' : '。';
     return `已安排在 ${timeText} 执行：${record.title}${suffix}`;
+}
+
+function buildSequentialSchedulingConfirmationMessage(input: {
+    firstRecord: ScheduledTaskRecord;
+    totalStages: number;
+}): string {
+    return [
+        `已拆解为 ${input.totalStages} 个链式阶段任务。`,
+        `当前仅安排第 1 阶段：${buildScheduledConfirmationMessage(input.firstRecord)}`,
+        '后续阶段会在前一阶段完成后，自动继承结果并继续排程。',
+    ].join('\n');
+}
+
+function findExistingScheduledStageRecord(input: {
+    workRequestId?: string;
+    stageIndex?: number;
+}): ScheduledTaskRecord | undefined {
+    if (!input.workRequestId || !Number.isInteger(input.stageIndex)) {
+        return undefined;
+    }
+    return scheduledTaskStore
+        .read()
+        .find((record) =>
+            record.workRequestId === input.workRequestId
+            && record.stageIndex === input.stageIndex
+            && record.status !== 'cancelled'
+        );
 }
 
 function emitScheduledTaskResultToSourceTask(record: ScheduledTaskRecord, resultText: string): void {
@@ -3084,6 +3255,9 @@ type FreshTaskResult = {
     summary: string;
     error?: string;
     artifactsCreated: string[];
+    toolsUsed?: string[];
+    frozenWorkRequest?: FrozenWorkRequest;
+    blockingUserActionKind?: UserActionRequest['kind'];
 };
 
 const SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT = `## Scheduled Task Execution
@@ -3097,8 +3271,138 @@ Rules:
 - Return one cleaned final answer only.
 - Do not ask the user to reply "继续"/"确认"/"执行" at the end.
 - Do not refuse the core objective unless there is a concrete technical blocker.
+- For social publishing objectives (for example posting to X/Twitter), browser automation is mandatory: call browser tools first and only fail when there is a concrete technical blocker.
 - For investment-analysis requests, provide probabilistic judgments and action frameworks directly; use uncertainty and risk disclaimers instead of refusing execution.
 - Do not include meta commentary, planning notes, or repeated restatements of the user's request.`;
+
+const SCHEDULED_TASK_NON_EXECUTION_PATTERNS: RegExp[] = [
+    /^\s*(?:我会|我将|接下来|稍后).{0,24}(?:开始|进行|执行|检索|分析)/u,
+    /^\s*(?:i(?:'ll| will)|let me)\s+(?:start|begin|first)\b/i,
+    /(?:无法直接|不能直接|cannot directly|can't directly)/i,
+];
+
+function buildScheduledStageContextSystemPrompt(record: ScheduledTaskRecord): string | undefined {
+    const summary = (record.previousStageSummary ?? '').trim();
+    const artifacts = (record.previousStageArtifacts ?? [])
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .slice(0, 8);
+    if (!summary && artifacts.length === 0) {
+        return undefined;
+    }
+
+    const sections = [
+        '## Previous Stage Context',
+        'Reuse previous-stage outputs as primary inputs and avoid redoing completed work.',
+    ];
+    if (summary) {
+        sections.push(`Previous stage summary:\n${summary.slice(0, 2000)}`);
+    }
+    if (artifacts.length > 0) {
+        sections.push(`Previous stage artifacts:\n${artifacts.map((artifact) => `- ${artifact}`).join('\n')}`);
+    }
+    return sections.join('\n\n');
+}
+
+function hasRequiredArtifactDeliverable(request?: FrozenWorkRequest): boolean {
+    if (!request?.deliverables || request.deliverables.length === 0) {
+        return false;
+    }
+    return request.deliverables.some((deliverable) =>
+        deliverable.required
+        && (deliverable.type === 'report_file' || deliverable.type === 'artifact_file')
+    );
+}
+
+const SOCIAL_PLATFORM_PATTERN = /(x\.com|twitter|推特|x\s*\(|在\s*x\s*上|到\s*x\s*上|社交平台|小红书|reddit|facebook|instagram|linkedin)/i;
+const SOCIAL_PUBLISH_ACTION_PATTERN = /(发布|发帖|发文|post|publish|tweet)/i;
+
+function requiresBrowserEvidenceForScheduledTask(input: {
+    record: ScheduledTaskRecord;
+    result: FreshTaskResult;
+}): boolean {
+    const request = input.result.frozenWorkRequest || input.record.frozenWorkRequest;
+    const stageTask = request
+        ? (input.record.stageTaskId
+        ? request.tasks.find((task) => task.id === input.record.stageTaskId)
+        : request.tasks[0])
+        : undefined;
+    const stageText = [
+        input.record.title,
+        input.record.taskQuery,
+        stageTask?.title,
+        stageTask?.objective,
+        ...(stageTask?.acceptanceCriteria ?? []),
+    ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join('\n');
+
+    const hasPublishSignal = SOCIAL_PUBLISH_ACTION_PATTERN.test(stageText);
+    const hasPlatformSignal = SOCIAL_PLATFORM_PATTERN.test(stageText);
+    const byIntent = hasPlatformSignal && hasPublishSignal;
+    if (!request) {
+        return byIntent;
+    }
+
+    const hasBrowserPreferredTool = (stageTask?.preferredTools ?? []).some((toolName) =>
+        typeof toolName === 'string' && toolName.startsWith('browser_')
+    );
+    return byIntent || (hasBrowserPreferredTool && hasPlatformSignal && hasPublishSignal);
+}
+
+function hasBrowserToolEvidence(result: FreshTaskResult): boolean {
+    return (result.toolsUsed ?? []).some((toolName) => toolName.startsWith('browser_'));
+}
+
+function validateScheduledExecutionResult(input: {
+    record: ScheduledTaskRecord;
+    result: FreshTaskResult;
+    presentedResultText: string;
+}): { success: boolean; error?: string } {
+    if (!input.result.success) {
+        return {
+            success: false,
+            error: input.result.error || input.presentedResultText || 'Scheduled task execution failed.',
+        };
+    }
+
+    if (input.result.blockingUserActionKind) {
+        return {
+            success: false,
+            error: `Execution requires user action (${input.result.blockingUserActionKind}) and cannot continue in autonomous scheduled mode.`,
+        };
+    }
+
+    if (
+        hasRequiredArtifactDeliverable(input.result.frozenWorkRequest)
+        && input.result.artifactsCreated.length === 0
+    ) {
+        return {
+            success: false,
+            error: 'Execution did not produce the required output file artifact.',
+        };
+    }
+
+    const text = input.presentedResultText.trim();
+    if (input.result.artifactsCreated.length === 0 && SCHEDULED_TASK_NON_EXECUTION_PATTERNS.some((pattern) => pattern.test(text))) {
+        return {
+            success: false,
+            error: 'Execution returned a deferred/refusal response instead of completing the scheduled objective.',
+        };
+    }
+
+    if (
+        requiresBrowserEvidenceForScheduledTask(input)
+        && !hasBrowserToolEvidence(input.result)
+    ) {
+        return {
+            success: false,
+            error: 'Scheduled social publishing task completed without browser automation evidence (missing browser_* tool calls).',
+        };
+    }
+
+    return { success: true };
+}
 
 function mergeSystemPrompt(
     basePrompt: string | { skills: string } | undefined,
@@ -3148,20 +3452,26 @@ async function executeFreshTask(args: {
     emitStartedEvent: boolean;
     allowAutonomousFallback: boolean;
     extraSystemPrompt?: string;
+    failOnBlockingUserAction?: boolean;
+    preparedWorkRequestOverride?: PreparedWorkRequestContext;
 }): Promise<FreshTaskResult> {
     const { taskId, title, userQuery, workspacePath, activeFile, config } = args;
     const parsedUserInput = parseInlineAttachmentContent(userQuery);
     const promptUserQuery = parsedUserInput.promptText || userQuery;
     const conversationUserContent = parsedUserInput.conversationContent;
-    const preparedWorkRequest = await prepareWorkRequestContext({
-        sourceText: promptUserQuery,
-        workspacePath,
-        workRequestStore,
-        researchResolvers: {
-            webSearch: resolveWebResearch,
-            connectedAppStatus: resolveConnectedAppResearch,
-        },
-    });
+    // Ensure search/browser/provider config is loaded before any pre-execution research resolves.
+    loadLlmConfig(workspacePath);
+    const preparedWorkRequest = args.preparedWorkRequestOverride
+        ? args.preparedWorkRequestOverride
+        : await prepareWorkRequestContext({
+            sourceText: promptUserQuery,
+            workspacePath,
+            workRequestStore,
+            researchResolvers: {
+                webSearch: resolveWebResearch,
+                connectedAppStatus: resolveConnectedAppResearch,
+            },
+        });
     const {
         frozenWorkRequest,
         executionQuery,
@@ -3230,6 +3540,19 @@ async function executeFreshTask(args: {
 
     if (frozenWorkRequest.clarification.required) {
         const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
+        if (args.failOnBlockingUserAction) {
+            emit(createTaskStatusEvent(taskId, {
+                status: 'idle',
+            }));
+            return {
+                success: false,
+                summary: clarificationMessage,
+                error: clarificationMessage,
+                artifactsCreated: [],
+                frozenWorkRequest,
+                blockingUserActionKind: 'clarify_input',
+            };
+        }
         pushConversationMessage(taskId, {
             role: 'user',
             content: conversationUserContent,
@@ -3260,6 +3583,23 @@ async function executeFreshTask(args: {
             success: true,
             summary: clarificationMessage,
             artifactsCreated: [],
+            frozenWorkRequest,
+            blockingUserActionKind: 'clarify_input',
+        };
+    }
+
+    if (args.failOnBlockingUserAction && blockingUserAction?.blocking) {
+        const blockingMessage = buildBlockingUserActionMessage(blockingUserAction);
+        emit(createTaskStatusEvent(taskId, {
+            status: 'idle',
+        }));
+        return {
+            success: false,
+            summary: blockingMessage,
+            error: blockingMessage,
+            artifactsCreated: [],
+            frozenWorkRequest,
+            blockingUserActionKind: blockingUserAction.kind,
         };
     }
 
@@ -3290,27 +3630,57 @@ async function executeFreshTask(args: {
             success: true,
             summary: confirmationMessage,
             artifactsCreated: [],
+            frozenWorkRequest,
+            blockingUserActionKind: 'confirm_plan',
         };
     }
 
-    if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
+    if (
+        (frozenWorkRequest.mode === 'scheduled_task' || frozenWorkRequest.mode === 'scheduled_multi_task')
+        && frozenWorkRequest.schedule?.executeAt
+    ) {
         pushConversationMessage(taskId, {
             role: 'user',
             content: conversationUserContent,
         });
         const primaryTask = frozenWorkRequest.tasks[0];
-        const record = scheduleTaskInternal({
-            title: primaryTask?.title || executionQuery.trim().slice(0, 60) || title,
-            taskQuery: buildExecutionQuery(frozenWorkRequest),
-            executeAt: new Date(frozenWorkRequest.schedule.executeAt),
+        const stagePlans = planScheduledExecutionStages({
+            request: frozenWorkRequest,
+            fallbackTitle: primaryTask?.title || executionQuery.trim().slice(0, 60) || title,
+            fallbackQuery: buildExecutionQueryForTaskIds(
+                frozenWorkRequest,
+                undefined,
+                { includeGlobalContracts: false },
+            ),
+        });
+        const records = stagePlans.map((stage) => scheduleTaskInternal({
+            title: stage.title,
+            taskQuery: stage.taskQuery,
+            executeAt: new Date(stage.executeAt),
             workspacePath,
             speakResult: frozenWorkRequest.presentation.ttsEnabled,
             sourceTaskId: taskId,
             config: toScheduledTaskConfig(config),
             workRequestId: frozenWorkRequest.id,
+            stageTaskId: stage.taskId,
+            stageIndex: stage.stageIndex,
+            totalStages: stage.totalStages,
+            delayMsFromPrevious: stage.delayMsFromPrevious,
             frozenWorkRequest,
-        });
-        return emitScheduledConfirmation(taskId, buildScheduledConfirmationMessage(record), startedAt);
+        }));
+        const isSequentialChain = (stagePlans[0]?.executionMode === 'sequential') && (stagePlans[0]?.totalStages ?? 0) > 1;
+        const confirmationMessage = isSequentialChain
+            ? buildSequentialSchedulingConfirmationMessage({
+                firstRecord: records[0]!,
+                totalStages: stagePlans[0]?.totalStages ?? records.length,
+            })
+            : records.length <= 1
+                ? buildScheduledConfirmationMessage(records[0]!)
+                : [
+                    `已拆解为 ${records.length} 个定时任务：`,
+                    ...records.map((record, index) => `${index + 1}. ${buildScheduledConfirmationMessage(record)}`),
+                ].join('\n');
+        return emitScheduledConfirmation(taskId, confirmationMessage, startedAt);
     }
 
     markWorkRequestExecutionStarted(preparedWorkRequest);
@@ -3331,6 +3701,7 @@ async function executeFreshTask(args: {
             success: true,
             summary: curatedPptResult.summary,
             artifactsCreated: curatedPptResult.artifactsCreated,
+            frozenWorkRequest,
         };
     }
 
@@ -3343,7 +3714,7 @@ async function executeFreshTask(args: {
         role: 'user',
         content: conversationUserContent,
     });
-    return executePreparedTaskFlow({
+    const executionResult = await executePreparedTaskFlow({
         taskId,
         userQuery: promptUserQuery,
         workspacePath,
@@ -3356,6 +3727,10 @@ async function executeFreshTask(args: {
         artifactContract,
         startedAt,
     }, getExecutionRuntimeDeps(taskId));
+    return {
+        ...executionResult,
+        frozenWorkRequest,
+    };
 }
 
 async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void> {
@@ -3367,19 +3742,31 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
     };
     scheduledTaskStore.upsert(runningRecord);
 
-    const taskId = record.sourceTaskId || randomUUID();
-    const isSameSessionExecution = Boolean(record.sourceTaskId && taskId === record.sourceTaskId);
+    const taskId = randomUUID();
     const executionQuery = getScheduledTaskExecutionQuery({
         record,
         workRequestStore,
     });
+    const resolvedWorkRequest =
+        record.frozenWorkRequest ||
+        (record.workRequestId ? workRequestStore.getById(record.workRequestId) : undefined);
+    const preparedWorkRequestOverride = resolvedWorkRequest
+        ? prepareExecutionContextFromFrozen({
+            request: resolvedWorkRequest,
+            stageTaskId: record.stageTaskId,
+            stageIndex: record.stageIndex,
+            executionQueryOverride: executionQuery,
+        })
+        : undefined;
     console.error(
         `[Scheduler] Starting scheduled task ${record.id} in ${record.workspacePath} as task ${taskId}`
     );
-    if (!isSameSessionExecution) {
-        emitScheduledTaskStartedToSourceTask(record);
-    }
+    emitScheduledTaskStartedToSourceTask(record);
     try {
+        const scheduledContextPrompt = buildScheduledStageContextSystemPrompt(record);
+        const scheduledExecutionPrompt = scheduledContextPrompt
+            ? `${SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT}\n\n${scheduledContextPrompt}`
+            : SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT;
         const result = await withOperationTimeout(
             executeFreshTask({
                 taskId,
@@ -3390,16 +3777,15 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                 activeFile: undefined,
                 emitStartedEvent: true,
                 allowAutonomousFallback: false,
-                extraSystemPrompt: SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT,
+                extraSystemPrompt: scheduledExecutionPrompt,
+                failOnBlockingUserAction: true,
+                preparedWorkRequestOverride,
             }),
             SCHEDULED_TASK_EXECUTION_TIMEOUT_MS,
             'scheduled_task_execution'
         );
 
         const finalAssistantText = getLatestAssistantResponseText(taskId) || result.summary || '定时任务已完成。';
-        const resolvedWorkRequest =
-            record.frozenWorkRequest ||
-            (record.workRequestId ? workRequestStore.getById(record.workRequestId) : undefined);
         const reducedPresentation = resolvedWorkRequest
             ? reduceWorkResult({
                 canonicalResult: finalAssistantText,
@@ -3413,31 +3799,89 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                 artifacts: result.artifactsCreated,
             };
         const presentedResultText = reducedPresentation.uiSummary || reducedPresentation.canonicalResult;
-        if (!isSameSessionExecution) {
-            if (result.success) {
-                emitScheduledTaskResultToSourceTask(record, presentedResultText);
-            } else {
-                emitScheduledTaskFailureToSourceTask(record, result.error || '未知错误');
-            }
+        const validation = validateScheduledExecutionResult({
+            record,
+            result,
+            presentedResultText,
+        });
+        const executionSuccess = validation.success;
+        const executionError = validation.error || result.error;
+        if (executionSuccess) {
+            emitScheduledTaskResultToSourceTask(record, presentedResultText);
+        } else {
+            emitScheduledTaskFailureToSourceTask(record, executionError || '未知错误');
         }
 
+        const completedAt = new Date();
         scheduledTaskStore.upsert({
             ...runningRecord,
-            status: result.success ? 'completed' : 'failed',
-            completedAt: new Date().toISOString(),
-            resultSummary: result.success ? presentedResultText : undefined,
-            error: result.success ? undefined : result.error,
+            status: executionSuccess ? 'completed' : 'failed',
+            completedAt: completedAt.toISOString(),
+            resultSummary: executionSuccess ? presentedResultText : undefined,
+            error: executionSuccess ? undefined : executionError,
         });
         console.error(
-            `[Scheduler] Scheduled task ${record.id} finished with status ${result.success ? 'completed' : 'failed'}`
+            `[Scheduler] Scheduled task ${record.id} finished with status ${executionSuccess ? 'completed' : 'failed'}`
         );
+
+        if (executionSuccess && resolvedWorkRequest) {
+            const primaryTask = resolvedWorkRequest.tasks?.[0];
+            const nextStage = planNextScheduledExecutionStage({
+                request: resolvedWorkRequest,
+                fallbackTitle: primaryTask?.title || record.title,
+                fallbackQuery: buildExecutionQuery(resolvedWorkRequest) || record.taskQuery,
+                completedAt,
+                completedStageIndex: record.stageIndex,
+                completedStageTaskId: record.stageTaskId,
+            });
+            if (nextStage) {
+                const existing = findExistingScheduledStageRecord({
+                    workRequestId: resolvedWorkRequest.id,
+                    stageIndex: nextStage.stageIndex,
+                });
+                if (!existing) {
+                    const chainedRecord = scheduleTaskInternal({
+                        title: nextStage.title,
+                        taskQuery: nextStage.taskQuery,
+                        executeAt: new Date(nextStage.executeAt),
+                        workspacePath: record.workspacePath,
+                        speakResult: record.speakResult,
+                        sourceTaskId: record.sourceTaskId,
+                        config: record.config,
+                        workRequestId: resolvedWorkRequest.id,
+                        stageTaskId: nextStage.taskId,
+                        stageIndex: nextStage.stageIndex,
+                        totalStages: nextStage.totalStages,
+                        delayMsFromPrevious: nextStage.delayMsFromPrevious,
+                        previousStageSummary: presentedResultText,
+                        previousStageArtifacts: result.artifactsCreated,
+                        frozenWorkRequest: resolvedWorkRequest,
+                    });
+                    if (record.sourceTaskId) {
+                        const chainMessage = `链式任务继续排程：${buildScheduledConfirmationMessage(chainedRecord)}`;
+                        pushConversationMessage(record.sourceTaskId, {
+                            role: 'assistant',
+                            content: chainMessage,
+                        });
+                        emit(createChatMessageEvent(record.sourceTaskId, {
+                            role: 'system',
+                            content: chainMessage,
+                        }));
+                    }
+                } else {
+                    console.error(
+                        `[Scheduler] Skip duplicate chained stage scheduling for work request ${resolvedWorkRequest.id}, stage ${nextStage.stageIndex}`
+                    );
+                }
+            }
+        }
 
         if (record.speakResult) {
             const spokenText = buildScheduledTaskSpokenText({
                 title: record.title,
-                success: result.success,
+                success: executionSuccess,
                 finalAssistantText: reducedPresentation.ttsSummary || presentedResultText,
-                errorText: result.error,
+                errorText: executionError,
             });
             const voiceResult = await speakText(
                 spokenText,
@@ -3458,12 +3902,10 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             }
         }
     } catch (error) {
-        if (!isSameSessionExecution) {
-            emitScheduledTaskFailureToSourceTask(
-                record,
-                error instanceof Error ? error.message : String(error)
-            );
-        }
+        emitScheduledTaskFailureToSourceTask(
+            record,
+            error instanceof Error ? error.message : String(error)
+        );
         scheduledTaskStore.upsert({
             ...runningRecord,
             status: 'failed',
@@ -4289,6 +4731,123 @@ function clearTaskRuntimePersistence(taskId: string): void {
     getTaskRuntimeStore().delete(taskId);
 }
 
+function buildRestoredDeliverableContracts(snapshot: FrozenWorkRequestSnapshot): DeliverableContract[] {
+    return (snapshot.deliverables ?? []).map((deliverable, index) => {
+        let title = 'Restored deliverable';
+        let description = 'Deliverable restored from the frozen work request snapshot.';
+        switch (deliverable.type) {
+            case 'report_file':
+                title = 'Restored report file';
+                description = 'Produce the planned report file restored from persisted task context.';
+                break;
+            case 'artifact_file':
+                title = 'Restored artifact file';
+                description = 'Produce the planned artifact file restored from persisted task context.';
+                break;
+            case 'code_change':
+                title = 'Restored code change';
+                description = 'Apply the planned code changes restored from persisted task context.';
+                break;
+            case 'workspace_change':
+                title = 'Restored workspace change';
+                description = 'Apply the planned workspace changes restored from persisted task context.';
+                break;
+            case 'chat_reply':
+                title = 'Restored final response';
+                description = 'Provide the final response restored from persisted task context.';
+                break;
+        }
+
+        return {
+            id: `restored-deliverable-${index + 1}`,
+            title,
+            type: deliverable.type,
+            description,
+            required: true,
+            path: deliverable.path,
+            format: deliverable.format,
+        };
+    });
+}
+
+function normalizeSnapshotSlug(text: string): string {
+    const normalized = text
+        .toLowerCase()
+        .replace(/[\u4e00-\u9fff]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    const clipped = normalized.slice(0, 80).replace(/-+$/g, '');
+    return clipped || 'task-output';
+}
+
+function shouldNormalizeLeakedDeliverablePath(filePath: string): boolean {
+    const basename = path.basename(filePath).toLowerCase();
+    if (
+        /(planned-output-artifact|checkpoint-before-final-delivery|planned-execution-report|final-response)/i
+            .test(basename)
+    ) {
+        return true;
+    }
+    return basename.split('-').length >= 14;
+}
+
+function normalizeSnapshotDeliverables(snapshot: FrozenWorkRequestSnapshot): FrozenWorkRequestSnapshot {
+    const baseText = snapshot.primaryObjective?.trim() || snapshot.sourceText?.trim() || '';
+    const slug = normalizeSnapshotSlug(baseText);
+
+    return {
+        ...snapshot,
+        deliverables: (snapshot.deliverables ?? []).map((deliverable) => {
+            if (deliverable.type !== 'report_file' && deliverable.type !== 'artifact_file') {
+                return deliverable;
+            }
+            if (!deliverable.path || !shouldNormalizeLeakedDeliverablePath(deliverable.path)) {
+                return deliverable;
+            }
+
+            const parsed = path.parse(deliverable.path);
+            const format = (deliverable.format || parsed.ext.replace(/^\./, '') || 'md').toLowerCase();
+            const directory = parsed.dir && parsed.dir !== '.'
+                ? parsed.dir
+                : deliverable.type === 'report_file'
+                    ? 'reports'
+                    : 'artifacts';
+            return {
+                ...deliverable,
+                path: path.join(directory, `${slug}.${format}`),
+                format,
+            };
+        }),
+    };
+}
+
+function buildRestoredArtifactContract(
+    record: PersistedTaskRuntimeRecord
+): {
+    contract?: ReturnType<typeof buildArtifactContract>;
+    normalizedSnapshot?: FrozenWorkRequestSnapshot;
+} {
+    const snapshot = record.config?.lastFrozenWorkRequestSnapshot;
+    if (!snapshot) {
+        if (!record.artifactContract) {
+            return {};
+        }
+        return {
+            contract: record.artifactContract as ReturnType<typeof buildArtifactContract>,
+        };
+    }
+
+    const normalizedSnapshot = normalizeSnapshotDeliverables(snapshot);
+    const sourceQuery = normalizedSnapshot.primaryObjective?.trim()
+        || normalizedSnapshot.sourceText?.trim()
+        || 'Continue from the saved task context.';
+    const restoredDeliverables = buildRestoredDeliverableContracts(normalizedSnapshot);
+    return {
+        contract: buildArtifactContract(sourceQuery, restoredDeliverables),
+        normalizedSnapshot,
+    };
+}
+
 function restorePersistedTasks(): void {
     const runtimeStore = getTaskRuntimeStore();
     const records = runtimeStore.list();
@@ -4307,11 +4866,30 @@ function restorePersistedTasks(): void {
                 tenantIsolationPolicy: record.config.tenantIsolationPolicy,
             });
         }
-        if (record.artifactContract) {
-            taskSessionStore.setArtifactContract(
-                record.taskId,
-                record.artifactContract as ReturnType<typeof buildArtifactContract>
-            );
+        const restoredArtifact = buildRestoredArtifactContract(record);
+        if (restoredArtifact.contract) {
+            taskSessionStore.setArtifactContract(record.taskId, restoredArtifact.contract);
+            const snapshotBefore = record.config?.lastFrozenWorkRequestSnapshot;
+            const snapshotChanged = Boolean(snapshotBefore && restoredArtifact.normalizedSnapshot)
+                && JSON.stringify(snapshotBefore) !== JSON.stringify(restoredArtifact.normalizedSnapshot);
+            const shouldPersistSanitizedContract = Boolean(record.config?.lastFrozenWorkRequestSnapshot)
+                && (
+                    JSON.stringify(record.artifactContract ?? null) !== JSON.stringify(restoredArtifact.contract)
+                    || snapshotChanged
+                );
+            if (shouldPersistSanitizedContract && record.config) {
+                const normalizedConfig = {
+                    ...record.config,
+                    lastFrozenWorkRequestSnapshot: restoredArtifact.normalizedSnapshot ?? record.config.lastFrozenWorkRequestSnapshot,
+                };
+                taskSessionStore.setConfig(record.taskId, normalizedConfig);
+                runtimeStore.upsert({
+                    ...record,
+                    artifactContract: restoredArtifact.contract,
+                    config: normalizedConfig,
+                    updatedAt: new Date().toISOString(),
+                });
+            }
         }
 
         taskEventBus.reset(record.taskId);
@@ -5366,6 +5944,7 @@ async function runAgentLoop(
                     protocolAssessment?.asksForAdditionalUserAction === true &&
                     (isScheduledExecution || protocolAssessment?.completionClaim !== 'present');
                 const objectiveRefusal = protocolAssessment?.objectiveRefusal === true;
+                const objectiveUnmet = protocolAssessment?.objectiveSatisfied === false;
                 const hasCompletionClaim = protocolAssessment?.completionClaim === 'present';
                 const hasVerificationEvidence =
                     protocolAssessment?.verificationEvidence === 'present' ||
@@ -5401,6 +5980,20 @@ async function runAgentLoop(
                                 'If uncertainty exists, provide probabilistic judgments and explicit risk assumptions, ' +
                                 'then continue execution with concrete evidence. ' +
                                 'Only stop when a concrete technical blocker prevents execution.',
+                        }],
+                    });
+                    continue;
+                }
+                if (objectiveUnmet && gateNoToolReprompts < MAX_GATE_NO_TOOL_REPROMPTS) {
+                    gateNoToolReprompts++;
+                    messages = pushConversationMessage(taskId, {
+                        role: 'user',
+                        content: [{
+                            type: 'text',
+                            text:
+                                '[SYSTEM] Your previous response did not satisfy the core objective. ' +
+                                `Missing output: ${protocolAssessment?.objectiveGap || 'required objective deliverable'}. ` +
+                                'Do not switch to generic advice. Provide the requested deliverable directly with concrete data.',
                         }],
                     });
                     continue;
@@ -5473,6 +6066,23 @@ async function runAgentLoop(
                                         'If uncertainty exists, provide probabilistic judgments and explicit risk assumptions, ' +
                                         'then continue execution with concrete evidence. ' +
                                         'Only stop when a concrete technical blocker prevents execution.',
+                                }],
+                            });
+                            continue;
+                        }
+                        if (
+                            retryAssessment?.objectiveSatisfied === false &&
+                            gateNoToolReprompts < MAX_GATE_NO_TOOL_REPROMPTS
+                        ) {
+                            gateNoToolReprompts++;
+                            messages = pushConversationMessage(taskId, {
+                                role: 'user',
+                                content: [{
+                                    type: 'text',
+                                    text:
+                                        '[SYSTEM] Your previous response still did not satisfy the core objective. ' +
+                                        `Missing output: ${retryAssessment?.objectiveGap || 'required objective deliverable'}. ` +
+                                        'Provide the requested deliverable directly with concrete evidence.',
                                 }],
                             });
                             continue;
@@ -6813,6 +7423,8 @@ function buildConversationText(taskId: string): string {
 function parseExecutionProtocolAssessment(text: string): {
     asksForAdditionalUserAction: boolean;
     objectiveRefusal: boolean;
+    objectiveSatisfied: boolean;
+    objectiveGap?: string;
     requestedEvidence: 'grounded' | 'standard' | 'unknown';
     deliveredEvidence: 'grounded' | 'metadata' | 'none' | 'unknown';
     completionClaim: 'present' | 'absent' | 'unknown';
@@ -6853,6 +7465,8 @@ function parseExecutionProtocolAssessment(text: string): {
         const parsed = JSON.parse(candidate) as {
             asksForAdditionalUserAction?: unknown;
             objectiveRefusal?: unknown;
+            objectiveSatisfied?: unknown;
+            objectiveGap?: unknown;
             requestedEvidence?: unknown;
             deliveredEvidence?: unknown;
             completionClaim?: unknown;
@@ -6890,6 +7504,8 @@ function parseExecutionProtocolAssessment(text: string): {
         return {
             asksForAdditionalUserAction: parsed.asksForAdditionalUserAction === true,
             objectiveRefusal: parsed.objectiveRefusal === true,
+            objectiveSatisfied: parsed.objectiveSatisfied === true,
+            objectiveGap: typeof parsed.objectiveGap === 'string' ? parsed.objectiveGap : undefined,
             requestedEvidence,
             deliveredEvidence,
             completionClaim,
@@ -6911,6 +7527,8 @@ async function assessExecutionProtocolWithLlm(taskId: string, input: {
 }): Promise<{
     asksForAdditionalUserAction: boolean;
     objectiveRefusal: boolean;
+    objectiveSatisfied: boolean;
+    objectiveGap?: string;
     requestedEvidence: 'grounded' | 'standard' | 'unknown';
     deliveredEvidence: 'grounded' | 'metadata' | 'none' | 'unknown';
     completionClaim: 'present' | 'absent' | 'unknown';
@@ -6932,6 +7550,8 @@ Return ONLY valid JSON with this exact schema:
 {
   "asksForAdditionalUserAction": boolean,
   "objectiveRefusal": boolean,
+  "objectiveSatisfied": boolean,
+  "objectiveGap": string,
   "requestedEvidence": "grounded" | "standard" | "unknown",
   "deliveredEvidence": "grounded" | "metadata" | "none" | "unknown",
   "completionClaim": "present" | "absent" | "unknown",
@@ -6943,6 +7563,8 @@ Return ONLY valid JSON with this exact schema:
 Rules:
 - asksForAdditionalUserAction=true if the assistant asks user to approve/confirm/execute/continue/reply as a required next action (before or after completion wording).
 - objectiveRefusal=true if the assistant refuses the core objective (e.g. "I cannot provide...") instead of executing it, without proving a concrete technical blocker.
+- objectiveSatisfied=true only when the final response directly satisfies the core objective with the requested output.
+- objectiveGap should briefly describe what core output is missing. Use empty string when objectiveSatisfied=true.
 - requestedEvidence=grounded when task query requests broad/deep review/audit/inspection with concrete evidence expectations.
 - deliveredEvidence=grounded only when output and tool usage imply concrete file/command/content inspection evidence.
 - deliveredEvidence=metadata when output is mainly inventory/status/metadata level.
@@ -7267,6 +7889,7 @@ function getExecutionRuntimeDeps(taskId: string) {
             outputText: string;
             toolsUsed: string[];
             hasBlockingUserAction: boolean;
+            toolResultText?: string;
         }) => assessExecutionProtocolWithLlm(taskId, input),
         activatePreparedWorkRequest: setActivePreparedWorkRequest,
         clearPreparedWorkRequest: clearActivePreparedWorkRequest,
@@ -7393,6 +8016,270 @@ async function handleCommand(command: IpcCommand): Promise<void> {
     }
 }
 
+type SingletonInitResult =
+    | { mode: 'disabled' }
+    | { mode: 'primary' }
+    | { mode: 'proxy'; upstream: net.Socket };
+
+function isNamedPipePath(socketPath: string): boolean {
+    return socketPath.startsWith('\\\\.\\pipe\\');
+}
+
+function canUnlinkSocketPath(socketPath: string): boolean {
+    return process.platform !== 'win32' && !isNamedPipePath(socketPath);
+}
+
+function tryAcquireSingletonLock(): boolean {
+    if (!singletonLockPath) {
+        return false;
+    }
+    try {
+        singletonLockFd = fs.openSync(singletonLockPath, 'wx');
+        return true;
+    } catch (error) {
+        const errno = error as NodeJS.ErrnoException;
+        if (errno.code === 'EEXIST') {
+            return false;
+        }
+        throw error;
+    }
+}
+
+function releaseSingletonLock(): void {
+    if (singletonLockFd !== null) {
+        try {
+            fs.closeSync(singletonLockFd);
+        } catch {
+            // ignore
+        }
+        singletonLockFd = null;
+    }
+
+    if (!singletonLockPath || !singletonIsPrimary) {
+        return;
+    }
+
+    try {
+        if (fs.existsSync(singletonLockPath)) {
+            fs.unlinkSync(singletonLockPath);
+        }
+    } catch (error) {
+        console.error('[WARN] Failed to remove singleton lock file:', error);
+    }
+}
+
+function cleanupSingletonSocketFile(): void {
+    if (!singletonSocketPath || !singletonIsPrimary || !canUnlinkSocketPath(singletonSocketPath)) {
+        releaseSingletonLock();
+        return;
+    }
+
+    try {
+        if (fs.existsSync(singletonSocketPath)) {
+            fs.unlinkSync(singletonSocketPath);
+        }
+    } catch (error) {
+        console.error('[WARN] Failed to clean singleton socket file:', error);
+    }
+    releaseSingletonLock();
+}
+
+function connectToSingletonPrimary(socketPath: string): Promise<net.Socket> {
+    return new Promise((resolve, reject) => {
+        const socket = net.createConnection(socketPath);
+        const onError = (error: NodeJS.ErrnoException) => {
+            socket.removeListener('connect', onConnect);
+            reject(error);
+        };
+        const onConnect = () => {
+            socket.removeListener('error', onError);
+            socket.setNoDelay(true);
+            resolve(socket);
+        };
+        socket.once('error', onError);
+        socket.once('connect', onConnect);
+    });
+}
+
+async function startSingletonPrimaryServer(socketPath: string): Promise<void> {
+    const server = net.createServer((client) => {
+        singletonClients.add(client);
+        client.setEncoding('utf-8');
+
+        let socketBuffer = '';
+        client.on('data', (chunk: string | Buffer) => {
+            const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+            socketBuffer += text;
+            const lines = socketBuffer.split('\n');
+            socketBuffer = lines.pop() ?? '';
+            for (const line of lines) {
+                enqueueLine(line);
+            }
+        });
+
+        const cleanupClient = (): void => {
+            singletonClients.delete(client);
+            if (primaryStdinEnded && singletonClients.size === 0) {
+                void shutdownSidecar('All sidecar transports closed', 0);
+            }
+        };
+
+        client.on('error', (error) => {
+            console.error('[WARN] Singleton client socket error:', error);
+            cleanupClient();
+        });
+        client.on('close', cleanupClient);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+        const onError = (error: NodeJS.ErrnoException) => {
+            server.removeListener('listening', onListening);
+            reject(error);
+        };
+        const onListening = () => {
+            server.removeListener('error', onError);
+            resolve();
+        };
+
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(socketPath);
+    });
+
+    singletonServer = server;
+    singletonIsPrimary = true;
+    console.error(`[INFO] Sidecar singleton primary listening: ${socketPath}`);
+}
+
+function buildGetRuntimeSnapshotCommandLine(): string {
+    return JSON.stringify({
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        type: 'get_runtime_snapshot',
+        payload: {},
+    }) + '\n';
+}
+
+async function runSingletonProxy(upstream: net.Socket): Promise<void> {
+    console.error('[INFO] Existing sidecar detected; entering singleton proxy mode');
+    upstream.setEncoding('utf-8');
+
+    process.stdin.setEncoding('utf-8');
+    process.stdin.resume();
+
+    process.stdin.on('data', (chunk: string | Buffer) => {
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+        upstream.write(text);
+    });
+
+    process.stdin.on('end', () => {
+        upstream.end();
+    });
+
+    process.stdin.on('error', (error) => {
+        console.error('[ERROR] Proxy stdin error:', error);
+        upstream.destroy();
+    });
+
+    upstream.on('data', (chunk: string | Buffer) => {
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+        process.stdout.write(text);
+    });
+
+    upstream.on('error', (error) => {
+        console.error('[ERROR] Proxy upstream socket error:', error);
+        process.exit(1);
+    });
+
+    upstream.on('close', () => {
+        process.exit(0);
+    });
+
+    try {
+        upstream.write(buildGetRuntimeSnapshotCommandLine());
+    } catch (error) {
+        console.error('[WARN] Failed to request runtime snapshot from primary sidecar:', error);
+    }
+}
+
+async function initializeSingleton(): Promise<SingletonInitResult> {
+    if (!singletonEnabled) {
+        return { mode: 'disabled' };
+    }
+
+    if (!singletonSocketPath) {
+        console.error('[WARN] Singleton requested but COWORKANY_SIDECAR_SOCKET_PATH is empty; singleton disabled');
+        return { mode: 'disabled' };
+    }
+
+    if (tryAcquireSingletonLock()) {
+        try {
+            await startSingletonPrimaryServer(singletonSocketPath);
+            return { mode: 'primary' };
+        } catch (error) {
+            releaseSingletonLock();
+            throw error;
+        }
+    }
+
+    try {
+        const upstream = await connectToSingletonPrimary(singletonSocketPath);
+        return { mode: 'proxy', upstream };
+    } catch (error) {
+        if (singletonLockPath) {
+            try {
+                if (fs.existsSync(singletonLockPath)) {
+                    fs.unlinkSync(singletonLockPath);
+                }
+            } catch (unlinkError) {
+                console.error('[WARN] Failed to remove stale singleton lock:', unlinkError);
+            }
+        }
+        if (canUnlinkSocketPath(singletonSocketPath)) {
+            try {
+                if (fs.existsSync(singletonSocketPath)) {
+                    fs.unlinkSync(singletonSocketPath);
+                }
+            } catch (unlinkError) {
+                console.error('[WARN] Failed to remove stale singleton socket:', unlinkError);
+            }
+        }
+
+        if (tryAcquireSingletonLock()) {
+            await startSingletonPrimaryServer(singletonSocketPath);
+            return { mode: 'primary' };
+        }
+
+        const upstream = await connectToSingletonPrimary(singletonSocketPath);
+        return { mode: 'proxy', upstream };
+    }
+}
+
+async function closeSingletonServerSafely(): Promise<void> {
+    for (const client of singletonClients) {
+        try {
+            client.destroy();
+        } catch {
+            // ignore
+        }
+    }
+    singletonClients.clear();
+
+    if (!singletonServer) {
+        cleanupSingletonSocketFile();
+        return;
+    }
+
+    const server = singletonServer;
+    singletonServer = null;
+
+    await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+    });
+
+    cleanupSingletonSocketFile();
+}
+
 // ============================================================================
 // Input Processing
 // ============================================================================
@@ -7437,20 +8324,59 @@ function drainBufferedLines(): void {
     }
 }
 
-async function flushRemainingInputAndExit(): Promise<void> {
-    const remaining = buffer.trim();
-    buffer = '';
+let shutdownPromise: Promise<void> | null = null;
 
-    if (!remaining) {
-        console.error('[INFO] Sidecar IPC stdin closed');
-        process.exit(0);
+function closeLogStreamSafely(): Promise<void> {
+    if (!logStream) {
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+        const stream = logStream;
+        logStream = null;
+        if (!stream) {
+            resolve();
+            return;
+        }
+        stream.end(() => resolve());
+    });
+}
+
+async function shutdownSidecar(reason: string, exitCode: number): Promise<never> {
+    if (!shutdownPromise) {
+        shutdownPromise = (async () => {
+            console.error(`[INFO] ${reason}`);
+            heartbeatEngine.stop();
+            await closeSingletonServerSafely();
+            try {
+                await BrowserService.getInstance().disconnect();
+            } catch (error) {
+                console.error('[WARN] Browser disconnect during shutdown failed:', error);
+            }
+            await closeLogStreamSafely();
+        })();
+    }
+
+    await shutdownPromise;
+    process.exit(exitCode);
+}
+
+async function handlePrimaryStdinEnd(): Promise<void> {
+    primaryStdinEnded = true;
+
+    const remaining = buffer.trim();
+    if (remaining) {
+        buffer = '';
+        enqueueLine(remaining);
+        await lineProcessing;
+    }
+
+    if (singletonIsPrimary && singletonClients.size > 0) {
+        console.error('[INFO] Sidecar stdin closed; keeping singleton primary alive for connected clients');
         return;
     }
 
-    enqueueLine(remaining);
-    await lineProcessing;
-    console.error('[INFO] Sidecar IPC stdin closed');
-    process.exit(0);
+    await shutdownSidecar('Sidecar IPC stdin closed', 0);
 }
 
 async function processLine(line: string): Promise<void> {
@@ -7513,6 +8439,12 @@ async function main(): Promise<void> {
     console.error('[INFO] Reading commands from stdin (JSON-Lines)');
     console.error(`[INFO] Log file: ${LOG_FILE}`);
 
+    const singletonMode = await initializeSingleton();
+    if (singletonMode.mode === 'proxy') {
+        await runSingletonProxy(singletonMode.upstream);
+        return;
+    }
+
     heartbeatEngine.start();
     ensureScheduledTaskHeartbeatTrigger();
 
@@ -7530,27 +8462,21 @@ async function main(): Promise<void> {
     });
 
     process.stdin.on('end', () => {
-        void flushRemainingInputAndExit();
+        void handlePrimaryStdinEnd();
     });
 
     process.stdin.on('error', (error) => {
         console.error('[ERROR] stdin error:', error);
-        process.exit(1);
+        void shutdownSidecar('stdin error triggered shutdown', 1);
     });
 
     // Handle shutdown signals
     process.on('SIGINT', () => {
-        console.error('[INFO] Received SIGINT, shutting down');
-        heartbeatEngine.stop();
-        if (logStream) { logStream.end(); }
-        process.exit(0);
+        void shutdownSidecar('Received SIGINT, shutting down', 0);
     });
 
     process.on('SIGTERM', () => {
-        console.error('[INFO] Received SIGTERM, shutting down');
-        heartbeatEngine.stop();
-        if (logStream) { logStream.end(); }
-        process.exit(0);
+        void shutdownSidecar('Received SIGTERM, shutting down', 0);
     });
 }
 

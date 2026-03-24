@@ -6,7 +6,9 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
@@ -23,8 +25,11 @@ use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
 
 static STARTUP_PROCESS_INSTANT: OnceLock<Instant> = OnceLock::new();
 static STARTUP_PROCESS_EPOCH_MS: OnceLock<u128> = OnceLock::new();
+static RECENT_SEND_TASK_MESSAGE_KEYS: OnceLock<std::sync::Mutex<HashMap<(String, u64), Instant>>> =
+    OnceLock::new();
 const SKILLHUB_INSTALL_SCRIPT_URL: &str =
     "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh";
+const SEND_TASK_MESSAGE_DEDUP_WINDOW: Duration = Duration::from_secs(8);
 
 pub fn init_startup_clock() {
     STARTUP_PROCESS_INSTANT.get_or_init(Instant::now);
@@ -542,6 +547,46 @@ fn sanitize_skillhub_name(slug: &str, raw_name: Option<&str>) -> String {
     candidate.to_string()
 }
 
+fn send_task_message_cache() -> &'static std::sync::Mutex<HashMap<(String, u64), Instant>> {
+    RECENT_SEND_TASK_MESSAGE_KEYS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn send_task_message_fingerprint(content: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.trim().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn is_duplicate_recent_send_task_message(
+    task_id: &str,
+    content_fingerprint: u64,
+    now: Instant,
+) -> bool {
+    let Ok(mut cache) = send_task_message_cache().lock() else {
+        return false;
+    };
+
+    cache.retain(|_, last_seen| now.duration_since(*last_seen) <= SEND_TASK_MESSAGE_DEDUP_WINDOW);
+
+    let key = (task_id.to_string(), content_fingerprint);
+    if let Some(last_seen) = cache.get_mut(&key) {
+        if now.duration_since(*last_seen) <= SEND_TASK_MESSAGE_DEDUP_WINDOW {
+            // Extend suppression window for rapid repeated retries/clicks.
+            *last_seen = now;
+            return true;
+        }
+    }
+
+    cache.insert(key, now);
+    false
+}
+
+fn clear_recent_send_task_message(task_id: &str, content_fingerprint: u64) {
+    if let Ok(mut cache) = send_task_message_cache().lock() {
+        cache.remove(&(task_id.to_string(), content_fingerprint));
+    }
+}
+
 async fn ensure_sidecar_running(
     state: &State<'_, SidecarState>,
     app_handle: &AppHandle,
@@ -612,7 +657,7 @@ async fn send_command_and_wait_with_timeout_policy(
                 return Err(error_message);
             }
 
-        Ok(response)
+            Ok(response)
         }
         Err(error_message) => {
             if let Ok(mut manager) = state.0.lock() {
@@ -1104,7 +1149,10 @@ pub async fn run_doctor_preflight(
     app_handle: AppHandle,
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
-    let command = build_command("doctor_preflight", build_doctor_preflight_payload(input.as_ref()));
+    let command = build_command(
+        "doctor_preflight",
+        build_doctor_preflight_payload(input.as_ref()),
+    );
     let response = send_command_and_wait(&state, command, 120000).await?;
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
     let success = inner_payload
@@ -1456,9 +1504,13 @@ pub async fn transcribe_audio(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_doctor_preflight_payload, select_transcription_model_from_catalog, DoctorPreflightInput,
+        build_doctor_preflight_payload, is_duplicate_recent_send_task_message,
+        select_transcription_model_from_catalog, send_task_message_fingerprint,
+        DoctorPreflightInput,
     };
     use serde_json::json;
+    use std::time::{Duration, Instant};
+    use uuid::Uuid;
 
     #[test]
     fn prefers_openai_realtime_transcription_models_over_whisper() {
@@ -1519,6 +1571,29 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn send_task_message_dedup_window_blocks_rapid_retries() {
+        let task_id = format!("task-{}", Uuid::new_v4());
+        let fingerprint = send_task_message_fingerprint("同意");
+        let now = Instant::now();
+
+        assert!(!is_duplicate_recent_send_task_message(
+            &task_id,
+            fingerprint,
+            now
+        ));
+        assert!(is_duplicate_recent_send_task_message(
+            &task_id,
+            fingerprint,
+            now + Duration::from_secs(1)
+        ));
+        assert!(!is_duplicate_recent_send_task_message(
+            &task_id,
+            fingerprint,
+            now + Duration::from_secs(10)
+        ));
+    }
 }
 
 /// Send a message to an existing task
@@ -1547,6 +1622,7 @@ pub async fn send_task_message(
     });
 
     let task_id = input.task_id.clone();
+    let content_fingerprint = send_task_message_fingerprint(&input.content);
     let command = serde_json::to_value(IpcCommand::send_task_message(
         task_id.clone(),
         input.content,
@@ -1554,7 +1630,22 @@ pub async fn send_task_message(
     ))
     .map_err(|e| e.to_string())?;
 
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 30000, false).await {
+    let now = Instant::now();
+    if is_duplicate_recent_send_task_message(&task_id, content_fingerprint, now) {
+        warn!(
+            "Suppressed duplicate send_task_message within dedup window: task_id={}",
+            task_id
+        );
+        return Ok(SendTaskMessageResult {
+            success: true,
+            task_id,
+            error: None,
+        });
+    }
+
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 30000, false)
+        .await
+    {
         Ok(value) => value,
         Err(error_message) => {
             if error_message.starts_with("response timeout:") {
@@ -1569,6 +1660,7 @@ pub async fn send_task_message(
                     error: None,
                 });
             }
+            clear_recent_send_task_message(&task_id, content_fingerprint);
             error!(
                 "Failed to send send_task_message command: {}",
                 error_message
@@ -1599,6 +1691,10 @@ pub async fn send_task_message(
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| (!success).then(|| "send_task_message_failed".to_string()));
+
+    if !success {
+        clear_recent_send_task_message(&task_id, content_fingerprint);
+    }
 
     Ok(SendTaskMessageResult {
         success,
@@ -2770,9 +2866,7 @@ fn install_skillhub_windows() -> Result<PathBuf, String> {
     }
 
     // Try to find via where command
-    let where_output = Command::new("where")
-        .arg("skills-hub-ai")
-        .output();
+    let where_output = Command::new("where").arg("skills-hub-ai").output();
     if let Ok(output) = where_output {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -2792,63 +2886,64 @@ fn install_skillhub_windows() -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub async fn install_skillhub_cli(app_handle: AppHandle) -> Result<GenericIpcResult, String> {
-    let extras = tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
-        info!("install_skillhub_cli: starting installer");
-        if let Ok(path) = resolve_skillhub_executable() {
-            info!("install_skillhub_cli: already installed at {:?}", path);
-            return Ok(json!({
-                "message": "Skillhub CLI already installed",
-                "path": path,
-                "errors": Value::Null,
-            }));
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            let executable = install_skillhub_windows()?;
-            info!("install_skillhub_cli: completed at {:?}", executable);
-            return Ok(json!({
-                "message": "Skillhub CLI installed",
-                "path": executable,
-                "errors": Value::Null,
-            }));
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let mut command = Command::new("bash");
-            command.arg("-lc").arg(format!(
-                "curl -fsSL {url} | bash -s -- --cli-only",
-                url = SKILLHUB_INSTALL_SCRIPT_URL
-            ));
-
-            let output = command
-                .output()
-                .map_err(|e| format!("Failed to run Skillhub installer: {e}"))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let message = if !stderr.is_empty() { stderr } else { stdout };
-                error!("install_skillhub_cli: installer failed: {}", message);
-                return Err(message);
+    let extras =
+        tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+            info!("install_skillhub_cli: starting installer");
+            if let Ok(path) = resolve_skillhub_executable() {
+                info!("install_skillhub_cli: already installed at {:?}", path);
+                return Ok(json!({
+                    "message": "Skillhub CLI already installed",
+                    "path": path,
+                    "errors": Value::Null,
+                }));
             }
 
-            let executable = resolve_skillhub_executable().map_err(|_| {
+            #[cfg(target_os = "windows")]
+            {
+                let executable = install_skillhub_windows()?;
+                info!("install_skillhub_cli: completed at {:?}", executable);
+                return Ok(json!({
+                    "message": "Skillhub CLI installed",
+                    "path": executable,
+                    "errors": Value::Null,
+                }));
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let mut command = Command::new("bash");
+                command.arg("-lc").arg(format!(
+                    "curl -fsSL {url} | bash -s -- --cli-only",
+                    url = SKILLHUB_INSTALL_SCRIPT_URL
+                ));
+
+                let output = command
+                    .output()
+                    .map_err(|e| format!("Failed to run Skillhub installer: {e}"))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let message = if !stderr.is_empty() { stderr } else { stdout };
+                    error!("install_skillhub_cli: installer failed: {}", message);
+                    return Err(message);
+                }
+
+                let executable = resolve_skillhub_executable().map_err(|_| {
                 "Skillhub installer finished but executable was not found in ~/.local/bin or PATH"
                     .to_string()
             })?;
 
-            info!("install_skillhub_cli: completed at {:?}", executable);
-            Ok(json!({
-                "message": "Skillhub CLI installed",
-                "path": executable,
-                "stdout": String::from_utf8_lossy(&output.stdout).trim().to_string(),
-                "errors": Value::Null,
-            }))
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+                info!("install_skillhub_cli: completed at {:?}", executable);
+                Ok(json!({
+                    "message": "Skillhub CLI installed",
+                    "path": executable,
+                    "stdout": String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                    "errors": Value::Null,
+                }))
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
     Ok(GenericIpcResult {
         success: true,

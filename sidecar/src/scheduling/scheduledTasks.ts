@@ -20,6 +20,12 @@ export interface ScheduledTaskRecord {
     title: string;
     taskQuery: string;
     workRequestId?: string;
+    stageTaskId?: string;
+    stageIndex?: number;
+    totalStages?: number;
+    delayMsFromPrevious?: number;
+    previousStageSummary?: string;
+    previousStageArtifacts?: string[];
     frozenWorkRequest?: FrozenWorkRequest;
     workspacePath: string;
     createdAt: string;
@@ -38,6 +44,12 @@ export interface ScheduledTaskInput {
     title: string;
     taskQuery: string;
     workRequestId?: string;
+    stageTaskId?: string;
+    stageIndex?: number;
+    totalStages?: number;
+    delayMsFromPrevious?: number;
+    previousStageSummary?: string;
+    previousStageArtifacts?: string[];
     frozenWorkRequest?: FrozenWorkRequest;
     workspacePath: string;
     executeAt: Date;
@@ -50,6 +62,13 @@ export interface ParsedScheduledIntent {
     executeAt: Date;
     taskQuery: string;
     speakResult: boolean;
+    originalTimeExpression: string;
+    chainedStages?: ChainedScheduledStageIntent[];
+}
+
+export interface ChainedScheduledStageIntent {
+    delayMsFromPrevious: number;
+    taskQuery: string;
     originalTimeExpression: string;
 }
 
@@ -82,6 +101,16 @@ function normalizeRecords(raw: unknown): ScheduledTaskRecord[] {
         .map((entry) => ({
             ...entry,
             workRequestId: typeof entry.workRequestId === 'string' ? entry.workRequestId : undefined,
+            stageTaskId: typeof entry.stageTaskId === 'string' ? entry.stageTaskId : undefined,
+            stageIndex: typeof entry.stageIndex === 'number' ? entry.stageIndex : undefined,
+            totalStages: typeof entry.totalStages === 'number' ? entry.totalStages : undefined,
+            delayMsFromPrevious: typeof entry.delayMsFromPrevious === 'number' ? entry.delayMsFromPrevious : undefined,
+            previousStageSummary: typeof entry.previousStageSummary === 'string'
+                ? entry.previousStageSummary
+                : undefined,
+            previousStageArtifacts: Array.isArray(entry.previousStageArtifacts)
+                ? entry.previousStageArtifacts.filter((artifact): artifact is string => typeof artifact === 'string')
+                : undefined,
             frozenWorkRequest: entry.frozenWorkRequest && typeof entry.frozenWorkRequest === 'object'
                 ? entry.frozenWorkRequest
                 : undefined,
@@ -224,6 +253,101 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
     return null;
 }
 
+const CHAINED_SCHEDULE_PATTERN = /(?:^|[\n。；;.!！？，,、])\s*(?:然后|接着|随后|再|并且再|并再|and then|then|next)\s*(?:再)?\s*(?:等(?:待)?\s*)?([零〇一二两兩三四五六七八九十百\d]+\s*(?:秒钟?|分钟?|分|小时|个小时|天)(?:以?后|之?后)?|in\s+\d+\s+(?:second|seconds|minute|minutes|hour|hours|day|days))\s*[，,、\s]*/giu;
+
+function normalizeRelativeExpressionForDuration(raw: string): string {
+    const trimmed = raw.trim();
+    if (/^in\s+/i.test(trimmed)) {
+        return trimmed.toLowerCase();
+    }
+    if (/(?:以?后|之?后)$/u.test(trimmed)) {
+        return trimmed;
+    }
+    return `${trimmed}后`;
+}
+
+function parseRelativeDurationMs(expression: string): number | null {
+    const anchor = new Date('2026-01-01T00:00:00.000Z');
+    const parsed = parseRelativeTimeExpression(expression, anchor);
+    if (!parsed) {
+        return null;
+    }
+    const delayMs = parsed.getTime() - anchor.getTime();
+    return delayMs > 0 ? delayMs : null;
+}
+
+function trimTaskSegment(input: string): string {
+    return input
+        .replace(/^[，,、\s]+/u, '')
+        .replace(/[，,、。.!！；;\s]+$/u, '')
+        .trim();
+}
+
+function extractChainedScheduledStages(taskQuery: string): {
+    primaryTaskQuery: string;
+    chainedStages: ChainedScheduledStageIntent[];
+} {
+    const matches: Array<{
+        index: number;
+        fullMatch: string;
+        expression: string;
+    }> = [];
+
+    const regex = new RegExp(CHAINED_SCHEDULE_PATTERN.source, CHAINED_SCHEDULE_PATTERN.flags);
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(taskQuery)) !== null) {
+        const expression = match[1]?.trim();
+        if (!expression) {
+            continue;
+        }
+        matches.push({
+            index: match.index,
+            fullMatch: match[0] ?? '',
+            expression,
+        });
+    }
+
+    if (matches.length === 0) {
+        return {
+            primaryTaskQuery: taskQuery.trim(),
+            chainedStages: [],
+        };
+    }
+
+    const primaryTaskQuery = trimTaskSegment(taskQuery.slice(0, matches[0]!.index));
+    const chainedStages: ChainedScheduledStageIntent[] = [];
+
+    for (let index = 0; index < matches.length; index += 1) {
+        const current = matches[index]!;
+        const next = matches[index + 1];
+        const stageStart = current.index + current.fullMatch.length;
+        const stageEnd = next ? next.index : taskQuery.length;
+        const stageQuery = trimTaskSegment(taskQuery.slice(stageStart, stageEnd).replace(/^(?:将|把)\s*/u, ''));
+        const normalizedExpression = normalizeRelativeExpressionForDuration(current.expression);
+        const delayMs = parseRelativeDurationMs(normalizedExpression);
+        if (!stageQuery || delayMs === null) {
+            continue;
+        }
+        chainedStages.push({
+            delayMsFromPrevious: delayMs,
+            taskQuery: stageQuery,
+            originalTimeExpression: current.expression.replace(/\s+/g, ''),
+        });
+    }
+
+    if (!primaryTaskQuery || chainedStages.length === 0) {
+        return {
+            primaryTaskQuery: taskQuery.trim(),
+            chainedStages: [],
+        };
+    }
+
+    return {
+        primaryTaskQuery,
+        chainedStages,
+    };
+}
+
 function stripDanglingSpeechTail(input: string): string {
     return input
         .replace(/[，,、\s]*(?:并|然后|再)\s*(?:将|把)?\s*结果?$/iu, '')
@@ -293,7 +417,15 @@ export function detectScheduledIntent(query: string, now: Date = new Date()): Pa
         const executeAt = parseScheduledTimeExpression(originalTimeExpression, now);
         const { taskQuery, speakResult } = stripSpeechDirective(chineseMatch[2]);
         if (!taskQuery) return null;
-        return { executeAt, taskQuery, speakResult, originalTimeExpression };
+        const splitResult = extractChainedScheduledStages(taskQuery);
+        if (!splitResult.primaryTaskQuery) return null;
+        return {
+            executeAt,
+            taskQuery: splitResult.primaryTaskQuery,
+            speakResult,
+            originalTimeExpression,
+            chainedStages: splitResult.chainedStages.length > 0 ? splitResult.chainedStages : undefined,
+        };
     }
 
     const englishMatch = trimmed.match(/^in\s+(\d+\s+(?:second|seconds|minute|minutes|hour|hours|day|days))[\s,:-]+(.+)$/i);
@@ -302,7 +434,15 @@ export function detectScheduledIntent(query: string, now: Date = new Date()): Pa
         const executeAt = parseScheduledTimeExpression(originalTimeExpression, now);
         const { taskQuery, speakResult } = stripSpeechDirective(englishMatch[2]);
         if (!taskQuery) return null;
-        return { executeAt, taskQuery, speakResult, originalTimeExpression };
+        const splitResult = extractChainedScheduledStages(taskQuery);
+        if (!splitResult.primaryTaskQuery) return null;
+        return {
+            executeAt,
+            taskQuery: splitResult.primaryTaskQuery,
+            speakResult,
+            originalTimeExpression,
+            chainedStages: splitResult.chainedStages.length > 0 ? splitResult.chainedStages : undefined,
+        };
     }
 
     return null;
@@ -360,6 +500,12 @@ export class ScheduledTaskStore {
             title: input.title,
             taskQuery: input.taskQuery,
             workRequestId: input.workRequestId,
+            stageTaskId: input.stageTaskId,
+            stageIndex: input.stageIndex,
+            totalStages: input.totalStages,
+            delayMsFromPrevious: input.delayMsFromPrevious,
+            previousStageSummary: input.previousStageSummary,
+            previousStageArtifacts: input.previousStageArtifacts,
             frozenWorkRequest: input.frozenWorkRequest,
             workspacePath: input.workspacePath,
             createdAt: new Date().toISOString(),

@@ -54,6 +54,12 @@ export type PlanUpdatedPayload = {
         description: string;
         status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
     }>;
+    taskProgress?: Array<{
+        taskId: string;
+        title: string;
+        status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+        dependencies: string[];
+    }>;
     currentStepId?: string;
 };
 
@@ -101,6 +107,13 @@ export type TaskResumedPayload = {
 
 export type TaskPlanReadyPayload = {
     summary: string;
+    mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    tasks?: Array<{
+        id: string;
+        title: string;
+        objective: string;
+        dependencies: string[];
+    }>;
     deliverables: DeliverableContract[];
     checkpoints: CheckpointContract[];
     userActionsRequired: UserActionRequest[];

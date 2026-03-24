@@ -235,6 +235,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             return {
                 ...session,
                 status: 'running',
+                taskMode: undefined,
                 title: payload.title as string,
                 failure: undefined,
                 clarificationQuestions: undefined,
@@ -244,6 +245,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 selectedStrategyTitle: undefined,
                 contractReopenReason: undefined,
                 contractReopenCount: 0,
+                plannedTasks: undefined,
                 workspacePath: (payload.context as Record<string, unknown>)?.workspacePath as string,
                 messages: [
                     ...session.messages,
@@ -260,11 +262,34 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             };
 
         case 'PLAN_UPDATED':
+        {
+            const taskProgress = ((payload.taskProgress as Array<Record<string, unknown>> | undefined) ?? [])
+                .map((entry) => ({
+                    taskId: String(entry.taskId ?? ''),
+                    title: String(entry.title ?? ''),
+                    status: String(entry.status ?? 'pending') as PlanStep['status'],
+                    dependencies: parseStringArray(entry.dependencies),
+                }))
+                .filter((entry) => entry.taskId.length > 0);
+            const mergedPlannedTasks = taskProgress.length > 0
+                ? taskProgress.map((entry) => {
+                    const existing = (session.plannedTasks ?? []).find((task) => task.id === entry.taskId);
+                    return {
+                        id: entry.taskId,
+                        title: entry.title || existing?.title || '',
+                        objective: existing?.objective ?? '',
+                        dependencies: entry.dependencies.length > 0 ? entry.dependencies : (existing?.dependencies ?? []),
+                        status: entry.status,
+                    };
+                })
+                : session.plannedTasks;
             return {
                 ...session,
                 planSummary: payload.summary as string,
                 planSteps: (payload.steps as PlanStep[]) || [],
+                plannedTasks: mergedPlannedTasks,
             };
+        }
 
         case 'TASK_RESEARCH_UPDATED':
             return {
@@ -298,7 +323,23 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
         case 'TASK_PLAN_READY':
             return {
                 ...session,
+                taskMode:
+                    payload.mode === 'chat' ||
+                    payload.mode === 'immediate_task' ||
+                    payload.mode === 'scheduled_task' ||
+                    payload.mode === 'scheduled_multi_task'
+                        ? payload.mode
+                        : session.taskMode,
                 planSummary: (payload.summary as string | undefined) ?? session.planSummary,
+                plannedTasks: ((payload.tasks as Array<Record<string, unknown>> | undefined) ?? [])
+                    .map((task) => ({
+                        id: String(task.id ?? ''),
+                        title: String(task.title ?? ''),
+                        objective: String(task.objective ?? ''),
+                        dependencies: parseStringArray(task.dependencies),
+                        status: 'pending' as PlanStep['status'],
+                    }))
+                    .filter((task) => task.id.length > 0),
                 plannedDeliverables: ((payload.deliverables as TaskSession['plannedDeliverables']) ?? []).slice(),
                 plannedCheckpoints: ((payload.checkpoints as unknown[] | undefined) ?? [])
                     .map((checkpoint) => toPlannedCheckpoint(checkpoint))
@@ -504,6 +545,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             return {
                 ...session,
                 status: 'idle',
+                taskMode: undefined,
                 summary: undefined,
                 failure: undefined,
                 suspension: undefined,
@@ -518,6 +560,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 contractReopenDiff: undefined,
                 contractReopenCount: undefined,
                 plannedDeliverables: undefined,
+                plannedTasks: undefined,
                 plannedCheckpoints: undefined,
                 plannedUserActions: undefined,
                 missingInfo: undefined,

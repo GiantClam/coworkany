@@ -68,7 +68,12 @@ function toPatchTaskCardItem(item: PatchItem): TaskCardItem {
 }
 
 function isTaskCardEmpty(item: TaskCardItem): boolean {
-    return !item.subtitle && item.sections.every((section) => section.lines.length === 0);
+    const hasSections = item.sections.some((section) => section.lines.length > 0);
+    const hasTasks = (item.tasks?.length ?? 0) > 0;
+    const hasCollaboration = Boolean(item.collaboration);
+    const hasResult = Boolean(item.result?.summary || item.result?.error);
+    const hasStatus = Boolean(item.status);
+    return !item.subtitle && !hasSections && !hasTasks && !hasCollaboration && !hasResult && !hasStatus;
 }
 
 interface TimelineProps {
@@ -79,6 +84,17 @@ interface TimelineProps {
     resumeCardActionLabel?: string;
     resumeCardActionDisabled?: boolean;
     onResumeCardAction?: () => void;
+    onTaskCollaborationSubmit?: (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+        value: string;
+    }) => void;
+    onTaskActionClick?: (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+    }) => void;
 }
 
 const TimelineComponent: React.FC<TimelineProps> = ({
@@ -89,6 +105,8 @@ const TimelineComponent: React.FC<TimelineProps> = ({
     resumeCardActionLabel,
     resumeCardActionDisabled = false,
     onResumeCardAction,
+    onTaskCollaborationSubmit,
+    onTaskActionClick,
 }) => {
     const { t } = useTranslation();
     const [showFullHistory, setShowFullHistory] = React.useState(false);
@@ -205,7 +223,14 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                         if (isTaskCardEmpty(item)) {
                             return null;
                         }
-                        return <TaskCardMessage key={item.id} item={item} />;
+                        return (
+                            <TaskCardMessage
+                                key={item.id}
+                                item={item}
+                                onTaskCollaborationSubmit={onTaskCollaborationSubmit}
+                                onTaskActionClick={onTaskActionClick}
+                            />
+                        );
                     default:
                         return null;
                 }
@@ -252,6 +277,8 @@ export const Timeline = React.memo(TimelineComponent, (prevProps, nextProps) => 
     && prevProps.resumeCardActionLabel === nextProps.resumeCardActionLabel
     && prevProps.resumeCardActionDisabled === nextProps.resumeCardActionDisabled
     && prevProps.onResumeCardAction === nextProps.onResumeCardAction
+    && prevProps.onTaskCollaborationSubmit === nextProps.onTaskCollaborationSubmit
+    && prevProps.onTaskActionClick === nextProps.onTaskActionClick
 ));
 
 Timeline.displayName = 'Timeline';

@@ -24,6 +24,7 @@ const readline = require('readline');
 let browser = null;
 let context = null;
 let page = null;
+const taskPages = new Map();
 const activeCommands = new Map();
 
 function send(obj) {
@@ -77,6 +78,30 @@ function getCommandCancellationError(control) {
     return new Error(control?.reason || 'Command cancelled');
 }
 
+function normalizeTaskKey(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const normalized = raw.trim();
+    return normalized.length > 0 ? normalized : null;
+}
+
+async function getPageForTask(taskKey) {
+    const normalizedTaskKey = normalizeTaskKey(taskKey);
+    if (!normalizedTaskKey) {
+        if (!page) throw new Error('Browser not launched');
+        return page;
+    }
+    if (!context) throw new Error('Browser context not available');
+
+    const existing = taskPages.get(normalizedTaskKey);
+    if (existing && !existing.isClosed()) {
+        return existing;
+    }
+
+    const nextPage = await context.newPage();
+    taskPages.set(normalizedTaskKey, nextPage);
+    return nextPage;
+}
+
 /**
  * Connect to an existing Chrome/Chromium browser via CDP (Chrome DevTools Protocol).
  *
@@ -109,6 +134,7 @@ async function connectCDP(params) {
 
     context = contexts[0];
     const existingPages = context.pages();
+    taskPages.clear();
 
     // Always create a new page (tab) for navigation instead of reusing
     // existing tabs. Reusing tabs can cause issues:
@@ -129,6 +155,7 @@ async function launch(params) {
     if (browser || context) {
         return { alreadyConnected: true };
     }
+    taskPages.clear();
 
     const commonLaunchArgs = [
         '--disable-blink-features=AutomationControlled',
@@ -196,17 +223,17 @@ async function launch(params) {
 }
 
 async function navigate(params) {
-    if (!page) throw new Error('Browser not launched');
+    const targetPage = await getPageForTask(params?.taskKey);
     const timeout = params.timeout || 30000;
     const waitUntil = params.waitUntil || 'domcontentloaded';
 
-    const response = await page.goto(params.url, { waitUntil, timeout });
+    const response = await targetPage.goto(params.url, { waitUntil, timeout });
 
     // Check if the page needs time for SPA hydration (common with X, Twitter, etc.)
     // Many SPAs ship minimal HTML with a <noscript> fallback, then render via JavaScript.
     let bodyText = '';
     try {
-        bodyText = await page.evaluate(() => (document.body?.innerText || '').trim());
+        bodyText = await targetPage.evaluate(() => (document.body?.innerText || '').trim());
     } catch { /* page might be navigating */ }
 
     const spaNotReady = !bodyText
@@ -220,9 +247,9 @@ async function navigate(params) {
 
         // Poll for up to 15 seconds waiting for JS to render
         for (let i = 0; i < 15; i++) {
-            await page.waitForTimeout(1000);
+            await targetPage.waitForTimeout(1000);
             try {
-                bodyText = await page.evaluate(() => (document.body?.innerText || '').trim());
+                bodyText = await targetPage.evaluate(() => (document.body?.innerText || '').trim());
                 if (bodyText.length > 100 && !bodyText.includes('JavaScript is not available')) {
                     log(`SPA hydrated after ${i + 1}s (bodyLen=${bodyText.length})`);
                     break;
@@ -234,8 +261,8 @@ async function navigate(params) {
         if (bodyText.length < 100 || bodyText.includes('JavaScript is not available')) {
             log('SPA still not ready, trying waitForLoadState("load")...');
             try {
-                await page.waitForLoadState('load', { timeout: 15000 });
-                bodyText = await page.evaluate(() => (document.body?.innerText || '').trim());
+                await targetPage.waitForLoadState('load', { timeout: 15000 });
+                bodyText = await targetPage.evaluate(() => (document.body?.innerText || '').trim());
                 log(`After load state: bodyLen=${bodyText.length}`);
             } catch (e) {
                 log(`waitForLoadState failed: ${e.message}`);
@@ -251,9 +278,9 @@ async function navigate(params) {
     if (xTransientError) {
         log('Detected transient X error page, attempting one reload...');
         try {
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-            await page.waitForTimeout(1500);
-            bodyText = await page.evaluate(() => (document.body?.innerText || '').trim());
+            await targetPage.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+            await targetPage.waitForTimeout(1500);
+            bodyText = await targetPage.evaluate(() => (document.body?.innerText || '').trim());
             log(`After reload: bodyLen=${bodyText.length}`);
         } catch (e) {
             log(`Reload after X error failed: ${e.message}`);
@@ -261,8 +288,8 @@ async function navigate(params) {
     }
 
     return {
-        url: page.url(),
-        title: await page.title(),
+        url: targetPage.url(),
+        title: await targetPage.title(),
         status: response ? response.status() : null,
         bodyLength: bodyText.length,
         xTransientError,
@@ -270,16 +297,16 @@ async function navigate(params) {
 }
 
 async function click(params) {
-    if (!page) throw new Error('Browser not launched');
+    const targetPage = await getPageForTask(params?.taskKey);
     const timeout = params.timeout || 10000;
 
     if (params.selector) {
-        await page.click(params.selector, { timeout });
+        await targetPage.click(params.selector, { timeout });
         return { clicked: true, selector: params.selector };
     } else if (params.text) {
         // Strategy 1: getByText (visible text content)
         try {
-            const el = page.getByText(params.text, { exact: false }).first();
+            const el = targetPage.getByText(params.text, { exact: false }).first();
             await el.click({ timeout: Math.min(timeout, 5000) });
             return { clicked: true, method: 'getByText', text: params.text };
         } catch (e) {
@@ -288,7 +315,7 @@ async function click(params) {
 
         // Strategy 2: getByPlaceholder (for input fields with placeholder text)
         try {
-            const el = page.getByPlaceholder(params.text, { exact: false }).first();
+            const el = targetPage.getByPlaceholder(params.text, { exact: false }).first();
             await el.click({ timeout: Math.min(timeout, 5000) });
             return { clicked: true, method: 'getByPlaceholder', text: params.text };
         } catch (e) {
@@ -297,7 +324,7 @@ async function click(params) {
 
         // Strategy 3: getByRole textbox with name
         try {
-            const el = page.getByRole('textbox', { name: params.text }).first();
+            const el = targetPage.getByRole('textbox', { name: params.text }).first();
             await el.click({ timeout: Math.min(timeout, 5000) });
             return { clicked: true, method: 'getByRole(textbox)', text: params.text };
         } catch (e) {
@@ -314,7 +341,7 @@ async function click(params) {
                 `[contenteditable][aria-label*="${escaped}"]`,
                 `[data-testid*="tweetTextarea"]`,
             ].join(', ');
-            await page.click(selectors, { timeout: Math.min(timeout, 5000) });
+            await targetPage.click(selectors, { timeout: Math.min(timeout, 5000) });
             return { clicked: true, method: 'css-placeholder-fallback', text: params.text };
         } catch (e) {
             log(`CSS placeholder fallback failed: ${e.message?.substring(0, 80)}`);
@@ -326,21 +353,21 @@ async function click(params) {
 }
 
 async function fill(params) {
-    if (!page) throw new Error('Browser not launched');
+    const targetPage = await getPageForTask(params?.taskKey);
     const timeout = params.timeout || 10000;
 
     if (params.selector) {
         try {
-            await page.fill(params.selector, params.value, { timeout });
+            await targetPage.fill(params.selector, params.value, { timeout });
             return { filled: true, method: 'fill-selector', value: params.value };
         } catch (e) {
             // fill() fails on contenteditable elements — fallback to click+type
             log(`fill(selector) failed, trying click+type: ${e.message?.substring(0, 80)}`);
             try {
-                await page.click(params.selector, { timeout: 3000 });
-                await page.keyboard.selectAll();
-                await page.keyboard.press('Backspace');
-                await page.keyboard.type(params.value, { delay: 30 });
+                await targetPage.click(params.selector, { timeout: 3000 });
+                await targetPage.keyboard.selectAll();
+                await targetPage.keyboard.press('Backspace');
+                await targetPage.keyboard.type(params.value, { delay: 30 });
                 return { filled: true, method: 'click+type-selector', value: params.value };
             } catch (e2) {
                 throw new Error(`fill selector "${params.selector}" failed: ${e2.message}`);
@@ -349,7 +376,7 @@ async function fill(params) {
     } else if (params.text) {
         // Strategy 1: getByPlaceholder + fill
         try {
-            const el = page.getByPlaceholder(params.text, { exact: false }).or(page.getByLabel(params.text)).first();
+            const el = targetPage.getByPlaceholder(params.text, { exact: false }).or(targetPage.getByLabel(params.text)).first();
             await el.fill(params.value, { timeout: Math.min(timeout, 5000) });
             return { filled: true, method: 'getByPlaceholder+fill', value: params.value };
         } catch (e) {
@@ -366,10 +393,10 @@ async function fill(params) {
                 `[aria-placeholder*="${escaped}"]`,
                 `[data-testid*="tweetTextarea"]`,
             ].join(', ');
-            await page.click(selectors, { timeout: 3000 });
-            await page.keyboard.selectAll();
-            await page.keyboard.press('Backspace');
-            await page.keyboard.type(params.value, { delay: 30 });
+            await targetPage.click(selectors, { timeout: 3000 });
+            await targetPage.keyboard.selectAll();
+            await targetPage.keyboard.press('Backspace');
+            await targetPage.keyboard.type(params.value, { delay: 30 });
             return { filled: true, method: 'contenteditable-click+type', value: params.value };
         } catch (e) {
             log(`contenteditable fill failed: ${e.message?.substring(0, 80)}`);
@@ -377,7 +404,7 @@ async function fill(params) {
 
         // Strategy 3: getByRole textbox + fill
         try {
-            const el = page.getByRole('textbox', { name: params.text }).first();
+            const el = targetPage.getByRole('textbox', { name: params.text }).first();
             await el.fill(params.value, { timeout: Math.min(timeout, 5000) });
             return { filled: true, method: 'getByRole+fill', value: params.value };
         } catch (e) {
@@ -387,68 +414,68 @@ async function fill(params) {
         throw new Error(`Could not find element to fill with text "${params.text}"`);
     } else {
         // Fill focused element
-        await page.keyboard.insertText(params.value);
+        await targetPage.keyboard.insertText(params.value);
         return { filled: true, method: 'keyboard-insert', value: params.value };
     }
 }
 
 async function screenshot(params) {
-    if (!page) throw new Error('Browser not launched');
+    const targetPage = await getPageForTask(params?.taskKey);
 
-    const buffer = await page.screenshot({
+    const buffer = await targetPage.screenshot({
         fullPage: params.fullPage || false,
         type: 'png',
     });
     return {
         base64: buffer.toString('base64'),
-        width: (await page.viewportSize())?.width,
-        height: (await page.viewportSize())?.height,
+        width: (await targetPage.viewportSize())?.width,
+        height: (await targetPage.viewportSize())?.height,
     };
 }
 
 async function getContent(params) {
-    if (!page) throw new Error('Browser not launched');
+    const targetPage = await getPageForTask(params?.taskKey);
 
     // Use innerText (visible text only) instead of textContent
     // (which includes hidden text from <style>/<script> elements).
     // This prevents X.com's noscript CSS from polluting the content.
     if (params.selector) {
         try {
-            const text = await page.innerText(params.selector, { timeout: 5000 });
+            const text = await targetPage.innerText(params.selector, { timeout: 5000 });
             return { content: text };
         } catch {
             // Fallback to textContent if innerText fails
-            const text = await page.textContent(params.selector, { timeout: 5000 });
+            const text = await targetPage.textContent(params.selector, { timeout: 5000 });
             return { content: text };
         }
     }
     try {
-        const text = await page.innerText('body', { timeout: 5000 });
+        const text = await targetPage.innerText('body', { timeout: 5000 });
         return { content: text ? text.substring(0, 10000) : '' };
     } catch {
-        const text = await page.textContent('body');
+        const text = await targetPage.textContent('body');
         return { content: text ? text.substring(0, 10000) : '' };
     }
 }
 
 async function executeScript(params) {
-    if (!page) throw new Error('Browser not launched');
-    const result = await page.evaluate(params.script);
+    const targetPage = await getPageForTask(params?.taskKey);
+    const result = await targetPage.evaluate(params.script);
     return { result };
 }
 
 async function waitForSelector(params) {
-    if (!page) throw new Error('Browser not launched');
-    await page.waitForSelector(params.selector, {
+    const targetPage = await getPageForTask(params?.taskKey);
+    await targetPage.waitForSelector(params.selector, {
         timeout: params.timeout || 10000,
         state: params.state || 'visible',
     });
     return { found: true };
 }
 
-async function getUrl() {
-    if (!page) throw new Error('Browser not launched');
-    return { url: page.url(), title: await page.title() };
+async function getUrl(params = {}) {
+    const targetPage = await getPageForTask(params?.taskKey);
+    return { url: targetPage.url(), title: await targetPage.title() };
 }
 
 /**
@@ -469,7 +496,7 @@ async function getUrl() {
  * @param {number}  [params.timeout]        Timeout in ms (default 10000)
  */
 async function uploadFile(params) {
-    if (!page) throw new Error('Browser not launched');
+    const targetPage = await getPageForTask(params?.taskKey);
 
     const selector = params.selector || 'input[type="file"]';
     let filePath = params.filePath;
@@ -479,7 +506,7 @@ async function uploadFile(params) {
         const os = require('os');
         filePath = path.join(os.tmpdir(), `xhs_temp_${Date.now()}.png`);
 
-        const base64 = await page.evaluate(({ text, width, height }) => {
+        const base64 = await targetPage.evaluate(({ text, width, height }) => {
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = height;
@@ -538,7 +565,7 @@ async function uploadFile(params) {
     if (!filePath) throw new Error('No filePath or generateImage specified');
 
     // Use Playwright's native setInputFiles — the gold standard for file uploads
-    const locator = page.locator(selector).first();
+    const locator = targetPage.locator(selector).first();
     await locator.setInputFiles(filePath, { timeout: params.timeout || 15000 });
 
     log(`File uploaded via setInputFiles: ${filePath} -> ${selector}`);
@@ -546,6 +573,15 @@ async function uploadFile(params) {
 }
 
 async function close() {
+    for (const [, taskPage] of taskPages) {
+        try {
+            if (taskPage && !taskPage.isClosed()) {
+                await taskPage.close({ runBeforeUnload: false });
+            }
+        } catch {}
+    }
+    taskPages.clear();
+
     if (context) {
         await context.close().catch(() => {});
         context = null;

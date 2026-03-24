@@ -79,6 +79,25 @@ function isLlmConfigError(error: string | null | undefined): boolean {
         || lower.includes('no llm');
 }
 
+function isLikelyCreateTaskIntent(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    return /^(新任务|新建任务|创建任务|开个新任务|另外一个任务|下一任务|new task|create task|start a new task|another task)\b/i.test(trimmed)
+        || /^(新任务|新建任务|创建任务)[:：]/i.test(trimmed)
+        || /^(new task|create task|start a new task)[:：]/i.test(trimmed);
+}
+
+function stripCreateTaskIntentPrefix(text: string): string {
+    return text
+        .trim()
+        .replace(/^(新任务|新建任务|创建任务|开个新任务|另外一个任务|下一任务)\s*[:：-]?\s*/i, '')
+        .replace(/^(new task|create task|start a new task|another task)\s*[:：-]?\s*/i, '')
+        .trim();
+}
+
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenSkills,
     onOpenMcp,
@@ -254,13 +273,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ): Promise<boolean> => {
         const includeAttachments = options?.includeAttachments ?? true;
         const trimmedQuery = text.trim();
-        if (!trimmedQuery && (!includeAttachments || attachments.length === 0)) return false;
-        const requestContent = includeAttachments ? buildContentWithAttachments(text) : trimmedQuery;
-        const titleSource = trimmedQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
+        const createTaskIntent = Boolean(
+            activeSession?.taskId
+            && !activeSession.isDraft
+            && isLikelyCreateTaskIntent(trimmedQuery)
+        );
+        const normalizedQuery = createTaskIntent ? stripCreateTaskIntentPrefix(trimmedQuery) : trimmedQuery;
+        const effectiveQuery = normalizedQuery || trimmedQuery;
+        if (!effectiveQuery && (!includeAttachments || attachments.length === 0)) return false;
+        const requestContent = includeAttachments ? buildContentWithAttachments(effectiveQuery) : effectiveQuery;
+        const titleSource = effectiveQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
         const enabledSkillsForRequest = enabledSkills;
         const enabledToolpacksForRequest = enabledToolpacks;
 
-        if (activeSession?.taskId && !activeSession.isDraft) {
+        if (activeSession?.taskId && !activeSession.isDraft && !createTaskIntent) {
             const voiceSettings = await getVoiceSettings();
             const taskId = activeSession.taskId;
             const sentContent = requestContent;
@@ -318,7 +344,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             return result?.success === true;
         }
 
-        const draftTaskId = activeSession?.isDraft ? activeSession.taskId : undefined;
+        const draftTaskId = createTaskIntent ? undefined : (activeSession?.isDraft ? activeSession.taskId : undefined);
 
         // Auto-create workspace if none selected or path is invalid
         let currentWorkspace = activeWorkspace;
@@ -395,6 +421,49 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleSubmit = useCallback(async () => {
         await submitRequest(query, { includeAttachments: true });
     }, [query, submitRequest]);
+
+    const handleTaskCardCollaborationSubmit = useCallback(async (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+        value: string;
+    }) => {
+        const message = input.value.trim();
+        if (!message) {
+            return;
+        }
+
+        if (!activeSession?.taskId || activeSession.taskId === input.taskId) {
+            await submitRequest(message, { includeAttachments: false });
+            return;
+        }
+
+        const voiceSettings = await getVoiceSettings();
+        await sendMessage({
+            taskId: input.taskId || activeSession.taskId,
+            content: message,
+            config: {
+                enabledClaudeSkills: enabledSkills,
+                enabledToolpacks,
+                enabledSkills,
+                voiceProviderMode: voiceSettings.providerMode,
+            },
+        });
+    }, [activeSession?.taskId, enabledSkills, enabledToolpacks, sendMessage, submitRequest]);
+
+    const handleTaskCardActionClick = useCallback(async (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+    }) => {
+        const continueMessage = input.actionId
+            ? `继续执行（${input.actionId}）`
+            : '继续执行';
+        await handleTaskCardCollaborationSubmit({
+            ...input,
+            value: continueMessage,
+        });
+    }, [handleTaskCardCollaborationSubmit]);
 
     const processVoiceSegmentQueue = useCallback(async () => {
         if (processingVoiceSegmentsRef.current) {
@@ -610,6 +679,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 resumeCardActionLabel={t('chat.resumeInterruptedAction', { defaultValue: 'Continue task' })}
                 resumeCardActionDisabled={isSending || isStarting || isResuming}
                 onResumeCardAction={handleResumeInterruptedTaskClick}
+                onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
+                onTaskActionClick={handleTaskCardActionClick}
             />
 
             <InputArea

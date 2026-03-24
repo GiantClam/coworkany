@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-03-23T23:45:01.988Z",
+  "taskId": "d542d658-fc81-41d0-8d01-69a96b2ed92a",
+  "appDataDir": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-replay-md-local-RB7SHp",
+  "workspacePath": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-replay-ws-md-local-9ZsTIj",
+  "planSummary": "把字符串 HELLO 写入 markdown 文件并保存到 artifacts/hello-local.md，然后在聊天中确认完成. Planned execution: 1 primary task, 1 deliverable, 1 checkpoint.",
+  "deliverablePaths": [
+    "artifacts/hello-local.md"
+  ],
+  "finishedSummary": null,
+  "finishedArtifacts": [],
+  "failedError": "unable to get issuer certificate",
+  "eventTypes": [
+    "start_task_response",
+    "TASK_STARTED",
+    "TASK_RESEARCH_UPDATED",
+    "TASK_PLAN_READY",
+    "PLAN_UPDATED",
+    "TASK_CHECKPOINT_REACHED",
+    "PLAN_UPDATED",
+    "TASK_FAILED"
+  ],
+  "taskEventCount": 8,
+  "helloFileExists": false,
+  "helloFilePreview": null,
+  "stderrTail": " fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[PostLearning] 📚 Learning from FAILED session: 把字符串 HELLO 写入 markdown 文件并保存到 artifacts/hello-local.md，然后在聊天中确认完成。\n[PostLearning] Failed tool calls: 0\n[PostLearning] Errors: \n[PostLearning] Detected missing capability: 把字符串 hello 写入\n[PostLearning] ✅ Saved failure knowledge: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/vault/self-learned/concepts/2026-03-23--hello-.md\n"
+}

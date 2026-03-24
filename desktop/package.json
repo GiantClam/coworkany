@@ -28,6 +28,9 @@
         "test": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
         "test:ci": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts",
         "test:e2e": "playwright test",
+        "test:e2e:smoke": "playwright test tests/sidecar-spawn-reuse.e2e.test.ts tests/sidecar-spawn-reuse-native-mac.test.ts --grep @smoke",
+        "test:e2e:regression": "playwright test tests/sidecar-spawn-reuse.e2e.test.ts tests/sidecar-spawn-reuse-native-mac.test.ts --grep @regression",
+        "test:e2e:smoke:sidecar-reuse": "playwright test tests/sidecar-spawn-reuse-native-mac.test.ts --grep @smoke",
         "test:e2e:x-following": "playwright test tests/x-following-posts-query-e2e.test.ts tests/x-following-posts-suspend-e2e.test.ts",
         "test:native:shell:mac": "node tests/run-native-shell-macos.mjs",
         "test:native:shell:mac:prompt": "node tests/run-native-shell-macos.mjs --prompt-accessibility"

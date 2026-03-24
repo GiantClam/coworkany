@@ -34,7 +34,8 @@ function createCancellationSignal(context?: ToolContext): { signal?: AbortSignal
 }
 
 async function ensureBrowserConnected(signal?: AbortSignal): Promise<void> {
-    if (browserService.isConnected()) {
+    const connectionInfo = browserService.getConnectionInfo();
+    if (connectionInfo.connected) {
         return;
     }
 
@@ -218,6 +219,7 @@ export const browserNavigateTool: ToolDefinition = {
                 waitUntil: args.wait_until,
                 timeout: args.timeout_ms,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {
@@ -264,6 +266,7 @@ export const browserScreenshotTool: ToolDefinition = {
                 selector: args.selector,
                 fullPage: args.full_page,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {
@@ -304,7 +307,7 @@ export const browserGetContentTool: ToolDefinition = {
         const { signal, cleanup } = createCancellationSignal(context);
         try {
             await ensureBrowserConnected(signal);
-            const result = await browserService.getContent(!args.as_html, { signal });
+            const result = await browserService.getContent(!args.as_html, { signal, taskId: context?.taskId });
 
             return {
                 success: true,
@@ -368,6 +371,7 @@ export const browserClickTool: ToolDefinition = {
                 text: args.text,
                 timeout: args.timeout_ms,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {
@@ -423,6 +427,7 @@ export const browserFillTool: ToolDefinition = {
                 value: args.value,
                 clearFirst: args.clear_first,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {
@@ -479,6 +484,7 @@ export const browserWaitTool: ToolDefinition = {
                 state: args.state,
                 timeout: args.timeout_ms,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {
@@ -521,7 +527,7 @@ export const browserExecuteScriptTool: ToolDefinition = {
         const { signal, cleanup } = createCancellationSignal(context);
         try {
             await ensureBrowserConnected(signal);
-            const result = await browserService.executeScript(args.script, { signal });
+            const result = await browserService.executeScript(args.script, { signal, taskId: context?.taskId });
 
             return {
                 success: true,
@@ -582,6 +588,7 @@ In auto mode: tries precise first, then falls back to smart.`,
                 selector: args.selector,
                 instruction: args.instruction,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {
@@ -694,6 +701,7 @@ Examples:
                 action: args.action,
                 context: args.context,
                 signal,
+                taskId: context?.taskId,
             });
 
             return {

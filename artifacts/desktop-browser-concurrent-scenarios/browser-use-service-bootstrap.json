@@ -13,13 +13,13 @@
     "killed": false,
     "spawnfile": "/Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
     "_handle": {
-      "pid": 28458
+      "pid": 87755
     },
     "spawnargs": [
       "/Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
       "/Users/beihuang/Documents/github/coworkany/browser-use-service/main.py"
     ],
-    "pid": 28458,
+    "pid": 87755,
     "stdin": null,
     "stdout": {
       "connecting": false,

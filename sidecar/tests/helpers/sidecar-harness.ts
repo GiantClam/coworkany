@@ -363,6 +363,11 @@ export class SidecarProcess {
         this.proc.stdin.flush();
     }
 
+    resetCollector(collector?: EventCollector): EventCollector {
+        this.collector = collector || new EventCollector();
+        return this.collector;
+    }
+
     async waitForCompletion(timeoutMs: number): Promise<void> {
         const startTime = Date.now();
         let lastProgressMs = Date.now();

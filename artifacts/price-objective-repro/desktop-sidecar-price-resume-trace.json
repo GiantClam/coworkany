@@ -1,0 +1,188 @@
+[SIDECAR] Spawning sidecar process...
+[SIDECAR] Waiting 5000ms for initialization...
+[SIDECAR] Ready.
+{
+  "taskId": "f55a5f3b-4ed2-4b00-82dd-b3dec4ba06e1",
+  "appDataDir": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-desktop-sidecar-logs-KqZh9H",
+  "workspaceDir": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-desktop-workspace-FZsexH",
+  "checkpoints": [
+    {
+      "marker": "after_bootstrap",
+      "eventCount": 1,
+      "at": "2026-03-23T13:40:49.823Z"
+    },
+    {
+      "marker": "after_send_task_message",
+      "eventCount": 2,
+      "at": "2026-03-23T13:40:51.326Z"
+    },
+    {
+      "marker": "after_resume_interrupted_task",
+      "eventCount": 10,
+      "at": "2026-03-23T13:40:58.329Z"
+    }
+  ],
+  "logFileLine": "[INFO] Log file: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/logs/sidecar-2026-03-23.log",
+  "stderrHead": [
+    "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+    "[SkillStore] Loaded 6 skills",
+    "[SkillStore] Scanning skills directory on startup...",
+    "[SkillStore] Total skills available: 25",
+    "[BrowserService] Mode changed: auto -> smart",
+    "[INFO] Sidecar IPC started",
+    "[INFO] Reading commands from stdin (JSON-Lines)",
+    "[INFO] Log file: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/logs/sidecar-2026-03-23.log",
+    "[Heartbeat] Starting engine...",
+    "[Heartbeat] Loaded 1 triggers from config",
+    "[Heartbeat] Started interval timer for: Scheduled Task Runner",
+    "[Heartbeat] engine_started: {\"triggerCount\":1}",
+    "[Heartbeat] Engine started with 1 triggers",
+    "[BrowserUse] ✗ Service not available at http://localhost:8100. Smart mode will be unavailable. Start with: cd browser-use-service && python main.py",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[DEBUG] stdin data chunk, length: 450",
+    "[DEBUG] Received line: {\"type\":\"bootstrap_runtime_context\",\"id\":\"4514095d-951c-4fad-bceb-043a927064eb\",\"timestamp\":\"2026-03-23T13:40:49.823Z\",\"payload\":{\"runtimeContext\":{\"platform\":\"darwin\",\"arch\":\"arm64\",\"appDir\":\"/Users/",
+    "[DEBUG] Parsed JSON, type: bootstrap_runtime_context",
+    "[DEBUG] Valid command, handling: bootstrap_runtime_context",
+    "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-desktop-sidecar-logs-KqZh9H, sidecarLaunchMode=unknown",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[DEBUG] stdin data chunk, length: 233",
+    "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"fe6d77f4-433e-48ca-8df6-103e0b691975\",\"timestamp\":\"2026-03-23T13:40:51.325Z\",\"payload\":{\"taskId\":\"f55a5f3b-4ed2-4b00-82dd-b3dec4ba06e1\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+    "[DEBUG] Parsed JSON, type: send_task_message",
+    "[DEBUG] Valid command, handling: send_task_message",
+    "[LlmConfig] Loaded config from /Users/beihuang/Documents/github/coworkany/sidecar/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[BrowserService] Mode changed: smart -> smart",
+    "[LlmConfig] BrowserUse configured: enabled=true, mode=smart",
+    "[WebSearch] Trying Serper.dev search...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] Serper returned 1 results",
+    "[DEBUG] stdin data chunk, length: 190",
+    "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"4c5a91e3-df3e-4dfc-9b95-ca7fcf2fe38b\",\"timestamp\":\"2026-03-23T13:40:58.328Z\",\"payload\":{\"taskId\":\"f55a5f3b-4ed2-4b00-82dd-b3dec4ba06e1\",\"config\":{}}}",
+    "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+    "[DEBUG] Valid command, handling: resume_interrupted_task",
+    "[WebSearch] Trying Serper.dev search...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}"
+  ],
+  "timeline": [
+    {
+      "idx": 1,
+      "timestamp": "2026-03-23T13:40:49.840Z",
+      "type": "bootstrap_runtime_context_response",
+      "summary": "{\"success\":true}"
+    },
+    {
+      "idx": 2,
+      "timestamp": "2026-03-23T13:40:51.327Z",
+      "type": "CHAT_MESSAGE",
+      "summary": "根据上述信息，给我兖矿能源的买入价格"
+    },
+    {
+      "idx": 3,
+      "timestamp": "2026-03-23T13:40:51.328Z",
+      "type": "send_task_message_response",
+      "summary": "{\"success\":true,\"taskId\":\"f55a5f3b-4ed2-4b00-82dd-b3dec4ba06e1\"}"
+    },
+    {
+      "idx": 4,
+      "timestamp": "2026-03-23T13:40:55.362Z",
+      "type": "TASK_RESEARCH_UPDATED",
+      "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+    },
+    {
+      "idx": 5,
+      "timestamp": "2026-03-23T13:40:55.362Z",
+      "type": "TASK_PLAN_READY",
+      "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+    },
+    {
+      "idx": 6,
+      "timestamp": "2026-03-23T13:40:55.363Z",
+      "type": "PLAN_UPDATED",
+      "summary": "Blocked: Resolve blocking uncertainty"
+    },
+    {
+      "idx": 7,
+      "timestamp": "2026-03-23T13:40:55.365Z",
+      "type": "TASK_USER_ACTION_REQUIRED",
+      "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+    },
+    {
+      "idx": 8,
+      "timestamp": "2026-03-23T13:40:55.365Z",
+      "type": "CHAT_MESSAGE",
+      "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market session context) for the "
+    },
+    {
+      "idx": 9,
+      "timestamp": "2026-03-23T13:40:55.365Z",
+      "type": "TASK_STATUS",
+      "summary": "status=idle"
+    },
+    {
+      "idx": 10,
+      "timestamp": "2026-03-23T13:40:58.333Z",
+      "type": "resume_interrupted_task_response",
+      "summary": "{\"success\":true,\"taskId\":\"f55a5f3b-4ed2-4b00-82dd-b3dec4ba06e1\"}"
+    },
+    {
+      "idx": 11,
+      "timestamp": "2026-03-23T13:40:58.333Z",
+      "type": "TASK_STATUS",
+      "summary": "status=running"
+    },
+    {
+      "idx": 12,
+      "timestamp": "2026-03-23T13:40:58.333Z",
+      "type": "TASK_RESUMED",
+      "summary": "resumeReason=interrupted_recovery"
+    },
+    {
+      "idx": 13,
+      "timestamp": "2026-03-23T13:41:00.237Z",
+      "type": "TASK_RESEARCH_UPDATED",
+      "summary": "Research updated: 3/3 queries processed, contract ready to freeze."
+    },
+    {
+      "idx": 14,
+      "timestamp": "2026-03-23T13:41:00.238Z",
+      "type": "TASK_PLAN_READY",
+      "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+    },
+    {
+      "idx": 15,
+      "timestamp": "2026-03-23T13:41:00.238Z",
+      "type": "PLAN_UPDATED",
+      "summary": "Queued: 根据上述信息，给我兖矿能源的买入价格"
+    },
+    {
+      "idx": 16,
+      "timestamp": "2026-03-23T13:41:00.238Z",
+      "type": "PLAN_UPDATED",
+      "summary": "In progress: 根据上述信息，给我兖矿能源的买入价格"
+    }
+  ],
+  "totalEvents": 17
+}
+[SIDECAR] Killing process...

@@ -24,6 +24,7 @@ import { parseInlineAttachmentContent } from '../llm/attachmentContent';
 import {
     buildBlockingUserActionMessage,
     buildPlanUpdatedPayload,
+    planScheduledExecutionStages,
     buildResearchUpdatedPayload,
     buildWorkRequestPlanSummary,
     getBlockingCheckpoint,
@@ -123,6 +124,20 @@ export type RuntimeCommandDeps = {
     emit: (message: Record<string, unknown>) => void;
     onBootstrapRuntimeContext: (runtimeContext: unknown) => void;
     restorePersistedTasks: () => void;
+    getRuntimeSnapshot: () => {
+        generatedAt: string;
+        activeTaskId?: string;
+        tasks: Array<{
+            taskId: string;
+            title: string;
+            workspacePath: string;
+            createdAt: string;
+            status: 'running' | 'idle' | 'finished' | 'failed' | 'interrupted' | 'suspended';
+            suspended?: boolean;
+            suspensionReason?: string;
+        }>;
+        count: number;
+    };
     runDoctorPreflight: (input?: {
         startupProfile?: string;
         readinessReportPath?: string;
@@ -174,6 +189,13 @@ export type RuntimeCommandDeps = {
     }) => Record<string, unknown>;
     createTaskPlanReadyEvent: (taskId: string, payload: {
         summary: string;
+        mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+        tasks?: Array<{
+            id: string;
+            title: string;
+            objective: string;
+            dependencies: string[];
+        }>;
         deliverables: DeliverableContract[];
         checkpoints: Array<{
             id: string;
@@ -237,6 +259,12 @@ export type RuntimeCommandDeps = {
             id: string;
             description: string;
             status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+        }>;
+        taskProgress?: Array<{
+            taskId: string;
+            title: string;
+            status: 'pending' | 'in_progress' | 'complete' | 'completed' | 'skipped' | 'failed' | 'blocked';
+            dependencies: string[];
         }>;
         currentStepId?: string;
     }) => Record<string, unknown>;
@@ -457,7 +485,12 @@ function detectFollowUpLanguage(text: string): 'zh' | 'en' {
 }
 
 function isPlanApprovalReply(text: string): boolean {
-    return /^(?:确认|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
+    return /^(?:确认|确认发布|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
+        .test(text.trim());
+}
+
+function isCompactApprovalSelectionReply(text: string): boolean {
+    return /^(?:(?:选项?\s*)?[1-9]|[1-9][.)、]|[A-Ca-c][.)]?|选[一二三])[.!?？。!]*$/
         .test(text.trim());
 }
 
@@ -467,7 +500,7 @@ function isGenericContinueReply(text: string): boolean {
 }
 
 function assistantPromptedForPlanApproval(text: string): boolean {
-    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|确认是否.*(?:继续|执行)|回复.*(?:确认|批准|approval)|显式批准)/i
+    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|final authorization|authorization token|confirm publish|please reply.*(?:confirm|approve|go ahead)|确认是否.*(?:继续|执行|发布)|请直接回复.*(?:确认|批准|授权)|回复.*(?:确认|批准|approval|授权)|显式批准|最终授权|授权口令|确认发布)/i
         .test(text);
 }
 
@@ -529,13 +562,22 @@ function buildFollowUpSourceText(input: {
         input.previousSnapshot?.sourceText?.trim() ||
         previousUserMessage;
 
-    const approvalBaseObjective = previousPrimaryObjective || previousUserMessage || previousContextText;
+    const preferFullSourceTextForApproval =
+        input.previousSnapshot?.mode === 'scheduled_task'
+        || input.previousSnapshot?.mode === 'scheduled_multi_task';
+    const approvalBaseObjective = preferFullSourceTextForApproval
+        ? (previousContextText || previousPrimaryObjective || previousUserMessage)
+        : (previousPrimaryObjective || previousContextText || previousUserMessage);
+    const promptedForApproval = assistantPromptedForPlanApproval(latestAssistantMessage);
     const hasCarryForwardDeliverable = (input.previousSnapshot?.deliverables ?? [])
         .some((deliverable) => deliverable.type !== 'chat_reply');
     if (
         approvalBaseObjective &&
-        isPlanApprovalReply(input.promptText) &&
-        (assistantPromptedForPlanApproval(latestAssistantMessage) || hasCarryForwardDeliverable)
+        (
+            isPlanApprovalReply(input.promptText) ||
+            (promptedForApproval && isCompactApprovalSelectionReply(input.promptText))
+        ) &&
+        (promptedForApproval || hasCarryForwardDeliverable)
     ) {
         return buildApprovalFollowUpSourceText({
             promptText: input.promptText,
@@ -599,7 +641,8 @@ function buildExecutionQueryFromFrozenWorkRequest(request: {
 }
 
 function buildTaskPlanReadyPayload(frozenWorkRequest: {
-    tasks?: Array<{ objective?: string }>;
+    mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    tasks?: Array<{ id: string; title: string; objective: string; dependencies?: string[] }>;
     sourceText?: string;
     deliverables?: DeliverableContract[];
     checkpoints?: CheckpointContract[];
@@ -614,6 +657,13 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
     resumeStrategy?: ResumeStrategy;
 }): {
     summary: string;
+    mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    tasks?: Array<{
+        id: string;
+        title: string;
+        objective: string;
+        dependencies: string[];
+    }>;
     deliverables: DeliverableContract[];
     checkpoints: CheckpointContract[];
     userActionsRequired: UserActionRequest[];
@@ -628,6 +678,14 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
 } {
     return {
         summary: buildWorkRequestPlanSummary(frozenWorkRequest),
+        mode: frozenWorkRequest.mode,
+        tasks: (frozenWorkRequest.tasks ?? [])
+            .map((task) => ({
+                id: task.id,
+                title: task.title,
+                objective: task.objective,
+                dependencies: Array.isArray(task.dependencies) ? task.dependencies : [],
+            })),
         deliverables: frozenWorkRequest.deliverables ?? [],
         checkpoints: frozenWorkRequest.checkpoints ?? [],
         userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
@@ -698,9 +756,33 @@ function emitBlockingCollaborationEvents(
     }
 
     const preferredActionKind = frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan';
-    const blockingUserAction =
+    const blockingUserActionFromPlan =
         getBlockingUserAction(frozenWorkRequest, preferredActionKind) ??
         getBlockingUserAction(frozenWorkRequest);
+    const blockingUnknowns = (frozenWorkRequest.uncertaintyRegistry ?? [])
+        .filter((item) => item.status === 'blocking_unknown');
+    const hasResearchBlockingUnknown = blockingUnknowns.some((item) => item.topic.startsWith('required_research:'));
+    const synthesizedBlockingUnknownAction: UserActionRequest | undefined =
+        !blockingUserActionFromPlan && blockingUnknowns.length > 0
+            ? {
+                id: `blocking-unknown-${taskId}`,
+                title: hasResearchBlockingUnknown ? '补齐必需研究数据' : '补齐阻塞信息',
+                kind: 'clarify_input',
+                description: hasResearchBlockingUnknown
+                    ? '执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。'
+                    : '执行已暂停：任务仍存在阻塞信息，需要先补充后才能继续。',
+                riskTier: 'high',
+                executionPolicy: 'hard_block',
+                blocking: true,
+                questions: blockingUnknowns.map((item) => item.question || `请补充 ${item.topic} 所需信息。`),
+                instructions: [
+                    hasResearchBlockingUnknown
+                        ? '请提供缺失数据，或同意 Coworkany 重新执行必需 research 以补齐数据后继续。'
+                        : '请补充缺失信息后再继续执行。',
+                ],
+            }
+            : undefined;
+    const blockingUserAction = blockingUserActionFromPlan ?? synthesizedBlockingUnknownAction;
     if (blockingUserAction) {
         deps.emit(deps.createTaskUserActionRequiredEvent(taskId, {
             actionId: blockingUserAction.id,
@@ -889,6 +971,26 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             return true;
         }
 
+        case 'get_runtime_snapshot': {
+            try {
+                deps.emit(respond(command.id, 'get_runtime_snapshot_response', {
+                    success: true,
+                    snapshot: deps.getRuntimeSnapshot(),
+                }));
+            } catch (error) {
+                deps.emit(respond(command.id, 'get_runtime_snapshot_response', {
+                    success: false,
+                    snapshot: {
+                        generatedAt: new Date().toISOString(),
+                        tasks: [],
+                        count: 0,
+                    },
+                    error: error instanceof Error ? error.message : String(error),
+                }));
+            }
+            return true;
+        }
+
         case 'doctor_preflight': {
             const payload = (command.payload as {
                 startupProfile?: string;
@@ -1043,6 +1145,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 title: content.trim().slice(0, 80) || 'Follow-up task',
                 workspacePath,
             });
+            deps.loadLlmConfig(workspacePath);
 
             const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: sourceTextForAnalysis,
@@ -1076,16 +1179,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             deps.emit(deps.createTaskResearchUpdatedEvent(taskId, buildTaskResearchUpdatedPayload(frozenWorkRequest)));
             deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
-            const artifactContract = reopenSignal
-                ? deps.buildArtifactContract(
-                    preparedWorkRequest.executionQuery || promptText,
-                    frozenWorkRequest.deliverables
-                )
-                : deps.taskSessionStore.getArtifactContract(taskId) ||
-                    deps.buildArtifactContract(
-                        preparedWorkRequest.executionQuery || promptText,
-                        frozenWorkRequest.deliverables
-                    );
+            const artifactContract = deps.buildArtifactContract(
+                preparedWorkRequest.executionQuery || promptText,
+                frozenWorkRequest.deliverables
+            );
 
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
 
@@ -1126,22 +1223,60 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
                 return true;
             }
+            if (collaborationGate.blocked) {
+                if (collaborationGate.blockingUserAction) {
+                    const blockedMessage = buildBlockingUserActionMessage(collaborationGate.blockingUserAction);
+                    deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
+                    deps.pushConversationMessage(taskId, { role: 'assistant', content: blockedMessage });
+                    if (deps.shouldUsePlanningFiles(frozenWorkRequest)) {
+                        deps.appendPlanningProgressEntry(
+                            workspacePath,
+                            `Execution blocked for work request ${frozenWorkRequest.id}: ${blockedMessage}`
+                        );
+                    }
+                }
+                return true;
+            }
 
             deps.taskEventBus.emitStatus(taskId, { status: 'running' });
-            if (frozenWorkRequest.mode === 'scheduled_task' && frozenWorkRequest.schedule?.executeAt) {
+            if (
+                (frozenWorkRequest.mode === 'scheduled_task' || frozenWorkRequest.mode === 'scheduled_multi_task')
+                && frozenWorkRequest.schedule?.executeAt
+            ) {
                 const primaryTask = frozenWorkRequest.tasks?.[0];
-                const record = deps.scheduleTaskInternal({
-                    title: primaryTask?.title || promptText.trim().slice(0, 60) || 'Scheduled Task',
-                    taskQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || promptText,
-                    executeAt: new Date(frozenWorkRequest.schedule.executeAt),
+                const stagePlans = planScheduledExecutionStages({
+                    request: frozenWorkRequest,
+                    fallbackTitle: primaryTask?.title || promptText.trim().slice(0, 60) || 'Scheduled Task',
+                    fallbackQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || promptText,
+                });
+                const records = stagePlans.map((stage) => deps.scheduleTaskInternal({
+                    title: stage.title,
+                    taskQuery: stage.taskQuery,
+                    executeAt: new Date(stage.executeAt),
                     workspacePath,
                     speakResult: frozenWorkRequest.presentation?.ttsEnabled ?? false,
                     sourceTaskId: taskId,
                     config: deps.toScheduledTaskConfig(effectiveTaskConfig),
                     workRequestId: frozenWorkRequest.id,
+                    stageTaskId: stage.taskId,
+                    stageIndex: stage.stageIndex,
+                    totalStages: stage.totalStages,
+                    delayMsFromPrevious: stage.delayMsFromPrevious,
                     frozenWorkRequest,
-                });
-                const confirmationMessage = deps.buildScheduledConfirmationMessage(record);
+                }));
+                const isSequentialChain = (stagePlans[0]?.executionMode === 'sequential') && (stagePlans[0]?.totalStages ?? 0) > 1;
+                const confirmationMessage = isSequentialChain
+                    ? [
+                        `已拆解为 ${stagePlans[0]?.totalStages ?? records.length} 个链式阶段任务。`,
+                        `当前仅安排第 1 阶段：${deps.buildScheduledConfirmationMessage(records[0])}`,
+                        '后续阶段会在前一阶段完成后，自动继承结果并继续排程。',
+                    ].join('\n')
+                    : records.length <= 1
+                        ? deps.buildScheduledConfirmationMessage(records[0])
+                        : [
+                            `已拆解为 ${records.length} 个定时任务：`,
+                            ...records.map((record, index) => `${index + 1}. ${deps.buildScheduledConfirmationMessage(record)}`),
+                        ].join('\n');
                 deps.pushConversationMessage(taskId, { role: 'assistant', content: confirmationMessage });
                 deps.emit(deps.createChatMessageEvent(taskId, {
                     role: 'assistant',
@@ -1230,6 +1365,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 title: '',
                 workspacePath,
             });
+            deps.loadLlmConfig(workspacePath);
 
             deps.emit(respond(command.id, 'resume_interrupted_task_response', {
                 success: true,
@@ -1283,12 +1419,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 )
             );
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
-            const artifactContract =
-                deps.taskSessionStore.getArtifactContract(taskId) ||
-                deps.buildArtifactContract(
-                    preparedWorkRequest.executionQuery || resumeQuery,
-                    preparedWorkRequest.frozenWorkRequest?.deliverables
-                );
+            const artifactContract = deps.buildArtifactContract(
+                preparedWorkRequest.executionQuery || resumeQuery,
+                preparedWorkRequest.frozenWorkRequest?.deliverables
+            );
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
 
             const collaborationGate = emitBlockingCollaborationEvents(taskId, preparedWorkRequest.frozenWorkRequest, deps);
@@ -1313,6 +1447,15 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     role: 'assistant',
                     content: confirmationMessage,
                 });
+                return true;
+            }
+            if (collaborationGate.blocked) {
+                if (collaborationGate.blockingUserAction) {
+                    deps.pushConversationMessage(taskId, {
+                        role: 'assistant',
+                        content: buildBlockingUserActionMessage(collaborationGate.blockingUserAction),
+                    });
+                }
                 return true;
             }
 

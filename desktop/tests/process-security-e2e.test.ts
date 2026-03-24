@@ -1,5 +1,5 @@
 /**
- * E2E Test: Process Security Analysis via Tauri Desktop Client �?Self-Learning Scenario
+ * E2E Test: Process Security Analysis via Tauri Desktop Client ?Self-Learning Scenario
  *
  * Tests the agent's ability to perform LOCAL SYSTEM analysis WITHOUT any pre-built
  * compound tool or browser automation:
@@ -10,7 +10,7 @@
  * 5. Post-execution learning triggers and creates a reusable skill
  * 6. Verify: task completion, analysis quality, skill creation, and hot-reload
  *
- * This is a "pure system task" �?no browser needed. The agent must:
+ * This is a "pure system task" ?no browser needed. The agent must:
  *   - Use run_command with tasklist/Get-Process/wmic to get process info
  *   - Optionally use search_web to research suspicious process names
  *   - Analyze the output for security risks
@@ -31,10 +31,10 @@ import { test, expect, type TauriLogCollector } from './tauriFixture';
 // Config
 // ============================================================================
 
-// Query contains '检�? and '分析' �?these should trigger post-execution learning
+// Query contains '检? and '分析' ?these should trigger post-execution learning
 const TASK_QUERY = '检查当前本机运行的所有进程，分析是否存在安全风险，给出详细的安全报告';
 
-// This task should be faster than browser tasks �?no page loads, just command execution
+// This task should be faster than browser tasks ?no page loads, just command execution
 const TASK_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes
 const POLL_INTERVAL_MS = 3000;
 
@@ -66,7 +66,7 @@ async function waitForLogPattern(
 // Tests
 // ============================================================================
 
-test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
+test.describe('本机进程安全分析 ?自学习场?E2E', () => {
     // Extra time for Cargo build + app startup + task execution
     test.setTimeout(TASK_TIMEOUT_MS + 180_000);
 
@@ -158,7 +158,7 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
             // ── Command execution detection ─────────────────────────────
             if (!runCommandDetected && tauriLogs.contains('run_command')) {
                 runCommandDetected = true;
-                console.log(`[Test] [${elapsed}s] 🖥�?run_command tool detected`);
+                console.log(`[Test] [${elapsed}s] 🖥?run_command tool detected`);
             }
 
             // Track individual run_command calls
@@ -212,7 +212,7 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
                 const matchCount = processIndicators.filter(ind => tauriLogs.contains(ind)).length;
                 if (matchCount >= 3) {
                     processDataReceived = true;
-                    console.log(`[Test] [${elapsed}s] �?Process data received (${matchCount} indicators matched)`);
+                    console.log(`[Test] [${elapsed}s] ?Process data received (${matchCount} indicators matched)`);
                 }
             }
 
@@ -306,16 +306,16 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
                 const textLines = tauriLogs.grep('TEXT_DELTA');
                 if (textLines.some(l => securityKeywords.some(kw => l.includes(kw)))) {
                     securityAnalysisDone = true;
-                    console.log(`[Test] [${elapsed}s] 🛡�?Security analysis detected in response`);
+                    console.log(`[Test] [${elapsed}s] 🛡?Security analysis detected in response`);
                 }
             }
 
             // Detect risk assessment
             if (!riskAssessmentDone && securityAnalysisDone) {
                 const riskKeywords = [
-                    '高风�?, '中风�?, '低风�?,     // risk levels
-                    '无风�?, '无异�?,               // no risk
-                    '安全', '不安�?,                 // safe/unsafe
+                    '高风险', '中风险', '低风险',     // risk levels
+                    '无风险', '无异常',               // no risk
+                    '安全', '不安全',                 // safe/unsafe
                     '建议', '推荐',                   // recommendations
                     'high risk', 'low risk', 'medium risk',
                     'no risk', 'clean', 'secure',
@@ -333,7 +333,7 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
                 const reportKeywords = [
                     '报告', '总结', '结论', '分析结果',
                     'report', 'summary', 'conclusion', 'findings',
-                    '以下�?, '如下',                // "here are the results"
+                    '以下', '如下',                // "here are the results"
                 ];
                 const textLines = tauriLogs.grep('TEXT_DELTA');
                 // Need both report structure keywords AND some substance
@@ -352,7 +352,7 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
             }
             if (!taskFailed && tauriLogs.contains('TASK_FAILED')) {
                 taskFailed = true;
-                console.log(`[Test] [${elapsed}s] �?TASK_FAILED event detected`);
+                console.log(`[Test] [${elapsed}s] ?TASK_FAILED event detected`);
             }
 
             // ── Self-learning detection ──────────────────────────────────
@@ -463,23 +463,23 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
             taskSucceeded = true;
         } else if (processListRequested && reportGenerated) {
             // Process data might not have been detected in logs (truncated)
-            // but a report was generated �?treat as success
+            // but a report was generated ?treat as success
             taskSucceeded = true;
             console.log('[Test] Process data not fully captured in logs but report was generated.');
         } else if (runCommandDetected && securityAnalysisDone) {
-            // Command was run and analysis was done �?close enough
+            // Command was run and analysis was done ?close enough
             taskSucceeded = true;
             console.log('[Test] Partial process flow detected but analysis was provided.');
         } else {
             taskSucceeded = false;
             if (!runCommandDetected) {
-                console.log('[Test] �?Agent never used run_command');
+                console.log('[Test] ?Agent never used run_command');
             } else if (!processListRequested) {
-                console.log('[Test] �?No process listing command detected');
+                console.log('[Test] ?No process listing command detected');
             } else if (!processDataReceived) {
-                console.log('[Test] �?No process data received');
+                console.log('[Test] ?No process data received');
             } else {
-                console.log('[Test] �?No security analysis in agent response');
+                console.log('[Test] ?No security analysis in agent response');
             }
         }
 
@@ -488,7 +488,7 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
         // ================================================================
         console.log('');
         console.log('='.repeat(70));
-        console.log('  本机进程安全分析 + 自学�?E2E 测试报告 (Tauri Desktop)');
+        console.log('  本机进程安全分析 + 自学?E2E 测试报告 (Tauri Desktop)');
         console.log('='.repeat(70));
         console.log(`  耗时: ${totalElapsed}s`);
         console.log('');
@@ -499,19 +499,19 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
         console.log(`  多种命令策略: ${multipleCommandsUsed ? 'YES' : 'NO'}`);
         console.log(`  执行命令数量: ${runCommandCount}`);
         console.log('');
-        console.log('  ── 任务规划 (持久化增�? ──');
-        console.log(`  plan_step使用: ${planStepUsed ? 'YES �? : 'NO ⚠️'}`);
-        console.log(`  计划持久�? ${planPersisted ? 'YES �?(task_plan.md)' : 'NO ⚠️'}`);
-        console.log(`  log_finding使用: ${logFindingUsed ? 'YES �?(findings.md)' : 'NO ⚠️'}`);
-        console.log(`  计划上下文注�? ${planContextInjected ? 'YES �?(PreToolUse)' : 'NO ⚠️'}`);
-        console.log(`  Linux命令误用: ${linuxCommandAttempted ? 'YES �?(试错)' : 'NO �?(正确选择平台命令)'}`);
+        console.log('  ── 任务规划 (持久化增? ──');
+        console.log(`  plan_step使用: ${planStepUsed ? 'YES' : 'NO ⚠️'}`);
+        console.log(`  计划持久? ${planPersisted ? 'YES ?(task_plan.md)' : 'NO ⚠️'}`);
+        console.log(`  log_finding使用: ${logFindingUsed ? 'YES ?(findings.md)' : 'NO ⚠️'}`);
+        console.log(`  计划上下文注? ${planContextInjected ? 'YES ?(PreToolUse)' : 'NO ⚠️'}`);
+        console.log(`  Linux命令误用: ${linuxCommandAttempted ? 'YES ?(试错)' : 'NO ?(正确选择平台命令)'}`);
         console.log('');
         console.log('  ── 分析质量 ──');
         console.log(`  Web搜索辅助: ${webSearchUsed ? 'YES' : 'NO'}`);
         console.log(`  Think推理: ${thinkToolUsed ? 'YES' : 'NO'}`);
-        console.log(`  安全分析: ${securityAnalysisDone ? 'YES �? : 'NO �?}`);
-        console.log(`  风险评估: ${riskAssessmentDone ? 'YES �? : 'NO �?}`);
-        console.log(`  报告生成: ${reportGenerated ? 'YES �? : 'NO �?}`);
+        console.log(`  安全分析: ${securityAnalysisDone ? 'YES' : 'NO'}`);
+        console.log(`  风险评估: ${riskAssessmentDone ? 'YES' : 'NO'}`);
+        console.log(`  报告生成: ${reportGenerated ? 'YES' : 'NO'}`);
         console.log('');
         console.log('  ── 进程信息 ──');
         console.log(`  PID信息: ${pidDetected ? 'YES' : 'NO'}`);
@@ -520,15 +520,15 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
         console.log('  ── 任务结果 ──');
         console.log(`  Agent循环结束: ${taskFinished ? 'YES' : 'NO'}`);
         console.log(`  任务失败标记: ${taskFailed ? 'YES' : 'NO'}`);
-        console.log(`  进程分析成功: ${taskSucceeded ? 'YES �? : 'NO �?}`);
+        console.log(`  进程分析成功: ${taskSucceeded ? 'YES' : 'NO'}`);
         console.log('');
-        console.log('  ── 自学�?──');
+        console.log('  ── 自学?──');
         console.log(`  Post-Execution Learning 触发: ${postLearningTriggered ? 'YES' : 'NO'}`);
-        console.log(`  技�?知识沉淀: ${skillPrecipitated ? 'YES' : 'NO'}`);
-        console.log(`  技能安�? ${skillInstalled ? 'YES' : 'NO'}`);
+        console.log(`  技?知识沉淀: ${skillPrecipitated ? 'YES' : 'NO'}`);
+        console.log(`  技能安? ${skillInstalled ? 'YES' : 'NO'}`);
         console.log(`  技能热加载: ${skillReloaded ? 'YES' : 'NO'}`);
         console.log('');
-        console.log(`  控制台日志总行�? ${tauriLogs.length}`);
+        console.log(`  控制台日志总行? ${tauriLogs.length}`);
         console.log('');
 
         // Print key log lines
@@ -588,46 +588,46 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
         expect(runCommandDetected, '应该使用了run_command工具').toBe(true);
 
         // 7c. Agent should have run a process listing command
-        expect(processListRequested, '应该执行了进程列表命�?tasklist/Get-Process/wmic)').toBe(true);
+        expect(processListRequested, '应该执行了进程列表命?tasklist/Get-Process/wmic)').toBe(true);
 
         // 7d. Agent loop should have completed
-        expect(taskFinished, 'Agent循环应在超时内完�?).toBe(true);
+        expect(taskFinished, 'Agent loop should finish before timeout').toBe(true);
         expect(taskFailed, '任务不应被标记为失败').toBe(false);
 
         // 7e. Security analysis verification
-        expect(securityAnalysisDone, '应提供进程安全分�?).toBe(true);
-        expect(taskSucceeded, '进程安全分析任务应成功完�?).toBe(true);
+        expect(securityAnalysisDone, 'Should provide process security analysis').toBe(true);
+        expect(taskSucceeded, 'Process security analysis task should succeed').toBe(true);
 
         // 7f. Planning verification (validates persistent planning enhancement)
         if (planStepUsed) {
-            console.log('[Test] �?Agent used plan_step �?pre-execution planning protocol is working!');
+            console.log('[Test] ?Agent used plan_step ?pre-execution planning protocol is working!');
             if (planPersisted) {
-                console.log('[Test] �?Plan was persisted to disk �?survives context truncation!');
+                console.log('[Test] ?Plan was persisted to disk ?survives context truncation!');
             } else {
                 console.log('[Test] ⚠️ plan_step used but persistence not detected in logs.');
             }
         } else {
-            console.log('[Test] ⚠️ plan_step not used �?agent may have skipped task decomposition.');
+            console.log('[Test] ⚠️ plan_step not used ?agent may have skipped task decomposition.');
         }
         if (planContextInjected) {
-            console.log('[Test] �?Plan context was re-injected during execution �?PreToolUse hook active!');
+            console.log('[Test] ?Plan context was re-injected during execution ?PreToolUse hook active!');
         } else {
-            console.log('[Test] ⚠️ Plan context re-injection not detected �?may not have been triggered yet.');
+            console.log('[Test] ⚠️ Plan context re-injection not detected ?may not have been triggered yet.');
         }
         if (logFindingUsed) {
-            console.log('[Test] �?Agent used log_finding �?knowledge persistence working!');
+            console.log('[Test] ?Agent used log_finding ?knowledge persistence working!');
         } else {
-            console.log('[Test] ⚠️ log_finding not used �?agent may not have encountered findings to save.');
+            console.log('[Test] ⚠️ log_finding not used ?agent may not have encountered findings to save.');
         }
         if (linuxCommandAttempted) {
-            console.log('[Test] ⚠️ Agent tried Linux commands on Windows �?system environment injection may not be fully effective.');
+            console.log('[Test] ⚠️ Agent tried Linux commands on Windows ?system environment injection may not be fully effective.');
         } else {
-            console.log('[Test] �?No Linux commands on Windows �?platform-aware execution confirmed!');
+            console.log('[Test] ?No Linux commands on Windows ?platform-aware execution confirmed!');
         }
 
-        // 7g. Report quality (soft checks �?log warnings but don't fail)
+        // 7g. Report quality (soft checks ?log warnings but don't fail)
         if (!riskAssessmentDone) {
-            console.log('[Test] ⚠️ Risk assessment not detected �?agent may have given a general analysis.');
+            console.log('[Test] ⚠️ Risk assessment not detected ?agent may have given a general analysis.');
         }
         if (!reportGenerated) {
             console.log('[Test] ⚠️ Structured report not detected in output.');
@@ -638,16 +638,16 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
 
         // 7h. Self-learning verification
         if (postLearningTriggered) {
-            console.log('[Test] �?Self-learning was triggered after successful task!');
+            console.log('[Test] ?Self-learning was triggered after successful task!');
 
             if (skillPrecipitated) {
-                console.log('[Test] �?Knowledge/skill was precipitated from execution!');
+                console.log('[Test] ?Knowledge/skill was precipitated from execution!');
             }
             if (skillInstalled) {
-                console.log('[Test] �?Skill was installed and is available for reuse!');
+                console.log('[Test] ?Skill was installed and is available for reuse!');
             }
             if (skillReloaded) {
-                console.log('[Test] �?Skill was hot-reloaded �?ready for immediate use!');
+                console.log('[Test] ?Skill was hot-reloaded ?ready for immediate use!');
             }
 
             // Assert that at least precipitation happened
@@ -659,5 +659,3 @@ test.describe('本机进程安全分析 �?自学习场�?E2E', () => {
         }
     });
 });
-
-

@@ -526,6 +526,46 @@ describe('execution runtime', () => {
         expect(failures.length).toBe(0);
     });
 
+    test('continuePreparedAgentFlow flags capability-refusal phrasing even when protocol judge is unavailable', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-capability-refusal-fallback',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-capability-refusal-fallback',
+                conversationReader: {
+                    buildConversationText: () => '我无法直接替你在真实账号上发布内容。',
+                    getLatestAssistantResponseText: () => '我无法直接替你在真实账号上发布内容。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('refused the core task objective');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
     test('continuePreparedAgentFlow allows optional follow-up prompts once completion is already claimed', async () => {
         const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
         const prepared = makePreparedWorkRequest();
@@ -671,6 +711,109 @@ describe('execution runtime', () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toContain('refused the core task objective');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow fails when buy-price objective is not satisfied with explicit price evidence', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '根据上述信息，给我兖矿能源的买入价格';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+        prepared.frozenWorkRequest.tasks[0].objective = prepared.executionQuery;
+        prepared.frozenWorkRequest.tasks[0].acceptanceCriteria = [
+            '必须给出明确可执行的买入价格数值或价格区间，并标注货币单位。',
+            '必须说明价格依据的时间锚点（例如交易日、时区、盘中或收盘时点）。',
+        ];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-price-objective-unmet',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: false,
+                objectiveRefusal: false,
+                objectiveSatisfied: false,
+                objectiveGap: 'No explicit buy-price value and timestamp were provided.',
+                requestedEvidence: 'standard',
+                deliveredEvidence: 'grounded',
+                completionClaim: 'present',
+                confidence: 0.9,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-price-objective-unmet',
+                conversationReader: {
+                    buildConversationText: () => '我不能给你“保证盈利”的精确买入价，但可以给你一个区间法。',
+                    getLatestAssistantResponseText: () => '我不能给你“保证盈利”的精确买入价，但可以给你一个区间法。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('did not satisfy the frozen objective');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow deterministically blocks buy-price responses without price/time anchors', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '给我腾讯股票的买入价格';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+        prepared.frozenWorkRequest.tasks[0].objective = prepared.executionQuery;
+        prepared.frozenWorkRequest.tasks[0].acceptanceCriteria = [
+            '必须给出明确可执行的买入价格数值或价格区间，并标注货币单位。',
+            '必须说明价格依据的时间锚点（例如交易日、时区、盘中或收盘时点）。',
+        ];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-price-objective-deterministic',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-price-objective-deterministic',
+                conversationReader: {
+                    buildConversationText: () => '建议分批买入，但我不能给具体买入价。',
+                    getLatestAssistantResponseText: () => '建议分批买入，但我不能给具体买入价。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('buy-price objective requires explicit price values');
         expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
     });
 
@@ -864,6 +1007,76 @@ describe('execution runtime', () => {
         }));
 
         expect(result.success).toBe(true);
+        expect(result.artifactsCreated).toContain(artifactAbsolutePath);
+        expect(observedEvidenceFiles).toContain(artifactAbsolutePath);
+    });
+
+    test('continuePreparedAgentFlow materializes required markdown deliverables from assistant output', async () => {
+        const workspaceDir = makeTempDir('coworkany-runtime-md-materialize-');
+        const artifactRelativePath = 'artifacts/task-output.md';
+        const artifactAbsolutePath = path.join(workspaceDir, artifactRelativePath);
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.deliverables = [{
+            id: 'deliverable-md',
+            title: 'Planned output artifact',
+            type: 'report_file',
+            description: 'Persist the result as markdown.',
+            required: true,
+            path: artifactRelativePath,
+            format: 'md',
+        }];
+
+        let observedEvidenceFiles: string[] = [];
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-md-materialize',
+            userMessage: 'continue',
+            workspacePath: workspaceDir,
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {
+                requirements: [
+                    {
+                        kind: 'file',
+                        payload: {
+                            extension: '.md',
+                            path: artifactRelativePath,
+                        },
+                    },
+                ],
+            },
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: [],
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-md-materialize',
+                conversationReader: {
+                    buildConversationText: () => 'conversation text',
+                    getLatestAssistantResponseText: () => 'markdown body from assistant',
+                },
+            }),
+            evaluateArtifactContract: (_contract, evidence) => {
+                observedEvidenceFiles = [...evidence.files];
+                const foundArtifact = evidence.files.some((filePath) =>
+                    filePath.endsWith(path.normalize(artifactRelativePath))
+                );
+                return foundArtifact
+                    ? { passed: true, failed: [] }
+                    : {
+                        passed: false,
+                        failed: [{
+                            description: 'expected markdown report',
+                            reason: 'missing markdown artifact',
+                        }],
+                    };
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(fs.existsSync(artifactAbsolutePath)).toBe(true);
+        expect(fs.readFileSync(artifactAbsolutePath, 'utf-8')).toContain('markdown body from assistant');
         expect(result.artifactsCreated).toContain(artifactAbsolutePath);
         expect(observedEvidenceFiles).toContain(artifactAbsolutePath);
     });

@@ -1,0 +1,60 @@
+{
+  "generatedAt": "2026-03-23T23:43:45.661Z",
+  "results": [
+    {
+      "label": "inflated-path-replay",
+      "taskId": "0bb0b944-2c73-4fd8-ba78-1767e625e3ec",
+      "appDataDir": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-replay-inflated-path-replay-FHMT4z",
+      "workspacePath": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-replay-ws-inflated-path-replay-22ZZre",
+      "timeoutMs": 30000,
+      "planSummary": "检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中. Planned execution: 1 primary task, 1 deliverable, 1 checkpoint.",
+      "deliverablePaths": [
+        "reports/1-x.md"
+      ],
+      "hasInflatedPath": false,
+      "hasTaskOutputMd": false,
+      "finishedSummary": null,
+      "finishedArtifacts": [],
+      "failedError": null,
+      "eventTypes": [
+        "start_task_response",
+        "TASK_STARTED",
+        "TASK_RESEARCH_UPDATED",
+        "TASK_PLAN_READY",
+        "PLAN_UPDATED",
+        "TASK_CHECKPOINT_REACHED",
+        "PLAN_UPDATED"
+      ],
+      "taskEventCount": 7,
+      "stderrTail": "\n[BrowserService] Mode changed: smart -> smart\n[LlmConfig] BrowserUse configured: enabled=true, mode=smart\n[OpenAI] Sending 100 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning\n"
+    },
+    {
+      "label": "md-materialization-replay",
+      "taskId": "334bda19-b722-40ed-be10-0733b15fa8da",
+      "appDataDir": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-replay-md-materialization-replay-WSGxjG",
+      "workspacePath": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-replay-ws-md-materialization-replay-5dghos",
+      "timeoutMs": 90000,
+      "planSummary": "请把 HELLO 和当前任务说明写入 markdown 文件并保存到工作区，然后在聊天里确认已保存. Planned execution: 1 primary task, 1 deliverable, 1 checkpoint.",
+      "deliverablePaths": [
+        "artifacts/hello-markdown.md"
+      ],
+      "hasInflatedPath": false,
+      "hasTaskOutputMd": false,
+      "finishedSummary": null,
+      "finishedArtifacts": [],
+      "failedError": "unable to get issuer certificate",
+      "eventTypes": [
+        "start_task_response",
+        "TASK_STARTED",
+        "TASK_RESEARCH_UPDATED",
+        "TASK_PLAN_READY",
+        "PLAN_UPDATED",
+        "TASK_CHECKPOINT_REACHED",
+        "PLAN_UPDATED",
+        "TASK_FAILED"
+      ],
+      "taskEventCount": 8,
+      "stderrTail": "at] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] Trigger fired: Scheduled Task Runner\n[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}\n[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}\n[PostLearning] 📚 Learning from FAILED session: 请把 HELLO 和当前任务说明写入 markdown 文件并保存到工作区，然后在聊天里确认已保存。\n[PostLearning] Failed tool calls: 0\n[PostLearning] Errors: \n[PostLearning] Detected missing capability: 请把 hello 和当前任务说明写入\n[PostLearning] ✅ Saved failure knowledge: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/vault/self-learned/concepts/2026-03-23--hello-.md\n"
+    }
+  ]
+}

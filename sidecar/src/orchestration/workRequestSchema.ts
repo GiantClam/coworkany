@@ -234,6 +234,12 @@ export type NormalizedWorkRequest = {
         executeAt?: string;
         timezone: string;
         recurrence?: null | { kind: 'rrule'; value: string };
+        stages?: Array<{
+            taskId: string;
+            executeAt: string;
+            delayMsFromPrevious?: number;
+            originalTimeExpression?: string;
+        }>;
     };
     tasks: TaskDefinition[];
     clarification: ClarificationDecision;

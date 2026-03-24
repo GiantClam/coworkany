@@ -67,8 +67,21 @@ let proxyFetchCache:
     | null = null;
 let proxyBridgeLogSignature: string | null = null;
 let proxyBridgeLoadFailed = false;
+let directFetchBridge: typeof fetch | null = null;
+let directBridgeLoadAttempted = false;
+let directBridgeLoadFailed = false;
 const DOH_CACHE_TTL_MS = 10 * 60 * 1000;
 const dohCache = new Map<string, { ips: string[]; expiresAt: number }>();
+const PROXY_ROUTE_STATE_TTL_MS = 30 * 60 * 1000;
+const PROXY_REPROBE_INTERVAL_MS = 5 * 60 * 1000;
+type ProxyRouteMode = 'proxy' | 'doh';
+type ProxyRouteState = {
+    mode: ProxyRouteMode;
+    updatedAt: number;
+    nextProxyProbeAt: number;
+    preferredDohIp?: string;
+};
+const proxyRouteStateByHost = new Map<string, ProxyRouteState>();
 let nodeReadableToWeb:
     | ((stream: NodeJS.ReadableStream) => ReadableStream<Uint8Array>)
     | null
@@ -211,6 +224,71 @@ function toUrl(input: string | URL | Request): URL | null {
     }
 }
 
+function getProxyRouteState(hostname: string, now: number): ProxyRouteState {
+    if (proxyRouteStateByHost.size > 128) {
+        for (const [host, state] of proxyRouteStateByHost.entries()) {
+            if (now - state.updatedAt > PROXY_ROUTE_STATE_TTL_MS) {
+                proxyRouteStateByHost.delete(host);
+            }
+        }
+    }
+    const cached = proxyRouteStateByHost.get(hostname);
+    if (cached && now - cached.updatedAt <= PROXY_ROUTE_STATE_TTL_MS) {
+        return cached;
+    }
+    const initial: ProxyRouteState = {
+        mode: 'proxy',
+        updatedAt: now,
+        nextProxyProbeAt: now,
+    };
+    proxyRouteStateByHost.set(hostname, initial);
+    return initial;
+}
+
+function markHostDohPreferred(hostname: string, now: number, preferredIp?: string): void {
+    const current = getProxyRouteState(hostname, now);
+    const nextState: ProxyRouteState = {
+        mode: 'doh',
+        updatedAt: now,
+        nextProxyProbeAt: now + PROXY_REPROBE_INTERVAL_MS,
+        preferredDohIp: preferredIp || current.preferredDohIp,
+    };
+    proxyRouteStateByHost.set(hostname, nextState);
+    if (current.mode !== 'doh') {
+        console.warn(
+            `[Proxy] Host ${hostname} switched to DoH fallback mode. Next proxy probe in ${
+                Math.round(PROXY_REPROBE_INTERVAL_MS / 1000)
+            }s.`
+        );
+    }
+}
+
+function markHostProxyPreferred(hostname: string, now: number): void {
+    const current = getProxyRouteState(hostname, now);
+    proxyRouteStateByHost.set(hostname, {
+        mode: 'proxy',
+        updatedAt: now,
+        nextProxyProbeAt: now,
+    });
+    if (current.mode !== 'proxy') {
+        console.error(`[Proxy] Host ${hostname} recovered via proxy route; exiting DoH fallback mode.`);
+    }
+}
+
+function noteHostDohSuccess(hostname: string, now: number, ip?: string): void {
+    const current = getProxyRouteState(hostname, now);
+    proxyRouteStateByHost.set(hostname, {
+        mode: 'doh',
+        updatedAt: now,
+        nextProxyProbeAt: current.nextProxyProbeAt,
+        preferredDohIp: ip || current.preferredDohIp,
+    });
+}
+
+function shouldPreferDohRoute(state: ProxyRouteState, now: number): boolean {
+    return state.mode === 'doh' && now < state.nextProxyProbeAt;
+}
+
 function isLikelyReplayableBody(body: unknown): boolean {
     if (body === null || body === undefined) return true;
     if (typeof body === 'string') return true;
@@ -256,6 +334,54 @@ async function resolvePublicARecordsViaDoh(
         expiresAt: now + DOH_CACHE_TTL_MS,
     });
     return ips;
+}
+
+async function tryFetchViaDohFallback(
+    requestUrl: URL,
+    init: RequestInit,
+    nodeFetch: (input: any, init?: any) => Promise<any>,
+    agent: unknown,
+    preferredIp?: string
+): Promise<{ response: Response; ip: string } | null> {
+    let fallbackIps: string[] = [];
+    try {
+        fallbackIps = await resolvePublicARecordsViaDoh(requestUrl.hostname, nodeFetch as any, agent);
+    } catch {
+        fallbackIps = [];
+    }
+
+    if (fallbackIps.length === 0) {
+        return null;
+    }
+
+    const orderedIps = preferredIp && fallbackIps.includes(preferredIp)
+        ? [preferredIp, ...fallbackIps.filter((ip) => ip !== preferredIp)]
+        : fallbackIps;
+
+    for (const ip of orderedIps) {
+        try {
+            const fallbackUrl = new URL(requestUrl.toString());
+            fallbackUrl.hostname = ip;
+
+            const headers = new Headers(init.headers as any);
+            headers.set('host', requestUrl.hostname);
+
+            const fallbackResponse = await nodeFetch(fallbackUrl.toString(), {
+                ...(init as Record<string, unknown>),
+                headers,
+                servername: requestUrl.hostname,
+            } as any);
+
+            return {
+                response: await ensureWebReadableResponse(fallbackResponse),
+                ip,
+            };
+        } catch {
+            continue;
+        }
+    }
+
+    return null;
 }
 
 async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
@@ -335,59 +461,66 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                 ...(init as Record<string, unknown>),
                 agent,
             } as any;
+            const requestUrl = toUrl(input);
+            const supportsDohFallback = Boolean(
+                requestUrl
+                && requestUrl.protocol === 'https:'
+                && !isIpv4Address(requestUrl.hostname)
+                && isLikelyReplayableBody((init as any)?.body)
+            );
+            const routeState = supportsDohFallback && requestUrl
+                ? getProxyRouteState(requestUrl.hostname, Date.now())
+                : null;
+            const preferDohRoute = Boolean(routeState && shouldPreferDohRoute(routeState, Date.now()));
+
+            if (preferDohRoute && requestUrl && routeState) {
+                const dohRouteResult = await tryFetchViaDohFallback(
+                    requestUrl,
+                    requestInit,
+                    nodeFetch as any,
+                    agent,
+                    routeState.preferredDohIp
+                );
+                if (dohRouteResult) {
+                    noteHostDohSuccess(requestUrl.hostname, Date.now(), dohRouteResult.ip);
+                    return dohRouteResult.response;
+                }
+                console.warn(
+                    `[Proxy] DoH-preferred route failed for ${requestUrl.hostname}; retrying proxy route.`
+                );
+            }
 
             try {
                 const response = await nodeFetch(input as any, requestInit);
+                if (routeState && requestUrl) {
+                    markHostProxyPreferred(requestUrl.hostname, Date.now());
+                }
                 return await ensureWebReadableResponse(response);
             } catch (error) {
                 if (!isTlsDisconnectError(error)) {
                     throw error;
                 }
-                if (!isLikelyReplayableBody((init as any)?.body)) {
-                    throw error;
-                }
-
-                const requestUrl = toUrl(input);
-                if (!requestUrl || requestUrl.protocol !== 'https:' || isIpv4Address(requestUrl.hostname)) {
-                    throw error;
-                }
-
-                let fallbackIps: string[] = [];
-                try {
-                    fallbackIps = await resolvePublicARecordsViaDoh(requestUrl.hostname, nodeFetch as any, agent);
-                } catch {
-                    fallbackIps = [];
-                }
-
-                if (fallbackIps.length === 0) {
+                if (!supportsDohFallback || !requestUrl) {
                     throw error;
                 }
 
                 console.warn(
-                    `[Proxy] TLS handshake failed for ${requestUrl.hostname}. Trying ${fallbackIps.length} DoH A-record fallback IP(s).`
+                    `[Proxy] TLS handshake failed for ${requestUrl.hostname}. Trying DoH A-record fallback route.`
                 );
 
-                for (const ip of fallbackIps) {
-                    try {
-                        const fallbackUrl = new URL(requestUrl.toString());
-                        fallbackUrl.hostname = ip;
-
-                        const headers = new Headers(init?.headers as any);
-                        headers.set('host', requestUrl.hostname);
-
-                        const fallbackResponse = await nodeFetch(fallbackUrl.toString(), {
-                            ...requestInit,
-                            headers,
-                            servername: requestUrl.hostname,
-                        } as any);
-
-                        console.warn(
-                            `[Proxy] Fallback TLS route succeeded for ${requestUrl.hostname} via ${ip}.`
-                        );
-                        return await ensureWebReadableResponse(fallbackResponse);
-                    } catch {
-                        continue;
-                    }
+                const fallbackResult = await tryFetchViaDohFallback(
+                    requestUrl,
+                    requestInit,
+                    nodeFetch as any,
+                    agent,
+                    routeState?.preferredDohIp
+                );
+                if (fallbackResult) {
+                    console.warn(
+                        `[Proxy] Fallback TLS route succeeded for ${requestUrl.hostname} via ${fallbackResult.ip}.`
+                    );
+                    markHostDohPreferred(requestUrl.hostname, Date.now(), fallbackResult.ip);
+                    return fallbackResult.response;
                 }
 
                 throw error;
@@ -418,6 +551,83 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
         }
         return null;
     }
+}
+
+async function createNodeDirectFetchBridge(): Promise<typeof fetch | null> {
+    if (!canUseNodeProxyBridge()) {
+        return null;
+    }
+    if (directBridgeLoadAttempted) {
+        return directFetchBridge;
+    }
+    directBridgeLoadAttempted = true;
+    try {
+        const { default: nodeFetch } = await import('node-fetch');
+        const bridgeFetch = (async (
+            input: string | URL | Request,
+            init?: RequestInit
+        ): Promise<Response> => {
+            const response = await nodeFetch(input as any, init as any);
+            return ensureWebReadableResponse(response);
+        }) as typeof fetch;
+        directFetchBridge = bridgeFetch;
+        console.error('[Network] Enabled direct Node fetch bridge for TLS DoH fallback.');
+        return bridgeFetch;
+    } catch (error) {
+        if (!directBridgeLoadFailed) {
+            directBridgeLoadFailed = true;
+            console.warn(
+                `[Network] Failed to initialize direct Node fetch bridge for TLS fallback: ${
+                    error instanceof Error ? error.message : String(error)
+                }`
+            );
+        }
+        directFetchBridge = null;
+        return null;
+    }
+}
+
+async function tryFetchWithDirectDohFallback(
+    url: string,
+    init: RequestInit,
+    error: Error
+): Promise<Response | null> {
+    if (!isTlsDisconnectError(error)) {
+        return null;
+    }
+
+    const requestUrl = toUrl(url);
+    if (!requestUrl || requestUrl.protocol !== 'https:' || isIpv4Address(requestUrl.hostname)) {
+        return null;
+    }
+
+    const proxyUrl = firstNonEmptyEnv(PROXY_ENV_KEYS);
+    if (proxyUrl && !shouldBypassProxy(url)) {
+        return null;
+    }
+
+    const directFetch = await createNodeDirectFetchBridge();
+    if (!directFetch) {
+        return null;
+    }
+
+    const fallbackResult = await tryFetchViaDohFallback(
+        requestUrl,
+        init,
+        directFetch as any,
+        undefined
+    );
+
+    if (!fallbackResult) {
+        return null;
+    }
+
+    const now = Date.now();
+    noteHostDohSuccess(requestUrl.hostname, now, fallbackResult.ip);
+    console.warn(
+        `[Network] TLS failed for ${requestUrl.hostname}; recovered via direct DoH fallback (${fallbackResult.ip}).`
+    );
+    return fallbackResult.response;
 }
 
 async function fetchWithProxySupport(url: string, init: RequestInit): Promise<Response> {
@@ -455,8 +665,16 @@ export async function fetchWithBackoff(
 
     let lastError: Error | null = null;
     let lastResponse: Response | null = null;
+    const retryTarget = (() => {
+        try {
+            return new URL(url).host;
+        } catch {
+            return url;
+        }
+    })();
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        let requestInitForAttempt: RequestInit | null = null;
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -465,6 +683,7 @@ export async function fetchWithBackoff(
                 ...options,
                 signal: controller.signal,
             }, allowInsecureTls);
+            requestInitForAttempt = requestInit;
             const response = await fetchWithProxySupport(url, requestInit);
 
             clearTimeout(timeoutId);
@@ -513,7 +732,7 @@ export async function fetchWithBackoff(
             };
 
             console.warn(
-                `[Retry] HTTP ${response.status} on attempt ${attempt + 1}/${maxRetries + 1}. ` +
+                `[Retry] HTTP ${response.status} on attempt ${attempt + 1}/${maxRetries + 1} (${retryTarget}). ` +
                 `Retrying in ${Math.round(delay / 1000)}s` +
                 (retryAfterMs !== null ? ` (Retry-After: ${retryAfterHeader})` : ' (exponential backoff)')
             );
@@ -528,6 +747,25 @@ export async function fetchWithBackoff(
             lastError = error instanceof Error ? error : new Error(String(error));
             const msg = lastError.message;
 
+            if (requestInitForAttempt) {
+                try {
+                    const dohRecoveredResponse = await tryFetchWithDirectDohFallback(
+                        url,
+                        requestInitForAttempt,
+                        lastError
+                    );
+                    if (dohRecoveredResponse) {
+                        return dohRecoveredResponse;
+                    }
+                } catch (fallbackError) {
+                    const fallbackMessage =
+                        fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+                    console.warn(
+                        `[Network] Direct DoH fallback attempt failed for ${retryTarget}: ${fallbackMessage}`
+                    );
+                }
+            }
+
             // Don't retry on certain errors
             if (NON_RETRYABLE_ERRORS.some(e => msg.includes(e))) {
                 throw lastError;
@@ -538,13 +776,13 @@ export async function fetchWithBackoff(
                 if (attempt >= maxRetries) {
                     throw new Error(`Request timed out after ${maxRetries + 1} attempts (${timeout}ms each)`);
                 }
-                console.warn(`[Retry] Timeout on attempt ${attempt + 1}/${maxRetries + 1}, retrying...`);
+                console.warn(`[Retry] Timeout on attempt ${attempt + 1}/${maxRetries + 1} (${retryTarget}), retrying...`);
             } else if (attempt >= maxRetries) {
                 throw lastError;
             } else {
                 const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
                 console.warn(
-                    `[Retry] Network error on attempt ${attempt + 1}: ${msg}${formatErrorDetails(lastError)}. ` +
+                    `[Retry] Network error on attempt ${attempt + 1} (${retryTarget}): ${msg}${formatErrorDetails(lastError)}. ` +
                     `Retrying in ${delay}ms...`
                 );
                 await new Promise(resolve => setTimeout(resolve, delay));

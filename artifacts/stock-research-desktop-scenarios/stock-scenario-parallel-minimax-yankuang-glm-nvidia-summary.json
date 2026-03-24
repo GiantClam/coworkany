@@ -19,7 +19,7 @@
     "taskFinished": true,
     "taskFailed": false,
     "taskFailedError": "",
-    "searchWebCallCount": 4,
+    "searchWebCallCount": 6,
     "adviceKeywordHits": [
       "买入",
       "卖出",
@@ -33,7 +33,7 @@
       "预期",
       "未来",
       "走势",
-      "概率"
+      "forecast"
     ],
     "entityCoverage": [
       {
@@ -48,7 +48,6 @@
         "displayName": "兖矿能源",
         "matchedAliases": [
           "兖矿能源",
-          "yankuang",
           "yanzhou",
           "600188",
           "1171"
@@ -77,7 +76,7 @@
     "completedBySilence": false,
     "completed": true,
     "externalFailure": false,
-    "evidenceTextLength": 7364,
-    "rawLogLength": 293177
+    "evidenceTextLength": 9711,
+    "rawLogLength": 253170
   }
 }

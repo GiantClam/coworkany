@@ -1,0 +1,975 @@
+{
+  "generatedAt": "2026-03-23T13:46:38.763Z",
+  "counts": {
+    "total": 8,
+    "initialBlocked": 7,
+    "resumeBlocked": 4,
+    "resumeUnblocked": 3,
+    "resumeUnknown": 1
+  },
+  "results": [
+    {
+      "trial": 1,
+      "taskId": "adcb5454-039d-4c60-a49b-6630a7c9e3d5",
+      "initialBlocked": true,
+      "resumeOutcome": "blocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:44:11.845Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:44:12.748Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:44:12.749Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"adcb5454-039d-4c60-a49b-6630a7c9e3d5\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:44:16.796Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:44:16.796Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:44:16.796Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:44:16.798Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:44:16.798Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:44:16.798Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:44:19.248Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"adcb5454-039d-4c60-a49b-6630a7c9e3d5\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:44:19.249Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:44:19.249Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:44:23.281Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:44:23.281Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:44:23.281Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:44:23.281Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 17,
+          "timestamp": "2026-03-23T13:44:23.281Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 18,
+          "timestamp": "2026-03-23T13:44:23.281Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-1-94b25ec5-abf6-4552-9fa4-1fb6f888f873, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"143a9619-d0e9-4d5b-9f44-0ab4195a5959\",\"timestamp\":\"2026-03-23T13:44:12.740Z\",\"payload\":{\"taskId\":\"adcb5454-039d-4c60-a49b-6630a7c9e3d5\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"8ee75341-9f0f-4042-beed-ca8794253e25\",\"timestamp\":\"2026-03-23T13:44:19.244Z\",\"payload\":{\"taskId\":\"adcb5454-039d-4c60-a49b-6630a7c9e3d5\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[WebSearch] Serper returned 5 results"
+      ]
+    },
+    {
+      "trial": 2,
+      "taskId": "402932ba-a7a6-45c1-aedb-2d0208fd38a4",
+      "initialBlocked": true,
+      "resumeOutcome": "blocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:44:30.791Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:44:31.680Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:44:31.680Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"402932ba-a7a6-45c1-aedb-2d0208fd38a4\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:44:35.714Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:44:35.714Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:44:35.714Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:44:35.716Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:44:35.716Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:44:35.716Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:44:38.185Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"402932ba-a7a6-45c1-aedb-2d0208fd38a4\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:44:38.185Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:44:38.185Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:44:42.219Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:44:42.219Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:44:42.219Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:44:42.219Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 17,
+          "timestamp": "2026-03-23T13:44:42.219Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 18,
+          "timestamp": "2026-03-23T13:44:42.219Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-2-c8a0a6ea-1b81-4e12-87fd-219d3decad27, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"07d32784-d8bf-45d2-a458-33fb5a2bdfd5\",\"timestamp\":\"2026-03-23T13:44:31.677Z\",\"payload\":{\"taskId\":\"402932ba-a7a6-45c1-aedb-2d0208fd38a4\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"210a3107-0604-4c81-88b1-512d13a88f95\",\"timestamp\":\"2026-03-23T13:44:38.179Z\",\"payload\":{\"taskId\":\"402932ba-a7a6-45c1-aedb-2d0208fd38a4\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[WebSearch] Serper returned 1 results"
+      ]
+    },
+    {
+      "trial": 3,
+      "taskId": "4572c14a-cecb-4872-b139-56f70f09ae41",
+      "initialBlocked": true,
+      "resumeOutcome": "unblocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 3/3 queries processed, contract ready to freeze.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:44:49.719Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:44:50.613Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:44:50.613Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"4572c14a-cecb-4872-b139-56f70f09ae41\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:44:54.660Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:44:54.660Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:44:54.660Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:44:54.662Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:44:54.662Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:44:54.662Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:44:57.112Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"4572c14a-cecb-4872-b139-56f70f09ae41\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:44:57.112Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:44:57.112Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:44:58.421Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 3/3 queries processed, contract ready to freeze."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:44:58.421Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:44:58.421Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Queued: 根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:44:58.421Z",
+          "type": "PLAN_UPDATED",
+          "summary": "In progress: 根据上述信息，给我兖矿能源的买入价格"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-3-409366af-3e95-4338-a8cb-84028860bc7f, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"9de97838-9892-4623-ae07-9b5e06cf78d3\",\"timestamp\":\"2026-03-23T13:44:50.605Z\",\"payload\":{\"taskId\":\"4572c14a-cecb-4872-b139-56f70f09ae41\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"b31dd4bc-2ca2-497a-90a8-583f4952d9ec\",\"timestamp\":\"2026-03-23T13:44:57.107Z\",\"payload\":{\"taskId\":\"4572c14a-cecb-4872-b139-56f70f09ae41\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 5 results",
+        "[OpenAI] Sending 102 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, search_coworkany_skill_marketplace, install_coworkany_skill_from_marketplace, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning",
+        "[Retry] Network error on attempt 1: unable to get issuer certificate (name=UNABLE_TO_GET_ISSUER_CERT, code=UNABLE_TO_GET_ISSUER_CERT, errno=0). Retrying in 2000ms..."
+      ]
+    },
+    {
+      "trial": 4,
+      "taskId": "a8e45e13-29d2-4597-8855-0515c182e6cd",
+      "initialBlocked": true,
+      "resumeOutcome": "unblocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 3/3 queries processed, contract ready to freeze.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:45:08.647Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:45:09.542Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:45:09.543Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"a8e45e13-29d2-4597-8855-0515c182e6cd\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:45:13.589Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:45:13.589Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:45:13.590Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:45:13.591Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:45:13.591Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:45:13.591Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:45:16.041Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"a8e45e13-29d2-4597-8855-0515c182e6cd\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:45:16.041Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:45:16.041Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:45:20.031Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 3/3 queries processed, contract ready to freeze."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:45:20.031Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:45:20.031Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Queued: 根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:45:20.032Z",
+          "type": "PLAN_UPDATED",
+          "summary": "In progress: 根据上述信息，给我兖矿能源的买入价格"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-4-7ca68660-eb52-4df8-958c-62ca6e280b4a, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"577f1b0c-a932-40a4-bffc-cffd0f6bb343\",\"timestamp\":\"2026-03-23T13:45:09.534Z\",\"payload\":{\"taskId\":\"a8e45e13-29d2-4597-8855-0515c182e6cd\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"06e51865-4ccf-4871-b0c2-d23461dca4a2\",\"timestamp\":\"2026-03-23T13:45:16.037Z\",\"payload\":{\"taskId\":\"a8e45e13-29d2-4597-8855-0515c182e6cd\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[WebSearch] Serper returned 1 results",
+        "[OpenAI] Sending 102 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, search_coworkany_skill_marketplace, install_coworkany_skill_from_marketplace, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning"
+      ]
+    },
+    {
+      "trial": 5,
+      "taskId": "f0c5dec2-9ed1-4a75-8ade-5dcb304afac2",
+      "initialBlocked": true,
+      "resumeOutcome": "blocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:45:27.572Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:45:28.464Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:45:28.464Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"f0c5dec2-9ed1-4a75-8ade-5dcb304afac2\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:45:32.511Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:45:32.512Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:45:32.512Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:45:32.512Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:45:32.512Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:45:32.512Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:45:34.967Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"f0c5dec2-9ed1-4a75-8ade-5dcb304afac2\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:45:34.967Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:45:34.967Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:45:39.000Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:45:39.000Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:45:39.000Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:45:39.000Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 17,
+          "timestamp": "2026-03-23T13:45:39.000Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 18,
+          "timestamp": "2026-03-23T13:45:39.000Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-5-4fd9b76e-5219-4fb1-9806-7c1c121f00ac, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"e80b0a83-260e-4883-951d-713c676f5332\",\"timestamp\":\"2026-03-23T13:45:28.458Z\",\"payload\":{\"taskId\":\"f0c5dec2-9ed1-4a75-8ade-5dcb304afac2\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"20c545eb-db9e-4e37-a14b-0c66f61f7a16\",\"timestamp\":\"2026-03-23T13:45:34.961Z\",\"payload\":{\"taskId\":\"f0c5dec2-9ed1-4a75-8ade-5dcb304afac2\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 5 results",
+        "[WebSearch] Serper returned 1 results"
+      ]
+    },
+    {
+      "trial": 6,
+      "taskId": "b6decc83-9884-4829-9ceb-4d81237315aa",
+      "initialBlocked": false,
+      "resumeOutcome": "unknown",
+      "sendResearchSummary": "Research updated: 3/3 queries processed, contract ready to freeze.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:45:46.502Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:45:47.392Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:45:47.393Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"b6decc83-9884-4829-9ceb-4d81237315aa\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:45:51.363Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 3/3 queries processed, contract ready to freeze."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:45:51.363Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:45:51.363Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Queued: 根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:45:51.363Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:45:51.364Z",
+          "type": "PLAN_UPDATED",
+          "summary": "In progress: 根据上述信息，给我兖矿能源的买入价格"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-6-875c5927-e860-415a-8e98-fc3fc63d656d, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"51733d68-346b-49cc-b82f-b7ac59c1f839\",\"timestamp\":\"2026-03-23T13:45:47.390Z\",\"payload\":{\"taskId\":\"b6decc83-9884-4829-9ceb-4d81237315aa\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[OpenAI] Sending 102 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, search_coworkany_skill_marketplace, install_coworkany_skill_from_marketplace, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"cbe58256-6581-43b1-a3f6-19dd48bb8660\",\"timestamp\":\"2026-03-23T13:45:53.892Z\",\"payload\":{\"taskId\":\"b6decc83-9884-4829-9ceb-4d81237315aa\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[Retry] Network error on attempt 1: unable to get issuer certificate (name=UNABLE_TO_GET_ISSUER_CERT, code=UNABLE_TO_GET_ISSUER_CERT, errno=0). Retrying in 2000ms..."
+      ]
+    },
+    {
+      "trial": 7,
+      "taskId": "5f21e9bc-d587-474a-8762-92aa586fecde",
+      "initialBlocked": true,
+      "resumeOutcome": "unblocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 3/3 queries processed, contract ready to freeze.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:46:05.424Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:46:06.323Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:46:06.324Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"5f21e9bc-d587-474a-8762-92aa586fecde\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:46:10.367Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:46:10.367Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:46:10.368Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:46:10.369Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:46:10.369Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:46:10.369Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:46:12.826Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"5f21e9bc-d587-474a-8762-92aa586fecde\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:46:12.826Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:46:12.826Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:46:14.729Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 3/3 queries processed, contract ready to freeze."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:46:14.729Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:46:14.729Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Queued: 根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:46:14.729Z",
+          "type": "PLAN_UPDATED",
+          "summary": "In progress: 根据上述信息，给我兖矿能源的买入价格"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-7-3b036a66-fcf5-4e13-8238-c4f46123dd5a, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"c76353b3-123d-4205-9039-dc74678a18b1\",\"timestamp\":\"2026-03-23T13:46:06.318Z\",\"payload\":{\"taskId\":\"5f21e9bc-d587-474a-8762-92aa586fecde\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"f4ac8746-d8e7-4769-8df7-43d9cb5833cb\",\"timestamp\":\"2026-03-23T13:46:12.821Z\",\"payload\":{\"taskId\":\"5f21e9bc-d587-474a-8762-92aa586fecde\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 5 results",
+        "[OpenAI] Sending 102 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, search_coworkany_skill_marketplace, install_coworkany_skill_from_marketplace, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning"
+      ]
+    },
+    {
+      "trial": 8,
+      "taskId": "57c2003a-c8e1-4900-9f3f-e8a230e04c24",
+      "initialBlocked": true,
+      "resumeOutcome": "blocked",
+      "sendResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "resumeResearchSummary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain.",
+      "evidence": [
+        {
+          "idx": 1,
+          "timestamp": "2026-03-23T13:46:24.352Z",
+          "type": "bootstrap_runtime_context_response",
+          "summary": "{\"success\":true}"
+        },
+        {
+          "idx": 2,
+          "timestamp": "2026-03-23T13:46:25.250Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "根据上述信息，给我兖矿能源的买入价格"
+        },
+        {
+          "idx": 3,
+          "timestamp": "2026-03-23T13:46:25.251Z",
+          "type": "send_task_message_response",
+          "summary": "{\"success\":true,\"taskId\":\"57c2003a-c8e1-4900-9f3f-e8a230e04c24\"}"
+        },
+        {
+          "idx": 4,
+          "timestamp": "2026-03-23T13:46:29.296Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 5,
+          "timestamp": "2026-03-23T13:46:29.296Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 6,
+          "timestamp": "2026-03-23T13:46:29.296Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 7,
+          "timestamp": "2026-03-23T13:46:29.297Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 8,
+          "timestamp": "2026-03-23T13:46:29.297Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 9,
+          "timestamp": "2026-03-23T13:46:29.297Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        },
+        {
+          "idx": 10,
+          "timestamp": "2026-03-23T13:46:31.750Z",
+          "type": "resume_interrupted_task_response",
+          "summary": "{\"success\":true,\"taskId\":\"57c2003a-c8e1-4900-9f3f-e8a230e04c24\"}"
+        },
+        {
+          "idx": 11,
+          "timestamp": "2026-03-23T13:46:31.750Z",
+          "type": "TASK_STATUS",
+          "summary": "status=running"
+        },
+        {
+          "idx": 12,
+          "timestamp": "2026-03-23T13:46:31.750Z",
+          "type": "TASK_RESUMED",
+          "summary": "resumeReason=interrupted_recovery"
+        },
+        {
+          "idx": 13,
+          "timestamp": "2026-03-23T13:46:35.780Z",
+          "type": "TASK_RESEARCH_UPDATED",
+          "summary": "Research updated: 2/3 queries processed, 1 blocking item(s) remain."
+        },
+        {
+          "idx": 14,
+          "timestamp": "2026-03-23T13:46:35.780Z",
+          "type": "TASK_PLAN_READY",
+          "summary": "根据上述信息，给我兖矿能源的买入价格. Planned execution: 1 primary task, 1 deliverable."
+        },
+        {
+          "idx": 15,
+          "timestamp": "2026-03-23T13:46:35.780Z",
+          "type": "PLAN_UPDATED",
+          "summary": "Blocked: Resolve blocking uncertainty"
+        },
+        {
+          "idx": 16,
+          "timestamp": "2026-03-23T13:46:35.780Z",
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "summary": "补齐必需研究数据 | 执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。"
+        },
+        {
+          "idx": 17,
+          "timestamp": "2026-03-23T13:46:35.780Z",
+          "type": "CHAT_MESSAGE",
+          "summary": "执行已暂停：缺少必需研究数据（例如最新价格快照），需先补齐后才能继续。 Please provide the missing data or allow Coworkany to retry this research step: Fetch the latest market price snapshot (price, currency, timestamp, and market sessi"
+        },
+        {
+          "idx": 18,
+          "timestamp": "2026-03-23T13:46:35.780Z",
+          "type": "TASK_STATUS",
+          "summary": "status=idle"
+        }
+      ],
+      "stderrHints": [
+        "[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)",
+        "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-resume-stability-8-4db7a817-6d3f-432a-946e-6209d3addc61, sidecarLaunchMode=unknown",
+        "[DEBUG] Received line: {\"type\":\"send_task_message\",\"id\":\"9327356d-1dc4-476c-b13a-9bf8525a99bf\",\"timestamp\":\"2026-03-23T13:46:25.244Z\",\"payload\":{\"taskId\":\"57c2003a-c8e1-4900-9f3f-e8a230e04c24\",\"content\":\"根据上述信息，给我兖矿能源的买入价格\"",
+        "[DEBUG] Parsed JSON, type: send_task_message",
+        "[DEBUG] Valid command, handling: send_task_message",
+        "[WebSearch] Trying Serper.dev search...",
+        "[DEBUG] Received line: {\"type\":\"resume_interrupted_task\",\"id\":\"8ef10f3c-52a8-46c4-a4a3-cfcce4432679\",\"timestamp\":\"2026-03-23T13:46:31.745Z\",\"payload\":{\"taskId\":\"57c2003a-c8e1-4900-9f3f-e8a230e04c24\",\"config\":{}}}",
+        "[DEBUG] Parsed JSON, type: resume_interrupted_task",
+        "[DEBUG] Valid command, handling: resume_interrupted_task",
+        "[WebSearch] Trying Serper.dev search...",
+        "[WebSearch] Serper returned 1 results",
+        "[WebSearch] Serper returned 1 results"
+      ]
+    }
+  ]
+}

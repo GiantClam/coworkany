@@ -342,10 +342,14 @@ export {
     ReloadToolsResponseSchema,
     GetTasksCommandSchema,
     GetTasksResponseSchema,
+    GetRuntimeSnapshotCommandSchema,
+    GetRuntimeSnapshotResponseSchema,
     type ReloadToolsCommand,
     type ReloadToolsResponse,
     type GetTasksCommand,
     type GetTasksResponse,
+    type GetRuntimeSnapshotCommand,
+    type GetRuntimeSnapshotResponse,
 } from './commands';
 
 // ============================================================================

@@ -1,0 +1,564 @@
+{
+  "taskId": "67c765c7-caec-4312-b536-86411cdb4f6e",
+  "appDataDir": "/tmp/coworkany-chain-tls-cQcxiH",
+  "scheduledRecords": [
+    {
+      "id": "ffc19959-f637-4557-9992-24a8ee4236d3",
+      "title": "检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+      "taskQuery": "检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+      "workRequestId": "171a38b8-e4fe-48dc-9b43-4f61b4f2178e",
+      "stageTaskId": "e84a76bd-103f-4839-9b97-535a81cf9ab7",
+      "stageIndex": 0,
+      "totalStages": 2,
+      "frozenWorkRequest": {
+        "schemaVersion": 1,
+        "mode": "scheduled_multi_task",
+        "sourceText": "5秒以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 5 秒，将分析结果发布到 X 上",
+        "workspacePath": "/Users/beihuang/Documents/github/coworkany",
+        "schedule": {
+          "executeAt": "2026-03-24T01:28:43.544Z",
+          "timezone": "Asia/Shanghai",
+          "recurrence": null,
+          "stages": [
+            {
+              "taskId": "e84a76bd-103f-4839-9b97-535a81cf9ab7",
+              "executeAt": "2026-03-24T01:28:43.544Z",
+              "originalTimeExpression": "5秒以后"
+            },
+            {
+              "taskId": "164ffc89-f75f-4257-a3f6-1b4f440c5c6c",
+              "executeAt": "2026-03-24T01:28:48.544Z",
+              "delayMsFromPrevious": 5000,
+              "originalTimeExpression": "5秒"
+            }
+          ]
+        },
+        "tasks": [
+          {
+            "id": "e84a76bd-103f-4839-9b97-535a81cf9ab7",
+            "title": "检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+            "objective": "检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+            "constraints": [],
+            "acceptanceCriteria": [],
+            "dependencies": [],
+            "preferredSkills": [
+              "task-orchestrator",
+              "superpowers-workflow",
+              "planning-with-files"
+            ],
+            "preferredTools": []
+          },
+          {
+            "id": "164ffc89-f75f-4257-a3f6-1b4f440c5c6c",
+            "title": "分析结果发布到 X 上",
+            "objective": "分析结果发布到 X 上",
+            "constraints": [],
+            "acceptanceCriteria": [],
+            "dependencies": [
+              "e84a76bd-103f-4839-9b97-535a81cf9ab7"
+            ],
+            "preferredSkills": [
+              "task-orchestrator",
+              "browser-automation",
+              "superpowers-workflow",
+              "planning-with-files"
+            ],
+            "preferredTools": [
+              "browser_connect",
+              "browser_navigate",
+              "browser_wait",
+              "browser_get_content",
+              "browser_click",
+              "browser_fill",
+              "browser_screenshot"
+            ]
+          }
+        ],
+        "clarification": {
+          "required": false,
+          "questions": [],
+          "missingFields": [],
+          "canDefault": true,
+          "assumptions": [
+            "Coworkany owns task decomposition, deliverable planning, and user-collaboration requests.",
+            "Default UI format: report.",
+            "Default artifact directory: reports.",
+            "Scheduled requests are frozen before background execution."
+          ]
+        },
+        "presentation": {
+          "uiFormat": "report",
+          "ttsEnabled": false,
+          "ttsMode": "full",
+          "ttsMaxChars": 0,
+          "language": "zh-CN"
+        },
+        "deliverables": [
+          {
+            "id": "01d91f6b-77ec-4720-87ed-9fc4a5bd4f49",
+            "title": "Planned output artifact",
+            "type": "report_file",
+            "description": "Create a concrete output artifact and save it into the workspace.",
+            "required": true,
+            "path": "reports/x.md",
+            "format": "md"
+          }
+        ],
+        "checkpoints": [
+          {
+            "id": "41f24788-81c4-4813-bb96-42e88c9a1478",
+            "title": "Checkpoint before final delivery",
+            "kind": "pre_delivery",
+            "reason": "Summarize progress and verify the planned deliverables before final handoff.",
+            "userMessage": "Provide a checkpoint summary before final delivery and request input only if a blocker or decision remains.",
+            "riskTier": "low",
+            "executionPolicy": "auto",
+            "requiresUserConfirmation": false,
+            "blocking": false
+          }
+        ],
+        "userActionsRequired": [],
+        "hitlPolicy": {
+          "riskTier": "low",
+          "requiresPlanConfirmation": false,
+          "reasons": []
+        },
+        "runtimeIsolationPolicy": {
+          "connectorIsolationMode": "deny_by_default",
+          "filesystemMode": "workspace_only",
+          "allowedWorkspacePaths": [
+            "/Users/beihuang/Documents/github/coworkany"
+          ],
+          "writableWorkspacePaths": [
+            "/Users/beihuang/Documents/github/coworkany"
+          ],
+          "networkAccess": "restricted",
+          "allowedDomains": [],
+          "notes": [
+            "Connector/toolpack access is denied by default unless explicitly enabled for the task session.",
+            "Filesystem access is restricted to the current workspace by default.",
+            "External network connectors require explicit domain allowlisting before MCP toolpacks can reach them."
+          ]
+        },
+        "sessionIsolationPolicy": {
+          "workspaceBindingMode": "frozen_workspace_only",
+          "followUpScope": "same_task_only",
+          "allowWorkspaceOverride": false,
+          "supersededContractHandling": "tombstone_prior_contracts",
+          "staleEvidenceHandling": "evict_on_refreeze",
+          "notes": [
+            "Follow-up and resume execution stay bound to the original task session.",
+            "Workspace overrides are denied once the task session is frozen.",
+            "Superseded frozen contracts are retained only as tombstones and must not drive new execution."
+          ]
+        },
+        "memoryIsolationPolicy": {
+          "classificationMode": "scope_tagged",
+          "readScopes": [
+            "task",
+            "user_preference",
+            "workspace"
+          ],
+          "writeScopes": [
+            "task",
+            "workspace"
+          ],
+          "defaultWriteScope": "workspace",
+          "notes": [
+            "Memory reads and writes must be tagged by scope before they can enter long-term storage or prompt context.",
+            "Task memory is ephemeral to the current task session; workspace memory is limited to the current workspace tenant.",
+            "User-preference memory is reserved for explicit preference capture and must stay bound to the current local user."
+          ]
+        },
+        "tenantIsolationPolicy": {
+          "workspaceBoundaryMode": "same_workspace_only",
+          "userBoundaryMode": "current_local_user_only",
+          "allowCrossWorkspaceMemory": false,
+          "allowCrossWorkspaceFollowUp": false,
+          "allowCrossUserMemory": false,
+          "notes": [
+            "Task continuity is restricted to the same workspace boundary.",
+            "Cross-workspace memory recall is denied unless data is explicitly scoped as user preference.",
+            "Per-user memory and session state stay bound to the current local user."
+          ]
+        },
+        "missingInfo": [],
+        "defaultingPolicy": {
+          "outputLanguage": "zh-CN",
+          "uiFormat": "report",
+          "artifactDirectory": "reports",
+          "checkpointStrategy": "review_before_completion"
+        },
+        "resumeStrategy": {
+          "mode": "continue_from_saved_context",
+          "preserveDeliverables": true,
+          "preserveCompletedSteps": true,
+          "preserveArtifacts": true
+        },
+        "goalFrame": {
+          "objective": "检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+          "constraints": [],
+          "preferences": [],
+          "contextSignals": [
+            "mode:scheduled_multi_task"
+          ],
+          "successHypothesis": [
+            "Create a concrete output artifact and save it into the workspace."
+          ],
+          "taskCategory": "research"
+        },
+        "researchQueries": [
+          {
+            "id": "549cbb5d-3c0b-45c8-b4d2-bef3fd506e25",
+            "kind": "domain_research",
+            "source": "web",
+            "objective": "Research relevant best practices and current domain approaches before freezing the contract.",
+            "required": true,
+            "status": "failed"
+          },
+          {
+            "id": "c9026f68-708f-4596-9ceb-2547dde1a146",
+            "kind": "context_research",
+            "source": "template",
+            "objective": "Look for similar historical tasks or templates to bootstrap the contract.",
+            "required": false,
+            "status": "skipped"
+          }
+        ],
+        "researchEvidence": [
+          {
+            "id": "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+            "kind": "context_research",
+            "source": "conversation",
+            "summary": "Parsed user request \"5秒以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 5 秒，将分析结果发布到 X 上\" into objective: 检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+            "confidence": 0.98,
+            "collectedAt": "2026-03-24T01:28:38.551Z"
+          },
+          {
+            "id": "db2c7f17-0f22-4541-8289-2f90f534ef18",
+            "kind": "feasibility_research",
+            "source": "template",
+            "summary": "Planned 1 deliverable(s) with default UI format report.",
+            "confidence": 0.82,
+            "collectedAt": "2026-03-24T01:28:38.551Z"
+          },
+          {
+            "id": "2cf211a8-a997-4440-bb4e-e3a7dc33c7cf",
+            "kind": "domain_research",
+            "source": "web",
+            "summary": "Web research failed: Error: web_research_timeout_4000ms",
+            "confidence": 0.35,
+            "collectedAt": "2026-03-24T01:28:42.558Z"
+          },
+          {
+            "id": "fab44cdb-199b-4a04-85c0-85f659e8c075",
+            "kind": "context_research",
+            "source": "template",
+            "summary": "Research source \"template\" is planned but not yet wired in this runtime slice.",
+            "confidence": 0.35,
+            "collectedAt": "2026-03-24T01:28:42.558Z"
+          }
+        ],
+        "uncertaintyRegistry": [
+          {
+            "id": "bc4f148f-7000-47a8-ac58-09bf389e46e4",
+            "topic": "output_language",
+            "status": "defaultable",
+            "statement": "Default output language is zh-CN.",
+            "whyItMatters": "Presentation format should be explicit even when the user does not specify it.",
+            "defaultValue": "zh-CN",
+            "supportingEvidenceIds": [
+              "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+              "db2c7f17-0f22-4541-8289-2f90f534ef18"
+            ]
+          },
+          {
+            "id": "334e7925-3661-41db-9063-49bd5f564957",
+            "topic": "ui_format",
+            "status": "defaultable",
+            "statement": "Default UI format is report.",
+            "whyItMatters": "The execution contract should define how results are returned.",
+            "defaultValue": "report",
+            "supportingEvidenceIds": [
+              "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+              "db2c7f17-0f22-4541-8289-2f90f534ef18"
+            ]
+          },
+          {
+            "id": "4f77a421-ff3b-4f40-8fb6-ec979cfeee7c",
+            "topic": "artifact_directory",
+            "status": "defaultable",
+            "statement": "Default artifact directory is reports.",
+            "whyItMatters": "Artifact-producing tasks need a stable output location.",
+            "defaultValue": "reports",
+            "supportingEvidenceIds": [
+              "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+              "db2c7f17-0f22-4541-8289-2f90f534ef18"
+            ]
+          },
+          {
+            "id": "58f068cf-ad46-42af-b34e-78e4cda1309d",
+            "topic": "required_research:549cbb5d-3c0b-45c8-b4d2-bef3fd506e25",
+            "status": "blocking_unknown",
+            "statement": "Required pre-freeze research did not complete successfully: Research relevant best practices and current domain approaches before freezing the contract.",
+            "whyItMatters": "Coworkany cannot safely continue execution without the required research evidence.",
+            "question": "Please provide the missing data or allow Coworkany to retry this research step: Research relevant best practices and current domain approaches before freezing the contract.",
+            "supportingEvidenceIds": [
+              "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+              "db2c7f17-0f22-4541-8289-2f90f534ef18",
+              "2cf211a8-a997-4440-bb4e-e3a7dc33c7cf",
+              "fab44cdb-199b-4a04-85c0-85f659e8c075"
+            ]
+          }
+        ],
+        "strategyOptions": [
+          {
+            "id": "9bb6d498-5b84-433c-889b-27e8ac2c1d20",
+            "title": "Research-backed artifact delivery",
+            "description": "Gather enough domain and project context, then produce the planned artifact.",
+            "pros": [
+              "Fits report and artifact tasks.",
+              "Supports explicit checkpoints before delivery."
+            ],
+            "cons": [
+              "Needs stronger context gathering before execution."
+            ],
+            "feasibility": "high",
+            "supportingEvidenceIds": [
+              "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+              "db2c7f17-0f22-4541-8289-2f90f534ef18"
+            ],
+            "selected": true
+          },
+          {
+            "id": "44f7d08b-58eb-4f2c-8495-97ec801388a4",
+            "title": "Chat-only summary",
+            "description": "Respond directly in chat without producing a workspace artifact.",
+            "pros": [
+              "Lower latency."
+            ],
+            "cons": [
+              "Drops the requested artifact deliverable."
+            ],
+            "feasibility": "low",
+            "supportingEvidenceIds": [
+              "2f508a54-13a3-49f7-9d4e-4eb5663c6c7f",
+              "db2c7f17-0f22-4541-8289-2f90f534ef18"
+            ],
+            "selected": false,
+            "rejectionReason": "The frozen contract already commits to an artifact deliverable."
+          }
+        ],
+        "selectedStrategyId": "9bb6d498-5b84-433c-889b-27e8ac2c1d20",
+        "knownRisks": [
+          "Best-practice assumptions may change after deeper domain research is performed.",
+          "Web research failed before contract freeze.",
+          "Required pre-freeze research is incomplete; execution contract remains blocked until missing research is resolved."
+        ],
+        "replanPolicy": {
+          "allowReturnToResearch": true,
+          "triggers": [
+            "new_scope_signal",
+            "missing_resource",
+            "permission_block",
+            "contradictory_evidence",
+            "execution_infeasible"
+          ]
+        },
+        "createdAt": "2026-03-24T01:28:38.552Z",
+        "id": "171a38b8-e4fe-48dc-9b43-4f61b4f2178e",
+        "frozenAt": "2026-03-24T01:28:42.558Z",
+        "frozenResearchSummary": {
+          "evidenceCount": 4,
+          "sourcesChecked": [
+            "conversation",
+            "template",
+            "web"
+          ],
+          "blockingUnknownCount": 1,
+          "selectedStrategyTitle": "Research-backed artifact delivery"
+        }
+      },
+      "workspacePath": "/Users/beihuang/Documents/github/coworkany",
+      "createdAt": "2026-03-24T01:28:42.583Z",
+      "executeAt": "2026-03-24T01:28:43.544Z",
+      "status": "failed",
+      "speakResult": false,
+      "sourceTaskId": "67c765c7-caec-4312-b536-86411cdb4f6e",
+      "config": {
+        "enabledToolpacks": [],
+        "enabledSkills": [],
+        "disabledTools": []
+      },
+      "startedAt": "2026-03-24T01:28:44.035Z",
+      "error": "unable to get issuer certificate",
+      "completedAt": "2026-03-24T01:29:18.111Z"
+    }
+  ],
+  "toolCallCount": 0,
+  "browserCallCount": 0,
+  "browserCalls": [],
+  "hasXNavigate": false,
+  "stderrTail": [
+    "[INFO] Sidecar IPC started",
+    "[INFO] Reading commands from stdin (JSON-Lines)",
+    "[INFO] Log file: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/logs/sidecar-2026-03-24.log",
+    "[Heartbeat] Starting engine...",
+    "[Heartbeat] Loaded 1 triggers from config",
+    "[Heartbeat] Started interval timer for: Scheduled Task Runner",
+    "[Heartbeat] engine_started: {\"triggerCount\":1}",
+    "[Heartbeat] Engine started with 1 triggers",
+    "[BrowserUse] ✗ Service not available at http://localhost:8100. Smart mode will be unavailable. Start with: cd browser-use-service && python main.py",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[DEBUG] stdin data chunk, length: 395",
+    "[DEBUG] Received line: {\"type\":\"bootstrap_runtime_context\",\"id\":\"af619554-9eea-40b3-892a-bd88018e545b\",\"timestamp\":\"2026-03-24T01:28:38.519Z\",\"payload\":{\"runtimeContext\":{\"platform\":\"darwin\",\"arch\":\"arm64\",\"appDir\":\"/Users/",
+    "[DEBUG] Parsed JSON, type: bootstrap_runtime_context",
+    "[DEBUG] Valid command, handling: bootstrap_runtime_context",
+    "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/tmp/coworkany-chain-tls-cQcxiH, sidecarLaunchMode=unknown",
+    "[DEBUG] stdin data chunk, length: 414",
+    "[DEBUG] Received line: {\"type\":\"start_task\",\"id\":\"29190f9e-9502-40ac-b9f8-9ab6a6a2dda0\",\"timestamp\":\"2026-03-24T01:28:38.520Z\",\"payload\":{\"taskId\":\"67c765c7-caec-4312-b536-86411cdb4f6e\",\"title\":\"chain-replay-x-post-tls\",\"us",
+    "[DEBUG] Parsed JSON, type: start_task",
+    "[DEBUG] Valid command, handling: start_task",
+    "[WebSearch] Fetching SearXNG instances from searx.space...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[LlmConfig] Loaded config from /Users/beihuang/Documents/github/coworkany/sidecar/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[BrowserService] Mode changed: smart -> smart",
+    "[LlmConfig] BrowserUse configured: enabled=true, mode=smart",
+    "[LlmConfig] Loaded config from /Users/beihuang/Documents/github/coworkany/sidecar/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[BrowserService] Mode changed: smart -> smart",
+    "[LlmConfig] BrowserUse configured: enabled=true, mode=smart",
+    "[PackageManager] Detected from lock file: npm",
+    "[Task 67c765c7-caec-4312-b536-86411cdb4f6e] Package manager detected: npm",
+    "[Scheduler] Scheduled task ffc19959-f637-4557-9992-24a8ee4236d3 for 2026-03-24T01:28:43.544Z: 检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中",
+    "[WebSearch] Failed to fetch instances from searx.space: TimeoutError: The operation timed out.",
+    "[WebSearch] Using fallback static instance list",
+    "[WebSearch] Trying 4 SearXNG instances...",
+    "[WebSearch] Trying SearXNG: https://search.inetol.net",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Scheduler] Starting scheduled task ffc19959-f637-4557-9992-24a8ee4236d3 in /Users/beihuang/Documents/github/coworkany as task 67c765c7-caec-4312-b536-86411cdb4f6e",
+    "[LlmConfig] Loaded config from /Users/beihuang/Documents/github/coworkany/sidecar/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[BrowserService] Mode changed: smart -> smart",
+    "[LlmConfig] BrowserUse configured: enabled=true, mode=smart",
+    "[PackageManager] Detected from lock file: npm",
+    "[Task 67c765c7-caec-4312-b536-86411cdb4f6e] Package manager detected: npm",
+    "[Skill] Loaded builtin: task-orchestrator",
+    "[LlmConfig] Loaded config from /Users/beihuang/Documents/github/coworkany/sidecar/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[BrowserService] Mode changed: smart -> smart",
+    "[LlmConfig] BrowserUse configured: enabled=true, mode=smart",
+    "[OpenAI] Sending 102 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, search_coworkany_skill_marketplace, install_coworkany_skill_from_marketplace, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] SearXNG https://search.inetol.net failed: The operation timed out.",
+    "[WebSearch] Trying SearXNG: https://searx.work",
+    "[Retry] Network error on attempt 1: unable to get issuer certificate (name=UNABLE_TO_GET_ISSUER_CERT, code=UNABLE_TO_GET_ISSUER_CERT, errno=0). Retrying in 2000ms...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] SearXNG https://searx.work failed: The operation timed out.",
+    "[WebSearch] Trying SearXNG: https://search.ononoki.org",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Retry] Network error on attempt 2: unable to get issuer certificate (name=UNABLE_TO_GET_ISSUER_CERT, code=UNABLE_TO_GET_ISSUER_CERT, errno=0). Retrying in 4000ms...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] SearXNG https://search.ononoki.org failed: The operation timed out.",
+    "[WebSearch] Trying SearXNG: https://searx.namejeff.xyz",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] SearXNG https://searx.namejeff.xyz failed: The operation timed out.",
+    "[WebSearch] All SearXNG instances failed, trying Google scraping...",
+    "[WebSearch] Trying Google search...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Retry] Network error on attempt 3: unable to get issuer certificate (name=UNABLE_TO_GET_ISSUER_CERT, code=UNABLE_TO_GET_ISSUER_CERT, errno=0). Retrying in 8000ms...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] Google failed: TimeoutError: The operation timed out.",
+    "[WebSearch] Google failed, trying DuckDuckGo Lite...",
+    "[WebSearch] Trying DuckDuckGo Lite search...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] DuckDuckGo failed: TimeoutError: The operation timed out.",
+    "[WebSearch] DuckDuckGo Lite failed, trying DuckDuckGo HTML...",
+    "[WebSearch] Trying DuckDuckGo HTML search...",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[PostLearning] 📚 Learning from FAILED session: 5秒以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 5 秒，将分析结果发布到 X 上",
+    "[PostLearning] Failed tool calls: 0",
+    "[PostLearning] Errors: ",
+    "[PostLearning] Detected missing capability: 5秒以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 5 秒，将分析结果发布到",
+    "[PostLearning] ✅ Saved failure knowledge: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/vault/self-learned/concepts/2026-03-24-5-5-.md",
+    "[Scheduler] Scheduled task ffc19959-f637-4557-9992-24a8ee4236d3 finished with status failed",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    ""
+  ]
+}

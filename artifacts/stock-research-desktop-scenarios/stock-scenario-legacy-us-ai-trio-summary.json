@@ -18,21 +18,24 @@
     "taskFinished": true,
     "taskFailed": false,
     "taskFailedError": "",
-    "searchWebCallCount": 3,
+    "searchWebCallCount": 4,
     "adviceKeywordHits": [
       "买入",
       "持有",
       "buy",
+      "sell",
+      "评级",
       "建议"
     ],
     "predictionKeywordHits": [
       "预测",
       "预期",
-      "目标价",
       "未来",
       "走势",
       "概率",
-      "forecast"
+      "forecast",
+      "upside",
+      "downside"
     ],
     "entityCoverage": [
       {
@@ -66,7 +69,7 @@
     "completedBySilence": false,
     "completed": true,
     "externalFailure": false,
-    "evidenceTextLength": 8573,
-    "rawLogLength": 270666
+    "evidenceTextLength": 9514,
+    "rawLogLength": 228435
   }
 }

@@ -117,6 +117,15 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+.taskCardBoardLayout {
+    width: 100%;
+}
+
+.taskCardBoardLayout .contentBubble {
+    max-width: 100% !important;
+    width: 100%;
+}
+
 .taskCardHeader {
     display: flex;
     flex-direction: column;
@@ -139,6 +148,41 @@
     font-size: 14px;
     color: var(--text-primary);
     line-height: 1.4;
+}
+
+.taskStatusChip {
+    align-self: flex-start;
+    font-size: 11px;
+    line-height: 1.2;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    color: #cbd5e1;
+    padding: 3px 8px;
+}
+
+.taskStatusrunning {
+    border-color: rgba(34, 197, 94, 0.35);
+    color: #bbf7d0;
+}
+
+.taskStatusfinished {
+    border-color: rgba(59, 130, 246, 0.4);
+    color: #bfdbfe;
+}
+
+.taskStatusfailed {
+    border-color: rgba(248, 113, 113, 0.4);
+    color: #fecaca;
+}
+
+.taskStatusidle {
+    border-color: rgba(148, 163, 184, 0.35);
+    color: #cbd5e1;
+}
+
+.taskWorkflowLabel {
+    font-size: 11px;
+    color: var(--text-muted);
 }
 
 .taskCardSubtitle {
@@ -179,10 +223,118 @@
     border-left: 2px solid rgba(96, 165, 250, 0.16);
 }
 
+.taskListInCard {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.taskListRow {
+    background: rgba(15, 23, 42, 0.34);
+    border: 1px solid rgba(100, 116, 139, 0.24);
+    border-radius: 10px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.taskListTitleRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.taskListTitle {
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.taskListStatus {
+    font-size: 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #cbd5e1;
+    padding: 2px 6px;
+    white-space: nowrap;
+}
+
+.taskListStatuspending {
+    border-color: rgba(148, 163, 184, 0.35);
+    color: #cbd5e1;
+}
+
+.taskListStatusin_progress {
+    border-color: rgba(34, 197, 94, 0.35);
+    color: #bbf7d0;
+}
+
+.taskListStatuscomplete,
+.taskListStatuscompleted {
+    border-color: rgba(59, 130, 246, 0.4);
+    color: #bfdbfe;
+}
+
+.taskListStatusfailed {
+    border-color: rgba(248, 113, 113, 0.4);
+    color: #fecaca;
+}
+
+.taskListStatusblocked {
+    border-color: rgba(251, 191, 36, 0.4);
+    color: #fde68a;
+}
+
+.taskListStatusskipped {
+    border-color: rgba(148, 163, 184, 0.28);
+    color: #94a3b8;
+}
+
+.taskListDeps {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
 .taskCardActions {
     margin-top: 12px;
     display: flex;
     justify-content: flex-start;
+}
+
+.taskCardCollaboration {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.taskCardCollaborationBody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.taskCardCollaborationTitle {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.taskCardInputRow {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.taskCardInput {
+    flex: 1;
+    min-width: 0;
+    border-radius: 10px;
+    border: 1px solid rgba(100, 116, 139, 0.35);
+    background: rgba(15, 23, 42, 0.52);
+    color: var(--text-primary);
+    padding: 8px 10px;
+    font-size: 12px;
 }
 
 .taskCardActionButton {

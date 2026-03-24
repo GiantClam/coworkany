@@ -44,6 +44,12 @@ fn shared_app_data_dir() -> std::path::PathBuf {
         .join(APP_IDENTIFIER)
 }
 
+fn parse_env_u32(name: &str) -> Option<u32> {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+}
+
 /// IPC command to update the global shortcut for toggling the main window.
 /// Unregisters the old shortcut and registers the new one.
 #[tauri::command]
@@ -307,6 +313,44 @@ fn main() {
                                 "status": "running"
                             }));
                         }
+                    }
+
+                    // Test-only hook: intentionally call spawn multiple times to verify
+                    // sidecar singleton reuse behavior with a real desktop process.
+                    let extra_spawn_attempts =
+                        parse_env_u32("COWORKANY_TEST_REPEAT_SPAWN_SIDE_CAR_ATTEMPTS")
+                            .unwrap_or(0);
+                    if extra_spawn_attempts > 0 {
+                        let delay_ms =
+                            parse_env_u32("COWORKANY_TEST_REPEAT_SPAWN_SIDE_CAR_DELAY_MS")
+                                .unwrap_or(150);
+                        info!(
+                            "Sidecar repeat-spawn test hook enabled: extra_attempts={}, delay_ms={}",
+                            extra_spawn_attempts, delay_ms
+                        );
+
+                        for attempt in 1..=extra_spawn_attempts {
+                            if delay_ms > 0 {
+                                std::thread::sleep(std::time::Duration::from_millis(delay_ms as u64));
+                            }
+                            let state = app_for_boot.state::<SidecarState>();
+                            let mut manager = state.0.lock().unwrap();
+                            match manager.spawn(app_for_boot.clone()) {
+                                Ok(()) => info!(
+                                    "Sidecar repeat-spawn attempt {}/{} completed",
+                                    attempt, extra_spawn_attempts
+                                ),
+                                Err(error) => warn!(
+                                    "Sidecar repeat-spawn attempt {}/{} failed: {}",
+                                    attempt, extra_spawn_attempts, error
+                                ),
+                            }
+                        }
+
+                        info!(
+                            "Sidecar repeat-spawn test hook completed: attempts={}",
+                            extra_spawn_attempts
+                        );
                     }
 
                     // NOTE: backend services are warmed by frontend after first paint.

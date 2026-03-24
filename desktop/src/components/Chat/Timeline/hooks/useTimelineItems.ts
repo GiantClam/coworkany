@@ -2,61 +2,32 @@
  * useTimelineItems Hook
  *
  * Transforms TaskSession events into TimelineItems for display.
- * Uses incremental caching so streaming updates do not rebuild the full timeline.
+ * Task-related state is consolidated into a single task center card.
  */
 
-import { useMemo, useRef } from 'react';
-import type { TaskSession, TimelineItemType } from '../../../../types';
+import { useMemo } from 'react';
+import type { PlanStep, TaskCardItem, TaskSession, TimelineItemType } from '../../../../types';
 
 export interface TimelineItemsResult {
     items: TimelineItemType[];
     hiddenEventCount: number;
 }
 
-type TimelineCache = {
-    taskId: string;
-    maxRecentEvents?: number;
-    firstEventId: string | null;
-    sourceEventCount: number;
-    sessionStatus: TaskSession['status'];
+type TaskCardTask = NonNullable<TaskCardItem['tasks']>[number];
+
+type BuildState = {
     items: TimelineItemType[];
+    taskCardIndex: number | null;
+    hasTaskContext: boolean;
+    isChatMode: boolean;
+    currentDraftIndex: number | null;
+    taskOutputDraft: string;
     toolIndex: Map<string, number>;
     effectIndex: Map<string, number>;
     patchIndex: Map<string, number>;
-    currentDraftIndex: number | null;
-    taskUpdateCardIndex: number | null;
+    toolNameById: Map<string, string>;
+    taskById: Map<string, TaskCardTask>;
 };
-
-function createEmptyCache(
-    taskId: string,
-    maxRecentEvents: number | undefined,
-    firstEventId: string | null,
-    sessionStatus: TaskSession['status']
-): TimelineCache {
-    return {
-        taskId,
-        maxRecentEvents,
-        firstEventId,
-        sourceEventCount: 0,
-        sessionStatus,
-        items: [],
-        toolIndex: new Map(),
-        effectIndex: new Map(),
-        patchIndex: new Map(),
-        currentDraftIndex: null,
-        taskUpdateCardIndex: null,
-    };
-}
-
-function upsertItem(cache: TimelineCache, index: number, item: TimelineItemType): void {
-    cache.items[index] = item;
-}
-
-function appendItem(cache: TimelineCache, item: TimelineItemType): number {
-    const nextIndex = cache.items.length;
-    cache.items.push(item);
-    return nextIndex;
-}
 
 function normalizeText(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -69,18 +40,28 @@ function normalizeLines(values: unknown[]): string[] {
     return Array.from(new Set(lines));
 }
 
-function appendSystemEvent(cache: TimelineCache, event: TaskSession['events'][number], content: string): void {
+function appendItem(state: BuildState, item: TimelineItemType): number {
+    const index = state.items.length;
+    state.items.push(item);
+    return index;
+}
+
+function upsertItem(state: BuildState, index: number, item: TimelineItemType): void {
+    state.items[index] = item;
+}
+
+function appendSystemEvent(state: BuildState, event: TaskSession['events'][number], content: string): void {
     const normalizedContent = content.trim();
     if (!normalizedContent) {
         return;
     }
 
-    const lastItem = cache.items.at(-1);
+    const lastItem = state.items.at(-1);
     if (lastItem?.type === 'system_event' && lastItem.content.trim() === normalizedContent) {
         return;
     }
 
-    appendItem(cache, {
+    appendItem(state, {
         type: 'system_event',
         id: event.id,
         content: normalizedContent,
@@ -88,157 +69,228 @@ function appendSystemEvent(cache: TimelineCache, event: TaskSession['events'][nu
     });
 }
 
-function upsertTaskUpdateCard(
-    cache: TimelineCache,
+function mapStatusLabel(status: TaskSession['status'] | ''): string {
+    switch (status) {
+        case 'running':
+            return 'In progress';
+        case 'finished':
+            return 'Completed';
+        case 'failed':
+            return 'Failed';
+        case 'idle':
+            return 'Waiting';
+        default:
+            return 'Unknown';
+    }
+}
+
+function inferWorkflow(tasks: TaskCardTask[]): NonNullable<TaskCardItem['workflow']> {
+    if (tasks.length <= 1) {
+        return 'single';
+    }
+
+    const allWithoutDependencies = tasks.every((task) => task.dependencies.length === 0);
+    if (allWithoutDependencies) {
+        return 'parallel';
+    }
+
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    const sequential = tasks.every((task, index) => {
+        if (index === 0) {
+            return task.dependencies.length === 0;
+        }
+        const previous = tasks[index - 1];
+        return task.dependencies.length === 1
+            && task.dependencies[0] === previous?.id
+            && byId.has(previous.id);
+    });
+
+    return sequential ? 'sequential' : 'dag';
+}
+
+function ensureTaskCard(
+    state: BuildState,
+    session: TaskSession,
     event: TaskSession['events'][number],
-    card: {
-        subtitle?: string;
-        sections: Array<{ label: string; lines: string[] }>;
-    }
-): void {
-    const subtitle = normalizeText(card.subtitle);
-    const sections = card.sections
-        .map((section) => ({
-            label: normalizeText(section.label),
-            lines: normalizeLines(section.lines),
-        }))
-        .filter((section) => section.label.length > 0);
-
-    if (!subtitle && sections.length === 0) {
-        return;
-    }
-
-    let cardIndex = cache.taskUpdateCardIndex;
-    let existingItem = cardIndex !== null ? cache.items[cardIndex] : undefined;
-    if (!existingItem || existingItem.type !== 'task_card') {
-        cardIndex = appendItem(cache, {
+): TaskCardItem {
+    let card = state.taskCardIndex !== null ? state.items[state.taskCardIndex] : undefined;
+    if (!card || card.type !== 'task_card') {
+        const nextCard: TaskCardItem = {
             type: 'task_card',
-            id: `task-update-${cache.taskId}`,
-            title: 'Task update',
+            id: `task-center-${session.taskId}`,
+            taskId: session.taskId,
+            title: 'Task center',
             subtitle: undefined,
+            status: session.status,
             sections: [],
             timestamp: event.timestamp,
-        });
-        cache.taskUpdateCardIndex = cardIndex;
-        existingItem = cache.items[cardIndex];
+        };
+        const index = appendItem(state, nextCard);
+        state.taskCardIndex = index;
+        return nextCard;
     }
 
-    if (!existingItem || existingItem.type !== 'task_card') {
+    return card;
+}
+
+function commitTaskCard(state: BuildState, card: TaskCardItem): void {
+    if (state.taskCardIndex === null) {
         return;
     }
-    if (cardIndex === null) {
-        return;
-    }
 
-    const nextSections = [...existingItem.sections];
-    for (const section of sections) {
-        const index = nextSections.findIndex((entry) => entry.label.toLowerCase() === section.label.toLowerCase());
-        if (section.lines.length === 0) {
-            if (index >= 0) {
-                nextSections.splice(index, 1);
-            }
-            continue;
-        }
-        if (index >= 0) {
-            nextSections[index] = {
-                label: section.label,
-                lines: section.lines,
-            };
-            continue;
-        }
-        nextSections.push({
-            label: section.label,
-            lines: section.lines,
-        });
-    }
-
-    upsertItem(cache, cardIndex, {
-        ...existingItem,
-        subtitle: subtitle || existingItem.subtitle,
-        sections: nextSections,
-        timestamp: event.timestamp,
+    upsertItem(state, state.taskCardIndex, {
+        ...card,
+        sections: [...card.sections],
+        tasks: card.tasks ? [...card.tasks] : undefined,
     });
 }
 
-function appendFinishedSummaryIfNeeded(
-    cache: TimelineCache,
-    event: TaskSession['events'][number],
-    summary: string | undefined
+function upsertTaskCardSection(
+    card: TaskCardItem,
+    label: string,
+    lines: unknown[],
+    mode: 'replace' | 'append' = 'replace',
+    maxLines: number = 8,
 ): void {
-    const normalizedSummary = summary?.trim();
-    if (!normalizedSummary) {
+    const normalizedLabel = normalizeText(label);
+    if (!normalizedLabel) {
         return;
     }
 
-    if (cache.currentDraftIndex !== null) {
+    const normalized = normalizeLines(Array.isArray(lines) ? lines : []);
+    const index = card.sections.findIndex((section) => section.label.toLowerCase() === normalizedLabel.toLowerCase());
+
+    if (mode === 'replace') {
+        if (normalized.length === 0) {
+            if (index >= 0) {
+                card.sections.splice(index, 1);
+            }
+            return;
+        }
+
+        const nextSection = {
+            label: normalizedLabel,
+            lines: normalized,
+        };
+        if (index >= 0) {
+            card.sections[index] = nextSection;
+        } else {
+            card.sections.push(nextSection);
+        }
         return;
     }
 
-    const lastItem = cache.items.at(-1);
-    if (lastItem?.type === 'assistant_message' && lastItem.content.trim() === normalizedSummary) {
+    const existing = index >= 0 ? card.sections[index].lines : [];
+    const merged = Array.from(new Set([...existing, ...normalized])).slice(-maxLines);
+    if (merged.length === 0) {
+        if (index >= 0) {
+            card.sections.splice(index, 1);
+        }
         return;
     }
 
-    appendItem(cache, {
-        type: 'assistant_message',
-        id: `${event.id}-assistant`,
-        content: normalizedSummary,
-        timestamp: event.timestamp,
-        isStreaming: false,
-    });
+    const nextSection = {
+        label: normalizedLabel,
+        lines: merged,
+    };
+    if (index >= 0) {
+        card.sections[index] = nextSection;
+    } else {
+        card.sections.push(nextSection);
+    }
 }
 
-function processEvent(cache: TimelineCache, event: TaskSession['events'][number]): void {
+function setTaskList(card: TaskCardItem, tasks: TaskCardTask[]): void {
+    if (tasks.length === 0) {
+        card.tasks = undefined;
+        card.workflow = 'single';
+        return;
+    }
+
+    card.tasks = tasks;
+    card.workflow = inferWorkflow(tasks);
+}
+
+function toTaskStatus(value: unknown): PlanStep['status'] {
+    const normalized = typeof value === 'string' ? value : 'pending';
+    switch (normalized) {
+        case 'pending':
+        case 'in_progress':
+        case 'complete':
+        case 'completed':
+        case 'skipped':
+        case 'failed':
+        case 'blocked':
+            return normalized;
+        default:
+            return 'pending';
+    }
+}
+
+function processEvent(state: BuildState, session: TaskSession, event: TaskSession['events'][number]): void {
     const payload = event.payload as Record<string, any>;
 
     switch (event.type) {
-        case 'CHAT_MESSAGE':
         case 'TASK_STARTED': {
-            if (event.type === 'TASK_STARTED') {
-                const content = payload.context?.userQuery || payload.description;
-                if (content) {
-                    appendItem(cache, {
-                        type: 'user_message',
-                        id: event.id,
-                        content,
-                        timestamp: event.timestamp,
-                    });
-                }
-                break;
+            const content = payload.context?.userQuery || payload.description;
+            if (content) {
+                appendItem(state, {
+                    type: 'user_message',
+                    id: event.id,
+                    content,
+                    timestamp: event.timestamp,
+                });
             }
 
+            break;
+        }
+
+        case 'CHAT_MESSAGE': {
             const role = payload.role || 'system';
             if (role === 'user') {
-                appendItem(cache, {
+                appendItem(state, {
                     type: 'user_message',
                     id: event.id,
                     content: payload.content,
                     timestamp: event.timestamp,
                 });
-                cache.currentDraftIndex = null;
-            } else if (role === 'system') {
-                appendItem(cache, {
-                    type: 'system_event',
-                    id: event.id,
-                    content: payload.content,
-                    timestamp: event.timestamp,
-                });
-            } else {
-                const assistantItem: TimelineItemType = {
-                    type: 'assistant_message',
-                    id: event.id,
-                    content: payload.content,
-                    timestamp: event.timestamp,
-                    isStreaming: false,
-                };
-
-                if (cache.currentDraftIndex !== null && cache.items[cache.currentDraftIndex]?.type === 'assistant_message') {
-                    upsertItem(cache, cache.currentDraftIndex, assistantItem);
-                } else {
-                    appendItem(cache, assistantItem);
-                }
-                cache.currentDraftIndex = null;
+                state.currentDraftIndex = null;
+                break;
             }
+
+            if (state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                if (role === 'assistant') {
+                    upsertTaskCardSection(card, 'Process · Assistant output', [payload.content], 'append', 6);
+                    state.taskOutputDraft = '';
+                } else {
+                    upsertTaskCardSection(card, 'Process · System updates', [payload.content], 'append', 6);
+                }
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                state.currentDraftIndex = null;
+                break;
+            }
+
+            if (role === 'system') {
+                appendSystemEvent(state, event, String(payload.content ?? ''));
+                break;
+            }
+
+            const assistantItem: TimelineItemType = {
+                type: 'assistant_message',
+                id: event.id,
+                content: payload.content,
+                timestamp: event.timestamp,
+                isStreaming: false,
+            };
+
+            if (state.currentDraftIndex !== null && state.items[state.currentDraftIndex]?.type === 'assistant_message') {
+                upsertItem(state, state.currentDraftIndex, assistantItem);
+            } else {
+                appendItem(state, assistantItem);
+            }
+            state.currentDraftIndex = null;
             break;
         }
 
@@ -248,123 +300,52 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
             }
 
             const delta = payload.delta || '';
-            if (cache.currentDraftIndex !== null && cache.items[cache.currentDraftIndex]?.type === 'assistant_message') {
-                const currentItem = cache.items[cache.currentDraftIndex] as Extract<TimelineItemType, { type: 'assistant_message' }>;
-                upsertItem(cache, cache.currentDraftIndex, {
+
+            if (state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                state.taskOutputDraft += delta;
+                upsertTaskCardSection(card, 'Process · Assistant output', [state.taskOutputDraft], 'replace');
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                return;
+            }
+
+            if (state.currentDraftIndex !== null && state.items[state.currentDraftIndex]?.type === 'assistant_message') {
+                const currentItem = state.items[state.currentDraftIndex] as Extract<TimelineItemType, { type: 'assistant_message' }>;
+                upsertItem(state, state.currentDraftIndex, {
                     ...currentItem,
                     content: currentItem.content + delta,
-                    isStreaming: cache.sessionStatus === 'running',
+                    isStreaming: session.status === 'running',
                 });
             } else {
-                cache.currentDraftIndex = appendItem(cache, {
+                state.currentDraftIndex = appendItem(state, {
                     type: 'assistant_message',
                     id: event.id,
                     content: delta,
                     timestamp: event.timestamp,
-                    isStreaming: cache.sessionStatus === 'running',
+                    isStreaming: session.status === 'running',
                 });
             }
             break;
         }
 
-        case 'TOOL_CALLED': {
-            const toolItem: TimelineItemType & { type: 'tool_call' } = {
-                type: 'tool_call',
-                id: payload.toolId || event.id,
-                toolName: payload.toolName,
-                args: payload.args,
-                status: 'running',
-                timestamp: event.timestamp,
-            };
-            const index = appendItem(cache, toolItem);
-            cache.toolIndex.set(toolItem.id, index);
-            cache.currentDraftIndex = null;
-            break;
-        }
-
-        case 'TOOL_RESULT': {
-            const matchingIndex = cache.toolIndex.get(payload.toolId);
-            if (matchingIndex !== undefined) {
-                const currentItem = cache.items[matchingIndex];
-                if (currentItem?.type === 'tool_call') {
-                    upsertItem(cache, matchingIndex, {
-                        ...currentItem,
-                        status: payload.success ? 'success' : 'failed',
-                        result: payload.result || payload.error,
-                    });
-                }
-            }
-            break;
-        }
-
-        case 'EFFECT_REQUESTED': {
-            const req = payload.request;
-            const effItem: TimelineItemType & { type: 'effect_request' } = {
-                type: 'effect_request',
-                id: req.id,
-                effectType: req.effectType,
-                risk: payload.riskLevel,
-                timestamp: event.timestamp,
-            };
-            const index = appendItem(cache, effItem);
-            cache.effectIndex.set(effItem.id, index);
-            break;
-        }
-
-        case 'EFFECT_APPROVED':
-        case 'EFFECT_DENIED': {
-            const resp = payload.response;
-            const effIndex = cache.effectIndex.get(resp.requestId);
-            if (effIndex !== undefined) {
-                const currentItem = cache.items[effIndex];
-                if (currentItem?.type === 'effect_request') {
-                    upsertItem(cache, effIndex, {
-                        ...currentItem,
-                        approved: event.type === 'EFFECT_APPROVED',
-                    });
-                }
-            }
-            break;
-        }
-
-        case 'PATCH_PROPOSED': {
-            const patchItem: TimelineItemType & { type: 'patch' } = {
-                type: 'patch',
-                id: payload.patch.id,
-                filePath: payload.patch.filePath,
-                status: 'proposed',
-                timestamp: event.timestamp,
-            };
-            const index = appendItem(cache, patchItem);
-            cache.patchIndex.set(patchItem.id, index);
-            break;
-        }
-
-        case 'PATCH_APPLIED':
-        case 'PATCH_REJECTED': {
-            const patchIndex = cache.patchIndex.get(payload.patchId);
-            if (patchIndex !== undefined) {
-                const currentItem = cache.items[patchIndex];
-                if (currentItem?.type === 'patch') {
-                    upsertItem(cache, patchIndex, {
-                        ...currentItem,
-                        status: event.type === 'PATCH_APPLIED' ? 'applied' : 'rejected',
-                    });
-                }
-            }
-            break;
-        }
-
-        case 'RATE_LIMITED':
-            appendSystemEvent(
-                cache,
-                event,
-                payload.message || `API rate limited (attempt ${payload.attempt}/${payload.maxRetries}). Retrying...`
-            );
-            break;
-
         case 'TASK_STATUS': {
-            const status = typeof payload.status === 'string' ? payload.status : '';
+            const status = typeof payload.status === 'string' ? payload.status as TaskSession['status'] : session.status;
+            if (state.isChatMode && !state.hasTaskContext) {
+                break;
+            }
+            if (state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                card.status = status;
+                if (status === 'running') {
+                    card.collaboration = undefined;
+                }
+                upsertTaskCardSection(card, 'Task · Status', [`Status: ${mapStatusLabel(status)}`], 'replace');
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
             const statusLabel = status === 'running'
                 ? 'Status updated: in progress'
                 : status === 'finished'
@@ -374,77 +355,128 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
                         : status === 'idle'
                             ? 'Status updated: waiting'
                             : '';
-
-            appendSystemEvent(cache, event, statusLabel);
+            appendSystemEvent(state, event, statusLabel);
             break;
         }
 
-        case 'TASK_PLAN_READY':
-            upsertTaskUpdateCard(cache, event, {
-                subtitle: payload.summary || 'Coworkany prepared an execution plan.',
-                sections: [
-                    {
-                        label: 'Plan · Deliverables',
-                        lines: ((Array.isArray(payload.deliverables) ? payload.deliverables : []) as Array<Record<string, unknown>>)
-                            .map((deliverable) => {
-                                const title = normalizeText(deliverable.title);
-                                const path = normalizeText(deliverable.path);
-                                const description = normalizeText(deliverable.description);
-                                if (path) return `${title || 'Deliverable'}: ${path}`;
-                                if (description) return `${title || 'Deliverable'}: ${description}`;
-                                return title || '';
-                            }),
-                    },
-                    {
-                        label: 'Plan · Checkpoints',
-                        lines: ((Array.isArray(payload.checkpoints) ? payload.checkpoints : []) as Array<Record<string, unknown>>)
-                            .map((checkpoint) => {
-                                const title = normalizeText(checkpoint.title);
-                                const reason = normalizeText(checkpoint.reason);
-                                return reason ? `${title || 'Checkpoint'}: ${reason}` : title;
-                            }),
-                    },
-                    {
-                        label: 'Plan · User actions',
-                        lines: ((Array.isArray(payload.userActionsRequired) ? payload.userActionsRequired : []) as Array<Record<string, unknown>>)
-                            .map((action) => {
-                                const title = normalizeText(action.title);
-                                const description = normalizeText(action.description);
-                                return description ? `${title || 'Action'}: ${description}` : title;
-                            }),
-                    },
-                    {
-                        label: 'Plan · Needs from you',
-                        lines: ((Array.isArray(payload.missingInfo) ? payload.missingInfo : []) as Array<Record<string, unknown>>)
-                            .map((entry) => {
-                                const field = normalizeText(entry.field);
-                                const question = normalizeText(entry.question);
-                                const reason = normalizeText(entry.reason);
-                                return question || reason ? `${field || 'Item'}: ${question || reason}` : field;
-                            }),
-                    },
-                ],
-            });
-            break;
+        case 'TASK_PLAN_READY': {
+            const mode = normalizeText(payload.mode) as TaskSession['taskMode'] | '';
+            state.isChatMode = mode === 'chat' || session.taskMode === 'chat';
+            if (state.isChatMode) {
+                state.hasTaskContext = false;
+                break;
+            }
 
-        case 'TASK_RESEARCH_UPDATED':
-            upsertTaskUpdateCard(cache, event, {
-                subtitle: payload.summary || 'Research updated.',
-                sections: [
-                    {
-                        label: 'Research · Sources checked',
-                        lines: Array.isArray(payload.sourcesChecked) ? payload.sourcesChecked : [],
-                    },
-                    {
-                        label: 'Research · Blocking unknowns',
-                        lines: Array.isArray(payload.blockingUnknowns) ? payload.blockingUnknowns : [],
-                    },
-                ],
-            });
-            break;
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            card.subtitle = normalizeText(payload.summary) || card.subtitle;
 
-        case 'TASK_CONTRACT_REOPENED':
-        {
+            const tasks = ((Array.isArray(payload.tasks) ? payload.tasks : []) as Array<Record<string, unknown>>)
+                .map((task) => ({
+                    id: normalizeText(task.id),
+                    title: normalizeText(task.title) || normalizeText(task.objective) || 'Task',
+                    status: 'pending' as PlanStep['status'],
+                    dependencies: normalizeLines(Array.isArray(task.dependencies) ? task.dependencies : []),
+                }))
+                .filter((task) => task.id.length > 0);
+
+            if (tasks.length > 0) {
+                state.taskById = new Map(tasks.map((task) => [task.id, task]));
+                setTaskList(card, tasks);
+            }
+
+            upsertTaskCardSection(card, 'Plan · Deliverables', ((Array.isArray(payload.deliverables) ? payload.deliverables : []) as Array<Record<string, unknown>>)
+                .map((deliverable) => {
+                    const title = normalizeText(deliverable.title);
+                    const path = normalizeText(deliverable.path);
+                    const description = normalizeText(deliverable.description);
+                    if (path) return `${title || 'Deliverable'}: ${path}`;
+                    if (description) return `${title || 'Deliverable'}: ${description}`;
+                    return title || '';
+                }), 'replace');
+
+            upsertTaskCardSection(card, 'Plan · Checkpoints', ((Array.isArray(payload.checkpoints) ? payload.checkpoints : []) as Array<Record<string, unknown>>)
+                .map((checkpoint) => {
+                    const title = normalizeText(checkpoint.title);
+                    const reason = normalizeText(checkpoint.reason);
+                    return reason ? `${title || 'Checkpoint'}: ${reason}` : title;
+                }), 'replace');
+
+            upsertTaskCardSection(card, 'Plan · User actions', ((Array.isArray(payload.userActionsRequired) ? payload.userActionsRequired : []) as Array<Record<string, unknown>>)
+                .map((action) => {
+                    const title = normalizeText(action.title);
+                    const description = normalizeText(action.description);
+                    return description ? `${title || 'Action'}: ${description}` : title;
+                }), 'replace');
+
+            upsertTaskCardSection(card, 'Plan · Needs from you', ((Array.isArray(payload.missingInfo) ? payload.missingInfo : []) as Array<Record<string, unknown>>)
+                .map((entry) => {
+                    const field = normalizeText(entry.field);
+                    const question = normalizeText(entry.question);
+                    const reason = normalizeText(entry.reason);
+                    return question || reason ? `${field || 'Item'}: ${question || reason}` : field;
+                }), 'replace');
+
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
+            break;
+        }
+
+        case 'PLAN_UPDATED': {
+            if (state.isChatMode || !state.hasTaskContext) {
+                break;
+            }
+
+            const card = ensureTaskCard(state, session, event);
+            upsertTaskCardSection(card, 'Process · Plan updates', [payload.summary], 'append', 8);
+            const taskProgress = ((Array.isArray(payload.taskProgress) ? payload.taskProgress : []) as Array<Record<string, unknown>>)
+                .map((entry) => ({
+                    id: normalizeText(entry.taskId),
+                    title: normalizeText(entry.title),
+                    status: toTaskStatus(entry.status),
+                    dependencies: normalizeLines(Array.isArray(entry.dependencies) ? entry.dependencies : []),
+                }))
+                .filter((entry) => entry.id.length > 0);
+
+            if (taskProgress.length > 0) {
+                for (const entry of taskProgress) {
+                    const existing = state.taskById.get(entry.id);
+                    state.taskById.set(entry.id, {
+                        id: entry.id,
+                        title: entry.title || existing?.title || 'Task',
+                        status: entry.status,
+                        dependencies: entry.dependencies.length > 0 ? entry.dependencies : (existing?.dependencies ?? []),
+                    });
+                }
+                setTaskList(card, Array.from(state.taskById.values()));
+            }
+
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
+            break;
+        }
+
+        case 'TASK_RESEARCH_UPDATED': {
+            if (state.isChatMode) {
+                break;
+            }
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            card.subtitle = normalizeText(payload.summary) || card.subtitle;
+            upsertTaskCardSection(card, 'Research · Sources checked', Array.isArray(payload.sourcesChecked) ? payload.sourcesChecked : [], 'replace');
+            upsertTaskCardSection(card, 'Research · Blocking unknowns', Array.isArray(payload.blockingUnknowns) ? payload.blockingUnknowns : [], 'replace');
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
+            break;
+        }
+
+        case 'TASK_CONTRACT_REOPENED': {
+            if (state.isChatMode) {
+                break;
+            }
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            card.subtitle = normalizeText(payload.summary) || normalizeText(payload.reason) || card.subtitle;
             const changedFields = Array.isArray(payload.diff?.changedFields)
                 ? payload.diff.changedFields.filter((field: unknown): field is string => typeof field === 'string')
                 : [];
@@ -466,71 +498,340 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
                     ? `Workflow: ${(Array.isArray(diff.workflowsChanged.before) ? diff.workflowsChanged.before.join(', ') : 'none')} -> ${(Array.isArray(diff.workflowsChanged.after) ? diff.workflowsChanged.after.join(', ') : 'none')}`
                     : '',
             ];
-            upsertTaskUpdateCard(cache, event, {
-                subtitle: payload.summary || payload.reason || 'Execution contract reopened.',
-                sections: [
-                    {
-                        label: 'Contract · Reason',
-                        lines: payload.reason ? [payload.reason] : [],
-                    },
-                    {
-                        label: 'Contract · Changed fields',
-                        lines: changedFields,
-                    },
-                    {
-                        label: 'Contract · Diff',
-                        lines: diffLines,
-                    },
-                ],
-            });
+            upsertTaskCardSection(card, 'Contract · Reason', payload.reason ? [payload.reason] : [], 'replace');
+            upsertTaskCardSection(card, 'Contract · Changed fields', changedFields, 'replace');
+            upsertTaskCardSection(card, 'Contract · Diff', diffLines, 'replace');
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
             break;
         }
 
-        case 'TASK_CHECKPOINT_REACHED':
-            upsertTaskUpdateCard(cache, event, {
-                subtitle: payload.userMessage || payload.reason || 'Checkpoint reached.',
-                sections: [
-                    {
-                        label: 'Checkpoint · Current',
-                        lines: [
-                            [
-                                normalizeText(payload.title),
-                                normalizeText(payload.reason),
-                            ].filter(Boolean).join(': '),
-                        ],
-                    },
-                ],
-            });
+        case 'TASK_CHECKPOINT_REACHED': {
+            if (state.isChatMode) {
+                break;
+            }
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            card.subtitle = normalizeText(payload.userMessage) || normalizeText(payload.reason) || card.subtitle;
+            upsertTaskCardSection(card, 'Checkpoint · Current', [[normalizeText(payload.title), normalizeText(payload.reason)].filter(Boolean).join(': ')], 'replace');
+            card.collaboration = {
+                actionId: normalizeText(payload.checkpointId),
+                title: normalizeText(payload.title) || 'Checkpoint reached',
+                description: normalizeText(payload.userMessage) || normalizeText(payload.reason),
+                blocking: Boolean(payload.blocking),
+                questions: [],
+                instructions: [],
+                action: {
+                    label: 'Continue',
+                },
+            };
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
             break;
+        }
 
-        case 'TASK_USER_ACTION_REQUIRED':
-            upsertTaskUpdateCard(cache, event, {
-                subtitle: payload.description || 'User action required.',
-                sections: [
-                    {
-                        label: 'Action · Questions',
-                        lines: Array.isArray(payload.questions) ? payload.questions : [],
-                    },
-                    {
-                        label: 'Action · Instructions',
-                        lines: Array.isArray(payload.instructions) ? payload.instructions : [],
-                    },
-                ],
-            });
+        case 'TASK_USER_ACTION_REQUIRED': {
+            if (state.isChatMode) {
+                break;
+            }
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            const questions = normalizeLines(Array.isArray(payload.questions) ? payload.questions : []);
+            const instructions = normalizeLines(Array.isArray(payload.instructions) ? payload.instructions : []);
+            card.subtitle = normalizeText(payload.description) || card.subtitle;
+            upsertTaskCardSection(card, 'Action · Questions', questions, 'replace');
+            upsertTaskCardSection(card, 'Action · Instructions', instructions, 'replace');
+            card.collaboration = {
+                actionId: normalizeText(payload.actionId),
+                title: normalizeText(payload.title) || 'User action required',
+                description: normalizeText(payload.description),
+                blocking: Boolean(payload.blocking),
+                questions,
+                instructions,
+                input: {
+                    placeholder: questions[0] || 'Enter your response for this task...',
+                    submitLabel: 'Submit and continue',
+                },
+                action: {
+                    label: 'Continue',
+                },
+            };
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
             break;
+        }
 
-        case 'TASK_FINISHED':
-            appendFinishedSummaryIfNeeded(cache, event, payload.summary);
+        case 'TASK_CLARIFICATION_REQUIRED': {
+            if (state.isChatMode) {
+                break;
+            }
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            const questions = normalizeLines(Array.isArray(payload.questions) ? payload.questions : []);
+            const missingFields = normalizeLines(Array.isArray(payload.missingFields) ? payload.missingFields : []);
+            card.subtitle = normalizeText(payload.reason) || 'Clarification required';
+            upsertTaskCardSection(card, 'Action · Clarification questions', questions, 'replace');
+            upsertTaskCardSection(card, 'Action · Missing fields', missingFields, 'replace');
+            card.collaboration = {
+                actionId: normalizeText(payload.reason) || 'clarification',
+                title: 'Clarification required',
+                description: normalizeText(payload.reason),
+                blocking: true,
+                questions,
+                instructions: [],
+                input: {
+                    placeholder: questions[0] || 'Provide clarification to continue...',
+                    submitLabel: 'Submit clarification',
+                },
+            };
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
             break;
+        }
+
+        case 'TOOL_CALLED': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                const toolName = normalizeText(payload.toolName) || 'Tool';
+                const toolId = normalizeText(payload.toolId) || event.id;
+                state.toolNameById.set(toolId, toolName);
+                upsertTaskCardSection(card, 'Process · Tool activity', [`Running: ${toolName}`], 'append', 8);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            const toolItem: TimelineItemType & { type: 'tool_call' } = {
+                type: 'tool_call',
+                id: payload.toolId || event.id,
+                toolName: payload.toolName,
+                args: payload.args,
+                status: 'running',
+                timestamp: event.timestamp,
+            };
+            const index = appendItem(state, toolItem);
+            state.toolIndex.set(toolItem.id, index);
+            state.currentDraftIndex = null;
+            break;
+        }
+
+        case 'TOOL_RESULT': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                const toolName = state.toolNameById.get(normalizeText(payload.toolId)) || 'Tool';
+                const resultLabel = payload.success ? 'Completed' : `Failed: ${normalizeText(payload.error) || 'unknown error'}`;
+                upsertTaskCardSection(card, 'Process · Tool activity', [`${toolName}: ${resultLabel}`], 'append', 8);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            const matchingIndex = state.toolIndex.get(payload.toolId);
+            if (matchingIndex !== undefined) {
+                const currentItem = state.items[matchingIndex];
+                if (currentItem?.type === 'tool_call') {
+                    upsertItem(state, matchingIndex, {
+                        ...currentItem,
+                        status: payload.success ? 'success' : 'failed',
+                        result: payload.result || payload.error,
+                    });
+                }
+            }
+            break;
+        }
+
+        case 'EFFECT_REQUESTED': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                const req = payload.request;
+                upsertTaskCardSection(card, 'Process · Effect requests', [`Requested: ${normalizeText(req?.effectType) || 'effect'} (risk ${String(payload.riskLevel ?? 'n/a')})`], 'append', 6);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            const req = payload.request;
+            const effItem: TimelineItemType & { type: 'effect_request' } = {
+                type: 'effect_request',
+                id: req.id,
+                effectType: req.effectType,
+                risk: payload.riskLevel,
+                timestamp: event.timestamp,
+            };
+            const index = appendItem(state, effItem);
+            state.effectIndex.set(effItem.id, index);
+            break;
+        }
+
+        case 'EFFECT_APPROVED':
+        case 'EFFECT_DENIED': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                const response = payload.response as Record<string, unknown>;
+                const requestId = normalizeText(response?.requestId);
+                upsertTaskCardSection(card, 'Process · Effect requests', [
+                    `${requestId || 'Effect request'}: ${event.type === 'EFFECT_APPROVED' ? 'Approved' : 'Denied'}`,
+                ], 'append', 6);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            const resp = payload.response;
+            const effIndex = state.effectIndex.get(resp.requestId);
+            if (effIndex !== undefined) {
+                const currentItem = state.items[effIndex];
+                if (currentItem?.type === 'effect_request') {
+                    upsertItem(state, effIndex, {
+                        ...currentItem,
+                        approved: event.type === 'EFFECT_APPROVED',
+                    });
+                }
+            }
+            break;
+        }
+
+        case 'PATCH_PROPOSED': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                const patch = payload.patch as Record<string, unknown>;
+                upsertTaskCardSection(card, 'Process · Patches', [
+                    `Proposed: ${normalizeText(patch.filePath) || 'unknown file'}`,
+                ], 'append', 6);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            const patchItem: TimelineItemType & { type: 'patch' } = {
+                type: 'patch',
+                id: payload.patch.id,
+                filePath: payload.patch.filePath,
+                status: 'proposed',
+                timestamp: event.timestamp,
+            };
+            const index = appendItem(state, patchItem);
+            state.patchIndex.set(patchItem.id, index);
+            break;
+        }
+
+        case 'PATCH_APPLIED':
+        case 'PATCH_REJECTED': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                const filePath = normalizeText(payload.filePath);
+                const statusLabel = event.type === 'PATCH_APPLIED' ? 'Applied' : 'Rejected';
+                upsertTaskCardSection(card, 'Process · Patches', [
+                    `${statusLabel}: ${filePath || normalizeText(payload.patchId) || 'patch'}`,
+                ], 'append', 6);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            const patchIndex = state.patchIndex.get(payload.patchId);
+            if (patchIndex !== undefined) {
+                const currentItem = state.items[patchIndex];
+                if (currentItem?.type === 'patch') {
+                    upsertItem(state, patchIndex, {
+                        ...currentItem,
+                        status: event.type === 'PATCH_APPLIED' ? 'applied' : 'rejected',
+                    });
+                }
+            }
+            break;
+        }
+
+        case 'RATE_LIMITED': {
+            if (!state.isChatMode && state.hasTaskContext) {
+                const card = ensureTaskCard(state, session, event);
+                upsertTaskCardSection(card, 'Process · Runtime notices', [
+                    payload.message || `Rate limited (attempt ${payload.attempt}/${payload.maxRetries}). Retrying...`,
+                ], 'append', 5);
+                card.timestamp = event.timestamp;
+                commitTaskCard(state, card);
+                break;
+            }
+
+            appendSystemEvent(state, event, payload.message || `API rate limited (attempt ${payload.attempt}/${payload.maxRetries}). Retrying...`);
+            break;
+        }
+
+        case 'TASK_FINISHED': {
+            if (state.isChatMode || !state.hasTaskContext) {
+                const normalizedSummary = normalizeText(payload.summary);
+                if (normalizedSummary) {
+                    appendItem(state, {
+                        type: 'assistant_message',
+                        id: `${event.id}-assistant`,
+                        content: normalizedSummary,
+                        timestamp: event.timestamp,
+                        isStreaming: false,
+                    });
+                }
+                state.currentDraftIndex = null;
+                state.taskOutputDraft = '';
+                break;
+            }
+
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            card.status = 'finished';
+            card.result = {
+                summary: normalizeText(payload.summary),
+                artifacts: normalizeLines(Array.isArray(payload.artifactsCreated) ? payload.artifactsCreated : []),
+                files: normalizeLines(Array.isArray(payload.filesModified) ? payload.filesModified : []),
+            };
+            card.collaboration = undefined;
+            const completedTasks = Array.from(state.taskById.values()).map((task) => ({
+                ...task,
+                status: (task.status === 'failed' ? 'failed' : 'completed') as PlanStep['status'],
+            }));
+            if (completedTasks.length > 0) {
+                state.taskById = new Map(completedTasks.map((task) => [task.id, task]));
+                setTaskList(card, completedTasks);
+            }
+            upsertTaskCardSection(card, 'Task · Status', [`Status: ${mapStatusLabel('finished')}`], 'replace');
+            upsertTaskCardSection(card, 'Result · Summary', [payload.summary], 'replace');
+            upsertTaskCardSection(card, 'Result · Artifacts', card.result.artifacts ?? [], 'replace');
+            upsertTaskCardSection(card, 'Result · Files changed', card.result.files ?? [], 'replace');
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
+            state.currentDraftIndex = null;
+            state.taskOutputDraft = '';
+            break;
+        }
 
         case 'TASK_FAILED': {
-            const error = normalizeText(payload.error);
-            const suggestion = normalizeText(payload.suggestion);
-            appendSystemEvent(cache, event, error ? `Task failed: ${error}` : 'Task failed');
-            if (suggestion) {
-                appendSystemEvent(cache, event, suggestion);
+            if (state.isChatMode || !state.hasTaskContext) {
+                const error = normalizeText(payload.error);
+                const suggestion = normalizeText(payload.suggestion);
+                appendSystemEvent(state, event, error ? `Task failed: ${error}` : 'Task failed');
+                if (suggestion) {
+                    appendSystemEvent(state, event, suggestion);
+                }
+                state.currentDraftIndex = null;
+                state.taskOutputDraft = '';
+                break;
             }
-            cache.currentDraftIndex = null;
+
+            state.hasTaskContext = true;
+            const card = ensureTaskCard(state, session, event);
+            card.status = 'failed';
+            card.result = {
+                error: normalizeText(payload.error) || 'Unknown error',
+                suggestion: normalizeText(payload.suggestion),
+            };
+            card.collaboration = undefined;
+            upsertTaskCardSection(card, 'Task · Status', [`Status: ${mapStatusLabel('failed')}`], 'replace');
+            upsertTaskCardSection(card, 'Result · Error', [
+                card.result.error,
+                card.result.suggestion,
+            ], 'replace');
+            card.timestamp = event.timestamp;
+            commitTaskCard(state, card);
+            state.currentDraftIndex = null;
+            state.taskOutputDraft = '';
             break;
         }
 
@@ -539,112 +840,57 @@ function processEvent(cache: TimelineCache, event: TaskSession['events'][number]
     }
 }
 
-function buildCache(
-    session: TaskSession,
-    sourceEvents: TaskSession['events'],
-    maxRecentEvents?: number
-): TimelineCache {
-    const cache = createEmptyCache(session.taskId, maxRecentEvents, sourceEvents[0]?.id ?? null, session.status);
-    for (const event of sourceEvents) {
-        processEvent(cache, event);
-    }
-    cache.sourceEventCount = sourceEvents.length;
-    return cache;
-}
-
-function finalizeStreamingState(cache: TimelineCache, sessionStatus: TaskSession['status']): TimelineCache {
-    if (cache.sessionStatus === sessionStatus) {
-        return cache;
-    }
-
-    const nextCache: TimelineCache = {
-        ...cache,
-        sessionStatus,
-        items: [...cache.items],
-        toolIndex: new Map(cache.toolIndex),
-        effectIndex: new Map(cache.effectIndex),
-        patchIndex: new Map(cache.patchIndex),
-        taskUpdateCardIndex: cache.taskUpdateCardIndex,
-    };
-
-    if (nextCache.currentDraftIndex !== null) {
-        const currentItem = nextCache.items[nextCache.currentDraftIndex];
-        if (currentItem?.type === 'assistant_message') {
-            upsertItem(nextCache, nextCache.currentDraftIndex, {
-                ...currentItem,
-                isStreaming: sessionStatus === 'running',
-            });
-        }
-        if (sessionStatus !== 'running') {
-            nextCache.currentDraftIndex = null;
-        }
-    }
-
-    return nextCache;
-}
-
 export function buildTimelineItems(
     session: TaskSession,
-    maxRecentEvents?: number
+    maxRecentEvents?: number,
 ): TimelineItemsResult {
     const sourceEvents = typeof maxRecentEvents === 'number' && maxRecentEvents > 0
         ? session.events.slice(Math.max(0, session.events.length - maxRecentEvents))
         : session.events;
-    const cache = finalizeStreamingState(
-        buildCache(session, sourceEvents, maxRecentEvents),
-        session.status
-    );
+
+    const state: BuildState = {
+        items: [],
+        taskCardIndex: null,
+        hasTaskContext: Boolean(session.taskMode && session.taskMode !== 'chat'),
+        isChatMode: session.taskMode === 'chat',
+        currentDraftIndex: null,
+        taskOutputDraft: '',
+        toolIndex: new Map(),
+        effectIndex: new Map(),
+        patchIndex: new Map(),
+        toolNameById: new Map(),
+        taskById: new Map(),
+    };
+
+    for (const event of sourceEvents) {
+        processEvent(state, session, event);
+    }
+
+    if (state.taskCardIndex !== null) {
+        const current = state.items[state.taskCardIndex];
+        if (current?.type === 'task_card' && current.status !== session.status) {
+            const nextCard: TaskCardItem = {
+                ...current,
+                status: session.status,
+                timestamp: session.updatedAt,
+            };
+            if (session.status === 'running') {
+                nextCard.collaboration = undefined;
+            }
+            upsertTaskCardSection(nextCard, 'Task · Status', [`Status: ${mapStatusLabel(session.status)}`], 'replace');
+            state.items[state.taskCardIndex] = nextCard;
+        }
+    }
 
     return {
-        items: cache.items,
+        items: state.items,
         hiddenEventCount: session.events.length - sourceEvents.length,
     };
 }
 
 /**
  * Process session events into timeline items
- * Handles event aggregation, streaming text, and status updates
  */
 export function useTimelineItems(session: TaskSession, maxRecentEvents?: number): TimelineItemsResult {
-    const cacheRef = useRef<TimelineCache | null>(null);
-
-    return useMemo(() => {
-        const sourceEvents = typeof maxRecentEvents === 'number' && maxRecentEvents > 0
-            ? session.events.slice(Math.max(0, session.events.length - maxRecentEvents))
-            : session.events;
-
-        const firstEventId = sourceEvents[0]?.id ?? null;
-        const previousCache = cacheRef.current;
-        const shouldRebuild =
-            !previousCache ||
-            previousCache.taskId !== session.taskId ||
-            previousCache.maxRecentEvents !== maxRecentEvents ||
-            previousCache.firstEventId !== firstEventId ||
-            previousCache.sourceEventCount > sourceEvents.length;
-
-        let nextCache = shouldRebuild
-            ? buildCache(session, sourceEvents, maxRecentEvents)
-            : finalizeStreamingState(previousCache, session.status);
-
-        if (!shouldRebuild && nextCache.sourceEventCount < sourceEvents.length) {
-            nextCache = {
-                ...nextCache,
-                items: [...nextCache.items],
-                toolIndex: new Map(nextCache.toolIndex),
-                effectIndex: new Map(nextCache.effectIndex),
-                patchIndex: new Map(nextCache.patchIndex),
-            };
-            for (let index = nextCache.sourceEventCount; index < sourceEvents.length; index += 1) {
-                processEvent(nextCache, sourceEvents[index]);
-            }
-            nextCache.sourceEventCount = sourceEvents.length;
-        }
-
-        cacheRef.current = nextCache;
-
-        return {
-            items: nextCache.items,
-            hiddenEventCount: session.events.length - sourceEvents.length,
-        };
-    }, [maxRecentEvents, session.events, session.status, session.taskId]);
+    return useMemo(() => buildTimelineItems(session, maxRecentEvents), [maxRecentEvents, session]);
 }

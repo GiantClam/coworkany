@@ -31,6 +31,13 @@ export interface ResumeInterruptedTaskResult {
     error?: string;
 }
 
+function isQueuedTimeoutError(errorMessage: string | undefined): boolean {
+    if (!errorMessage) return false;
+    const normalized = errorMessage.toLowerCase();
+    return normalized.includes('response timeout:')
+        || normalized.includes('timed out waiting on channel');
+}
+
 export function useSendTaskMessage() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -41,12 +48,28 @@ export function useSendTaskMessage() {
             setError(null);
             try {
                 const result = await invoke<SendTaskMessageResult>('send_task_message', { input });
+                if (!result.success && isQueuedTimeoutError(result.error)) {
+                    console.warn('[useSendTaskMessage] Timeout acknowledged as queued delivery:', result.error);
+                    return {
+                        success: true,
+                        taskId: result.taskId || input.taskId,
+                        error: undefined,
+                    };
+                }
                 if (!result.success && result.error) {
                     setError(result.error);
                 }
                 return result;
             } catch (e) {
                 const errorMessage = e instanceof Error ? e.message : String(e);
+                if (isQueuedTimeoutError(errorMessage)) {
+                    console.warn('[useSendTaskMessage] Timeout exception treated as queued delivery:', errorMessage);
+                    return {
+                        success: true,
+                        taskId: input.taskId,
+                        error: undefined,
+                    };
+                }
                 setError(errorMessage);
                 console.error('[useSendTaskMessage] Error:', e);
                 return {
