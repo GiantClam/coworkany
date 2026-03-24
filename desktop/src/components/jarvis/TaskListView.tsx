@@ -6,6 +6,7 @@ import { useToolpacks } from '../../hooks/useToolpacks';
 import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { getVoiceSettings } from '../../lib/configStore';
+import { encodeTaskCollaborationMessage } from '../Chat/collaborationMessage';
 import { TaskCardMessage } from '../Chat/Timeline/components/TaskCardMessage';
 import { buildTimelineItems } from '../Chat/Timeline/hooks/useTimelineItems';
 import { useTaskEventStore, type TaskSession } from '../../stores/useTaskEventStore';
@@ -249,7 +250,10 @@ export const TaskListView: React.FC = () => {
         value: string;
     }) => {
         const taskId = input.taskId || UNKNOWN_TASK_ID;
-        const message = input.value.trim();
+        const message = encodeTaskCollaborationMessage({
+            actionId: input.actionId,
+            value: input.value,
+        });
         if (!message || taskId === UNKNOWN_TASK_ID) {
             return;
         }
@@ -272,10 +276,11 @@ export const TaskListView: React.FC = () => {
         taskId?: string;
         cardId: string;
         actionId?: string;
+        value?: string;
     }) => {
         await handleTaskCardCollaborationSubmit({
             ...input,
-            value: input.actionId ? `继续执行（${input.actionId}）` : '继续执行',
+            value: input.value || (input.actionId ? `继续执行（${input.actionId}）` : '继续执行'),
         });
     }, [handleTaskCardCollaborationSubmit]);
 
@@ -430,6 +435,7 @@ const TaskBoardTaskCard: React.FC<{
         taskId?: string;
         cardId: string;
         actionId?: string;
+        value?: string;
     }) => void;
 }> = ({ task, onSelect, onTaskCollaborationSubmit, onTaskActionClick }) => {
     return (

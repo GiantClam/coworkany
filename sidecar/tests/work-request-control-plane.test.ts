@@ -46,6 +46,39 @@ describe('work request control plane', () => {
         expect(analyzed.defaultingPolicy?.uiFormat).toBe('chat_message');
     });
 
+    test('marks ambiguous immediate requests for route disambiguation intent routing', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: 'React hooks 是什么',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'immediate_task',
+            needsDisambiguation: true,
+        });
+        expect(analyzed.intentRouting.reasonCodes).toContain('mixed_or_ambiguous');
+        expect(analyzed.intentRouting.confidence).toBeLessThan(0.75);
+    });
+
+    test('respects explicit user route follow-up selection for chat mode', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                'Original task: Explain React hooks with examples.',
+                'User route: chat',
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('chat');
+        expect(analyzed.sourceText).toBe('Explain React hooks with examples.');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'chat',
+            forcedByUserSelection: true,
+            needsDisambiguation: false,
+        });
+    });
+
     test('classifies complex non-scheduled input as immediate task with planning skills', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '帮我规划并拆分一个多步实现方案，包含架构、测试和验收标准',
@@ -116,6 +149,7 @@ describe('work request control plane', () => {
         expect(analyzed.deliverables?.some((deliverable) =>
             typeof deliverable.path === 'string' && deliverable.path.endsWith('.md')
         )).toBe(false);
+        expect(analyzed.taskDraftRequired).toBe(true);
     });
 
     test('does not require task-scope clarification for explicit path corrections that include normal pronouns', () => {
@@ -386,6 +420,7 @@ describe('work request control plane', () => {
         });
 
         expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.taskDraftRequired).toBe(true);
         expect(analyzed.schedule?.executeAt).toBeTruthy();
         expect(analyzed.presentation.ttsEnabled).toBe(true);
         expect(analyzed.tasks[0]?.objective).toBe('整理 3 篇 Reddit 内容');
@@ -586,6 +621,7 @@ describe('work request control plane', () => {
         });
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth' && action.blocking)).toBe(true);
         const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
             query.kind === 'domain_research' && query.source === 'web' && query.required
         ) ?? [];
@@ -606,6 +642,24 @@ describe('work request control plane', () => {
             requiresPlanConfirmation: false,
         });
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(false);
+    });
+
+    test('preserves chained scheduled mode for structured approval follow-ups', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                '原始任务：1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到 reports/chain_stage1_result.md。然后再等 1 分钟，将分析结果发布到 X 上',
+                '用户确认：继续执行',
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('scheduled_multi_task');
+        expect(analyzed.tasks).toHaveLength(2);
+        expect(analyzed.tasks[0]?.objective).toContain('检索特朗普和伊朗是否有沟通停战的可能性');
+        expect(analyzed.tasks[1]?.objective).toContain('发布到 X 上');
+        expect(analyzed.schedule?.stages).toHaveLength(2);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(false);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth' && action.blocking)).toBe(false);
     });
 
     test('creates blocking user action requests for login-dependent tasks', () => {

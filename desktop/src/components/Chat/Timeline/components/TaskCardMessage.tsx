@@ -20,6 +20,7 @@ interface TaskCardMessageProps {
         taskId?: string;
         cardId: string;
         actionId?: string;
+        value?: string;
     }) => void;
 }
 
@@ -81,6 +82,15 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
             actionId: collaboration.actionId,
         });
     }, [collaboration?.action, collaboration?.actionId, item.id, item.taskId, onTaskActionClick]);
+
+    const handleChoiceClick = React.useCallback((value: string) => {
+        onTaskActionClick?.({
+            taskId: item.taskId,
+            cardId: item.id,
+            actionId: collaboration?.actionId,
+            value,
+        });
+    }, [collaboration?.actionId, item.id, item.taskId, onTaskActionClick]);
 
     return (
         <div className={`${styles.timelineItem} ${styles.assistant} ${layout === 'board' ? styles.taskCardBoardLayout : ''}`}>
@@ -191,6 +201,20 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
                                     >
                                         {collaboration.action.label}
                                     </button>
+                                </div>
+                            ) : null}
+                            {collaboration.choices && collaboration.choices.length > 0 ? (
+                                <div className={styles.taskCardActions}>
+                                    {collaboration.choices.map((choice) => (
+                                        <button
+                                            key={`${item.id}-${choice.value}`}
+                                            type="button"
+                                            className={styles.taskCardActionButton}
+                                            onClick={() => handleChoiceClick(choice.value)}
+                                        >
+                                            {choice.label}
+                                        </button>
+                                    ))}
                                 </div>
                             ) : null}
                         </div>

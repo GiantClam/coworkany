@@ -11,7 +11,7 @@
  * - "auto": Try Playwright first, fallback to browser-use on failure
  */
 
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -29,6 +29,17 @@ const CDP_FALLBACK_PORTS = [9223, 9224, 9225];
 /** All CDP ports to attempt, in order */
 const ALL_CDP_PORTS = [CDP_PORT, ...CDP_FALLBACK_PORTS];
 
+let cachedChromium: (typeof import('playwright'))['chromium'] | null = null;
+
+async function getChromium(): Promise<(typeof import('playwright'))['chromium']> {
+    if (cachedChromium) {
+        return cachedChromium;
+    }
+    const playwright = await import('playwright');
+    cachedChromium = playwright.chromium;
+    return cachedChromium;
+}
+
 function shouldDisableExternalCdp(): boolean {
     const raw = process.env.COWORKANY_DISABLE_BROWSER_CDP?.trim().toLowerCase();
     return raw === '1' || raw === 'true' || raw === 'yes';
@@ -40,6 +51,23 @@ function resolveBridgeScriptPath(): string {
         return explicit;
     }
     return path.join(__dirname, 'playwright-bridge.cjs');
+}
+
+function resolveBundledNodePath(): string | null {
+    const explicit = process.env.COWORKANY_BUNDLED_NODE?.trim();
+    if (explicit && fs.existsSync(explicit)) {
+        return explicit;
+    }
+    return null;
+}
+
+function resolvePlaywrightBrowsersPath(): string | null {
+    const explicit = process.env.COWORKANY_PLAYWRIGHT_BROWSERS_PATH?.trim()
+        || process.env.PLAYWRIGHT_BROWSERS_PATH?.trim();
+    if (explicit && fs.existsSync(explicit)) {
+        return explicit;
+    }
+    return null;
 }
 // ============================================================================
 // Types
@@ -616,7 +644,10 @@ export class PlaywrightBackend implements BrowserBackend {
             // 5s timeout: a healthy CDP WebSocket connects in < 1s
             const browser = await this.runAbortableConnectAction(
                 signal,
-                () => chromium.connectOverCDP(cdpUrl, { timeout: 5000 }),
+                async () => {
+                    const chromium = await getChromium();
+                    return chromium.connectOverCDP(cdpUrl, { timeout: 5000 });
+                },
                 async (resolvedBrowser) => {
                     await resolvedBrowser.close().catch(() => {});
                 }
@@ -745,6 +776,7 @@ export class PlaywrightBackend implements BrowserBackend {
             const directConnection = await this.runAbortableConnectAction(
                 signal,
                 async () => {
+                    const chromium = await getChromium();
                     const browser = await chromium.launch({
                         headless,
                         timeout: 30000,
@@ -805,10 +837,8 @@ export class PlaywrightBackend implements BrowserBackend {
             throw new Error(`Playwright bridge script not found: ${bridgeScript}`);
         }
 
-        // Find Node.js executable
-        const nodePath = process.platform === 'win32'
-            ? await this._findNodePath()
-            : 'node';
+        // Find Node.js executable (prefer bundled runtime from packaged desktop app)
+        const nodePath = await this._resolveNodePath();
 
         if (!nodePath) {
             throw new Error('Node.js not found on system. Please install Node.js.');
@@ -818,9 +848,15 @@ export class PlaywrightBackend implements BrowserBackend {
 
         const { spawn: spawnChild } = await import('child_process');
 
+        const bridgeEnv: Record<string, string> = { ...process.env } as Record<string, string>;
+        const bundledBrowsersPath = resolvePlaywrightBrowsersPath();
+        if (bundledBrowsersPath) {
+            bridgeEnv.PLAYWRIGHT_BROWSERS_PATH = bundledBrowsersPath;
+        }
+
         const bridgeProc = spawnChild(nodePath, [bridgeScript], {
             stdio: ['pipe', 'pipe', 'pipe'],
-            env: { ...process.env },
+            env: bridgeEnv,
             cwd: path.dirname(bridgeScript),
         });
 
@@ -1364,21 +1400,34 @@ export class PlaywrightBackend implements BrowserBackend {
     /**
      * Find Node.js executable path on the system.
      */
-    private async _findNodePath(): Promise<string | null> {
+    private async _resolveNodePath(): Promise<string | null> {
+        const bundledNode = resolveBundledNodePath();
+        if (bundledNode) {
+            return bundledNode;
+        }
+
         const { execSync } = await import('child_process');
         try {
-            const result = execSync('where node', { encoding: 'utf-8', timeout: 5000 }).trim();
+            const lookup = process.platform === 'win32' ? 'where node' : 'which node';
+            const result = execSync(lookup, { encoding: 'utf-8', timeout: 5000 }).trim();
             const firstLine = result.split('\n')[0].trim();
             if (firstLine && fs.existsSync(firstLine)) {
                 return firstLine;
             }
         } catch {}
 
-        // Check common paths
-        const commonPaths = [
-            'C:\\Program Files\\nodejs\\node.exe',
-            'C:\\Program Files (x86)\\nodejs\\node.exe',
-        ];
+        // Check common install paths.
+        const commonPaths = process.platform === 'win32'
+            ? [
+                'C:\\Program Files\\nodejs\\node.exe',
+                'C:\\Program Files (x86)\\nodejs\\node.exe',
+            ]
+            : [
+                '/opt/homebrew/bin/node',
+                '/usr/local/bin/node',
+                '/usr/bin/node',
+            ];
+
         for (const p of commonPaths) {
             if (fs.existsSync(p)) return p;
         }
@@ -2696,6 +2745,7 @@ export class BrowserService {
         for (const port of ALL_CDP_PORTS) {
             try {
                 console.error(`[BrowserService] Trying to connect to Chrome on port ${port}...`);
+                const chromium = await getChromium();
                 const browser = await chromium.connectOverCDP(`http://localhost:${port}`, {
                     timeout: 5000,
                 });

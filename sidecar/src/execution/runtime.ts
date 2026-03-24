@@ -512,6 +512,33 @@ const METADATA_ONLY_TOOLS = new Set([
     'get_coworkany_config',
 ]);
 
+const GROUNDED_INSPECTION_INTENT_PATTERN = new RegExp(
+    [
+        'audit',
+        'review',
+        'inspect',
+        'inspection',
+        'investigate',
+        'verification',
+        'verify',
+        'root\\s*cause',
+        'triage',
+        'diagnos',
+        'code\\s*review',
+        '审计',
+        '复核',
+        '复盘',
+        '核查',
+        '排查',
+        '诊断',
+        '深入分析',
+        '检查',
+        '核验',
+        '验收',
+    ].join('|'),
+    'i',
+);
+
 function hasGroundedInspectionToolEvidence(toolsUsed: string[]): boolean {
     return toolsUsed.some((tool) => GROUNDED_INSPECTION_TOOLS.has(tool));
 }
@@ -520,11 +547,25 @@ function isMetadataOnlyExecution(toolsUsed: string[]): boolean {
     return toolsUsed.length > 0 && toolsUsed.every((tool) => METADATA_ONLY_TOOLS.has(tool));
 }
 
-function contractDemandsGroundedInspection(prepared: PreparedWorkRequestContext): boolean {
+function contractDemandsGroundedInspection(
+    prepared: PreparedWorkRequestContext,
+    executionQuery?: string,
+): boolean {
     const tasks = prepared.frozenWorkRequest.tasks ?? [];
-    return tasks.some((task) =>
-        (task.preferredTools ?? []).some((tool) => GROUNDED_INSPECTION_TOOLS.has(tool))
-    );
+    const semanticScope = [
+        executionQuery ?? '',
+        prepared.frozenWorkRequest.sourceText ?? '',
+        ...tasks.flatMap((task) => [
+            task.title,
+            task.objective,
+            ...(task.constraints ?? []),
+            ...(task.acceptanceCriteria ?? []),
+        ]),
+    ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join('\n');
+
+    return GROUNDED_INSPECTION_INTENT_PATTERN.test(semanticScope);
 }
 
 function objectiveDemandsExplicitBuyPrice(prepared: PreparedWorkRequestContext, executionQuery: string): boolean {
@@ -658,7 +699,7 @@ async function evaluateExecutionProtocolCompliance(input: {
 
     const requestedGroundedEvidence =
         assessedProtocol?.requestedEvidence === 'grounded' ||
-        (!assessedProtocol && contractDemandsGroundedInspection(input.preparedWorkRequest));
+        (!assessedProtocol && contractDemandsGroundedInspection(input.preparedWorkRequest, input.executionQuery));
 
     if (requestedGroundedEvidence) {
         const hasGroundedEvidence =

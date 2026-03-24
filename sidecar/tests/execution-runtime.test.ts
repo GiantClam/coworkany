@@ -448,6 +448,9 @@ describe('execution runtime', () => {
     test('continuePreparedAgentFlow falls back to contract tool hints when protocol assessment is unavailable', async () => {
         const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
         const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '请审计并核查当前实现，给出证据';
+        prepared.frozenWorkRequest.sourceText = '请审计并核查当前实现，给出证据';
+        prepared.frozenWorkRequest.tasks[0].objective = '请审计并核查当前实现，给出证据';
         prepared.frozenWorkRequest.tasks[0].preferredTools = ['view_file', 'run_command'];
 
         const result = await continuePreparedAgentFlow({
@@ -484,6 +487,49 @@ describe('execution runtime', () => {
         expect(result.success).toBe(false);
         expect(result.error).toContain('Execution protocol unmet');
         expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow does not require grounded inspection for publish tasks when protocol assessment is unavailable', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '将分析结果发布到 X 上';
+        prepared.frozenWorkRequest.sourceText = '将分析结果发布到 X 上';
+        prepared.frozenWorkRequest.tasks[0].objective = '将分析结果发布到 X 上';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['browser_connect', 'browser_get_content', 'browser_click'];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-fallback-publish',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: [],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-fallback-publish',
+                conversationReader: {
+                    buildConversationText: () => '已完成发布',
+                    getLatestAssistantResponseText: () => '已完成发布',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(failures.length).toBe(0);
     });
 
     test('continuePreparedAgentFlow does not block user-action phrasing when protocol judge is unavailable', async () => {

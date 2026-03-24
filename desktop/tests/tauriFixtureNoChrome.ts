@@ -693,7 +693,15 @@ class DarwinBrowserHarness {
             case 'plugin:resources|close':
                 return null;
             case 'get_llm_settings':
-                return { success: true, payload: {} };
+                return { success: true, payload: this.readLlmConfig() };
+            case 'save_llm_settings': {
+                const input = (args.input ?? {}) as Record<string, unknown>;
+                this.writeLlmConfig(input);
+                await this.emitToPage('llm-settings-updated', input);
+                return { success: true, payload: input, error: null };
+            }
+            case 'validate_llm_settings':
+                return this.validateLlmSettings((args.input ?? {}) as Record<string, unknown>);
             case 'get_startup_measurement_config':
                 return { enabled: false, profile: 'optimized', runLabel: '' };
             case 'record_startup_metric':
@@ -896,6 +904,104 @@ class DarwinBrowserHarness {
 
     private storeLength(rid: number): number {
         return this.getStoreMap(rid).size;
+    }
+
+    private llmConfigPath(): string {
+        return path.join(this.appDataDir, 'llm-config.json');
+    }
+
+    private readLlmConfig(): Record<string, unknown> {
+        const configPath = this.llmConfigPath();
+        if (!fs.existsSync(configPath)) {
+            return { provider: 'anthropic', profiles: [] };
+        }
+        try {
+            const raw = fs.readFileSync(configPath, 'utf-8');
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            return parsed;
+        } catch (error) {
+            this.logs.push(
+                `[Fixture-NoChrome] Failed to parse llm-config.json: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+            return { provider: 'anthropic', profiles: [] };
+        }
+    }
+
+    private writeLlmConfig(config: Record<string, unknown>): void {
+        fs.mkdirSync(this.appDataDir, { recursive: true });
+        fs.writeFileSync(this.llmConfigPath(), JSON.stringify(config, null, 2), 'utf-8');
+    }
+
+    private async validateLlmSettings(input: Record<string, unknown>): Promise<{
+        success: boolean;
+        payload: { error?: string; message?: string };
+    }> {
+        const provider = String(input.provider ?? '').trim();
+        if (!provider) {
+            return { success: false, payload: { error: 'Missing provider' } };
+        }
+
+        const openaiCompatibleDefaults: Record<string, { baseUrl: string; model: string }> = {
+            openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
+            aiberm: { baseUrl: 'https://aiberm.com/v1', model: 'gpt-5.3-codex' },
+            nvidia: { baseUrl: 'https://integrate.api.nvidia.com/v1', model: 'meta/llama-3.1-70b-instruct' },
+            siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+            gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.0-flash' },
+            qwen: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+            minimax: { baseUrl: 'https://api.minimax.chat/v1', model: 'MiniMax-Text-01' },
+            kimi: { baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+        };
+
+        const preset = openaiCompatibleDefaults[provider];
+        if (!preset) {
+            return { success: false, payload: { error: `Unsupported provider in Darwin harness: ${provider}` } };
+        }
+
+        const openai = (typeof input.openai === 'object' && input.openai !== null)
+            ? input.openai as Record<string, unknown>
+            : undefined;
+        const apiKey = String(openai?.apiKey ?? '').trim();
+        if (!apiKey) {
+            return { success: false, payload: { error: 'Missing API key' } };
+        }
+
+        const baseUrl = String(openai?.baseUrl ?? preset.baseUrl).trim().replace(/\/+$/, '');
+        const requestUrl = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
+        const model = String(openai?.model ?? preset.model).trim() || preset.model;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12_000);
+        try {
+            const response = await fetch(requestUrl, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    'content-type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model,
+                    max_tokens: 1,
+                    messages: [{ role: 'user', content: 'ping' }],
+                }),
+                signal: controller.signal,
+            });
+
+            if (response.ok) {
+                return { success: true, payload: { message: 'Connection successful' } };
+            }
+            const body = (await response.text()).slice(0, 500);
+            return {
+                success: false,
+                payload: { error: `Provider returned status ${response.status}: ${body}` },
+            };
+        } catch (error) {
+            return {
+                success: false,
+                payload: { error: error instanceof Error ? error.message : String(error) },
+            };
+        } finally {
+            clearTimeout(timeout);
+        }
     }
 }
 

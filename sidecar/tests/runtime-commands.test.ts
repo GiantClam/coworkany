@@ -619,6 +619,307 @@ describe('runtime commands handler', () => {
         expect(emitted[7]?.payload?.status).toBe('idle');
     });
 
+    test('gates follow-up execution behind task draft confirmation before agent continuation', async () => {
+        const emitted: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-task-draft',
+                    mode: 'immediate_task',
+                    clarification: {
+                        required: false,
+                        questions: [],
+                        missingFields: [],
+                        assumptions: [],
+                        canDefault: true,
+                    },
+                    intentRouting: {
+                        intent: 'immediate_task',
+                        confidence: 0.9,
+                        reasonCodes: ['artifact_output_intent'],
+                        needsDisambiguation: false,
+                    },
+                    taskDraftRequired: true,
+                    tasks: [{ objective: '生成报告并保存到 reports/weekly.md' }],
+                    deliverables: [{
+                        id: 'deliverable-report',
+                        title: 'Weekly report',
+                        type: 'report_file',
+                        description: 'Write weekly report markdown.',
+                        required: true,
+                        path: 'reports/weekly.md',
+                        format: 'md',
+                    }],
+                    checkpoints: [],
+                    userActionsRequired: [],
+                    missingInfo: [],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-task-draft',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze follow-up request',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                        {
+                            stepId: 'step-execution',
+                            kind: 'execution',
+                            title: 'Execute',
+                            description: 'Execute follow-up request',
+                            status: 'pending',
+                            dependencies: ['step-analysis'],
+                        },
+                    ],
+                },
+                executionQuery: '生成报告并保存到 reports/weekly.md',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-task-draft',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-task-draft',
+                content: '把上面的内容整理成报告并创建任务',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(continued).toBe(false);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'CHAT_MESSAGE',
+            'TASK_CLARIFICATION_REQUIRED',
+            'TASK_STATUS',
+        ]);
+        expect(emitted[2]?.payload?.taskDraftRequired).toBe(true);
+        expect(emitted[5]?.payload).toMatchObject({
+            clarificationType: 'task_draft_confirmation',
+            missingFields: ['task_draft_confirmation'],
+        });
+        expect(emitted[5]?.payload?.routeChoices).toEqual([
+            { id: 'immediate_task', label: '确认创建', value: '__task_draft_confirm__' },
+            { id: 'chat', label: '改成普通回答', value: '__task_draft_chat__' },
+        ]);
+        expect(emitted[6]?.payload?.status).toBe('idle');
+    });
+
+    test('maps task draft confirm token to structured approval follow-up source text', async () => {
+        const preparedInputs: Array<{ sourceText: string }> = [];
+        const deps = createRuntimeCommandDeps({
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'assistant', content: '任务草稿已生成。请选择确认创建或改成普通回答。' },
+                ],
+                getArtifactContract: () => ({ type: 'artifact' }),
+                setArtifactContract: () => {},
+            },
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-prev-draft',
+                    mode: 'immediate_task',
+                    sourceText: '生成周报并保存为 reports/weekly.md',
+                    tasks: [{ objective: '生成周报并保存为 reports/weekly.md' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-prev-draft',
+                        title: 'Weekly report',
+                        type: 'report_file',
+                        description: 'Write weekly report markdown file',
+                        required: true,
+                        path: 'reports/weekly.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push({ sourceText: input.sourceText });
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-next-draft',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze token follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-task-draft-confirm-token',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-draft-confirm-token',
+                content: '__task_draft_confirm__',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：生成周报并保存为 reports/weekly.md');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+    });
+
+    test('maps task draft chat token to explicit chat route follow-up source text', async () => {
+        const preparedInputs: Array<{ sourceText: string }> = [];
+        const deps = createRuntimeCommandDeps({
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-prev-draft-chat',
+                    mode: 'immediate_task',
+                    sourceText: '生成周报并保存为 reports/weekly.md',
+                    tasks: [{ objective: '生成周报并保存为 reports/weekly.md' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-prev-draft-chat',
+                        title: 'Weekly report',
+                        type: 'report_file',
+                        description: 'Write weekly report markdown file',
+                        required: true,
+                        path: 'reports/weekly.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push({ sourceText: input.sourceText });
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'chat',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-next-draft-chat',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze token follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-task-draft-chat-token',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-draft-chat-token',
+                content: '__task_draft_chat__',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('Original task: 生成周报并保存为 reports/weekly.md');
+        expect(preparedInputs[0]?.sourceText).toContain('User route: chat');
+    });
+
+    test('maps task draft edit-create token to approval follow-up using edited objective text', async () => {
+        const preparedInputs: Array<{ sourceText: string }> = [];
+        const deps = createRuntimeCommandDeps({
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-prev-draft-edit',
+                    mode: 'immediate_task',
+                    sourceText: '生成周报并保存为 reports/weekly.md',
+                    tasks: [{ objective: '生成周报并保存为 reports/weekly.md' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-prev-draft-edit',
+                        title: 'Weekly report',
+                        type: 'report_file',
+                        description: 'Write weekly report markdown file',
+                        required: true,
+                        path: 'reports/weekly.md',
+                        format: 'md',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push({ sourceText: input.sourceText });
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-next-draft-edit',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze token follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-task-draft-edit-token',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-draft-edit-token',
+                content: '__task_draft_edit_create__:改为生成双语周报并保存到 reports/weekly-bilingual.md',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：改为生成双语周报并保存到 reports/weekly-bilingual.md');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).not.toContain('__task_draft_edit_create__');
+    });
+
     test('treats approval follow-up as continuing prior non-chat deliverable objective', async () => {
         const emitted: any[] = [];
         const sourceTexts: string[] = [];
@@ -1513,7 +1814,7 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(true);
     });
 
-    test('uses full scheduled chain source text for approval follow-ups in scheduled_multi_task mode', async () => {
+    test('preserves scheduled chain source while carrying explicit approval signal', async () => {
         const preparedInputs: any[] = [];
         let continued = false;
         const chainSourceText = '1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上。';
@@ -1594,9 +1895,9 @@ describe('runtime commands handler', () => {
         } as any, deps);
 
         expect(handled).toBe(true);
-        expect(preparedInputs[0]?.sourceText).toContain('原始任务：1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上。');
-        expect(preparedInputs[0]?.sourceText).toContain('发布到 X 上');
+        expect(preparedInputs[0]?.sourceText).toContain(`原始任务：${chainSourceText}`);
         expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).toContain('发布到 X 上');
         expect(preparedInputs[0]?.sourceText).not.toContain('用户补充：同意');
         expect(continued).toBe(true);
     });

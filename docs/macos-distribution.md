@@ -3,6 +3,10 @@
 This repository now supports a fresh-macOS delivery path for the desktop app with these expectations:
 
 - `sidecar` is bundled into the app resources.
+- Sidecar browser automation runtime is self-contained:
+  - bundled Node.js runtime (`sidecar/node/bin/node`)
+  - bundled Playwright runtime modules (`sidecar/node_modules/playwright*`)
+  - Playwright 浏览器不内置，默认使用系统已安装的 Chrome
 - `rag-service` source files are bundled into the app resources.
 - `browser-use-service` source files are bundled into the app resources as an optional component.
 - Python environments for bundled services are prepared inside the app data directory on demand.
@@ -43,3 +47,4 @@ Managed runtime locations:
 ## Limitations
 
 - Browser smart mode requires an active OpenAI-compatible profile because `browser-use-service` is launched with `OPENAI_API_KEY` and optional `LITELLM_BASE_URL`.
+- Current packaged DMG is architecture-specific (for this build: `aarch64` / Apple Silicon).

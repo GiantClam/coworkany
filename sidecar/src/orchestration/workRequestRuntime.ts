@@ -50,6 +50,9 @@ export type ScheduledExecutionStagePlan = {
 
 export type ScheduledExecutionMode = 'sequential' | 'parallel';
 
+const EXECUTION_TIME_COLLABORATION_TEXT_PATTERN =
+    /(manual|auth|external[_\s-]?auth|confirm|approval|用户|确认|阻塞|blocking|登录|账号|pre-freeze research|manual action)/i;
+
 export type PlanUpdatedPayload = {
     summary: string;
     steps: Array<{
@@ -215,10 +218,32 @@ export function prepareExecutionContextFromFrozen(input: {
         : allTasks[0];
     const scopedTasks = stageTask ? [stageTask] : allTasks.slice(0, 1);
     const selectedTaskIds = scopedTasks.map((task) => task.id);
+    const scopedMode =
+        input.request.mode === 'scheduled_task' || input.request.mode === 'scheduled_multi_task'
+            ? input.request.mode
+            : 'immediate_task';
+    const isScheduledScoped = scopedMode === 'scheduled_task' || scopedMode === 'scheduled_multi_task';
+    const sanitizedKnownRisks = isScheduledScoped
+        ? (input.request.knownRisks ?? []).filter((risk) => !EXECUTION_TIME_COLLABORATION_TEXT_PATTERN.test(risk))
+        : input.request.knownRisks;
+    const sanitizedHitlReasons = isScheduledScoped
+        ? (input.request.hitlPolicy?.reasons ?? [])
+            .filter((reason) => !EXECUTION_TIME_COLLABORATION_TEXT_PATTERN.test(reason))
+        : (input.request.hitlPolicy?.reasons ?? []);
+    const sanitizedResearchSummary = input.request.frozenResearchSummary
+        ? {
+            ...input.request.frozenResearchSummary,
+            blockingUnknownCount: isScheduledScoped
+                ? 0
+                : input.request.frozenResearchSummary.blockingUnknownCount,
+        }
+        : undefined;
     const scopedRequest: FrozenWorkRequest = {
         ...input.request,
-        mode: 'immediate_task',
-        sourceText: scopedTasks[0]?.objective || input.request.sourceText,
+        // Preserve scheduled semantics so execution-time guards and prompts stay in scheduled mode.
+        mode: scopedMode,
+        // Keep the original source text to retain chained context in frozen execution prompts.
+        sourceText: input.request.sourceText,
         schedule: undefined,
         tasks: scopedTasks,
         clarification: {
@@ -227,9 +252,31 @@ export function prepareExecutionContextFromFrozen(input: {
             reason: undefined,
             questions: [],
             missingFields: [],
+            assumptions: isScheduledScoped
+                ? Array.from(new Set([
+                    ...input.request.clarification.assumptions,
+                    'All required user collaboration checks were handled during initial planning; execute autonomously now.',
+                ]))
+                : input.request.clarification.assumptions,
         },
         // Execution-time user actions should be decided during initial planning, not mid-run.
         userActionsRequired: [],
+        // Scheduled stage execution should not re-surface planning-time manual checkpoints.
+        checkpoints: isScheduledScoped
+            ? []
+            : input.request.checkpoints,
+        hitlPolicy: input.request.hitlPolicy
+            ? {
+                ...input.request.hitlPolicy,
+                requiresPlanConfirmation: isScheduledScoped ? false : input.request.hitlPolicy.requiresPlanConfirmation,
+                reasons: sanitizedHitlReasons,
+            }
+            : undefined,
+        knownRisks: sanitizedKnownRisks,
+        uncertaintyRegistry: isScheduledScoped
+            ? (input.request.uncertaintyRegistry ?? []).filter((item) => item.status !== 'blocking_unknown')
+            : input.request.uncertaintyRegistry,
+        frozenResearchSummary: sanitizedResearchSummary,
         // Only the first stage keeps original deliverable requirements (e.g., output files).
         deliverables: typeof input.stageIndex === 'number' && input.stageIndex > 0
             ? []
@@ -682,9 +729,17 @@ export function planNextScheduledExecutionStage(input: {
         return null;
     }
 
-    const delayMs = typeof nextStage.delayMsFromPrevious === 'number'
+    const previousStage = allStages[completedStageIndex];
+    let delayMs = typeof nextStage.delayMsFromPrevious === 'number'
         ? Math.max(0, nextStage.delayMsFromPrevious)
         : 0;
+    if (delayMs === 0 && previousStage) {
+        const plannedNextAtMs = new Date(nextStage.executeAt).getTime();
+        const plannedPreviousAtMs = new Date(previousStage.executeAt).getTime();
+        if (Number.isFinite(plannedNextAtMs) && Number.isFinite(plannedPreviousAtMs)) {
+            delayMs = Math.max(0, plannedNextAtMs - plannedPreviousAtMs);
+        }
+    }
     const executeAt = new Date(input.completedAt.getTime() + delayMs).toISOString();
     return {
         ...nextStage,
@@ -695,8 +750,12 @@ export function planNextScheduledExecutionStage(input: {
 const SCHEDULED_CONTRACT_NOISE_LINE_PATTERNS: RegExp[] = [
     /^\s*交付物[:：]/i,
     /^\s*检查点[:：]/i,
+    /^\s*约束[:：]/i,
+    /^\s*验收标准[:：]/i,
     /^\s*deliverables?[:：]/i,
     /^\s*checkpoints?[:：]/i,
+    /^\s*constraints?[:：]/i,
+    /^\s*acceptance criteria[:：]/i,
 ];
 
 function stripScheduledContractNoise(query: string): string {

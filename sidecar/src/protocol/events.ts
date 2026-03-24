@@ -138,6 +138,14 @@ const ResumeStrategySchema = z.object({
     preserveArtifacts: z.boolean(),
 });
 
+const IntentRoutingSchema = z.object({
+    intent: z.enum(['chat', 'immediate_task', 'scheduled_task']),
+    confidence: z.number().min(0).max(1),
+    reasonCodes: z.array(z.string()),
+    needsDisambiguation: z.boolean(),
+    forcedByUserSelection: z.boolean().optional(),
+});
+
 // ============================================================================
 // Base Event
 // ============================================================================
@@ -238,6 +246,8 @@ export const TaskPlanReadyEventSchema = BaseEventSchema.extend({
     payload: z.object({
         summary: z.string(),
         mode: z.enum(['chat', 'immediate_task', 'scheduled_task', 'scheduled_multi_task']).optional(),
+        intentRouting: IntentRoutingSchema.optional(),
+        taskDraftRequired: z.boolean().optional(),
         tasks: z.array(z.object({
             id: z.string(),
             title: z.string(),
@@ -340,6 +350,13 @@ export const TaskClarificationRequiredEventSchema = BaseEventSchema.extend({
         reason: z.string().optional(),
         questions: z.array(z.string()),
         missingFields: z.array(z.string()).optional(),
+        clarificationType: z.enum(['missing_info', 'route_disambiguation', 'task_draft_confirmation']).optional(),
+        routeChoices: z.array(z.object({
+            id: z.enum(['chat', 'immediate_task']),
+            label: z.string(),
+            value: z.string(),
+        })).optional(),
+        intentRouting: IntentRoutingSchema.optional(),
     }),
 });
 

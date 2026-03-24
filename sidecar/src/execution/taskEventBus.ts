@@ -5,6 +5,7 @@ import type {
     DefaultingPolicy,
     DeliverableContract,
     HitlPolicy,
+    IntentRouting,
     MemoryIsolationPolicy,
     MissingInfoItem,
     ResumeStrategy,
@@ -108,6 +109,8 @@ export type TaskResumedPayload = {
 export type TaskPlanReadyPayload = {
     summary: string;
     mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    intentRouting?: IntentRouting;
+    taskDraftRequired?: boolean;
     tasks?: Array<{
         id: string;
         title: string;
@@ -196,6 +199,13 @@ export class TaskEventBus {
         reason?: string;
         questions: string[];
         missingFields?: string[];
+        clarificationType?: 'missing_info' | 'route_disambiguation' | 'task_draft_confirmation';
+        routeChoices?: Array<{
+            id: 'chat' | 'immediate_task';
+            label: string;
+            value: string;
+        }>;
+        intentRouting?: IntentRouting;
     }, meta?: TaskEventMeta): TaskEvent {
         return this.build(taskId, 'TASK_CLARIFICATION_REQUIRED', payload, meta);
     }
@@ -280,6 +290,13 @@ export class TaskEventBus {
         reason?: string;
         questions: string[];
         missingFields?: string[];
+        clarificationType?: 'missing_info' | 'route_disambiguation' | 'task_draft_confirmation';
+        routeChoices?: Array<{
+            id: 'chat' | 'immediate_task';
+            label: string;
+            value: string;
+        }>;
+        intentRouting?: IntentRouting;
     }, meta?: TaskEventMeta): void {
         this.emit(this.clarificationRequired(taskId, payload, meta));
     }

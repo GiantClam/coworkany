@@ -569,21 +569,65 @@ function processEvent(state: BuildState, session: TaskSession, event: TaskSessio
             const card = ensureTaskCard(state, session, event);
             const questions = normalizeLines(Array.isArray(payload.questions) ? payload.questions : []);
             const missingFields = normalizeLines(Array.isArray(payload.missingFields) ? payload.missingFields : []);
-            card.subtitle = normalizeText(payload.reason) || 'Clarification required';
-            upsertTaskCardSection(card, 'Action · Clarification questions', questions, 'replace');
-            upsertTaskCardSection(card, 'Action · Missing fields', missingFields, 'replace');
-            card.collaboration = {
-                actionId: normalizeText(payload.reason) || 'clarification',
-                title: 'Clarification required',
-                description: normalizeText(payload.reason),
-                blocking: true,
+            const clarificationType = normalizeText(payload.clarificationType);
+            const isRouteDisambiguation = clarificationType === 'route_disambiguation';
+            const isTaskDraftConfirmation = clarificationType === 'task_draft_confirmation';
+            card.subtitle = normalizeText(payload.reason) || (
+                isRouteDisambiguation
+                    ? 'Choose response mode'
+                    : isTaskDraftConfirmation
+                        ? 'Task draft confirmation required'
+                        : 'Clarification required'
+            );
+            upsertTaskCardSection(
+                card,
+                isRouteDisambiguation
+                    ? 'Action · Route choices'
+                    : isTaskDraftConfirmation
+                        ? 'Action · Draft confirmation'
+                        : 'Action · Clarification questions',
                 questions,
-                instructions: [],
-                input: {
-                    placeholder: questions[0] || 'Provide clarification to continue...',
-                    submitLabel: 'Submit clarification',
-                },
-            };
+                'replace',
+            );
+            upsertTaskCardSection(card, 'Action · Missing fields', missingFields, 'replace');
+            if (isRouteDisambiguation || isTaskDraftConfirmation) {
+                const routeChoices = ((Array.isArray(payload.routeChoices) ? payload.routeChoices : []) as Array<Record<string, unknown>>)
+                    .map((choice) => ({
+                        label: normalizeText(choice.label),
+                        value: normalizeText(choice.value),
+                    }))
+                    .filter((choice) => choice.label.length > 0 && choice.value.length > 0);
+                card.collaboration = {
+                    actionId: isTaskDraftConfirmation ? 'task_draft_confirm' : 'intent_route',
+                    title: isTaskDraftConfirmation ? '任务草稿确认' : '选择处理方式',
+                    description: normalizeText(payload.reason),
+                    blocking: true,
+                    questions,
+                    instructions: isTaskDraftConfirmation
+                        ? ['可直接确认创建，或先输入修改内容后点击“编辑后创建”。']
+                        : [],
+                    input: isTaskDraftConfirmation
+                        ? {
+                            placeholder: '输入修改后的任务说明（可选）',
+                            submitLabel: '编辑后创建',
+                        }
+                        : undefined,
+                    choices: routeChoices,
+                };
+            } else {
+                card.collaboration = {
+                    actionId: normalizeText(payload.reason) || 'clarification',
+                    title: 'Clarification required',
+                    description: normalizeText(payload.reason),
+                    blocking: true,
+                    questions,
+                    instructions: [],
+                    input: {
+                        placeholder: questions[0] || 'Provide clarification to continue...',
+                        submitLabel: 'Submit clarification',
+                    },
+                };
+            }
             card.timestamp = event.timestamp;
             commitTaskCard(state, card);
             break;

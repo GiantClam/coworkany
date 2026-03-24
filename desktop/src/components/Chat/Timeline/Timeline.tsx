@@ -94,6 +94,7 @@ interface TimelineProps {
         taskId?: string;
         cardId: string;
         actionId?: string;
+        value?: string;
     }) => void;
 }
 

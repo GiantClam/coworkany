@@ -126,6 +126,7 @@ describe('workRequestRuntime', () => {
             title: 'legacy',
             taskQuery: [
                 '检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中',
+                '约束：优先复用上一阶段已产出的结果与文件，不要重复前一阶段工作。',
                 '交付物：Planned output artifact (reports/1-x.md)',
                 '检查点：Checkpoint before final delivery',
             ].join('\n'),
@@ -136,6 +137,7 @@ describe('workRequestRuntime', () => {
 
         const query = getScheduledTaskExecutionQuery({ record, workRequestStore: store });
         expect(query).toContain('将结果保存到文件中');
+        expect(query).not.toContain('约束：');
         expect(query).not.toContain('交付物：');
         expect(query).not.toContain('检查点：');
     });
@@ -240,26 +242,35 @@ describe('workRequestRuntime', () => {
             stageTaskId: stage0TaskId,
             stageIndex: 0,
         });
-        expect(stage0Scoped.frozenWorkRequest.mode).toBe('immediate_task');
+        expect(stage0Scoped.frozenWorkRequest.mode).toBe('scheduled_multi_task');
         expect(stage0Scoped.frozenWorkRequest.schedule).toBeUndefined();
+        expect(stage0Scoped.frozenWorkRequest.sourceText).toBe(frozen.sourceText);
         expect(stage0Scoped.frozenWorkRequest.tasks).toHaveLength(1);
         expect(stage0Scoped.frozenWorkRequest.tasks[0]?.id).toBe(stage0TaskId);
         expect(stage0Scoped.frozenWorkRequest.deliverables?.length ?? 0).toBeGreaterThan(0);
         expect(stage0Scoped.frozenWorkRequest.userActionsRequired ?? []).toHaveLength(0);
+        expect(stage0Scoped.frozenWorkRequest.checkpoints ?? []).toHaveLength(0);
 
         const stage1Scoped = prepareExecutionContextFromFrozen({
             request: frozen,
             stageTaskId: stage1TaskId,
             stageIndex: 1,
         });
-        expect(stage1Scoped.frozenWorkRequest.mode).toBe('immediate_task');
+        expect(stage1Scoped.frozenWorkRequest.mode).toBe('scheduled_multi_task');
         expect(stage1Scoped.frozenWorkRequest.schedule).toBeUndefined();
+        expect(stage1Scoped.frozenWorkRequest.sourceText).toBe(frozen.sourceText);
         expect(stage1Scoped.frozenWorkRequest.tasks).toHaveLength(1);
         expect(stage1Scoped.frozenWorkRequest.tasks[0]?.id).toBe(stage1TaskId);
         expect(stage1Scoped.frozenWorkRequest.deliverables ?? []).toHaveLength(0);
         expect(stage1Scoped.frozenWorkRequest.userActionsRequired ?? []).toHaveLength(0);
+        expect(stage1Scoped.frozenWorkRequest.checkpoints ?? []).toHaveLength(0);
+        expect(stage1Scoped.frozenWorkRequest.hitlPolicy?.requiresPlanConfirmation).toBe(false);
+        expect(stage1Scoped.frozenWorkRequest.uncertaintyRegistry?.some((item) => item.status === 'blocking_unknown')).toBe(false);
+        expect(stage1Scoped.frozenWorkRequest.frozenResearchSummary?.blockingUnknownCount ?? 0).toBe(0);
         expect(stage1Scoped.executionQuery).toContain('发布到 X');
         expect(stage1Scoped.executionQuery).not.toContain('写入 reports/a.md');
+        expect(stage1Scoped.workRequestExecutionPrompt).toContain('Frozen Work Request');
+        expect(stage1Scoped.workRequestExecutionPrompt).toContain('Coworkany is the primary task owner');
     });
 
     test('plans only the first stage for sequential scheduled multi-task execution', () => {
@@ -382,6 +393,63 @@ describe('workRequestRuntime', () => {
         expect(nextStage?.executionMode).toBe('sequential');
         expect(nextStage?.executeAt).toBe('2026-03-23T05:41:00.000Z');
         expect(nextStage?.taskQuery).toBe('再做 B');
+    });
+
+    test('falls back to original stage gap when delayMsFromPrevious is missing', () => {
+        const request = {
+            tasks: [
+                {
+                    id: 'task-1',
+                    title: '阶段 1',
+                    objective: '先做 A',
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: [],
+                    preferredSkills: [],
+                    preferredTools: [],
+                },
+                {
+                    id: 'task-2',
+                    title: '阶段 2',
+                    objective: '再做 B',
+                    constraints: [],
+                    acceptanceCriteria: [],
+                    dependencies: ['task-1'],
+                    preferredSkills: [],
+                    preferredTools: [],
+                },
+            ],
+            schedule: {
+                executeAt: '2026-03-23T05:35:08.000Z',
+                timezone: 'Asia/Shanghai',
+                recurrence: null,
+                stages: [
+                    {
+                        taskId: 'task-1',
+                        executeAt: '2026-03-23T05:35:08.000Z',
+                    },
+                    {
+                        taskId: 'task-2',
+                        executeAt: '2026-03-23T05:37:08.000Z',
+                        originalTimeExpression: '2分钟',
+                    },
+                ],
+            },
+            deliverables: [],
+            checkpoints: [],
+        } as any;
+
+        const nextStage = planNextScheduledExecutionStage({
+            request,
+            fallbackTitle: 'Scheduled Task',
+            fallbackQuery: 'fallback',
+            completedAt: new Date('2026-03-23T05:40:00.000Z'),
+            completedStageIndex: 0,
+            completedStageTaskId: 'task-1',
+        });
+
+        expect(nextStage).not.toBeNull();
+        expect(nextStage?.executeAt).toBe('2026-03-23T05:42:00.000Z');
     });
 
     test('migrates legacy scheduled task presentation to full TTS on read', () => {

@@ -252,4 +252,34 @@ describe('SCH-06: Scheduled Task Recovery', () => {
         expect(recovered[0]?.id).toBe(staleTask.id);
         expect(store.read()[0]?.status).toBe('failed');
     });
+
+    test('recoverStaleRunning 不应回收等待用户交互的挂起任务', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-scheduled-task-'));
+        const store = new ScheduledTaskStore(path.join(tempDir, 'scheduled-tasks.json'));
+        const now = new Date('2026-03-17T16:00:00.000Z');
+
+        const suspendedTask = store.create({
+            title: 'suspended',
+            taskQuery: 'wait user interaction',
+            workspacePath: tempDir,
+            executeAt: new Date('2026-03-17T15:30:00.000Z'),
+            speakResult: false,
+        });
+        store.upsert({
+            ...suspendedTask,
+            status: 'suspended_waiting_user',
+            startedAt: new Date('2026-03-17T15:31:00.000Z').toISOString(),
+            error: 'waiting for user confirmation',
+        });
+
+        const recovered = store.recoverStaleRunning({
+            now,
+            timeoutMs: 10 * 60 * 1000,
+        });
+
+        expect(recovered).toHaveLength(0);
+        const persisted = store.read().find((task) => task.id === suspendedTask.id);
+        expect(persisted?.status).toBe('suspended_waiting_user');
+        expect(persisted?.error).toBe('waiting for user confirmation');
+    });
 });

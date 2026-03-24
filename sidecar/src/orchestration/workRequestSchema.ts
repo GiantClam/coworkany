@@ -225,9 +225,19 @@ export type ClarificationDecision = {
     assumptions: string[];
 };
 
+export type IntentRouting = {
+    intent: 'chat' | 'immediate_task' | 'scheduled_task';
+    confidence: number;
+    reasonCodes: string[];
+    needsDisambiguation: boolean;
+    forcedByUserSelection?: boolean;
+};
+
 export type NormalizedWorkRequest = {
     schemaVersion: 1;
     mode: WorkMode;
+    intentRouting: IntentRouting;
+    taskDraftRequired?: boolean;
     sourceText: string;
     workspacePath: string;
     schedule?: {

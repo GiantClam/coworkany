@@ -6,6 +6,7 @@ import type {
     DeliverableContract,
     FrozenWorkRequest,
     HitlPolicy,
+    IntentRouting,
     MemoryIsolationPolicy,
     MissingInfoItem,
     ResumeStrategy,
@@ -171,6 +172,13 @@ export type RuntimeCommandDeps = {
         reason?: string;
         questions: string[];
         missingFields?: string[];
+        clarificationType?: 'missing_info' | 'route_disambiguation' | 'task_draft_confirmation';
+        routeChoices?: Array<{
+            id: 'chat' | 'immediate_task';
+            label: string;
+            value: string;
+        }>;
+        intentRouting?: IntentRouting;
     }) => Record<string, unknown>;
     createTaskContractReopenedEvent: (taskId: string, payload: {
         summary: string;
@@ -190,6 +198,8 @@ export type RuntimeCommandDeps = {
     createTaskPlanReadyEvent: (taskId: string, payload: {
         summary: string;
         mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+        intentRouting?: IntentRouting;
+        taskDraftRequired?: boolean;
         tasks?: Array<{
             id: string;
             title: string;
@@ -550,6 +560,12 @@ function buildCorrectionFollowUpSourceText(input: {
     ].join('\n');
 }
 
+const ROUTE_CHAT_TOKEN = '__route_chat__';
+const ROUTE_TASK_TOKEN = '__route_task__';
+const TASK_DRAFT_CONFIRM_TOKEN = '__task_draft_confirm__';
+const TASK_DRAFT_CHAT_TOKEN = '__task_draft_chat__';
+const TASK_DRAFT_EDIT_CREATE_PREFIX = '__task_draft_edit_create__:';
+
 function buildFollowUpSourceText(input: {
     promptText: string;
     conversation: Array<{ role?: string; content?: unknown }>;
@@ -561,7 +577,24 @@ function buildFollowUpSourceText(input: {
     const previousContextText =
         input.previousSnapshot?.sourceText?.trim() ||
         previousUserMessage;
-
+    if (previousContextText && input.promptText.trim() === ROUTE_CHAT_TOKEN) {
+        return [
+            `Original task: ${previousContextText}`,
+            'User route: chat',
+        ].join('\n');
+    }
+    if (previousContextText && input.promptText.trim() === ROUTE_TASK_TOKEN) {
+        return [
+            `Original task: ${previousContextText}`,
+            'User route: task',
+        ].join('\n');
+    }
+    if (previousContextText && input.promptText.trim() === TASK_DRAFT_CHAT_TOKEN) {
+        return [
+            `Original task: ${previousContextText}`,
+            'User route: chat',
+        ].join('\n');
+    }
     const preferFullSourceTextForApproval =
         input.previousSnapshot?.mode === 'scheduled_task'
         || input.previousSnapshot?.mode === 'scheduled_multi_task';
@@ -571,12 +604,12 @@ function buildFollowUpSourceText(input: {
     const promptedForApproval = assistantPromptedForPlanApproval(latestAssistantMessage);
     const hasCarryForwardDeliverable = (input.previousSnapshot?.deliverables ?? [])
         .some((deliverable) => deliverable.type !== 'chat_reply');
+    const isApprovalReply =
+        isPlanApprovalReply(input.promptText) ||
+        (promptedForApproval && isCompactApprovalSelectionReply(input.promptText));
     if (
         approvalBaseObjective &&
-        (
-            isPlanApprovalReply(input.promptText) ||
-            (promptedForApproval && isCompactApprovalSelectionReply(input.promptText))
-        ) &&
+        isApprovalReply &&
         (promptedForApproval || hasCarryForwardDeliverable)
     ) {
         return buildApprovalFollowUpSourceText({
@@ -594,6 +627,32 @@ function buildFollowUpSourceText(input: {
             promptText: input.promptText,
             baseObjective: approvalBaseObjective,
         });
+    }
+
+    if (
+        approvalBaseObjective &&
+        input.promptText.trim() === TASK_DRAFT_CONFIRM_TOKEN
+    ) {
+        return buildApprovalFollowUpSourceText({
+            promptText: input.promptText,
+            baseObjective: approvalBaseObjective,
+        });
+    }
+
+    if (
+        input.promptText.trim().startsWith(TASK_DRAFT_EDIT_CREATE_PREFIX)
+    ) {
+        const editedObjective = input.promptText
+            .trim()
+            .slice(TASK_DRAFT_EDIT_CREATE_PREFIX.length)
+            .trim();
+        const objectiveForApproval = editedObjective || approvalBaseObjective || previousContextText;
+        if (objectiveForApproval) {
+            return buildApprovalFollowUpSourceText({
+                promptText: input.promptText,
+                baseObjective: objectiveForApproval,
+            });
+        }
     }
 
     if (hasCorrectionCue(input.promptText) && previousContextText) {
@@ -642,6 +701,8 @@ function buildExecutionQueryFromFrozenWorkRequest(request: {
 
 function buildTaskPlanReadyPayload(frozenWorkRequest: {
     mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    intentRouting?: IntentRouting;
+    taskDraftRequired?: boolean;
     tasks?: Array<{ id: string; title: string; objective: string; dependencies?: string[] }>;
     sourceText?: string;
     deliverables?: DeliverableContract[];
@@ -658,6 +719,8 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
 }): {
     summary: string;
     mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    intentRouting?: IntentRouting;
+    taskDraftRequired?: boolean;
     tasks?: Array<{
         id: string;
         title: string;
@@ -679,6 +742,8 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
     return {
         summary: buildWorkRequestPlanSummary(frozenWorkRequest),
         mode: frozenWorkRequest.mode,
+        intentRouting: frozenWorkRequest.intentRouting,
+        taskDraftRequired: frozenWorkRequest.taskDraftRequired,
         tasks: (frozenWorkRequest.tasks ?? [])
             .map((task) => ({
                 id: task.id,
@@ -756,6 +821,8 @@ function emitBlockingCollaborationEvents(
     }
 
     const preferredActionKind = frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan';
+    const blockingUserActionsFromPlan = (frozenWorkRequest.userActionsRequired ?? [])
+        .filter((action) => isBlockingPolicy(action.executionPolicy, action.blocking));
     const blockingUserActionFromPlan =
         getBlockingUserAction(frozenWorkRequest, preferredActionKind) ??
         getBlockingUserAction(frozenWorkRequest);
@@ -783,19 +850,32 @@ function emitBlockingCollaborationEvents(
             }
             : undefined;
     const blockingUserAction = blockingUserActionFromPlan ?? synthesizedBlockingUnknownAction;
-    if (blockingUserAction) {
+
+    const emittedActionIds = new Set<string>();
+    const emitUserActionRequired = (action: UserActionRequest): void => {
+        if (emittedActionIds.has(action.id)) {
+            return;
+        }
+        emittedActionIds.add(action.id);
         deps.emit(deps.createTaskUserActionRequiredEvent(taskId, {
-            actionId: blockingUserAction.id,
-            title: blockingUserAction.title,
-            kind: blockingUserAction.kind,
-            description: blockingUserAction.description,
-            riskTier: blockingUserAction.riskTier,
-            executionPolicy: blockingUserAction.executionPolicy,
-            blocking: blockingUserAction.blocking,
-            questions: blockingUserAction.questions,
-            instructions: blockingUserAction.instructions,
-            fulfillsCheckpointId: blockingUserAction.fulfillsCheckpointId,
+            actionId: action.id,
+            title: action.title,
+            kind: action.kind,
+            description: action.description,
+            riskTier: action.riskTier,
+            executionPolicy: action.executionPolicy,
+            blocking: action.blocking,
+            questions: action.questions,
+            instructions: action.instructions,
+            fulfillsCheckpointId: action.fulfillsCheckpointId,
         }));
+    };
+
+    if (blockingUserAction) {
+        emitUserActionRequired(blockingUserAction);
+    }
+    for (const action of blockingUserActionsFromPlan) {
+        emitUserActionRequired(action);
     }
 
     if (frozenWorkRequest.clarification.required) {
@@ -1179,6 +1259,69 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             deps.emit(deps.createTaskResearchUpdatedEvent(taskId, buildTaskResearchUpdatedPayload(frozenWorkRequest)));
             deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
+
+            if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
+                const disambiguationMessage = '我可以直接回答，也可以帮你创建可跟踪任务。请选择一种：直接回答 / 创建任务。';
+                deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
+                deps.pushConversationMessage(taskId, { role: 'assistant', content: disambiguationMessage });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: disambiguationMessage,
+                }));
+                deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
+                    reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                    questions: ['请选择：直接回答，或创建任务。'],
+                    missingFields: ['intent_route'],
+                    clarificationType: 'route_disambiguation',
+                    routeChoices: [
+                        {
+                            id: 'chat',
+                            label: '直接回答',
+                            value: ROUTE_CHAT_TOKEN,
+                        },
+                        {
+                            id: 'immediate_task',
+                            label: '创建任务',
+                            value: ROUTE_TASK_TOKEN,
+                        },
+                    ],
+                    intentRouting: frozenWorkRequest.intentRouting,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
+
+            if (frozenWorkRequest.taskDraftRequired) {
+                const draftMessage = '任务草稿已生成。请先确认创建执行任务，或改成普通回答。你也可以直接输入修改内容后提交。';
+                deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
+                deps.pushConversationMessage(taskId, { role: 'assistant', content: draftMessage });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: draftMessage,
+                }));
+                deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
+                    reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                    questions: ['确认创建任务，或改成普通回答。'],
+                    missingFields: ['task_draft_confirmation'],
+                    clarificationType: 'task_draft_confirmation',
+                    routeChoices: [
+                        {
+                            id: 'immediate_task',
+                            label: '确认创建',
+                            value: TASK_DRAFT_CONFIRM_TOKEN,
+                        },
+                        {
+                            id: 'chat',
+                            label: '改成普通回答',
+                            value: TASK_DRAFT_CHAT_TOKEN,
+                        },
+                    ],
+                    intentRouting: frozenWorkRequest.intentRouting,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
+
             const artifactContract = deps.buildArtifactContract(
                 preparedWorkRequest.executionQuery || promptText,
                 frozenWorkRequest.deliverables
@@ -1200,6 +1343,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     reason: frozenWorkRequest.clarification.reason,
                     questions: frozenWorkRequest.clarification.questions,
                     missingFields: frozenWorkRequest.clarification.missingFields,
+                    clarificationType: 'missing_info',
+                    intentRouting: frozenWorkRequest.intentRouting,
                 }));
                 deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
                 if (deps.shouldUsePlanningFiles(frozenWorkRequest)) {
@@ -1419,6 +1564,73 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 )
             );
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
+
+            if (preparedWorkRequest.frozenWorkRequest.intentRouting?.needsDisambiguation) {
+                const disambiguationMessage = '我可以直接回答，也可以帮你创建可跟踪任务。请选择一种：直接回答 / 创建任务。';
+                deps.pushConversationMessage(taskId, {
+                    role: 'assistant',
+                    content: disambiguationMessage,
+                });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: disambiguationMessage,
+                }));
+                deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
+                    reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                    questions: ['请选择：直接回答，或创建任务。'],
+                    missingFields: ['intent_route'],
+                    clarificationType: 'route_disambiguation',
+                    routeChoices: [
+                        {
+                            id: 'chat',
+                            label: '直接回答',
+                            value: ROUTE_CHAT_TOKEN,
+                        },
+                        {
+                            id: 'immediate_task',
+                            label: '创建任务',
+                            value: ROUTE_TASK_TOKEN,
+                        },
+                    ],
+                    intentRouting: preparedWorkRequest.frozenWorkRequest.intentRouting,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
+
+            if (preparedWorkRequest.frozenWorkRequest.taskDraftRequired) {
+                const draftMessage = '任务草稿已生成。请先确认创建执行任务，或改成普通回答。你也可以直接输入修改内容后提交。';
+                deps.pushConversationMessage(taskId, {
+                    role: 'assistant',
+                    content: draftMessage,
+                });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: draftMessage,
+                }));
+                deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
+                    reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                    questions: ['确认创建任务，或改成普通回答。'],
+                    missingFields: ['task_draft_confirmation'],
+                    clarificationType: 'task_draft_confirmation',
+                    routeChoices: [
+                        {
+                            id: 'immediate_task',
+                            label: '确认创建',
+                            value: TASK_DRAFT_CONFIRM_TOKEN,
+                        },
+                        {
+                            id: 'chat',
+                            label: '改成普通回答',
+                            value: TASK_DRAFT_CHAT_TOKEN,
+                        },
+                    ],
+                    intentRouting: preparedWorkRequest.frozenWorkRequest.intentRouting,
+                }));
+                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                return true;
+            }
+
             const artifactContract = deps.buildArtifactContract(
                 preparedWorkRequest.executionQuery || resumeQuery,
                 preparedWorkRequest.frozenWorkRequest?.deliverables
@@ -1436,6 +1648,13 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 deps.emit(deps.createChatMessageEvent(taskId, {
                     role: 'assistant',
                     content: clarificationMessage,
+                }));
+                deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
+                    reason: preparedWorkRequest.frozenWorkRequest.clarification.reason,
+                    questions: preparedWorkRequest.frozenWorkRequest.clarification.questions,
+                    missingFields: preparedWorkRequest.frozenWorkRequest.clarification.missingFields,
+                    clarificationType: 'missing_info',
+                    intentRouting: preparedWorkRequest.frozenWorkRequest.intentRouting,
                 }));
                 deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
                 return true;

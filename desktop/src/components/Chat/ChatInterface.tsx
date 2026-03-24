@@ -25,6 +25,7 @@ import { WelcomeSection } from '../Welcome/WelcomeSection';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
 import { getPendingTaskStatus } from './Timeline/pendingTaskStatus';
 import { getVoiceSettings } from '../../lib/configStore';
+import { encodeTaskCollaborationMessage } from './collaborationMessage';
 import type { TaskEvent } from '../../types';
 
 const SkillsViewLazy = lazy(async () => {
@@ -428,7 +429,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         actionId?: string;
         value: string;
     }) => {
-        const message = input.value.trim();
+        const message = encodeTaskCollaborationMessage({
+            actionId: input.actionId,
+            value: input.value,
+        });
         if (!message) {
             return;
         }
@@ -455,10 +459,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         taskId?: string;
         cardId: string;
         actionId?: string;
+        value?: string;
     }) => {
-        const continueMessage = input.actionId
+        const continueMessage = input.value || (input.actionId
             ? `继续执行（${input.actionId}）`
-            : '继续执行';
+            : '继续执行');
         await handleTaskCardCollaborationSubmit({
             ...input,
             value: continueMessage,

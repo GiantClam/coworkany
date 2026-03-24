@@ -10,6 +10,7 @@ import {
     type HitlExecutionPolicy,
     type GoalFrame,
     type HitlPolicy,
+    type IntentRouting,
     type MissingInfoItem,
     type MemoryIsolationPolicy,
     type NormalizedWorkRequest,
@@ -199,7 +200,7 @@ function buildDefaultingPolicy(input: {
 }
 
 function hasPlanApprovalCue(text: string): boolean {
-    return /(按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续执行|开始执行|go ahead|proceed|approved?|ship it|looks good,? continue)/i
+    return /(按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续执行|开始执行|用户确认|user approval|go ahead|proceed|approved?|ship it|looks good,? continue)/i
         .test(text);
 }
 
@@ -207,6 +208,7 @@ function buildHitlPolicy(input: {
     text: string;
     taskDefinition: TaskDefinition;
     hasManualAction: boolean;
+    planAlreadyApproved?: boolean;
 }): HitlPolicy {
     const reasons: string[] = [];
     let riskTier: HitlPolicy['riskTier'] = 'low';
@@ -251,6 +253,7 @@ function buildHitlPolicy(input: {
 
     const requiresPlanConfirmation = !hostAccessOnlyReview
         && riskTier !== 'low'
+        && !input.planAlreadyApproved
         && !hasPlanApprovalCue(input.text);
 
     return {
@@ -1187,6 +1190,192 @@ function isLikelyChat(text: string): boolean {
     return /^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i.test(trimmed);
 }
 
+type ForcedIntentHint = {
+    intent: IntentRouting['intent'];
+    reasonCode: string;
+    forcedByUserSelection: boolean;
+};
+
+function extractForcedIntentHint(text: string): ForcedIntentHint | undefined {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+
+    const routedFollowUpMatch = trimmed.match(
+        /^(?:原始任务|Original task)\s*[:：][\s\S]+?\n(?:用户路由|User route)\s*[:：]\s*(chat|task|immediate_task)\s*$/i
+    );
+    if (routedFollowUpMatch?.[1]) {
+        const route = routedFollowUpMatch[1].toLowerCase();
+        return {
+            intent: route === 'chat' ? 'chat' : 'immediate_task',
+            reasonCode: 'user_route_choice',
+            forcedByUserSelection: true,
+        };
+    }
+
+    if (/^__route_chat__$/i.test(trimmed)) {
+        return {
+            intent: 'chat',
+            reasonCode: 'user_route_choice',
+            forcedByUserSelection: true,
+        };
+    }
+    if (/^__route_task__$/i.test(trimmed)) {
+        return {
+            intent: 'immediate_task',
+            reasonCode: 'user_route_choice',
+            forcedByUserSelection: true,
+        };
+    }
+
+    if (/^\/ask\b/i.test(trimmed)) {
+        return {
+            intent: 'chat',
+            reasonCode: 'explicit_command',
+            forcedByUserSelection: false,
+        };
+    }
+    if (/^\/task\b/i.test(trimmed)) {
+        return {
+            intent: 'immediate_task',
+            reasonCode: 'explicit_command',
+            forcedByUserSelection: false,
+        };
+    }
+    if (/^\/schedule\b/i.test(trimmed)) {
+        return {
+            intent: 'scheduled_task',
+            reasonCode: 'explicit_command',
+            forcedByUserSelection: false,
+        };
+    }
+
+    return undefined;
+}
+
+function buildIntentRouting(input: {
+    sourceText: string;
+    executableText: string;
+    mode: NormalizedWorkRequest['mode'];
+    scheduledIntentDetected: boolean;
+    clarification: ClarificationDecision;
+    hasExplicitTaskCue: boolean;
+    forcedIntentHint?: ForcedIntentHint;
+}): IntentRouting {
+    const intent: IntentRouting['intent'] =
+        input.mode === 'chat'
+            ? 'chat'
+            : input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task'
+                ? 'scheduled_task'
+                : 'immediate_task';
+
+    if (input.forcedIntentHint) {
+        return {
+            intent: input.forcedIntentHint.intent,
+            confidence: 0.99,
+            reasonCodes: [input.forcedIntentHint.reasonCode],
+            needsDisambiguation: false,
+            forcedByUserSelection: input.forcedIntentHint.forcedByUserSelection,
+        };
+    }
+
+    if (input.scheduledIntentDetected) {
+        return {
+            intent: 'scheduled_task',
+            confidence: 0.96,
+            reasonCodes: ['schedule_phrase'],
+            needsDisambiguation: false,
+        };
+    }
+
+    if (intent === 'chat') {
+        return {
+            intent: 'chat',
+            confidence: 0.9,
+            reasonCodes: ['chat_pattern'],
+            needsDisambiguation: false,
+        };
+    }
+
+    const reasonCodes: string[] = [];
+    if (isCodeChangeTask(input.sourceText)) {
+        reasonCodes.push('code_change_cue');
+    }
+    if (hasExplicitArtifactOutputIntent(input.sourceText)) {
+        reasonCodes.push('artifact_output_intent');
+    }
+    if (requiresExternalAuthOrManualAction(input.sourceText)) {
+        reasonCodes.push('manual_action_cue');
+    }
+    if (isComplexPlanningTask(input.sourceText, 'immediate_task')) {
+        reasonCodes.push('multi_step_cue');
+    }
+    if (requiresBrowserAutomationSkill(input.executableText)) {
+        reasonCodes.push('browser_ui_cue');
+    }
+
+    if (reasonCodes.length === 0) {
+        reasonCodes.push('mixed_or_ambiguous');
+    }
+
+    const confidence = reasonCodes.includes('mixed_or_ambiguous') ? 0.62 : 0.84;
+    const needsDisambiguation =
+        !input.clarification.required &&
+        intent === 'immediate_task' &&
+        confidence < 0.75 &&
+        !input.hasExplicitTaskCue;
+
+    return {
+        intent,
+        confidence,
+        reasonCodes,
+        needsDisambiguation,
+    };
+}
+
+function buildTaskDraftRequired(input: {
+    mode: NormalizedWorkRequest['mode'];
+    planAlreadyApproved: boolean;
+    clarification: ClarificationDecision;
+    intentRouting: IntentRouting;
+    hasManualAction: boolean;
+    deliverables: DeliverableContract[];
+    sourceText: string;
+}): boolean {
+    if (input.planAlreadyApproved) {
+        return false;
+    }
+    if (input.clarification.required || input.intentRouting.needsDisambiguation) {
+        return false;
+    }
+
+    const isScheduled = input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task';
+    if (isScheduled) {
+        return true;
+    }
+
+    if (input.hasManualAction) {
+        return true;
+    }
+
+    if (hasExplicitArtifactOutputIntent(input.sourceText)) {
+        return true;
+    }
+
+    const hasStateChangingDeliverable = input.deliverables.some((deliverable) =>
+        deliverable.type === 'report_file'
+        || deliverable.type === 'artifact_file'
+        || deliverable.type === 'workspace_change'
+        || deliverable.type === 'code_change'
+    );
+    if (hasStateChangingDeliverable && isComplexPlanningTask(input.sourceText, 'immediate_task')) {
+        return true;
+    }
+
+    return false;
+}
+
 function buildClarificationDecision(input: {
     sourceText: string;
     executableText: string;
@@ -1384,13 +1573,63 @@ function buildPresentationContract(text: string, ttsEnabled: boolean): Presentat
     };
 }
 
+function unwrapStructuredFollowUpSourceText(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return trimmed;
+    }
+
+    const correctionWrappedMatch = trimmed.match(
+        /^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+?)\n(?:用户更正|User correction)\s*[:：]\s*([\s\S]*)$/i
+    );
+    if (correctionWrappedMatch?.[1]) {
+        const baseObjective = correctionWrappedMatch[1].trim();
+        const correctionText = (correctionWrappedMatch[2] ?? '').trim();
+        return [baseObjective, correctionText].filter(Boolean).join('\n').trim();
+    }
+
+    const approvalWrappedMatch = trimmed.match(
+        /^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+?)\n(?:用户确认|User approval)\s*[:：][\s\S]*$/i
+    );
+    if (approvalWrappedMatch?.[1]) {
+        return approvalWrappedMatch[1].trim();
+    }
+
+    const routedFollowUpMatch = trimmed.match(
+        /^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+?)\n(?:用户路由|User route)\s*[:：]\s*(?:chat|task|immediate_task)\s*$/i
+    );
+    if (routedFollowUpMatch?.[1]) {
+        return routedFollowUpMatch[1].trim();
+    }
+
+    const baseOnlyWrappedMatch = trimmed.match(/^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+)$/i);
+    if (baseOnlyWrappedMatch?.[1]) {
+        return baseOnlyWrappedMatch[1].trim();
+    }
+
+    return trimmed;
+}
+
+function hasStructuredApprovalFollowUp(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+    return /^(?:原始任务|Original task)\s*[:：]\s*[\s\S]+?\n(?:用户确认|User approval)\s*[:：][\s\S]*$/i
+        .test(trimmed);
+}
+
 export function analyzeWorkRequest(input: {
     sourceText: string;
     workspacePath: string;
     now?: Date;
     systemContext?: SystemFolderResolutionOptions;
 }): NormalizedWorkRequest {
-    const sourceText = input.sourceText.trim();
+    const sourceTextRaw = input.sourceText;
+    const forcedIntentHint = extractForcedIntentHint(sourceTextRaw);
+    const sourceText = unwrapStructuredFollowUpSourceText(sourceTextRaw);
+    const planAlreadyApproved =
+        hasStructuredApprovalFollowUp(sourceTextRaw) || hasPlanApprovalCue(sourceTextRaw);
     const scheduledIntent = detectScheduledIntent(sourceText, input.now);
     const chainedScheduledStages = scheduledIntent?.chainedStages ?? [];
     const executableText = scheduledIntent?.taskQuery || sourceText;
@@ -1401,7 +1640,11 @@ export function analyzeWorkRequest(input: {
         ? chainedScheduledStages.length > 0
             ? 'scheduled_multi_task'
             : 'scheduled_task'
-        : isLikelyChat(executableText)
+        : forcedIntentHint?.intent === 'chat'
+            ? 'chat'
+            : forcedIntentHint?.intent === 'immediate_task' || forcedIntentHint?.intent === 'scheduled_task'
+                ? 'immediate_task'
+                : isLikelyChat(executableText)
             ? 'chat'
             : 'immediate_task';
     const language = detectLanguage(sourceText);
@@ -1422,11 +1665,30 @@ export function analyzeWorkRequest(input: {
     const primaryTaskDefinition =
         tasks[0] ?? buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext);
     const hasManualAction = requiresExternalAuthOrManualAction(planningText);
-    const hasBlockingManualAction = hasExplicitManualActionSignal(planningText);
+    const scheduledMode = mode === 'scheduled_task' || mode === 'scheduled_multi_task';
+    const manualActionPreapproved = scheduledMode && planAlreadyApproved;
+    const hasBlockingManualAction = hasExplicitManualActionSignal(planningText)
+        || (scheduledMode && hasManualAction && !manualActionPreapproved);
+    const hasExplicitTaskCue =
+        isCodeChangeTask(planningText) ||
+        hasExplicitArtifactOutputIntent(planningText) ||
+        isComplexPlanningTask(planningText, mode) ||
+        hasManualAction ||
+        Boolean(primaryTaskDefinition.localPlanHint);
+    const intentRouting = buildIntentRouting({
+        sourceText: planningText,
+        executableText,
+        mode,
+        scheduledIntentDetected: Boolean(scheduledIntent),
+        clarification,
+        hasExplicitTaskCue,
+        forcedIntentHint,
+    });
     const hitlPolicy = mergeHitlPolicies(tasks.map((taskDefinition) => buildHitlPolicy({
         text: planningText,
         taskDefinition,
         hasManualAction,
+        planAlreadyApproved,
     })));
     const defaultingPolicy = buildDefaultingPolicy({
         text: planningText,
@@ -1440,6 +1702,15 @@ export function analyzeWorkRequest(input: {
         presentation,
         localPlanWorkflow: primaryTaskDefinition.preferredWorkflow,
         localPlanRequiresHostAccess: primaryTaskDefinition.localPlanHint?.requiresHostAccessGrant,
+    });
+    const taskDraftRequired = buildTaskDraftRequired({
+        mode,
+        planAlreadyApproved,
+        clarification,
+        intentRouting,
+        hasManualAction,
+        deliverables,
+        sourceText: planningText,
     });
     const checkpoints = buildCheckpoints({
         text: executableText,
@@ -1520,6 +1791,8 @@ export function analyzeWorkRequest(input: {
     return {
         schemaVersion: 1,
         mode,
+        intentRouting,
+        taskDraftRequired,
         sourceText,
         workspacePath: input.workspacePath,
         schedule: scheduledIntent

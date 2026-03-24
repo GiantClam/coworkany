@@ -216,6 +216,7 @@ import {
     type CheckpointContract,
     type DeliverableContract,
     type FrozenWorkRequest,
+    type IntentRouting,
     type UserActionRequest,
 } from './orchestration/workRequestSchema';
 import {
@@ -582,11 +583,24 @@ const artifactTelemetryPath = path.join(process.cwd(), '.coworkany', 'self-learn
 function buildTaskPlanReadyPayload(frozenWorkRequest: FrozenWorkRequest): TaskPlanReadyPayload {
     return {
         summary: buildWorkRequestPlanSummary(frozenWorkRequest),
+        mode: frozenWorkRequest.mode,
+        intentRouting: frozenWorkRequest.intentRouting,
+        taskDraftRequired: frozenWorkRequest.taskDraftRequired,
+        tasks: (frozenWorkRequest.tasks ?? [])
+            .map((task) => ({
+                id: task.id,
+                title: task.title,
+                objective: task.objective,
+                dependencies: Array.isArray(task.dependencies) ? task.dependencies : [],
+            })),
         deliverables: frozenWorkRequest.deliverables ?? [],
         checkpoints: frozenWorkRequest.checkpoints ?? [],
         userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
         hitlPolicy: frozenWorkRequest.hitlPolicy,
         runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
+        sessionIsolationPolicy: frozenWorkRequest.sessionIsolationPolicy,
+        memoryIsolationPolicy: frozenWorkRequest.memoryIsolationPolicy,
+        tenantIsolationPolicy: frozenWorkRequest.tenantIsolationPolicy,
         missingInfo: frozenWorkRequest.missingInfo ?? [],
         defaultingPolicy: frozenWorkRequest.defaultingPolicy,
         resumeStrategy: frozenWorkRequest.resumeStrategy,
@@ -735,6 +749,61 @@ function toUserActionRequiredPayload(
     };
 }
 
+const ROUTE_CHAT_TOKEN = '__route_chat__';
+const ROUTE_TASK_TOKEN = '__route_task__';
+const TASK_DRAFT_CONFIRM_TOKEN = '__task_draft_confirm__';
+const TASK_DRAFT_CHAT_TOKEN = '__task_draft_chat__';
+
+function buildRouteDisambiguationPayload(intentRouting: IntentRouting) {
+    return {
+        message: '我可以直接回答，也可以帮你创建可跟踪任务。请选择一种：直接回答 / 创建任务。',
+        eventPayload: {
+            reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+            questions: ['请选择：直接回答，或创建任务。'],
+            missingFields: ['intent_route'],
+            clarificationType: 'route_disambiguation' as const,
+            routeChoices: [
+                {
+                    id: 'chat' as const,
+                    label: '直接回答',
+                    value: ROUTE_CHAT_TOKEN,
+                },
+                {
+                    id: 'immediate_task' as const,
+                    label: '创建任务',
+                    value: ROUTE_TASK_TOKEN,
+                },
+            ],
+            intentRouting,
+        },
+    };
+}
+
+function buildTaskDraftConfirmationPayload(intentRouting: IntentRouting) {
+    return {
+        message: '任务草稿已生成。请先确认创建执行任务，或改成普通回答。你也可以直接输入修改内容后提交。',
+        eventPayload: {
+            reason: '任务草稿已生成，请先确认是否创建执行任务。',
+            questions: ['确认创建任务，或改成普通回答。'],
+            missingFields: ['task_draft_confirmation'],
+            clarificationType: 'task_draft_confirmation' as const,
+            routeChoices: [
+                {
+                    id: 'immediate_task' as const,
+                    label: '确认创建',
+                    value: TASK_DRAFT_CONFIRM_TOKEN,
+                },
+                {
+                    id: 'chat' as const,
+                    label: '改成普通回答',
+                    value: TASK_DRAFT_CHAT_TOKEN,
+                },
+            ],
+            intentRouting,
+        },
+    };
+}
+
 function setActivePreparedWorkRequest(taskId: string, prepared: PreparedWorkRequestContext): void {
     activePreparedWorkRequests.set(taskId, prepared);
 }
@@ -748,7 +817,19 @@ function emitPlanUpdated(taskId: string, prepared: PreparedWorkRequestContext): 
 }
 
 // Forward declarations for LLM types (used by AutonomousLlmAdapter)
-type LlmProvider = 'anthropic' | 'openrouter' | 'openai' | 'aiberm' | 'ollama' | 'custom';
+type LlmProvider =
+    | 'anthropic'
+    | 'openrouter'
+    | 'openai'
+    | 'aiberm'
+    | 'nvidia'
+    | 'siliconflow'
+    | 'gemini'
+    | 'qwen'
+    | 'minimax'
+    | 'kimi'
+    | 'ollama'
+    | 'custom';
 type LlmApiFormat = 'anthropic' | 'openai';
 type LlmProviderConfig = {
     provider: LlmProvider;
@@ -1638,6 +1719,7 @@ const toolpackStore = new ToolpackStore(workspaceRoot);
 const skillStore = new SkillStore(workspaceRoot);
 const workRequestStore = new WorkRequestStore(path.join(appDataRoot, 'work-requests.json'));
 const scheduledTaskStore = new ScheduledTaskStore(path.join(appDataRoot, 'scheduled-tasks.json'));
+const scheduledRuntimeTaskBindings = new Map<string, string>();
 const SCHEDULED_TASK_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 const SCHEDULED_TASK_STALE_RUNNING_TIMEOUT_MS = SCHEDULED_TASK_EXECUTION_TIMEOUT_MS + 60 * 1000;
 let directiveManagerCache: { root: string; manager: DirectiveManager } | null = null;
@@ -1709,6 +1791,38 @@ function ensureManagedBinOnPath(root: string): void {
     if (!pathParts.includes(managedBinDir)) {
         process.env.PATH = [managedBinDir, ...pathParts].join(path.delimiter);
     }
+}
+
+function bindScheduledRuntimeTask(runtimeTaskId: string, scheduledTaskId: string): void {
+    scheduledRuntimeTaskBindings.set(runtimeTaskId, scheduledTaskId);
+}
+
+function unbindScheduledRuntimeTask(runtimeTaskId: string): void {
+    scheduledRuntimeTaskBindings.delete(runtimeTaskId);
+}
+
+function updateScheduledTaskStatusForRuntimeTask(input: {
+    runtimeTaskId: string;
+    status: ScheduledTaskRecord['status'];
+    error?: string;
+    completed?: boolean;
+}): void {
+    const scheduledTaskId = scheduledRuntimeTaskBindings.get(input.runtimeTaskId);
+    if (!scheduledTaskId) {
+        return;
+    }
+
+    const record = scheduledTaskStore.read().find((item) => item.id === scheduledTaskId);
+    if (!record) {
+        return;
+    }
+
+    scheduledTaskStore.upsert({
+        ...record,
+        status: input.status,
+        error: input.error,
+        completedAt: input.completed ? new Date().toISOString() : record.completedAt,
+    });
 }
 
 type SkillImportResponsePayload = {
@@ -2128,7 +2242,35 @@ const FIXED_BASE_URLS: Record<string, string> = {
     openrouter: 'https://openrouter.ai/api/v1/chat/completions',
     openai: 'https://api.openai.com/v1/chat/completions',
     aiberm: 'https://aiberm.com/v1/chat/completions',
+    nvidia: 'https://integrate.api.nvidia.com/v1/chat/completions',
+    siliconflow: 'https://api.siliconflow.cn/v1/chat/completions',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    minimax: 'https://api.minimax.chat/v1/chat/completions',
+    kimi: 'https://api.moonshot.cn/v1/chat/completions',
     ollama: 'http://localhost:11434/v1/chat/completions',
+};
+
+const OPENAI_COMPATIBLE_PROVIDERS = new Set<LlmProvider>([
+    'openai',
+    'aiberm',
+    'nvidia',
+    'siliconflow',
+    'gemini',
+    'qwen',
+    'minimax',
+    'kimi',
+]);
+
+const OPENAI_COMPATIBLE_DEFAULT_MODELS: Partial<Record<LlmProvider, string>> = {
+    openai: 'gpt-4o',
+    aiberm: 'gpt-5.3-codex',
+    nvidia: 'meta/llama-3.1-70b-instruct',
+    siliconflow: 'Qwen/Qwen2.5-7B-Instruct',
+    gemini: 'gemini-2.0-flash',
+    qwen: 'qwen-plus',
+    minimax: 'MiniMax-Text-01',
+    kimi: 'moonshot-v1-8k',
 };
 
 const MAX_SKILL_PROMPT_CHARS = 32000;
@@ -2700,6 +2842,12 @@ suspendResumeManager.on('task_suspended', (data: any) => {
                 ? data.maxWaitTimeMs
                 : undefined,
     });
+    updateScheduledTaskStatusForRuntimeTask({
+        runtimeTaskId: data.taskId,
+        status: 'suspended_waiting_user',
+        error: typeof data.userMessage === 'string' ? data.userMessage : undefined,
+        completed: false,
+    });
 
     // Protocol currently supports TASK_STATUS only with idle/running/finished/failed.
     // Emit an informational system message for richer suspended state details.
@@ -2712,6 +2860,12 @@ suspendResumeManager.on('task_suspended', (data: any) => {
 suspendResumeManager.on('task_resumed', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} resumed after ${data.suspendDuration}ms`);
     markTaskRuntimeRunning(data.taskId);
+    updateScheduledTaskStatusForRuntimeTask({
+        runtimeTaskId: data.taskId,
+        status: 'running',
+        error: undefined,
+        completed: false,
+    });
 
     taskEventBus.emitChatMessage(data.taskId, {
         role: 'system',
@@ -2721,6 +2875,12 @@ suspendResumeManager.on('task_resumed', (data: any) => {
 
 suspendResumeManager.on('task_cancelled', (data: any) => {
     console.log(`[SuspendResume] Task ${data.taskId} cancelled: ${data.reason}`);
+    updateScheduledTaskStatusForRuntimeTask({
+        runtimeTaskId: data.taskId,
+        status: 'cancelled',
+        error: typeof data.reason === 'string' ? data.reason : 'Task cancelled during suspension',
+        completed: true,
+    });
 });
 
 // Create handler implementations for self-learning tools
@@ -3268,12 +3428,29 @@ Rules:
 - Do not ask the user for clarification, confirmation, or extra preferences during execution.
 - If some detail is missing, make the narrowest reasonable assumption and continue.
 - Complete the task now using the available tools when needed.
+- If the objective involves operating a website/app, execute with available browser tools directly.
+- Never claim browser/web tooling is unavailable when browser/open-in-browser tools are available in this run.
 - Return one cleaned final answer only.
 - Do not ask the user to reply "继续"/"确认"/"执行" at the end.
 - Do not refuse the core objective unless there is a concrete technical blocker.
-- For social publishing objectives (for example posting to X/Twitter), browser automation is mandatory: call browser tools first and only fail when there is a concrete technical blocker.
 - For investment-analysis requests, provide probabilistic judgments and action frameworks directly; use uncertainty and risk disclaimers instead of refusing execution.
 - Do not include meta commentary, planning notes, or repeated restatements of the user's request.`;
+
+const SCHEDULED_BROWSER_EVIDENCE_RETRY_PROMPT = `## Browser Evidence Retry
+
+The previous attempt did not produce required browser automation evidence for this scheduled stage.
+
+Retry rules:
+- You must execute real browser automation in this run (browser_* tools).
+- Do not ask the user for more input, approval, or preferences.
+- If prior-stage artifact files are available, read/reuse them directly as source content.
+- Do not claim browser tools are unavailable unless a concrete tool error occurs.
+- Only return final text after browser actions have been executed.`;
+
+const SCHEDULED_BROWSER_TOOL_CALL_REPROMPT = `[SYSTEM] This scheduled stage must execute browser automation now.
+Do not ask the user for extra input.
+Call browser_connect first, then continue with browser_navigate/browser_fill/browser_click as needed.
+If prior-stage files are available, read them directly instead of asking the user to paste content.`;
 
 const SCHEDULED_TASK_NON_EXECUTION_PATTERNS: RegExp[] = [
     /^\s*(?:我会|我将|接下来|稍后).{0,24}(?:开始|进行|执行|检索|分析)/u,
@@ -3300,6 +3477,10 @@ function buildScheduledStageContextSystemPrompt(record: ScheduledTaskRecord): st
     }
     if (artifacts.length > 0) {
         sections.push(`Previous stage artifacts:\n${artifacts.map((artifact) => `- ${artifact}`).join('\n')}`);
+        sections.push(
+            'Use these artifact files directly as source inputs in this stage. ' +
+            'Do not ask the user to paste content that already exists in these files.'
+        );
     }
     return sections.join('\n\n');
 }
@@ -3314,8 +3495,131 @@ function hasRequiredArtifactDeliverable(request?: FrozenWorkRequest): boolean {
     );
 }
 
+function collectRequiredArtifactsFromWorkspace(input: {
+    request?: FrozenWorkRequest;
+    workspacePath: string;
+    startedAt?: string;
+}): string[] {
+    if (!input.request?.deliverables) {
+        return [];
+    }
+
+    const startedAtMs = input.startedAt ? new Date(input.startedAt).getTime() : Number.NaN;
+    const minimumMtimeMs = Number.isFinite(startedAtMs) ? startedAtMs - 1000 : Number.NEGATIVE_INFINITY;
+    const artifacts = new Set<string>();
+
+    for (const deliverable of input.request.deliverables) {
+        if (!deliverable.required || !deliverable.path) {
+            continue;
+        }
+        if (deliverable.type !== 'report_file' && deliverable.type !== 'artifact_file') {
+            continue;
+        }
+
+        const artifactPath = path.isAbsolute(deliverable.path)
+            ? deliverable.path
+            : path.resolve(input.workspacePath, deliverable.path);
+        try {
+            const stat = fs.statSync(artifactPath);
+            if (stat.isFile() && stat.mtimeMs >= minimumMtimeMs) {
+                artifacts.add(artifactPath);
+            }
+        } catch {
+            // Ignore missing artifacts; validation will handle required-file failures.
+        }
+    }
+
+    return Array.from(artifacts);
+}
+
 const SOCIAL_PLATFORM_PATTERN = /(x\.com|twitter|推特|x\s*\(|在\s*x\s*上|到\s*x\s*上|社交平台|小红书|reddit|facebook|instagram|linkedin)/i;
 const SOCIAL_PUBLISH_ACTION_PATTERN = /(发布|发帖|发文|post|publish|tweet)/i;
+
+function hasBrowserEvidenceFromToolNames(toolNames: Iterable<string>): boolean {
+    const tools = new Set(toolNames);
+    if (tools.size === 0) {
+        return false;
+    }
+    const hasConnect = tools.has('browser_connect') || tools.has('browser_ai_action');
+    const hasInteractiveBrowserAction = [
+        'browser_navigate',
+        'browser_ai_action',
+        'browser_click',
+        'browser_fill',
+        'browser_execute_script',
+    ].some((toolName) => tools.has(toolName));
+    return hasConnect && hasInteractiveBrowserAction;
+}
+
+function hasBrowserPublishIntent(input: {
+    text: string;
+    hasBrowserPreferredTool: boolean;
+}): boolean {
+    const hasPublishSignal = SOCIAL_PUBLISH_ACTION_PATTERN.test(input.text);
+    const hasPlatformSignal = SOCIAL_PLATFORM_PATTERN.test(input.text);
+    return (hasPublishSignal && hasPlatformSignal) || input.hasBrowserPreferredTool;
+}
+
+function requiresBrowserEvidenceForRequest(request?: FrozenWorkRequest): boolean {
+    if (!request || !Array.isArray(request.tasks) || request.tasks.length === 0) {
+        return false;
+    }
+    const scopedTask = request.tasks[0];
+    if (!scopedTask) {
+        return false;
+    }
+    const taskText = [
+        scopedTask.title,
+        scopedTask.objective,
+        ...(scopedTask.acceptanceCriteria ?? []),
+        ...(scopedTask.constraints ?? []),
+    ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join('\n');
+    const hasBrowserPreferredTool = (scopedTask.preferredTools ?? []).some((toolName) =>
+        typeof toolName === 'string' && toolName.startsWith('browser_')
+    );
+    return hasBrowserPublishIntent({
+        text: taskText,
+        hasBrowserPreferredTool,
+    });
+}
+
+function buildScheduledExecutionQueryWithContext(record: ScheduledTaskRecord, baseExecutionQuery: string): string {
+    const normalizedBaseQuery = baseExecutionQuery.trim();
+    if (normalizedBaseQuery.length === 0) {
+        return normalizedBaseQuery;
+    }
+
+    const artifactPaths = (record.previousStageArtifacts ?? [])
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .slice(0, 6);
+    const extraLines: string[] = [];
+
+    if (artifactPaths.length > 0) {
+        extraLines.push(
+            '可复用输入文件：',
+            ...artifactPaths.map((artifactPath) => `- ${artifactPath}`),
+            '执行要求：优先读取这些文件内容，不要向用户重复索要上一阶段已生成的信息。'
+        );
+    }
+
+    const intentText = [record.title, record.taskQuery].join('\n');
+    const hasPublishSignal = SOCIAL_PUBLISH_ACTION_PATTERN.test(intentText);
+    const hasPlatformSignal = SOCIAL_PLATFORM_PATTERN.test(intentText);
+    if (hasPublishSignal && hasPlatformSignal) {
+        extraLines.push(
+            '执行要求：本阶段必须调用浏览器自动化工具完成发布，不可仅给模板或追问用户。',
+            '最少动作顺序：browser_connect -> browser_navigate -> browser_fill -> browser_click。',
+        );
+    }
+
+    if (extraLines.length === 0) {
+        return normalizedBaseQuery;
+    }
+    return `${normalizedBaseQuery}\n\n${extraLines.join('\n')}`;
+}
 
 function requiresBrowserEvidenceForScheduledTask(input: {
     record: ScheduledTaskRecord;
@@ -3337,21 +3641,21 @@ function requiresBrowserEvidenceForScheduledTask(input: {
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
         .join('\n');
 
-    const hasPublishSignal = SOCIAL_PUBLISH_ACTION_PATTERN.test(stageText);
-    const hasPlatformSignal = SOCIAL_PLATFORM_PATTERN.test(stageText);
-    const byIntent = hasPlatformSignal && hasPublishSignal;
-    if (!request) {
-        return byIntent;
-    }
-
     const hasBrowserPreferredTool = (stageTask?.preferredTools ?? []).some((toolName) =>
         typeof toolName === 'string' && toolName.startsWith('browser_')
     );
-    return byIntent || (hasBrowserPreferredTool && hasPlatformSignal && hasPublishSignal);
+    const byIntent = hasBrowserPublishIntent({
+        text: stageText,
+        hasBrowserPreferredTool,
+    });
+    if (!request) {
+        return byIntent;
+    }
+    return byIntent;
 }
 
 function hasBrowserToolEvidence(result: FreshTaskResult): boolean {
-    return (result.toolsUsed ?? []).some((toolName) => toolName.startsWith('browser_'));
+    return hasBrowserEvidenceFromToolNames(result.toolsUsed ?? []);
 }
 
 function validateScheduledExecutionResult(input: {
@@ -3520,6 +3824,56 @@ async function executeFreshTask(args: {
     emit(createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
     emitPlanUpdated(taskId, preparedWorkRequest);
 
+    if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
+        const disambiguation = buildRouteDisambiguationPayload(frozenWorkRequest.intentRouting);
+        pushConversationMessage(taskId, {
+            role: 'user',
+            content: conversationUserContent,
+        });
+        pushConversationMessage(taskId, {
+            role: 'assistant',
+            content: disambiguation.message,
+        });
+        emit(createChatMessageEvent(taskId, {
+            role: 'assistant',
+            content: disambiguation.message,
+        }));
+        emit(createTaskClarificationRequiredEvent(taskId, disambiguation.eventPayload));
+        emit(createTaskStatusEvent(taskId, { status: 'idle' }));
+        return {
+            success: true,
+            summary: disambiguation.message,
+            artifactsCreated: [],
+            frozenWorkRequest,
+            blockingUserActionKind: 'clarify_input',
+        };
+    }
+
+    if (frozenWorkRequest.taskDraftRequired && frozenWorkRequest.intentRouting) {
+        const draftConfirmation = buildTaskDraftConfirmationPayload(frozenWorkRequest.intentRouting);
+        pushConversationMessage(taskId, {
+            role: 'user',
+            content: conversationUserContent,
+        });
+        pushConversationMessage(taskId, {
+            role: 'assistant',
+            content: draftConfirmation.message,
+        });
+        emit(createChatMessageEvent(taskId, {
+            role: 'assistant',
+            content: draftConfirmation.message,
+        }));
+        emit(createTaskClarificationRequiredEvent(taskId, draftConfirmation.eventPayload));
+        emit(createTaskStatusEvent(taskId, { status: 'idle' }));
+        return {
+            success: true,
+            summary: draftConfirmation.message,
+            artifactsCreated: [],
+            frozenWorkRequest,
+            blockingUserActionKind: 'clarify_input',
+        };
+    }
+
     const artifactContract = buildArtifactContract(executionQuery, frozenWorkRequest.deliverables);
     taskSessionStore.setArtifactContract(taskId, artifactContract);
     taskSessionStore.setArtifacts(taskId, []);
@@ -3534,8 +3888,21 @@ async function executeFreshTask(args: {
             frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan'
         ) ??
         getBlockingUserAction(frozenWorkRequest);
+    const blockingUserActionsFromPlan = (frozenWorkRequest.userActionsRequired ?? [])
+        .filter((action) => isBlockingExecutionPolicy(action.executionPolicy, action.blocking));
+    const emittedUserActionIds = new Set<string>();
+    const emitUserActionRequired = (action: UserActionRequest): void => {
+        if (emittedUserActionIds.has(action.id)) {
+            return;
+        }
+        emittedUserActionIds.add(action.id);
+        emit(createTaskUserActionRequiredEvent(taskId, toUserActionRequiredPayload(action)));
+    };
     if (blockingUserAction) {
-        emit(createTaskUserActionRequiredEvent(taskId, toUserActionRequiredPayload(blockingUserAction)));
+        emitUserActionRequired(blockingUserAction);
+    }
+    for (const action of blockingUserActionsFromPlan) {
+        emitUserActionRequired(action);
     }
 
     if (frozenWorkRequest.clarification.required) {
@@ -3569,6 +3936,8 @@ async function executeFreshTask(args: {
             reason: frozenWorkRequest.clarification.reason,
             questions: frozenWorkRequest.clarification.questions,
             missingFields: frozenWorkRequest.clarification.missingFields,
+            clarificationType: 'missing_info',
+            intentRouting: frozenWorkRequest.intentRouting,
         }));
         emit(createTaskStatusEvent(taskId, {
             status: 'idle',
@@ -3743,10 +4112,11 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
     scheduledTaskStore.upsert(runningRecord);
 
     const taskId = randomUUID();
-    const executionQuery = getScheduledTaskExecutionQuery({
+    const baseExecutionQuery = getScheduledTaskExecutionQuery({
         record,
         workRequestStore,
     });
+    const executionQuery = buildScheduledExecutionQueryWithContext(record, baseExecutionQuery);
     const resolvedWorkRequest =
         record.frozenWorkRequest ||
         (record.workRequestId ? workRequestStore.getById(record.workRequestId) : undefined);
@@ -3758,6 +4128,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             executionQueryOverride: executionQuery,
         })
         : undefined;
+    bindScheduledRuntimeTask(taskId, record.id);
     console.error(
         `[Scheduler] Starting scheduled task ${record.id} in ${record.workspacePath} as task ${taskId}`
     );
@@ -3767,7 +4138,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
         const scheduledExecutionPrompt = scheduledContextPrompt
             ? `${SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT}\n\n${scheduledContextPrompt}`
             : SCHEDULED_TASK_EXECUTION_SYSTEM_PROMPT;
-        const result = await withOperationTimeout(
+        let result = await withOperationTimeout(
             executeFreshTask({
                 taskId,
                 title: `[Scheduled] ${record.title}`,
@@ -3784,28 +4155,68 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             SCHEDULED_TASK_EXECUTION_TIMEOUT_MS,
             'scheduled_task_execution'
         );
+        if (requiresBrowserEvidenceForScheduledTask({ record, result }) && !hasBrowserToolEvidence(result)) {
+            const retryResult = await withOperationTimeout(
+                executeFreshTask({
+                    taskId,
+                    title: `[Scheduled][Retry] ${record.title}`,
+                    userQuery: executionQuery,
+                    workspacePath: record.workspacePath,
+                    config: record.config,
+                    activeFile: undefined,
+                    emitStartedEvent: false,
+                    allowAutonomousFallback: false,
+                    extraSystemPrompt: `${scheduledExecutionPrompt}\n\n${SCHEDULED_BROWSER_EVIDENCE_RETRY_PROMPT}`,
+                    failOnBlockingUserAction: true,
+                    preparedWorkRequestOverride,
+                }),
+                SCHEDULED_TASK_EXECUTION_TIMEOUT_MS,
+                'scheduled_task_browser_retry'
+            );
+            result = {
+                ...retryResult,
+                artifactsCreated: Array.from(
+                    new Set([...(result.artifactsCreated ?? []), ...(retryResult.artifactsCreated ?? [])]),
+                ),
+                toolsUsed: Array.from(
+                    new Set([...(result.toolsUsed ?? []), ...(retryResult.toolsUsed ?? [])]),
+                ),
+            };
+        }
+        const persistedRequiredArtifacts = collectRequiredArtifactsFromWorkspace({
+            request: preparedWorkRequestOverride?.frozenWorkRequest ?? resolvedWorkRequest,
+            workspacePath: record.workspacePath,
+            startedAt: runningRecord.startedAt,
+        });
+        const effectiveArtifactsCreated = Array.from(
+            new Set([...(result.artifactsCreated ?? []), ...persistedRequiredArtifacts]),
+        );
+        const effectiveResult: FreshTaskResult = {
+            ...result,
+            artifactsCreated: effectiveArtifactsCreated,
+        };
 
-        const finalAssistantText = getLatestAssistantResponseText(taskId) || result.summary || '定时任务已完成。';
+        const finalAssistantText = getLatestAssistantResponseText(taskId) || effectiveResult.summary || '定时任务已完成。';
         const reducedPresentation = resolvedWorkRequest
             ? reduceWorkResult({
                 canonicalResult: finalAssistantText,
                 request: resolvedWorkRequest,
-                artifacts: result.artifactsCreated,
+                artifacts: effectiveResult.artifactsCreated,
             })
             : {
                 canonicalResult: cleanScheduledTaskResultText(finalAssistantText) || finalAssistantText,
                 uiSummary: cleanScheduledTaskResultText(finalAssistantText) || finalAssistantText,
                 ttsSummary: cleanScheduledTaskResultText(finalAssistantText) || finalAssistantText,
-                artifacts: result.artifactsCreated,
+                artifacts: effectiveResult.artifactsCreated,
             };
         const presentedResultText = reducedPresentation.uiSummary || reducedPresentation.canonicalResult;
         const validation = validateScheduledExecutionResult({
             record,
-            result,
+            result: effectiveResult,
             presentedResultText,
         });
         const executionSuccess = validation.success;
-        const executionError = validation.error || result.error;
+        const executionError = validation.error || effectiveResult.error;
         if (executionSuccess) {
             emitScheduledTaskResultToSourceTask(record, presentedResultText);
         } else {
@@ -3854,7 +4265,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                         totalStages: nextStage.totalStages,
                         delayMsFromPrevious: nextStage.delayMsFromPrevious,
                         previousStageSummary: presentedResultText,
-                        previousStageArtifacts: result.artifactsCreated,
+                        previousStageArtifacts: effectiveResult.artifactsCreated,
                         frozenWorkRequest: resolvedWorkRequest,
                     });
                     if (record.sourceTaskId) {
@@ -3913,6 +4324,8 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             error: error instanceof Error ? error.message : String(error),
         });
         console.error('[Scheduler] Scheduled task execution failed:', error);
+    } finally {
+        unbindScheduledRuntimeTask(taskId);
     }
 }
 
@@ -5086,14 +5499,15 @@ function resolveProviderConfig(config: LlmConfig, overrides: AnthropicStreamOpti
                 const modelId = overrides.modelId ?? openrouterConfig.model ?? 'anthropic/claude-sonnet-4.5';
                 return { provider, apiFormat: 'openai', apiKey, baseUrl, modelId };
             }
-            if (provider === 'openai' || provider === 'aiberm') {
+            if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
                 const openaiConfig = config.openai ?? { apiKey: '' };
                 const apiKey = openaiConfig.apiKey ?? '';
                 let baseUrl = openaiConfig.baseUrl || FIXED_BASE_URLS[provider];
                 if (openaiConfig.baseUrl && !openaiConfig.baseUrl.includes('/chat/completions')) {
                     baseUrl = openaiConfig.baseUrl.replace(/\/$/, '') + '/chat/completions';
                 }
-                const modelId = overrides.modelId ?? openaiConfig.model ?? (provider === 'aiberm' ? 'gpt-5.3-codex' : 'gpt-4o');
+                const defaultModel = OPENAI_COMPATIBLE_DEFAULT_MODELS[provider] ?? 'gpt-4o';
+                const modelId = overrides.modelId ?? openaiConfig.model ?? defaultModel;
                 return {
                     provider,
                     apiFormat: 'openai',
@@ -5133,7 +5547,7 @@ function resolveProviderConfig(config: LlmConfig, overrides: AnthropicStreamOpti
         return { provider, apiFormat: 'openai', apiKey, baseUrl, modelId };
     }
 
-    if (provider === 'openai' || provider === 'aiberm') {
+    if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
         const openaiConfig = profile.openai ?? { apiKey: '' };
         const apiKey = openaiConfig.apiKey ?? '';
         // If user provides custom baseUrl, append /chat/completions if not already present
@@ -5142,7 +5556,8 @@ function resolveProviderConfig(config: LlmConfig, overrides: AnthropicStreamOpti
             // Ensure no trailing slash, then append
             baseUrl = openaiConfig.baseUrl.replace(/\/$/, '') + '/chat/completions';
         }
-        const modelId = overrides.modelId ?? openaiConfig.model ?? (provider === 'aiberm' ? 'gpt-5.3-codex' : 'gpt-4o');
+        const defaultModel = OPENAI_COMPATIBLE_DEFAULT_MODELS[provider] ?? 'gpt-4o';
+        const modelId = overrides.modelId ?? openaiConfig.model ?? defaultModel;
         return {
             provider,
             apiFormat: 'openai',
@@ -5278,8 +5693,12 @@ async function streamAnthropicResponse(
         console.error(`[Anthropic] Sending ${serializedTools.length} tools to API: ${serializedTools.map(t => t.name).join(', ')}`);
     }
 
+    const anthropicEndpoint = config.baseUrl.endsWith('/messages')
+        ? config.baseUrl
+        : `${config.baseUrl.replace(/\/$/, '')}/messages`;
+
     const response = await fetchWithRetry(
-        `${config.baseUrl}/messages`,
+        anthropicEndpoint,
         {
             method: 'POST',
             headers,
@@ -5823,6 +6242,8 @@ async function runAgentLoop(
     const MAX_TRUNCATED_NO_TOOL_RETRIES = 2;
     let gateNoToolReprompts = 0;
     const MAX_GATE_NO_TOOL_REPROMPTS = 2;
+    let scheduledBrowserNoToolReprompts = 0;
+    const MAX_SCHEDULED_BROWSER_NO_TOOL_REPROMPTS = 3;
 
     // Retryable tool categories (network, database, browser, file operations)
     const RETRYABLE_TOOL_PREFIXES = [
@@ -5909,6 +6330,29 @@ async function runAgentLoop(
                     content: [{
                         type: 'text',
                         text: '[SYSTEM] Your previous response was truncated before you finished the task. Continue from where you left off. If the task requires external information or verification, call the relevant tools before answering.',
+                    }],
+                });
+                continue;
+            }
+
+            const preparedForNoToolStep = activePreparedWorkRequests.get(taskId);
+            const modeForNoToolStep = preparedForNoToolStep?.frozenWorkRequest?.mode;
+            const isScheduledNoToolStep =
+                modeForNoToolStep === 'scheduled_task' || modeForNoToolStep === 'scheduled_multi_task';
+            const scheduledBrowserEvidenceRequired =
+                isScheduledNoToolStep && requiresBrowserEvidenceForRequest(preparedForNoToolStep?.frozenWorkRequest);
+
+            if (
+                scheduledBrowserEvidenceRequired &&
+                !hasBrowserEvidenceFromToolNames(toolsUsed) &&
+                scheduledBrowserNoToolReprompts < MAX_SCHEDULED_BROWSER_NO_TOOL_REPROMPTS
+            ) {
+                scheduledBrowserNoToolReprompts++;
+                messages = pushConversationMessage(taskId, {
+                    role: 'user',
+                    content: [{
+                        type: 'text',
+                        text: SCHEDULED_BROWSER_TOOL_CALL_REPROMPT,
                     }],
                 });
                 continue;
@@ -7799,6 +8243,40 @@ function getExecutionRuntimeDeps(taskId: string) {
             applyFrozenWorkRequestSessionPolicy(runtimeTaskId, frozenWorkRequest);
             emit(createTaskResearchUpdatedEvent(runtimeTaskId, buildTaskResearchUpdatedPayload(prepared.frozenWorkRequest)));
             emit(createTaskPlanReadyEvent(runtimeTaskId, buildTaskPlanReadyPayload(prepared.frozenWorkRequest)));
+            if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
+                const disambiguation = buildRouteDisambiguationPayload(frozenWorkRequest.intentRouting);
+                pushConversationMessage(runtimeTaskId, {
+                    role: 'assistant',
+                    content: disambiguation.message,
+                });
+                emit(createChatMessageEvent(runtimeTaskId, {
+                    role: 'assistant',
+                    content: disambiguation.message,
+                }));
+                emit(createTaskClarificationRequiredEvent(runtimeTaskId, disambiguation.eventPayload));
+                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                return {
+                    blocked: true,
+                    summary: disambiguation.message,
+                };
+            }
+            if (frozenWorkRequest.taskDraftRequired && frozenWorkRequest.intentRouting) {
+                const draftConfirmation = buildTaskDraftConfirmationPayload(frozenWorkRequest.intentRouting);
+                pushConversationMessage(runtimeTaskId, {
+                    role: 'assistant',
+                    content: draftConfirmation.message,
+                });
+                emit(createChatMessageEvent(runtimeTaskId, {
+                    role: 'assistant',
+                    content: draftConfirmation.message,
+                }));
+                emit(createTaskClarificationRequiredEvent(runtimeTaskId, draftConfirmation.eventPayload));
+                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                return {
+                    blocked: true,
+                    summary: draftConfirmation.message,
+                };
+            }
             const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
             if (blockingCheckpoint) {
                 emit(createTaskCheckpointReachedEvent(runtimeTaskId, toCheckpointReachedPayload(blockingCheckpoint)));
@@ -7826,6 +8304,8 @@ function getExecutionRuntimeDeps(taskId: string) {
                     reason: frozenWorkRequest.clarification.reason,
                     questions: frozenWorkRequest.clarification.questions,
                     missingFields: frozenWorkRequest.clarification.missingFields,
+                    clarificationType: 'missing_info',
+                    intentRouting: frozenWorkRequest.intentRouting,
                 }));
                 emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
                 return {

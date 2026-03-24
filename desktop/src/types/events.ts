@@ -121,6 +121,14 @@ export interface ResumeStrategy {
     preserveArtifacts: boolean;
 }
 
+export interface IntentRouting {
+    intent: 'chat' | 'immediate_task' | 'scheduled_task';
+    confidence: number;
+    reasonCodes: string[];
+    needsDisambiguation: boolean;
+    forcedByUserSelection?: boolean;
+}
+
 export interface ToolCall {
     toolName: string;
     toolId: string;
@@ -308,6 +316,10 @@ export interface TaskCardItem extends BaseEvent {
         action?: {
             label: string;
         };
+        choices?: Array<{
+            label: string;
+            value: string;
+        }>;
     };
     result?: {
         summary?: string;
@@ -370,11 +382,20 @@ export interface TaskClarificationRequiredPayload {
     reason?: string;
     questions: string[];
     missingFields?: string[];
+    clarificationType?: 'missing_info' | 'route_disambiguation' | 'task_draft_confirmation';
+    routeChoices?: Array<{
+        id: 'chat' | 'immediate_task';
+        label: string;
+        value: string;
+    }>;
+    intentRouting?: IntentRouting;
 }
 
 export interface TaskPlanReadyPayload {
     summary: string;
     mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
+    intentRouting?: IntentRouting;
+    taskDraftRequired?: boolean;
     tasks?: Array<{
         id: string;
         title: string;

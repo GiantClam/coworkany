@@ -674,6 +674,10 @@ async fn send_command_and_wait_with_timeout_policy(
     }
 }
 
+fn is_response_timeout_error(error: &str) -> bool {
+    error.starts_with("response timeout:")
+}
+
 fn app_data_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     app_handle.path().app_data_dir().map_err(|e| e.to_string())
 }
@@ -1174,7 +1178,27 @@ pub async fn get_voice_state(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("get_voice_state", json!({}));
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(
+                "get_voice_state timed out without invalidating sidecar transport: {}",
+                error
+            );
+            return Ok(GenericIpcResult {
+                success: true,
+                payload: json!({
+                    "success": true,
+                    "state": {
+                        "isSpeaking": false,
+                        "canStop": false
+                    },
+                    "degraded": true,
+                    "error": error
+                }),
+            });
+        }
+    };
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
     Ok(GenericIpcResult {
@@ -1191,13 +1215,32 @@ pub async fn get_voice_provider_status(
     app_handle: AppHandle,
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
+    let provider_mode = input.and_then(|value| value.provider_mode);
     let command = build_command(
         "get_voice_provider_status",
         json!({
-            "providerMode": input.and_then(|value| value.provider_mode),
+            "providerMode": provider_mode,
         }),
     );
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(
+                "get_voice_provider_status timed out without invalidating sidecar transport: {}",
+                error
+            );
+            return Ok(GenericIpcResult {
+                success: true,
+                payload: json!({
+                    "success": true,
+                    "preferredAsr": "system",
+                    "hasCustomAsr": false,
+                    "degraded": true,
+                    "error": error
+                }),
+            });
+        }
+    };
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
     Ok(GenericIpcResult {
@@ -1214,7 +1257,27 @@ pub async fn stop_voice(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("stop_voice", json!({}));
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(
+                "stop_voice timed out without invalidating sidecar transport: {}",
+                error
+            );
+            return Ok(GenericIpcResult {
+                success: true,
+                payload: json!({
+                    "success": false,
+                    "stopped": false,
+                    "state": {
+                        "isSpeaking": false,
+                        "canStop": false
+                    },
+                    "error": error
+                }),
+            });
+        }
+    };
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
     Ok(GenericIpcResult {
@@ -2284,7 +2347,29 @@ pub async fn list_toolpacks(
         "includeDisabled": input.and_then(|v| v.include_disabled).unwrap_or(true)
     });
     let command = build_command("list_toolpacks", payload);
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            if is_response_timeout_error(&error) {
+                warn!(
+                    "list_toolpacks timed out without invalidating sidecar transport: {}",
+                    error
+                );
+                json!({
+                    "type": "list_toolpacks_response",
+                    "payload": {
+                        "success": true,
+                        "toolpacks": [],
+                        "degraded": true,
+                        "error": error,
+                    }
+                })
+            } else {
+                return Err(error);
+            }
+        }
+    };
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -2381,7 +2466,29 @@ pub async fn list_claude_skills(
         "includeDisabled": input.and_then(|v| v.include_disabled).unwrap_or(true)
     });
     let command = build_command("list_claude_skills", payload);
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            if is_response_timeout_error(&error) {
+                warn!(
+                    "list_claude_skills timed out without invalidating sidecar transport: {}",
+                    error
+                );
+                json!({
+                    "type": "list_claude_skills_response",
+                    "payload": {
+                        "success": true,
+                        "skills": [],
+                        "degraded": true,
+                        "error": error,
+                    }
+                })
+            } else {
+                return Err(error);
+            }
+        }
+    };
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -2588,7 +2695,29 @@ pub async fn list_workspaces(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("list_workspaces", json!({}));
-    let response = send_command_and_wait(&state, command, 3000).await?;
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            if is_response_timeout_error(&error) {
+                warn!(
+                    "list_workspaces timed out without invalidating sidecar transport: {}",
+                    error
+                );
+                json!({
+                    "type": "list_workspaces_response",
+                    "payload": {
+                        "success": true,
+                        "workspaces": [],
+                        "degraded": true,
+                        "error": error,
+                    }
+                })
+            } else {
+                return Err(error);
+            }
+        }
+    };
     Ok(GenericIpcResult {
         success: true,
         payload: response,

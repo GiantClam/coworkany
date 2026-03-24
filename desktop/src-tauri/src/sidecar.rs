@@ -16,6 +16,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -41,7 +42,10 @@ use crate::shadow_fs::{self, ShadowFsState};
 
 struct PackagedSidecar {
     executable: std::path::PathBuf,
+    node_entry: Option<std::path::PathBuf>,
     bridge_script: Option<std::path::PathBuf>,
+    node_binary: Option<std::path::PathBuf>,
+    playwright_browsers_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -433,12 +437,30 @@ impl SidecarManager {
 
         info!("Sidecar spawned with PID: {:?}", child.id());
 
-        // Take ownership of stdin/stdout/stderr
-        let command_writer: SharedCommandWriter = Arc::new(Mutex::new(CommandWriter::Child(
-            child.stdin.take().expect("Failed to get stdin"),
-        )));
+        // Keep consuming child stdout for event stream and to avoid pipe backpressure.
         let stdout = child.stdout.take().expect("Failed to get stdout");
         let stderr = child.stderr.take().expect("Failed to get stderr");
+        let command_writer = if let Some(attached) = Self::try_attach_singleton_transport_with_retry(
+            &app_data_dir,
+            120,
+            Duration::from_millis(50),
+        )? {
+            info!(
+                "Connected to spawned sidecar singleton transport; routing commands via {}",
+                attached.descriptor
+            );
+            // Close the direct stdin pipe when singleton transport is active so command
+            // delivery does not depend on stdin behavior of the packaged runtime.
+            let _ = child.stdin.take();
+            attached.writer
+        } else {
+            warn!(
+                "Spawned sidecar singleton transport not available yet; falling back to stdin command pipe"
+            );
+            Arc::new(Mutex::new(CommandWriter::Child(
+                child.stdin.take().expect("Failed to get stdin"),
+            )))
+        };
         self.command_writer = Some(command_writer.clone());
         self.child = Some(child);
 
@@ -988,6 +1010,23 @@ impl SidecarManager {
         }
     }
 
+    fn try_attach_singleton_transport_with_retry(
+        app_data_dir: &str,
+        attempts: usize,
+        delay: Duration,
+    ) -> Result<Option<AttachedSingletonTransport>, SidecarError> {
+        let attempts = attempts.max(1);
+        for attempt in 0..attempts {
+            if let Some(attached) = Self::try_attach_singleton_transport(app_data_dir)? {
+                return Ok(Some(attached));
+            }
+            if attempt + 1 < attempts {
+                thread::sleep(delay);
+            }
+        }
+        Ok(None)
+    }
+
     fn spawn_packaged_sidecar(
         packaged: &PackagedSidecar,
         app_dir: &str,
@@ -999,12 +1038,46 @@ impl SidecarManager {
         );
 
         let working_dir = packaged
-            .executable
-            .parent()
-            .map(|path| path.to_path_buf())
+            .node_entry
+            .as_ref()
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+            .or_else(|| {
+                packaged
+                    .executable
+                    .parent()
+                    .map(|path| path.to_path_buf())
+            })
             .unwrap_or_else(|| std::path::PathBuf::from(app_dir));
 
-        let mut command = Command::new(&packaged.executable);
+        let use_node_runtime = Self::should_launch_packaged_sidecar_via_node();
+        let can_launch_via_node = packaged.node_binary.is_some() && packaged.node_entry.is_some();
+
+        if use_node_runtime && !can_launch_via_node {
+            warn!(
+                "COWORKANY_PACKAGED_SIDECAR_MODE=node requested, but bundled Node runtime is incomplete; falling back to compiled binary"
+            );
+        }
+
+        let mut command = if use_node_runtime && can_launch_via_node {
+            let node_binary = packaged
+                .node_binary
+                .as_ref()
+                .expect("checked by can_launch_via_node");
+            let node_entry = packaged
+                .node_entry
+                .as_ref()
+                .expect("checked by can_launch_via_node");
+            info!(
+                "Launching packaged sidecar via bundled Node entry (COWORKANY_PACKAGED_SIDECAR_MODE=node): {}",
+                node_entry.display()
+            );
+            let mut command = Command::new(node_binary);
+            command.arg(node_entry);
+            command
+        } else {
+            info!("Launching packaged sidecar via compiled binary");
+            Command::new(&packaged.executable)
+        };
         command
             .current_dir(&working_dir)
             .stdin(Stdio::piped())
@@ -1015,6 +1088,14 @@ impl SidecarManager {
 
         if let Some(bridge_script) = &packaged.bridge_script {
             command.env("COWORKANY_PLAYWRIGHT_BRIDGE", bridge_script);
+        }
+        if let Some(node_binary) = &packaged.node_binary {
+            command.env("COWORKANY_BUNDLED_NODE", node_binary);
+        }
+        if let Some(playwright_browsers_path) = &packaged.playwright_browsers_path {
+            command
+                .env("COWORKANY_PLAYWRIGHT_BROWSERS_PATH", playwright_browsers_path)
+                .env("PLAYWRIGHT_BROWSERS_PATH", playwright_browsers_path);
         }
 
         Self::apply_singleton_env(&mut command, app_data_dir);
@@ -1106,10 +1187,89 @@ impl SidecarManager {
         .into_iter()
         .find(|candidate| candidate.exists());
 
+        let node_entry = [
+            resource_dir.join("sidecar/coworkany-sidecar-node.mjs"),
+            resource_dir.join("coworkany-sidecar-node.mjs"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.exists());
+
+        let node_binary = [
+            resource_dir.join("sidecar/node/bin/node.exe"),
+            resource_dir.join("sidecar/node/bin/node"),
+            resource_dir.join("node/bin/node.exe"),
+            resource_dir.join("node/bin/node"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .and_then(|candidate| {
+            if Self::is_packaged_node_runtime_usable(&candidate) {
+                Some(candidate)
+            } else {
+                None
+            }
+        });
+
+        let playwright_browsers_path = [
+            resource_dir.join("sidecar/ms-playwright"),
+            resource_dir.join("ms-playwright"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.exists());
+
         Some(PackagedSidecar {
             executable,
+            node_entry,
             bridge_script,
+            node_binary,
+            playwright_browsers_path,
         })
+    }
+
+    fn should_launch_packaged_sidecar_via_node() -> bool {
+        matches!(
+            std::env::var("COWORKANY_PACKAGED_SIDECAR_MODE")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("node")
+        )
+    }
+
+    fn is_packaged_node_runtime_usable(node_binary: &Path) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(bin_dir) = node_binary.parent() else {
+                return false;
+            };
+            let direct_lib = bin_dir.join("libnode.141.dylib");
+            if direct_lib.exists() {
+                return true;
+            }
+
+            let fallback_lib_dir = bin_dir.join("../lib");
+            if let Ok(entries) = fs::read_dir(&fallback_lib_dir) {
+                for entry in entries.flatten() {
+                    if let Some(file_name) = entry.file_name().to_str() {
+                        if file_name.starts_with("libnode.") && file_name.ends_with(".dylib") {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            warn!(
+                "Bundled Node runtime missing libnode*.dylib next to {}; disabling packaged Node launch path",
+                node_binary.display()
+            );
+            return false;
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = node_binary;
+            true
+        }
     }
 
     fn first_non_empty_env(keys: &[&str]) -> Option<String> {

@@ -355,4 +355,101 @@ describe('buildTimelineItems', () => {
             'Task failed: fetch failed',
         ]);
     });
+
+    test('renders route disambiguation clarification as choice buttons in task card', () => {
+        const session = makeSession({
+            status: 'idle',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Plan pending route selection.',
+                        mode: 'immediate_task',
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_CLARIFICATION_REQUIRED',
+                    payload: {
+                        reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                        questions: ['请选择：直接回答，或创建任务。'],
+                        missingFields: ['intent_route'],
+                        clarificationType: 'route_disambiguation',
+                        routeChoices: [
+                            { id: 'chat', label: '直接回答', value: '__route_chat__' },
+                            { id: 'immediate_task', label: '创建任务', value: '__route_task__' },
+                        ],
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = result.items
+            .filter((item) => item.type === 'task_card')
+            .map((item) => item);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.collaboration?.choices).toEqual([
+            { label: '直接回答', value: '__route_chat__' },
+            { label: '创建任务', value: '__route_task__' },
+        ]);
+        expect(taskCards[0]?.collaboration?.input).toBeUndefined();
+    });
+
+    test('renders task draft confirmation as collaboration choices with optional edit input', () => {
+        const session = makeSession({
+            status: 'idle',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Task draft is ready for confirmation.',
+                        mode: 'immediate_task',
+                        taskDraftRequired: true,
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_CLARIFICATION_REQUIRED',
+                    payload: {
+                        reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                        questions: ['确认创建任务，或改成普通回答。'],
+                        missingFields: ['task_draft_confirmation'],
+                        clarificationType: 'task_draft_confirmation',
+                        routeChoices: [
+                            { id: 'immediate_task', label: '确认创建', value: '__task_draft_confirm__' },
+                            { id: 'chat', label: '改成普通回答', value: '__task_draft_chat__' },
+                        ],
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = result.items
+            .filter((item) => item.type === 'task_card')
+            .map((item) => item);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.collaboration?.actionId).toBe('task_draft_confirm');
+        expect(taskCards[0]?.collaboration?.choices).toEqual([
+            { label: '确认创建', value: '__task_draft_confirm__' },
+            { label: '改成普通回答', value: '__task_draft_chat__' },
+        ]);
+        expect(taskCards[0]?.collaboration?.input).toEqual({
+            placeholder: '输入修改后的任务说明（可选）',
+            submitLabel: '编辑后创建',
+        });
+    });
 });

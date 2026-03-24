@@ -13,7 +13,13 @@ export interface ScheduledTaskConfig {
     disabledTools?: string[];
 }
 
-export type ScheduledTaskStatus = 'scheduled' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type ScheduledTaskStatus =
+    | 'scheduled'
+    | 'running'
+    | 'suspended_waiting_user'
+    | 'completed'
+    | 'failed'
+    | 'cancelled';
 
 export interface ScheduledTaskRecord {
     id: string;

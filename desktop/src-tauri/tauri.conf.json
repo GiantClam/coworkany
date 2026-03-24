@@ -18,7 +18,11 @@
         ],
         "resources": {
             "../../sidecar/dist/coworkany-sidecar*": "sidecar/",
+            "../../sidecar/dist/coworkany-sidecar-node.mjs": "sidecar/coworkany-sidecar-node.mjs",
             "../../sidecar/dist/playwright-bridge.cjs": "sidecar/playwright-bridge.cjs",
+            "../../sidecar/dist/node_modules/playwright": "sidecar/node_modules/playwright",
+            "../../sidecar/dist/node_modules/playwright-core": "sidecar/node_modules/playwright-core",
+            "../../sidecar/dist/node/bin/node*": "sidecar/node/bin/",
             "../../rag-service/main.py": "rag-service/main.py",
             "../../rag-service/indexer.py": "rag-service/indexer.py",
             "../../rag-service/embeddings.py": "rag-service/embeddings.py",
