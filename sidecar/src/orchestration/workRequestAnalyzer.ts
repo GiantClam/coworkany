@@ -28,19 +28,72 @@ import {
     type UncertaintyItem,
     type UserActionRequest,
 } from './workRequestSchema';
-import { detectScheduledIntent, type ParsedScheduledIntent } from '../scheduling/scheduledTasks';
+import {
+    detectScheduledIntent,
+    type ChainedScheduledStageIntent,
+    type ParsedScheduledIntent,
+} from '../scheduling/scheduledTasks';
 import { cleanScheduledTaskResultText, normalizeScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
 import { analyzeLocalTaskIntent } from './localTaskIntent';
 import type { SystemFolderResolutionOptions } from '../system/wellKnownFolders';
 import { TARGET_RESOLUTION_RULE_TABLE, matchesAnyPattern } from './targetResolutionRules';
+import {
+    CHAT_ACK_PATTERN,
+    EXPLICIT_INTENT_COMMANDS,
+    ROUTED_FOLLOW_UP_PATTERN,
+    ROUTE_TOKEN_PATTERN,
+    STRUCTURED_APPROVAL_PATTERN,
+    STRUCTURED_BASE_ONLY_PATTERN,
+    STRUCTURED_CORRECTION_PATTERN,
+    STRUCTURED_ROUTE_PATTERN,
+    resolveUserRouteIntent,
+} from './workRequestIntentRules';
+import {
+    ACCEPTANCE_CRITERIA_OUTPUT_PATTERN,
+    ACCEPTANCE_CRITERIA_PRICE_PATTERN,
+    ACCEPTANCE_CRITERIA_TIME_ANCHOR_PATTERN,
+    AMBIGUOUS_REFERENCE_PATTERNS,
+    ARTIFACT_FORMAT_JSON_CUE_PATTERN,
+    CODE_CHANGE_EXCLUSION_PATTERN,
+    CODE_CHANGE_POSITIVE_PATTERN,
+    CODE_CHANGE_PRIMARY_PATTERN,
+    COMPLEX_PLANNING_GENERAL_CUE_PATTERN,
+    COMPLEX_PLANNING_SCHEDULED_CUE_PATTERN,
+    CONTEXT_CURRENT_PROJECT_PATTERN,
+    CONTEXT_FOLLOW_UP_EXTENDED_PATTERN,
+    CONTEXT_FOLLOW_UP_PATTERN,
+    COWORKANY_SELF_MANAGEMENT_ACTION_PATTERN,
+    COWORKANY_SELF_MANAGEMENT_DOMAIN_PATTERN,
+    EXPLICIT_ARTIFACT_OUTPUT_INTENT_PATTERN,
+    EXPLICIT_WEB_LOOKUP_CUE_PATTERN,
+    LANGUAGE_CHINESE_PATTERN,
+    LOCAL_PLAN_HOST_SCOPE_PATTERN,
+    LOCAL_PLAN_WRITE_WORKFLOW_PATTERN,
+    LOCAL_SEARCH_SCOPE_PATTERN,
+    PLAN_APPROVAL_CUE_PATTERN,
+    PREFERENCE_PERSISTENCE_PATTERN,
+    PREFERENCE_BEST_PRACTICE_PATTERN,
+    PREFERENCE_CHINESE_PATTERN,
+    PREFERENCE_CONCISE_PATTERN,
+    PREFERENCE_DEEP_PATTERN,
+    PRICE_SENSITIVE_INVESTMENT_PATTERN,
+    RESEARCH_BEST_PRACTICE_CUE_PATTERN,
+    TASK_CATEGORY_BROWSER_CUE_PATTERN,
+    TASK_CATEGORY_MIXED_CUE_PATTERN,
+    TASK_CATEGORY_RESEARCH_CUE_PATTERN,
+    UI_FORMAT_ARTIFACT_CUE_PATTERN,
+    UI_FORMAT_REPORT_CUE_PATTERN,
+    UI_FORMAT_TABLE_CUE_PATTERN,
+    WEB_ANALYSIS_CUE_PATTERN,
+    WEB_FRESHNESS_STATUS_CUE_PATTERN,
+} from './workRequestSemanticRules';
 
 function detectLanguage(text: string): string {
-    return /[\u4e00-\u9fff]/.test(text) ? 'zh-CN' : 'en';
+    return LANGUAGE_CHINESE_PATTERN.test(text) ? 'zh-CN' : 'en';
 }
 
 function isPriceSensitiveInvestmentTask(text: string): boolean {
-    return /(买入价|买入价格|买入区间|建仓价|建仓区间|入场价|买点|目标价|target price|entry price|buy price|buy range|entry range|price range|at what price)/i
-        .test(text);
+    return PRICE_SENSITIVE_INVESTMENT_PATTERN.test(text);
 }
 
 function isPrecisionSensitiveLookupTask(text: string): boolean {
@@ -79,15 +132,14 @@ function isComplexPlanningTask(text: string, mode: NormalizedWorkRequest['mode']
         if (text.length > 180) {
             return true;
         }
-        return /(计划|规划|拆分|分解|设计|方案|架构|多步|workflow|multi-step|plan|break down|decompose|best practice|调研|research|analysis)/i
-            .test(text);
+        return COMPLEX_PLANNING_SCHEDULED_CUE_PATTERN.test(text);
     }
 
     if (text.length > 120) {
         return true;
     }
 
-    return /(计划|规划|拆分|分解|设计|方案|架构|实现|多步|multi-step|plan|break down|decompose|workflow|research)/i.test(text);
+    return COMPLEX_PLANNING_GENERAL_CUE_PATTERN.test(text);
 }
 
 function hasExplicitWebLookupIntent(text: string): boolean {
@@ -95,21 +147,18 @@ function hasExplicitWebLookupIntent(text: string): boolean {
         return false;
     }
 
-    const hasLookupCue =
-        /(检索|搜索|查找|查询|搜集|收集|爬取|crawl|scrape|search|lookup|find|news|新闻|latest|最新|事实核验|核验|source|来源|证据|时间线|timeline)/i
-            .test(text);
+    const hasLookupCue = EXPLICIT_WEB_LOOKUP_CUE_PATTERN.test(text);
     if (hasLookupCue) {
         return true;
     }
 
-    const hasAnalysisCue = /(深度分析|深入分析|analysis|why|为什么|原因|解读)/i.test(text);
-    const hasFreshnessOrStatusCue = /(最新|today|今日|最近|近期|news|动态|官方|公告|关闭|关停|停用|下线)/i.test(text);
+    const hasAnalysisCue = WEB_ANALYSIS_CUE_PATTERN.test(text);
+    const hasFreshnessOrStatusCue = WEB_FRESHNESS_STATUS_CUE_PATTERN.test(text);
     return hasAnalysisCue && hasFreshnessOrStatusCue;
 }
 
 function isLocalSearchScopeText(text: string): boolean {
-    return /(当前项目|当前仓库|现有流程|workspace|repo|repository|代码库|本地|目录|文件夹|文件|路径|log|日志|代码|src|package\.json)/i
-        .test(text);
+    return LOCAL_SEARCH_SCOPE_PATTERN.test(text);
 }
 
 function shouldRequireWebDomainResearch(input: {
@@ -140,20 +189,20 @@ function normalizeOutputSlug(text: string): string {
 }
 
 function inferUiFormat(text: string): PresentationContract['uiFormat'] {
-    if (/(ppt|slides|deck|演示|幻灯片|汇报)/i.test(text)) {
+    if (UI_FORMAT_ARTIFACT_CUE_PATTERN.test(text)) {
         return 'artifact';
     }
-    if (/(报告|report|总结|summary|分析|analysis|方案)/i.test(text)) {
+    if (UI_FORMAT_REPORT_CUE_PATTERN.test(text)) {
         return 'report';
     }
-    if (/(表格|table|清单|list)/i.test(text)) {
+    if (UI_FORMAT_TABLE_CUE_PATTERN.test(text)) {
         return 'table';
     }
     return 'chat_message';
 }
 
 function inferArtifactDirectory(text: string): string {
-    if (/(报告|report|总结|summary|分析|analysis|方案)/i.test(text)) {
+    if (UI_FORMAT_REPORT_CUE_PATTERN.test(text)) {
         return 'reports';
     }
     return 'artifacts';
@@ -194,10 +243,10 @@ function inferArtifactFormat(text: string): string {
     if (explicitOutputTargetPath) {
         return inferFormatFromPath(explicitOutputTargetPath);
     }
-    if (/(ppt|slides|deck|演示|幻灯片|汇报)/i.test(text)) {
+    if (UI_FORMAT_ARTIFACT_CUE_PATTERN.test(text)) {
         return 'pptx';
     }
-    if (/(json)/i.test(text)) {
+    if (ARTIFACT_FORMAT_JSON_CUE_PATTERN.test(text)) {
         return 'json';
     }
     return 'md';
@@ -208,21 +257,18 @@ function hasExplicitArtifactOutputIntent(text: string): boolean {
         return true;
     }
 
-    if (
-        /(?:保存(?:到|为)?|写入(?:到)?|写到|输出到|导出(?:到|为)?|生成(?:到)?|save(?:\s+it)?\s+to|write(?:\s+it)?\s+to|output(?:\s+it)?\s+to|export(?:\s+it)?\s+(?:to|as)|create\s+(?:an?\s+)?(?:file|document))/i
-            .test(text)
-    ) {
+    if (EXPLICIT_ARTIFACT_OUTPUT_INTENT_PATTERN.test(text)) {
         return true;
     }
     return false;
 }
 
 function isCodeChangeTask(text: string): boolean {
-    if (/(方案|plan|规划|拆分|设计|architecture|验收标准)/i.test(text) && !/(代码|code|refactor|修复|fix|实现功能|实现代码)/i.test(text)) {
+    if (CODE_CHANGE_EXCLUSION_PATTERN.test(text) && !CODE_CHANGE_PRIMARY_PATTERN.test(text)) {
         return false;
     }
 
-    return /(代码|code|refactor|修复|fix|实现功能|实现代码|实现一个.*功能|改这个 bug|修这个 bug)/i.test(text);
+    return CODE_CHANGE_POSITIVE_PATTERN.test(text);
 }
 
 const SOCIAL_PLATFORM_CUE_PATTERN =
@@ -265,8 +311,7 @@ function buildDefaultingPolicy(input: {
 }
 
 function hasPlanApprovalCue(text: string): boolean {
-    return /(按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续执行|开始执行|用户确认|user approval|go ahead|proceed|approved?|ship it|looks good,? continue)/i
-        .test(text);
+    return PLAN_APPROVAL_CUE_PATTERN.test(text);
 }
 
 function buildHitlPolicy(input: {
@@ -406,7 +451,7 @@ function buildRuntimeIsolationPolicy(input: {
 }
 
 function isPreferencePersistenceTask(text: string): boolean {
-    return /\b(preference|prefer|default setting|remember that i|save.*preference)\b|偏好|喜欢|默认设置|记住我/i.test(text);
+    return PREFERENCE_PERSISTENCE_PATTERN.test(text);
 }
 
 function isWorkspaceMemoryTask(goalFrame: GoalFrame): boolean {
@@ -509,8 +554,8 @@ function buildDeliverables(input: {
 
     if (
         input.localPlanWorkflow &&
-        /(organize|deduplicate|delete)/i.test(input.localPlanWorkflow) &&
-        /downloads|host-folder|explicit-path/i.test(input.localPlanWorkflow) &&
+        LOCAL_PLAN_WRITE_WORKFLOW_PATTERN.test(input.localPlanWorkflow) &&
+        LOCAL_PLAN_HOST_SCOPE_PATTERN.test(input.localPlanWorkflow) &&
         input.localPlanRequiresHostAccess
     ) {
         deliverables.push({
@@ -755,16 +800,16 @@ function detectTaskCategory(input: {
     if (isCodeChangeTask(text)) {
         return 'coding';
     }
-    if (/(browser|playwright|网页|网站|页面|登录|timeline|时间线)/i.test(text)) {
+    if (TASK_CATEGORY_BROWSER_CUE_PATTERN.test(text)) {
         return 'browser';
     }
     if (isCoworkanySelfManagementTask(text)) {
         return 'app_management';
     }
-    if (/(研究|research|调研|分析|best practice|最佳实践|方案)/i.test(text)) {
+    if (TASK_CATEGORY_RESEARCH_CUE_PATTERN.test(text)) {
         return 'research';
     }
-    if (/(以及|and|同时|across|multi)/i.test(text)) {
+    if (TASK_CATEGORY_MIXED_CUE_PATTERN.test(text)) {
         return 'mixed';
     }
     return 'mixed';
@@ -773,16 +818,16 @@ function detectTaskCategory(input: {
 function extractPreferences(text: string): string[] {
     const preferences: string[] = [];
 
-    if (/(最优|optimal|best practice|最佳实践)/i.test(text)) {
+    if (PREFERENCE_BEST_PRACTICE_PATTERN.test(text)) {
         preferences.push('Prefer best-practice or high-quality approaches.');
     }
-    if (/(简洁|concise|简明)/i.test(text)) {
+    if (PREFERENCE_CONCISE_PATTERN.test(text)) {
         preferences.push('Prefer concise output.');
     }
-    if (/(详细|深入|deep|深度)/i.test(text)) {
+    if (PREFERENCE_DEEP_PATTERN.test(text)) {
         preferences.push('Prefer deeper analysis when useful.');
     }
-    if (/(中文|zh|汉语)/i.test(text)) {
+    if (PREFERENCE_CHINESE_PATTERN.test(text)) {
         preferences.push('Prefer Chinese output.');
     }
 
@@ -796,10 +841,10 @@ function buildContextSignals(input: {
 }): string[] {
     const signals = new Set<string>([`mode:${input.mode}`]);
 
-    if (/(当前项目|当前仓库|现有流程|workspace|repo|repository|代码库)/i.test(input.text)) {
+    if (CONTEXT_CURRENT_PROJECT_PATTERN.test(input.text)) {
         signals.add('references_current_project');
     }
-    if (/(继续|resume|follow-up|接着|刚才|上面的)/i.test(input.text)) {
+    if (CONTEXT_FOLLOW_UP_PATTERN.test(input.text)) {
         signals.add('references_existing_conversation');
     }
     if (input.taskDefinition.localPlanHint?.targetFolder) {
@@ -857,7 +902,7 @@ function buildResearchQueries(input: {
     const seen = new Set<string>();
     const normalizedText = input.text.trim();
 
-    if (/(当前项目|当前仓库|现有流程|workspace|repo|repository|代码库)/i.test(normalizedText)) {
+    if (CONTEXT_CURRENT_PROJECT_PATTERN.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'context_research',
             source: 'workspace',
@@ -867,7 +912,7 @@ function buildResearchQueries(input: {
         });
     }
 
-    if (/(继续|resume|follow-up|接着|刚才|上面的|上述|前述)/i.test(normalizedText)) {
+    if (CONTEXT_FOLLOW_UP_EXTENDED_PATTERN.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'context_research',
             source: 'conversation',
@@ -898,7 +943,7 @@ function buildResearchQueries(input: {
         });
     }
 
-    if (isComplexPlanningTask(normalizedText, input.mode) || /(最佳实践|best practice|调研|research|架构|方案|设计)/i.test(normalizedText)) {
+    if (isComplexPlanningTask(normalizedText, input.mode) || RESEARCH_BEST_PRACTICE_CUE_PATTERN.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'domain_research',
             source: 'web',
@@ -1222,8 +1267,8 @@ function buildReplanPolicy(): ReplanPolicy {
 }
 
 function isCoworkanySelfManagementTask(text: string): boolean {
-    return /(coworkany|skillhub|clawhub|github:|github\.com|serper key|api key|工作区|workspace|配置|config|技能|skill)/i.test(text)
-        && /(安装|install|启用|enable|禁用|disable|删除|remove|卸载|uninstall|查看|inspect|列出|list|配置|config)/i.test(text);
+    return COWORKANY_SELF_MANAGEMENT_DOMAIN_PATTERN.test(text)
+        && COWORKANY_SELF_MANAGEMENT_ACTION_PATTERN.test(text);
 }
 
 function requiresBrowserAutomationSkill(text: string): boolean {
@@ -1263,7 +1308,7 @@ function inferPreferredSkills(text: string, mode: NormalizedWorkRequest['mode'])
 function isLikelyChat(text: string): boolean {
     const trimmed = text.trim().toLowerCase();
     if (!trimmed) return true;
-    return /^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i.test(trimmed);
+    return CHAT_ACK_PATTERN.test(trimmed);
 }
 
 type ForcedIntentHint = {
@@ -1278,56 +1323,66 @@ function extractForcedIntentHint(text: string): ForcedIntentHint | undefined {
         return undefined;
     }
 
-    const routedFollowUpMatch = trimmed.match(
-        /^(?:原始任务|Original task)\s*[:：][\s\S]+?\n(?:用户路由|User route)\s*[:：]\s*(chat|task|immediate_task)\s*$/i
-    );
+    const routedFollowUpMatch = trimmed.match(ROUTED_FOLLOW_UP_PATTERN);
     if (routedFollowUpMatch?.[1]) {
-        const route = routedFollowUpMatch[1].toLowerCase();
-        return {
-            intent: route === 'chat' ? 'chat' : 'immediate_task',
-            reasonCode: 'user_route_choice',
-            forcedByUserSelection: true,
-        };
+        const intent = resolveUserRouteIntent(routedFollowUpMatch[1]);
+        if (intent) {
+            return {
+                intent,
+                reasonCode: 'user_route_choice',
+                forcedByUserSelection: true,
+            };
+        }
     }
 
-    if (/^__route_chat__$/i.test(trimmed)) {
-        return {
-            intent: 'chat',
-            reasonCode: 'user_route_choice',
-            forcedByUserSelection: true,
-        };
-    }
-    if (/^__route_task__$/i.test(trimmed)) {
-        return {
-            intent: 'immediate_task',
-            reasonCode: 'user_route_choice',
-            forcedByUserSelection: true,
-        };
+    const routeTokenMatch = trimmed.match(ROUTE_TOKEN_PATTERN);
+    if (routeTokenMatch?.[1]) {
+        const intent = resolveUserRouteIntent(routeTokenMatch[1]);
+        if (intent) {
+            return {
+                intent,
+                reasonCode: 'user_route_choice',
+                forcedByUserSelection: true,
+            };
+        }
     }
 
-    if (/^\/ask\b/i.test(trimmed)) {
-        return {
-            intent: 'chat',
-            reasonCode: 'explicit_command',
-            forcedByUserSelection: false,
-        };
-    }
-    if (/^\/task\b/i.test(trimmed)) {
-        return {
-            intent: 'immediate_task',
-            reasonCode: 'explicit_command',
-            forcedByUserSelection: false,
-        };
-    }
-    if (/^\/schedule\b/i.test(trimmed)) {
-        return {
-            intent: 'scheduled_task',
-            reasonCode: 'explicit_command',
-            forcedByUserSelection: false,
-        };
+    for (const command of EXPLICIT_INTENT_COMMANDS) {
+        if (command.pattern.test(trimmed)) {
+            return {
+                intent: command.intent,
+                reasonCode: 'explicit_command',
+                forcedByUserSelection: false,
+            };
+        }
     }
 
     return undefined;
+}
+
+function resolveWorkRequestMode(input: {
+    scheduledIntent: ParsedScheduledIntent | null;
+    chainedScheduledStages: ChainedScheduledStageIntent[];
+    forcedIntentHint?: ForcedIntentHint;
+    executableText: string;
+}): NormalizedWorkRequest['mode'] {
+    if (input.scheduledIntent) {
+        return input.chainedScheduledStages.length > 0
+            ? 'scheduled_multi_task'
+            : 'scheduled_task';
+    }
+
+    if (input.forcedIntentHint?.intent === 'scheduled_task') {
+        return 'scheduled_task';
+    }
+    if (input.forcedIntentHint?.intent === 'chat') {
+        return 'chat';
+    }
+    if (input.forcedIntentHint?.intent === 'immediate_task') {
+        return 'immediate_task';
+    }
+
+    return isLikelyChat(input.executableText) ? 'chat' : 'immediate_task';
 }
 
 function buildIntentRouting(input: {
@@ -1346,7 +1401,7 @@ function buildIntentRouting(input: {
                 ? 'scheduled_task'
                 : 'immediate_task';
 
-    if (input.forcedIntentHint) {
+    if (input.forcedIntentHint?.reasonCode === 'explicit_command') {
         return {
             intent: input.forcedIntentHint.intent,
             confidence: 0.99,
@@ -1362,6 +1417,16 @@ function buildIntentRouting(input: {
             confidence: 0.96,
             reasonCodes: ['schedule_phrase'],
             needsDisambiguation: false,
+        };
+    }
+
+    if (input.forcedIntentHint) {
+        return {
+            intent: input.forcedIntentHint.intent,
+            confidence: 0.99,
+            reasonCodes: [input.forcedIntentHint.reasonCode],
+            needsDisambiguation: false,
+            forcedByUserSelection: input.forcedIntentHint.forcedByUserSelection,
         };
     }
 
@@ -1512,13 +1577,7 @@ function isAmbiguousReferenceRequest(text: string): boolean {
         return false;
     }
 
-    const ambiguousPatterns = [
-        /^(?:继续|接着|按刚才|照上面|continue|resume|follow up|same as above)(?:\s+(?:处理|做|看|handle|work on))?(?:\s+(?:这个|那个|这些|上面的|刚才的|this|that|those|it|them))?[.!?？。!]*$/i,
-        /^(?:这个|那个|这些|上面的|刚才的|this|that|those|it|them|same as above)[.!?？。!]*$/i,
-        /^(?:继续处理|继续做|continue with|resume with|handle|work on)\s*(?:这个|那个|this|that|it|them)[.!?？。!]*$/i,
-    ];
-
-    return ambiguousPatterns.some((pattern) => pattern.test(trimmed));
+    return AMBIGUOUS_REFERENCE_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 function buildTaskDefinition(
@@ -1531,12 +1590,12 @@ function buildTaskDefinition(
     const objective = (segments[0] || text).trim();
     const constraints = segments.slice(1);
     const acceptanceCriteria = segments.filter((segment) =>
-        /(只保留|必须|不要|输出|格式|每篇|唯一标识|summary|summarize|reply only|只回复)/i.test(segment)
+        ACCEPTANCE_CRITERIA_OUTPUT_PATTERN.test(segment)
     );
     const language = detectLanguage(text);
     if (isPriceSensitiveInvestmentTask(text)) {
         const hasNumericPriceCriterion = acceptanceCriteria.some((criterion) =>
-            /(价格|价位|区间|买入|目标价|price|entry|buy)/i.test(criterion)
+            ACCEPTANCE_CRITERIA_PRICE_PATTERN.test(criterion)
         );
         if (!hasNumericPriceCriterion) {
             acceptanceCriteria.push(
@@ -1547,7 +1606,7 @@ function buildTaskDefinition(
         }
 
         const hasTimeAnchorCriterion = acceptanceCriteria.some((criterion) =>
-            /(截至|时间|日期|交易日|盘中|收盘|as of|timestamp|date|session)/i.test(criterion)
+            ACCEPTANCE_CRITERIA_TIME_ANCHOR_PATTERN.test(criterion)
         );
         if (!hasTimeAnchorCriterion) {
             acceptanceCriteria.push(
@@ -1659,30 +1718,27 @@ function unwrapStructuredFollowUpSourceText(text: string): string {
         return trimmed;
     }
 
-    const correctionWrappedMatch = trimmed.match(
-        /^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+?)\n(?:用户更正|User correction)\s*[:：]\s*([\s\S]*)$/i
-    );
+    const correctionWrappedMatch = trimmed.match(STRUCTURED_CORRECTION_PATTERN);
     if (correctionWrappedMatch?.[1]) {
         const baseObjective = correctionWrappedMatch[1].trim();
         const correctionText = (correctionWrappedMatch[2] ?? '').trim();
         return [baseObjective, correctionText].filter(Boolean).join('\n').trim();
     }
 
-    const approvalWrappedMatch = trimmed.match(
-        /^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+?)\n(?:用户确认|User approval)\s*[:：][\s\S]*$/i
-    );
+    const approvalWrappedMatch = trimmed.match(STRUCTURED_APPROVAL_PATTERN);
     if (approvalWrappedMatch?.[1]) {
         return approvalWrappedMatch[1].trim();
     }
 
-    const routedFollowUpMatch = trimmed.match(
-        /^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+?)\n(?:用户路由|User route)\s*[:：]\s*(?:chat|task|immediate_task)\s*$/i
-    );
+    const routedFollowUpMatch = trimmed.match(STRUCTURED_ROUTE_PATTERN);
     if (routedFollowUpMatch?.[1]) {
-        return routedFollowUpMatch[1].trim();
+        const routeIntent = resolveUserRouteIntent(routedFollowUpMatch[2]);
+        if (routeIntent) {
+            return routedFollowUpMatch[1].trim();
+        }
     }
 
-    const baseOnlyWrappedMatch = trimmed.match(/^(?:原始任务|Original task)\s*[:：]\s*([\s\S]+)$/i);
+    const baseOnlyWrappedMatch = trimmed.match(STRUCTURED_BASE_ONLY_PATTERN);
     if (baseOnlyWrappedMatch?.[1]) {
         return baseOnlyWrappedMatch[1].trim();
     }
@@ -1695,8 +1751,7 @@ function hasStructuredApprovalFollowUp(text: string): boolean {
     if (!trimmed) {
         return false;
     }
-    return /^(?:原始任务|Original task)\s*[:：]\s*[\s\S]+?\n(?:用户确认|User approval)\s*[:：][\s\S]*$/i
-        .test(trimmed);
+    return STRUCTURED_APPROVAL_PATTERN.test(trimmed);
 }
 
 export function analyzeWorkRequest(input: {
@@ -1716,17 +1771,12 @@ export function analyzeWorkRequest(input: {
     const planningText = scheduledIntent
         ? [scheduledIntent.taskQuery, ...chainedScheduledStages.map((stage) => stage.taskQuery)].join('。')
         : executableText;
-    const mode = scheduledIntent
-        ? chainedScheduledStages.length > 0
-            ? 'scheduled_multi_task'
-            : 'scheduled_task'
-        : forcedIntentHint?.intent === 'chat'
-            ? 'chat'
-            : forcedIntentHint?.intent === 'immediate_task' || forcedIntentHint?.intent === 'scheduled_task'
-                ? 'immediate_task'
-                : isLikelyChat(executableText)
-            ? 'chat'
-            : 'immediate_task';
+    const mode = resolveWorkRequestMode({
+        scheduledIntent,
+        chainedScheduledStages,
+        forcedIntentHint,
+        executableText,
+    });
     const language = detectLanguage(sourceText);
     const clarification = buildClarificationDecision({
         sourceText,

@@ -116,6 +116,18 @@ describe('scheduled task intent parsing', () => {
         expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:00:00.000Z');
     });
 
+    test('defaults recurring chinese interval amount to 1 when omitted', () => {
+        const parsed = detectScheduledIntent(
+            '创建定时任务，每分钟叫我喝水一次',
+            new Date('2026-03-25T10:00:00+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('叫我喝水一次');
+        expect(parsed?.recurrence).toEqual({ kind: 'rrule', value: 'FREQ=MINUTELY;INTERVAL=1' });
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:00:00.000Z');
+    });
+
     test('detects recurring english interval scheduling intent', () => {
         const parsed = detectScheduledIntent(
             'Create scheduled task: every 2 hours remind me to stretch.',

@@ -207,9 +207,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenSettings }) => {
     };
 
     const handleCreateTask = async () => {
+        selectWorkspace(null);
         const taskId = createDraftSession({
             title: t('chat.newSessionTitle'),
-            workspacePath: activeWorkspace?.path,
         });
         setActiveTask(taskId);
     };

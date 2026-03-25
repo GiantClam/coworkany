@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import { deleteConfig, getConfig, saveConfig } from '../lib/configStore';
+import { deleteConfig, saveConfig } from '../lib/configStore';
 
 // ============================================================================
 // Types
@@ -111,16 +111,10 @@ function extractSuccess(payload: any): boolean {
 function resolveActiveWorkspace(
     list: Workspace[],
     currentActive: Workspace | null,
-    savedId: string | null,
 ): Workspace | null {
     if (currentActive) {
         const fresh = list.find((workspace) => workspace.id === currentActive.id);
         if (fresh) return fresh;
-    }
-
-    if (savedId) {
-        const saved = list.find((workspace) => workspace.id === savedId);
-        if (saved) return saved;
     }
     return null;
 }
@@ -158,8 +152,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
                 const data = result.payload ? toPayload(result) : {};
                 const list = extractWorkspaces(data);
-                const savedId = await getConfig<string>('activeWorkspaceId');
-                const activeWorkspace = resolveActiveWorkspace(list, get().activeWorkspace, savedId);
+                const activeWorkspace = resolveActiveWorkspace(list, get().activeWorkspace);
 
                 if (activeWorkspace) {
                     await saveConfig('activeWorkspaceId', activeWorkspace.id);

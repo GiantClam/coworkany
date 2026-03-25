@@ -2,6 +2,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { type FrozenWorkRequest, type PresentationContract } from '../orchestration/workRequestSchema';
+import {
+    CHAINED_SCHEDULE_PATTERN,
+    INLINE_CHINESE_RELATIVE_TIME_PATTERN,
+    INLINE_ENGLISH_RELATIVE_TIME_PATTERN,
+    LEADING_CHINESE_RELATIVE_TIME_PATTERN,
+    LEADING_ENGLISH_RELATIVE_TIME_PATTERN,
+    RECURRING_INTERVAL_PATTERN,
+    RECURRING_MARKER_PATTERN,
+    RECURRING_NOW_EXPRESSION_PATTERN,
+    resolveRelativeUnitKind,
+    SCHEDULED_TASK_PREFIX_PATTERNS,
+    SPEECH_DIRECTIVE_PATTERN_SOURCES,
+    SPEECH_FALLBACK_MARKER_PATTERN,
+    STRIP_DANGLING_SPEECH_TAIL_PATTERN,
+} from './scheduledTaskRules';
 
 export interface ScheduledTaskConfig {
     modelId?: string;
@@ -216,36 +231,40 @@ function parseChineseNumber(raw: string): number {
 function parseRelativeTimeExpression(expression: string, now: Date): Date | null {
     const lower = expression.trim().toLowerCase();
 
-    const englishMatch = lower.match(/^in\s+(\d+)\s+(second|seconds|minute|minutes|hour|hours|day|days)\b/);
+    const englishMatch = lower.match(INLINE_ENGLISH_RELATIVE_TIME_PATTERN);
     if (englishMatch) {
         const amount = Number(englishMatch[1]);
-        const unit = englishMatch[2];
+        const unitKind = resolveRelativeUnitKind(englishMatch[2] ?? '');
         const result = new Date(now);
-        if (unit.startsWith('second')) {
+        if (unitKind === 'second') {
             result.setSeconds(result.getSeconds() + amount);
-        } else if (unit.startsWith('minute')) {
+        } else if (unitKind === 'minute') {
             result.setMinutes(result.getMinutes() + amount);
-        } else if (unit.startsWith('hour')) {
+        } else if (unitKind === 'hour') {
             result.setHours(result.getHours() + amount);
-        } else {
+        } else if (unitKind === 'day') {
             result.setDate(result.getDate() + amount);
+        } else {
+            return null;
         }
         return result;
     }
 
-    const chineseMatch = expression.trim().match(/^([零〇一二两兩三四五六七八九十百\d]+)\s*(秒钟?|分钟?|分|小时|个小时|天)(?:以?后|之?后)$/);
+    const chineseMatch = expression.trim().match(INLINE_CHINESE_RELATIVE_TIME_PATTERN);
     if (chineseMatch) {
         const amount = parseChineseNumber(chineseMatch[1]);
-        const unit = chineseMatch[2];
+        const unitKind = resolveRelativeUnitKind(chineseMatch[2] ?? '');
         const result = new Date(now);
-        if (unit.startsWith('秒')) {
+        if (unitKind === 'second') {
             result.setSeconds(result.getSeconds() + amount);
-        } else if (unit.startsWith('分')) {
+        } else if (unitKind === 'minute') {
             result.setMinutes(result.getMinutes() + amount);
-        } else if (unit.includes('小时')) {
+        } else if (unitKind === 'hour') {
             result.setHours(result.getHours() + amount);
-        } else {
+        } else if (unitKind === 'day') {
             result.setDate(result.getDate() + amount);
+        } else {
+            return null;
         }
         return result;
     }
@@ -265,6 +284,123 @@ type RecurrenceSpec = {
     intervalMs: number;
 };
 
+type RecurringIntervalParse = {
+    amount: number;
+    unitRaw: string;
+    taskQueryRaw: string;
+};
+
+function stripScheduledTaskPrefix(input: string): string {
+    let normalized = input.trim();
+    for (const pattern of SCHEDULED_TASK_PREFIX_PATTERNS) {
+        normalized = normalized.replace(pattern, '').trim();
+    }
+    return normalized;
+}
+
+function parseRecurringAmount(raw: string | undefined): number {
+    if (!raw) {
+        return 1;
+    }
+    return /[零〇一二两兩三四五六七八九十百]/u.test(raw)
+        ? parseChineseNumber(raw)
+        : Number(raw);
+}
+
+function normalizeRecurringStartExpression(raw: string): string {
+    return raw
+        .trim()
+        .replace(/^[，,、:\-\s]+/u, '')
+        .replace(/[，,、:\-\s]+$/u, '')
+        .replace(/^(?:请)?(?:(?:帮我|帮忙|麻烦你)\s*)?(?:在)?\s*/u, '')
+        .replace(/^(?:please\s+)?(?:(?:help\s+me|could\s+you)\s+)?/iu, '')
+        .trim();
+}
+
+function parseRecurringStartExecuteAt(prefixRaw: string, now: Date): Date | null {
+    const normalized = normalizeRecurringStartExpression(prefixRaw);
+    if (!normalized || RECURRING_NOW_EXPRESSION_PATTERN.test(normalized)) {
+        return new Date(now);
+    }
+    const trimmedStartTail = normalized
+        .replace(/(?:开始|起|starting|beginning|begin)\s*$/iu, '')
+        .replace(/[，,、:\-\s]+$/u, '')
+        .trim();
+    if (!trimmedStartTail || RECURRING_NOW_EXPRESSION_PATTERN.test(trimmedStartTail)) {
+        return new Date(now);
+    }
+    try {
+        return parseScheduledTimeExpression(trimmedStartTail, now);
+    } catch {
+        return null;
+    }
+}
+
+function parseRecurringIntervalCandidate(candidate: string): RecurringIntervalParse | null {
+    const markerMatch = RECURRING_MARKER_PATTERN.exec(candidate);
+    if (!markerMatch || markerMatch.index === undefined) {
+        return null;
+    }
+
+    const markerIndex = markerMatch.index;
+    const markerText = markerMatch[0] ?? '';
+    const suffix = candidate.slice(markerIndex + markerText.length).trim();
+    if (!suffix) {
+        return null;
+    }
+
+    const intervalMatch = suffix.match(RECURRING_INTERVAL_PATTERN);
+    if (!intervalMatch) {
+        return null;
+    }
+
+    const amount = parseRecurringAmount(intervalMatch[1]);
+    const unitRaw = intervalMatch[2];
+    if (!Number.isFinite(amount) || amount <= 0 || !unitRaw) {
+        return null;
+    }
+
+    const afterIntervalRaw = suffix.slice(intervalMatch[0].length);
+    const isEnglishUnit = /^[a-z]/i.test(unitRaw);
+    if (isEnglishUnit && afterIntervalRaw.length > 0 && !/^[\s,:-]/.test(afterIntervalRaw)) {
+        return null;
+    }
+
+    const taskQueryRaw = afterIntervalRaw.replace(/^[\s,:，、-]+/u, '').trim();
+    if (!taskQueryRaw) {
+        return null;
+    }
+
+    return {
+        amount,
+        unitRaw,
+        taskQueryRaw,
+    };
+}
+
+function extractLeadingScheduleExpression(candidate: string): {
+    originalTimeExpression: string;
+    taskQueryRaw: string;
+} | null {
+    const chineseMatch = candidate.match(LEADING_CHINESE_RELATIVE_TIME_PATTERN);
+    if (chineseMatch?.[1] && chineseMatch[2]) {
+        return {
+            originalTimeExpression: chineseMatch[1].replace(/\s+/g, ''),
+            taskQueryRaw: chineseMatch[2],
+        };
+    }
+
+    const englishMatch = candidate.match(LEADING_ENGLISH_RELATIVE_TIME_PATTERN);
+    if (englishMatch?.[1] && englishMatch[2]) {
+        return {
+            originalTimeExpression: englishMatch[1].toLowerCase().replace(/\s+/g, ' ').trim(),
+            taskQueryRaw: englishMatch[2],
+        };
+    }
+
+    return null;
+}
+
 function buildRecurrenceSpec(
     amount: number,
     unitRaw: string
@@ -273,20 +409,20 @@ function buildRecurrenceSpec(
         return null;
     }
 
-    const unit = unitRaw.trim().toLowerCase();
-    if (unit.startsWith('minute') || unit.startsWith('分')) {
+    const unitKind = resolveRelativeUnitKind(unitRaw);
+    if (unitKind === 'minute') {
         return {
             rrule: `FREQ=MINUTELY;INTERVAL=${amount}`,
             intervalMs: amount * 60_000,
         };
     }
-    if (unit.startsWith('hour') || unit.includes('小时')) {
+    if (unitKind === 'hour') {
         return {
             rrule: `FREQ=HOURLY;INTERVAL=${amount}`,
             intervalMs: amount * 60 * 60_000,
         };
     }
-    if (unit.startsWith('day') || unit === '天') {
+    if (unitKind === 'day') {
         return {
             rrule: `FREQ=DAILY;INTERVAL=${amount}`,
             intervalMs: amount * 24 * 60 * 60_000,
@@ -297,105 +433,46 @@ function buildRecurrenceSpec(
 }
 
 function parseRecurringIntent(candidate: string, now: Date): ParsedScheduledIntent | null {
-    const chineseExplicitStartMatch = candidate.match(
-        /^(?:请)?(?:在)?([零〇一二两兩三四五六七八九十百\d]+\s*(?:秒钟?|分钟?|分|小时|个小时|天)(?:以?后|之?后))(?:开始)?[，,、\s]*每(?:隔)?\s*([零〇一二两兩三四五六七八九十百\d]+)\s*(分钟?|分|小时|个小时|天)[，,、\s]*(.+)$/u
-    );
-    if (chineseExplicitStartMatch) {
-        const executeAt = parseScheduledTimeExpression(
-            chineseExplicitStartMatch[1].replace(/\s+/g, ''),
-            now
-        );
-        const amount = parseChineseNumber(chineseExplicitStartMatch[2]);
-        const recurrence = buildRecurrenceSpec(amount, chineseExplicitStartMatch[3]);
-        if (!recurrence) {
-            return null;
-        }
-        const { taskQuery, speakResult } = stripSpeechDirective(chineseExplicitStartMatch[4]);
-        if (!taskQuery) {
-            return null;
-        }
-        return {
-            executeAt,
-            taskQuery,
-            speakResult,
-            originalTimeExpression: `每${amount}${chineseExplicitStartMatch[3]}`,
-            recurrence: { kind: 'rrule', value: recurrence.rrule },
-        };
+    const markerMatch = RECURRING_MARKER_PATTERN.exec(candidate);
+    if (!markerMatch || markerMatch.index === undefined) {
+        return null;
+    }
+    const markerIndex = markerMatch.index;
+    const markerText = markerMatch[0] ?? '';
+
+    const intervalParse = parseRecurringIntervalCandidate(candidate);
+    if (!intervalParse) {
+        return null;
     }
 
-    const englishExplicitStartMatch = candidate.match(
-        /^in\s+(\d+\s+(?:second|seconds|minute|minutes|hour|hours|day|days))[\s,:-]*(?:starting\s+)?every\s+(\d+)\s+(minute|minutes|hour|hours|day|days)[\s,:-]+(.+)$/i
-    );
-    if (englishExplicitStartMatch) {
-        const executeAt = parseScheduledTimeExpression(`in ${englishExplicitStartMatch[1]}`, now);
-        const amount = Number(englishExplicitStartMatch[2]);
-        const recurrence = buildRecurrenceSpec(amount, englishExplicitStartMatch[3]);
-        if (!recurrence) {
-            return null;
-        }
-        const { taskQuery, speakResult } = stripSpeechDirective(englishExplicitStartMatch[4]);
-        if (!taskQuery) {
-            return null;
-        }
-        return {
-            executeAt,
-            taskQuery,
-            speakResult,
-            originalTimeExpression: `every ${amount} ${englishExplicitStartMatch[3]}`,
-            recurrence: { kind: 'rrule', value: recurrence.rrule },
-        };
+    const recurrence = buildRecurrenceSpec(intervalParse.amount, intervalParse.unitRaw);
+    if (!recurrence) {
+        return null;
     }
 
-    const chineseMatch = candidate.match(
-        /^(?:(?:从现在开始|从现在起|现在开始|立刻开始|马上开始|立即开始)[，,、\s]*)?每(?:隔)?\s*([零〇一二两兩三四五六七八九十百\d]+)\s*(分钟?|分|小时|个小时|天)[，,、\s]*(.+)$/u
-    );
-    if (chineseMatch) {
-        const amount = parseChineseNumber(chineseMatch[1]);
-        const recurrence = buildRecurrenceSpec(amount, chineseMatch[2]);
-        if (!recurrence) {
-            return null;
-        }
-        const executeAt = new Date(now);
-        const { taskQuery, speakResult } = stripSpeechDirective(chineseMatch[3]);
-        if (!taskQuery) {
-            return null;
-        }
-        return {
-            executeAt,
-            taskQuery,
-            speakResult,
-            originalTimeExpression: `每${amount}${chineseMatch[2]}`,
-            recurrence: { kind: 'rrule', value: recurrence.rrule },
-        };
+    const prefixRaw = candidate.slice(0, markerIndex);
+    const executeAt = parseRecurringStartExecuteAt(prefixRaw, now);
+    if (!executeAt) {
+        return null;
     }
 
-    const englishMatch = candidate.match(
-        /^(?:(?:starting|beginning|begin|from)\s+now[\s,]*)?every\s+(\d+)\s+(minute|minutes|hour|hours|day|days)[\s,:-]+(.+)$/i
-    );
-    if (englishMatch) {
-        const amount = Number(englishMatch[1]);
-        const recurrence = buildRecurrenceSpec(amount, englishMatch[2]);
-        if (!recurrence) {
-            return null;
-        }
-        const executeAt = new Date(now);
-        const { taskQuery, speakResult } = stripSpeechDirective(englishMatch[3]);
-        if (!taskQuery) {
-            return null;
-        }
-        return {
-            executeAt,
-            taskQuery,
-            speakResult,
-            originalTimeExpression: `every ${amount} ${englishMatch[2]}`,
-            recurrence: { kind: 'rrule', value: recurrence.rrule },
-        };
+    const { taskQuery, speakResult } = stripSpeechDirective(intervalParse.taskQueryRaw);
+    if (!taskQuery) {
+        return null;
     }
 
-    return null;
+    const originalTimeExpression = markerText.startsWith('每')
+        ? `每${intervalParse.amount}${intervalParse.unitRaw}`
+        : `every ${intervalParse.amount} ${intervalParse.unitRaw}`;
+
+    return {
+        executeAt,
+        taskQuery,
+        speakResult,
+        originalTimeExpression,
+        recurrence: { kind: 'rrule', value: recurrence.rrule },
+    };
 }
-
-const CHAINED_SCHEDULE_PATTERN = /(?:^|[\n。；;.!！？，,、])\s*(?:然后|接着|随后|再|并且再|并再|and then|then|next)\s*(?:再)?\s*(?:等(?:待)?\s*)?([零〇一二两兩三四五六七八九十百\d]+\s*(?:秒钟?|分钟?|分|小时|个小时|天)(?:以?后|之?后)?|in\s+\d+\s+(?:second|seconds|minute|minutes|hour|hours|day|days))\s*[，,、\s]*/giu;
 
 function normalizeRelativeExpressionForDuration(raw: string): string {
     const trimmed = raw.trim();
@@ -492,7 +569,7 @@ function extractChainedScheduledStages(taskQuery: string): {
 
 function stripDanglingSpeechTail(input: string): string {
     return input
-        .replace(/[，,、\s]*(?:并|然后|再)\s*(?:将|把)?\s*结果?$/iu, '')
+        .replace(STRIP_DANGLING_SPEECH_TAIL_PATTERN, '')
         .replace(/[，,、\s]+$/u, '')
         .trim();
 }
@@ -507,21 +584,10 @@ function cleanupSpeechDirectiveRemoval(input: string): string {
 }
 
 function stripSpeechDirective(input: string): { taskQuery: string; speakResult: boolean } {
-    const patterns = [
-        /(?:,|，|\s)*(?:并|然后|再)?(?:将|把)?结果?(?:用)?语音播报给我(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?(?:将|把)?结果?(?:用)?语音播报(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?(?:将|把)?结果?(?:朗读|读|念|说)给我听(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?(?:用)?语音播报给我(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?(?:用)?语音播报(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?朗读给我听(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?读给我听(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:并|然后|再)?说给我听(?=[。.!！；;，,、\s]|$)/giu,
-        /(?:,|，|\s)*(?:and then |and )?(?:speak|read)(?: the result| it)?(?: aloud)?(?: to me)?(?=[.!,;\s]|$)/giu,
-    ];
-
     let stripped = input;
     let speakResult = false;
-    for (const pattern of patterns) {
+    for (const patternSource of SPEECH_DIRECTIVE_PATTERN_SOURCES) {
+        const pattern = new RegExp(patternSource, 'giu');
         const next = stripped.replace(pattern, '');
         if (next !== stripped) {
             stripped = next;
@@ -531,7 +597,7 @@ function stripSpeechDirective(input: string): { taskQuery: string; speakResult: 
 
     return {
         taskQuery: stripDanglingSpeechTail(cleanupSpeechDirectiveRemoval(stripped)),
-        speakResult: speakResult || /(语音|朗读|读出来|说给我听|播报|read aloud|speak)/iu.test(input),
+        speakResult: speakResult || SPEECH_FALLBACK_MARKER_PATTERN.test(input),
     };
 }
 
@@ -552,16 +618,7 @@ export function parseScheduledTimeExpression(expression: string, now: Date = new
 export function detectScheduledIntent(query: string, now: Date = new Date()): ParsedScheduledIntent | null {
     const trimmed = query.trim();
     if (!trimmed) return null;
-    const trimmedWithoutTaskPrefix = trimmed
-        .replace(
-            /^(?:请\s*)?(?:(?:帮我|帮忙|麻烦你)\s*)?(?:(?:创建|新建|设定|设置|安排|添加|建立)\s*)?(?:(?:一个|一条|个)\s*)?(?:定时任务|计划任务)\s*[:：,，]?\s*/u,
-            ''
-        )
-        .replace(
-            /^(?:please\s+)?(?:(?:create|set|schedule|add)\s+)?(?:an?\s+)?scheduled\s+task\s*[:：,，-]?\s*/i,
-            ''
-        )
-        .trim();
+    const trimmedWithoutTaskPrefix = stripScheduledTaskPrefix(trimmed);
     const candidate = trimmedWithoutTaskPrefix || trimmed;
 
     const recurringIntent = parseRecurringIntent(candidate, now);
@@ -569,11 +626,10 @@ export function detectScheduledIntent(query: string, now: Date = new Date()): Pa
         return recurringIntent;
     }
 
-    const chineseMatch = candidate.match(/^(?:请)?(?:在)?([零〇一二两兩三四五六七八九十百\d]+\s*(?:秒钟?|分钟?|分|小时|个小时|天)(?:以?后|之?后))[，,、\s]*(.+)$/u);
-    if (chineseMatch) {
-        const originalTimeExpression = chineseMatch[1].replace(/\s+/g, '');
-        const executeAt = parseScheduledTimeExpression(originalTimeExpression, now);
-        const { taskQuery, speakResult } = stripSpeechDirective(chineseMatch[2]);
+    const leadingExpression = extractLeadingScheduleExpression(candidate);
+    if (leadingExpression) {
+        const executeAt = parseScheduledTimeExpression(leadingExpression.originalTimeExpression, now);
+        const { taskQuery, speakResult } = stripSpeechDirective(leadingExpression.taskQueryRaw);
         if (!taskQuery) return null;
         const splitResult = extractChainedScheduledStages(taskQuery);
         if (!splitResult.primaryTaskQuery) return null;
@@ -581,24 +637,7 @@ export function detectScheduledIntent(query: string, now: Date = new Date()): Pa
             executeAt,
             taskQuery: splitResult.primaryTaskQuery,
             speakResult,
-            originalTimeExpression,
-            chainedStages: splitResult.chainedStages.length > 0 ? splitResult.chainedStages : undefined,
-        };
-    }
-
-    const englishMatch = candidate.match(/^in\s+(\d+\s+(?:second|seconds|minute|minutes|hour|hours|day|days))[\s,:-]+(.+)$/i);
-    if (englishMatch) {
-        const originalTimeExpression = `in ${englishMatch[1]}`;
-        const executeAt = parseScheduledTimeExpression(originalTimeExpression, now);
-        const { taskQuery, speakResult } = stripSpeechDirective(englishMatch[2]);
-        if (!taskQuery) return null;
-        const splitResult = extractChainedScheduledStages(taskQuery);
-        if (!splitResult.primaryTaskQuery) return null;
-        return {
-            executeAt,
-            taskQuery: splitResult.primaryTaskQuery,
-            speakResult,
-            originalTimeExpression,
+            originalTimeExpression: leadingExpression.originalTimeExpression,
             chainedStages: splitResult.chainedStages.length > 0 ? splitResult.chainedStages : undefined,
         };
     }

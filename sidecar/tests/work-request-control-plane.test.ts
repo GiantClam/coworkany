@@ -96,6 +96,73 @@ describe('work request control plane', () => {
         });
     });
 
+    test('supports schedule route wrapper without additional hardcoded branching', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                '原始任务：in 1 minute remind me to drink water',
+                '用户路由：schedule',
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-25T10:00:00+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.sourceText).toBe('in 1 minute remind me to drink water');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'scheduled_task',
+            needsDisambiguation: false,
+        });
+        expect(analyzed.intentRouting.reasonCodes).toContain('schedule_phrase');
+    });
+
+    test('supports scheduled route token via route-intent map', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '__route_scheduled_task__',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'scheduled_task',
+            forcedByUserSelection: true,
+            needsDisambiguation: false,
+        });
+    });
+
+    test('overrides user task-route wrapper when scheduled intent is explicit', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                '原始任务：每分钟叫我喝水一次',
+                '用户路由：task',
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-25T10:00:00+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'scheduled_task',
+            needsDisambiguation: false,
+        });
+        expect(analyzed.intentRouting.reasonCodes).toContain('schedule_phrase');
+        expect(analyzed.schedule?.recurrence).toEqual({ kind: 'rrule', value: 'FREQ=MINUTELY;INTERVAL=1' });
+    });
+
+    test('preserves explicit /schedule command as scheduled mode', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '/schedule in 1 minute remind me to drink water',
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-25T10:00:00+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'scheduled_task',
+            needsDisambiguation: false,
+        });
+        expect(analyzed.intentRouting.reasonCodes).toContain('explicit_command');
+    });
+
     test('classifies complex non-scheduled input as immediate task with planning skills', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '帮我规划并拆分一个多步实现方案，包含架构、测试和验收标准',
