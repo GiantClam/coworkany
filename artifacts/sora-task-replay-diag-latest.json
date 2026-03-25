@@ -1,0 +1,387 @@
+{
+  "appDataDir": "/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-sora-diag-oGHC0e",
+  "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f",
+  "eventTypes": [
+    "voice_state",
+    "bootstrap_runtime_context_response",
+    "start_task_response",
+    "TASK_STARTED",
+    "TASK_RESEARCH_UPDATED",
+    "TASK_PLAN_READY",
+    "PLAN_UPDATED",
+    "PLAN_UPDATED"
+  ],
+  "failedEvents": [],
+  "lastEvents": [
+    {
+      "type": "voice_state",
+      "payload": {
+        "isSpeaking": false,
+        "canStop": false
+      }
+    },
+    {
+      "commandId": "01a79022-d74a-4177-b4ae-ad6ae22a8faf",
+      "timestamp": "2026-03-25T04:24:32.915Z",
+      "type": "bootstrap_runtime_context_response",
+      "payload": {
+        "success": true
+      }
+    },
+    {
+      "commandId": "edc3d873-5aca-4a49-b205-8450841e1f2a",
+      "timestamp": "2026-03-25T04:24:33.209Z",
+      "type": "start_task_response",
+      "payload": {
+        "success": true,
+        "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f"
+      }
+    },
+    {
+      "id": "7711ef97-03b9-43e8-b356-8a857f424c2e",
+      "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f",
+      "timestamp": "2026-03-25T04:24:33.601Z",
+      "sequence": 1,
+      "type": "TASK_STARTED",
+      "payload": {
+        "title": "sora-task-mode-diag",
+        "description": "检索 openai 为什么关闭 sora，深度分析后回复我",
+        "context": {
+          "workspacePath": "/Users/beihuang/Documents/github/coworkany",
+          "userQuery": "检索 openai 为什么关闭 sora，深度分析后回复我",
+          "packageManager": "npm",
+          "packageManagerCommands": {
+            "install": "npm install",
+            "test": "npm test",
+            "build": "npm run build",
+            "dev": "npm run dev"
+          }
+        }
+      }
+    },
+    {
+      "id": "339e7f08-0d26-4a95-9f4f-d2d6f6744711",
+      "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f",
+      "timestamp": "2026-03-25T04:24:33.601Z",
+      "sequence": 2,
+      "type": "TASK_RESEARCH_UPDATED",
+      "payload": {
+        "summary": "Research updated: 0/1 queries processed, 1 blocking item(s) remain.",
+        "sourcesChecked": [
+          "conversation",
+          "template",
+          "web"
+        ],
+        "completedQueries": 0,
+        "pendingQueries": 0,
+        "blockingUnknowns": [
+          "required_research:d574bee3-83c4-4492-9a72-e107d2c56858"
+        ],
+        "selectedStrategyTitle": "Direct governed execution"
+      }
+    },
+    {
+      "id": "848b41c4-64f3-485d-a1e6-01410bfa55b4",
+      "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f",
+      "timestamp": "2026-03-25T04:24:33.601Z",
+      "sequence": 3,
+      "type": "TASK_PLAN_READY",
+      "payload": {
+        "summary": "检索 openai 为什么关闭 sora，深度分析后回复我. Planned execution: 1 primary task, 1 deliverable.",
+        "mode": "immediate_task",
+        "intentRouting": {
+          "intent": "immediate_task",
+          "confidence": 0.62,
+          "reasonCodes": [
+            "mixed_or_ambiguous"
+          ],
+          "needsDisambiguation": false
+        },
+        "taskDraftRequired": false,
+        "tasks": [
+          {
+            "id": "599978e9-295f-4e50-8b89-a1ecde780156",
+            "title": "检索 openai 为什么关闭 sora，深度分析后回复我",
+            "objective": "检索 openai 为什么关闭 sora，深度分析后回复我",
+            "dependencies": []
+          }
+        ],
+        "deliverables": [
+          {
+            "id": "48f3b7af-d23e-46ad-b636-03c1ff0bdadf",
+            "title": "Final response",
+            "type": "chat_reply",
+            "description": "Return a final user-facing result that addresses the task objective.",
+            "required": true,
+            "format": "report"
+          }
+        ],
+        "checkpoints": [],
+        "userActionsRequired": [],
+        "hitlPolicy": {
+          "riskTier": "low",
+          "requiresPlanConfirmation": false,
+          "reasons": []
+        },
+        "runtimeIsolationPolicy": {
+          "connectorIsolationMode": "deny_by_default",
+          "filesystemMode": "workspace_only",
+          "allowedWorkspacePaths": [
+            "/Users/beihuang/Documents/github/coworkany"
+          ],
+          "writableWorkspacePaths": [
+            "/Users/beihuang/Documents/github/coworkany"
+          ],
+          "networkAccess": "restricted",
+          "allowedDomains": [],
+          "notes": [
+            "Connector/toolpack access is denied by default unless explicitly enabled for the task session.",
+            "Filesystem access is restricted to the current workspace by default.",
+            "External network connectors require explicit domain allowlisting before MCP toolpacks can reach them."
+          ]
+        },
+        "sessionIsolationPolicy": {
+          "workspaceBindingMode": "frozen_workspace_only",
+          "followUpScope": "same_task_only",
+          "allowWorkspaceOverride": false,
+          "supersededContractHandling": "tombstone_prior_contracts",
+          "staleEvidenceHandling": "evict_on_refreeze",
+          "notes": [
+            "Follow-up and resume execution stay bound to the original task session.",
+            "Workspace overrides are denied once the task session is frozen.",
+            "Superseded frozen contracts are retained only as tombstones and must not drive new execution."
+          ]
+        },
+        "memoryIsolationPolicy": {
+          "classificationMode": "scope_tagged",
+          "readScopes": [
+            "task",
+            "user_preference",
+            "workspace"
+          ],
+          "writeScopes": [
+            "task",
+            "workspace"
+          ],
+          "defaultWriteScope": "workspace",
+          "notes": [
+            "Memory reads and writes must be tagged by scope before they can enter long-term storage or prompt context.",
+            "Task memory is ephemeral to the current task session; workspace memory is limited to the current workspace tenant.",
+            "User-preference memory is reserved for explicit preference capture and must stay bound to the current local user."
+          ]
+        },
+        "tenantIsolationPolicy": {
+          "workspaceBoundaryMode": "same_workspace_only",
+          "userBoundaryMode": "current_local_user_only",
+          "allowCrossWorkspaceMemory": false,
+          "allowCrossWorkspaceFollowUp": false,
+          "allowCrossUserMemory": false,
+          "notes": [
+            "Task continuity is restricted to the same workspace boundary.",
+            "Cross-workspace memory recall is denied unless data is explicitly scoped as user preference.",
+            "Per-user memory and session state stay bound to the current local user."
+          ]
+        },
+        "missingInfo": [],
+        "defaultingPolicy": {
+          "outputLanguage": "zh-CN",
+          "uiFormat": "report",
+          "artifactDirectory": "reports",
+          "checkpointStrategy": "review_before_completion"
+        },
+        "resumeStrategy": {
+          "mode": "continue_from_saved_context",
+          "preserveDeliverables": true,
+          "preserveCompletedSteps": true,
+          "preserveArtifacts": true
+        }
+      }
+    },
+    {
+      "id": "4ae8d54e-cb9d-4039-95f3-27184c3380d4",
+      "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f",
+      "timestamp": "2026-03-25T04:24:33.601Z",
+      "sequence": 4,
+      "type": "PLAN_UPDATED",
+      "payload": {
+        "summary": "Blocked: Resolve blocking uncertainty",
+        "steps": [
+          {
+            "id": "dc204931-94fd-4f9a-ae8c-b747d31a72af",
+            "description": "Normalize the raw user input into a goal frame with constraints, preferences, and target outcomes.",
+            "status": "completed"
+          },
+          {
+            "id": "6b5e61fb-eec3-42a5-b8a8-e882fe38f15d",
+            "description": "Prepared 1 research query and seeded 3 evidence items.",
+            "status": "completed"
+          },
+          {
+            "id": "6484dcce-d077-4e0c-a53f-3247ae64372b",
+            "description": "Blocking uncertainty remains before execution can safely continue.",
+            "status": "blocked"
+          },
+          {
+            "id": "c6c16f56-7f5f-4ddf-83ab-14b6ab65da52",
+            "description": "The execution contract is waiting on blocking clarification before final freeze.",
+            "status": "blocked"
+          },
+          {
+            "id": "2d1dd907-832d-4e54-9417-a934c08dbee8",
+            "description": "检索 openai 为什么关闭 sora，深度分析后回复我",
+            "status": "blocked"
+          },
+          {
+            "id": "ad691401-1660-4050-8bc0-53f4e24df529",
+            "description": "Condense raw execution output into canonical, UI, and TTS payloads.",
+            "status": "blocked"
+          },
+          {
+            "id": "2feb6e7b-05d3-4615-9a24-e5d14ea276de",
+            "description": "Present the reduced result to the user through the appropriate channels.",
+            "status": "blocked"
+          }
+        ],
+        "taskProgress": [
+          {
+            "taskId": "599978e9-295f-4e50-8b89-a1ecde780156",
+            "title": "检索 openai 为什么关闭 sora，深度分析后回复我",
+            "status": "blocked",
+            "dependencies": []
+          }
+        ],
+        "currentStepId": "6484dcce-d077-4e0c-a53f-3247ae64372b"
+      }
+    },
+    {
+      "id": "923382b2-5fb0-4ccf-ba67-a3b6cb52fa1a",
+      "taskId": "84e73d31-12ea-48ef-99ce-0eaddfcaa98f",
+      "timestamp": "2026-03-25T04:24:33.602Z",
+      "sequence": 5,
+      "type": "PLAN_UPDATED",
+      "payload": {
+        "summary": "In progress: 检索 openai 为什么关闭 sora，深度分析后回复我",
+        "steps": [
+          {
+            "id": "dc204931-94fd-4f9a-ae8c-b747d31a72af",
+            "description": "Normalize the raw user input into a goal frame with constraints, preferences, and target outcomes.",
+            "status": "completed"
+          },
+          {
+            "id": "6b5e61fb-eec3-42a5-b8a8-e882fe38f15d",
+            "description": "Prepared 1 research query and seeded 3 evidence items.",
+            "status": "completed"
+          },
+          {
+            "id": "6484dcce-d077-4e0c-a53f-3247ae64372b",
+            "description": "Blocking uncertainty remains before execution can safely continue.",
+            "status": "completed"
+          },
+          {
+            "id": "c6c16f56-7f5f-4ddf-83ab-14b6ab65da52",
+            "description": "The execution contract is waiting on blocking clarification before final freeze.",
+            "status": "completed"
+          },
+          {
+            "id": "2d1dd907-832d-4e54-9417-a934c08dbee8",
+            "description": "检索 openai 为什么关闭 sora，深度分析后回复我",
+            "status": "in_progress"
+          },
+          {
+            "id": "ad691401-1660-4050-8bc0-53f4e24df529",
+            "description": "Condense raw execution output into canonical, UI, and TTS payloads.",
+            "status": "pending"
+          },
+          {
+            "id": "2feb6e7b-05d3-4615-9a24-e5d14ea276de",
+            "description": "Present the reduced result to the user through the appropriate channels.",
+            "status": "pending"
+          }
+        ],
+        "taskProgress": [
+          {
+            "taskId": "599978e9-295f-4e50-8b89-a1ecde780156",
+            "title": "检索 openai 为什么关闭 sora，深度分析后回复我",
+            "status": "in_progress",
+            "dependencies": []
+          }
+        ],
+        "currentStepId": "2d1dd907-832d-4e54-9417-a934c08dbee8"
+      }
+    }
+  ],
+  "runtimeSnippet": "[\n  {\n    \"taskId\": \"84e73d31-12ea-48ef-99ce-0eaddfcaa98f\",\n    \"title\": \"sora-task-mode-diag\",\n    \"workspacePath\": \"/Users/beihuang/Documents/github/coworkany\",\n    \"createdAt\": \"2026-03-25T04:24:33.603Z\",\n    \"updatedAt\": \"2026-03-25T04:24:33.603Z\",\n    \"status\": \"running\",\n    \"conversation\": [\n      {\n        \"role\": \"user\",\n        \"content\": \"检索 openai 为什么关闭 sora，深度分析后回复我\"\n      }\n    ],\n    \"config\": {\n      \"enabledToolpacks\": [],\n      \"enabledSkills\": [],\n      \"disabledTools\": [],\n      \"workspacePath\": \"/Users/beihuang/Documents/github/coworkany\",\n      \"runtimeIsolationPolicy\": {\n        \"connectorIsolationMode\": \"deny_by_default\",\n        \"filesystemMode\": \"workspace_only\",\n        \"allowedWorkspacePaths\": [\n          \"/Users/beihuang/Documents/github/coworkany\"\n        ],\n        \"writableWorkspacePaths\": [\n          \"/Users/beihuang/Documents/github/coworkany\"\n        ],\n        \"networkAccess\": \"restricted\",\n        \"allowedDomains\": [],\n        \"notes\": [\n          \"Connector/toolpack access is denied by default unless explicitly enabled for the task session.\",\n          \"Filesystem access is restricted to the current workspace by default.\",\n          \"External network connectors require explicit domain allowlisting before MCP toolpacks can reach them.\"\n        ]\n      },\n      \"sessionIsolationPolicy\": {\n        \"workspaceBindingMode\": \"frozen_workspace_only\",\n        \"followUpScope\": \"same_task_only\",\n        \"allowWorkspaceOverride\": false,\n        \"supersededContractHandling\": \"tombstone_prior_contracts\",\n        \"staleEvidenceHandling\": \"evict_on_refreeze\",\n        \"notes\": [\n          \"Follow-up and resume execution stay bound to the original task session.\",\n          \"Workspace overrides are denied once the task session is frozen.\",\n          \"Superseded frozen contracts are retained only as tombstones and must not drive new execution.\"\n        ]\n      },\n      \"memoryIsolationPolicy\": {\n        \"classificationMode\": \"scope_tagged\",\n        \"readScopes\": [\n          \"task\",\n          \"user_preference\",\n          \"workspace\"\n        ],\n        \"writeScopes\": [\n          \"task\",\n          \"workspace\"\n        ],\n        \"defaultWriteScope\": \"workspace\",\n        \"notes\": [\n          \"Memory reads and writes must be tagged by scope before they can enter long-term storage or prompt context.\",\n          \"Task memory is ephemeral to the current task session; workspace memory is limited to the current workspace tenant.\",\n          \"User-preference memory is reserved for explicit preference capture and must stay bound to the current local user.\"\n        ]\n      },\n      \"tenantIsolationPolicy\": {\n        \"workspaceBoundaryMode\": \"same_workspace_only\",\n        \"userBoundaryMode\": \"current_local_user_only\",\n        \"allowCrossWorkspaceMemory\": false,\n        \"allowCrossWorkspaceFollowUp\": false,\n        \"allowCrossUserMemory\": false,\n        \"notes\": [\n          \"Task continuity is restricted to the same workspace boundary.\",\n      ",
+  "stderrTail": [
+    "[SkillStore] Loaded 6 skills",
+    "[SkillStore] Scanning skills directory on startup...",
+    "[SkillStore] Total skills available: 25",
+    "[BrowserService] Mode changed: auto -> smart",
+    "[INFO] Sidecar IPC started",
+    "[INFO] Reading commands from stdin (JSON-Lines)",
+    "[INFO] Log file: /Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/logs/sidecar-2026-03-25.log",
+    "[Heartbeat] Starting engine...",
+    "[Heartbeat] engine_started: {\"triggerCount\":0}",
+    "[Heartbeat] Engine started with 0 triggers",
+    "[Heartbeat] Started interval timer for: Scheduled Task Runner",
+    "[Heartbeat] trigger_registered: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\"}",
+    "[Heartbeat] Registered trigger: Scheduled Task Runner (interval)",
+    "[BrowserUse] ✗ Service not available at http://localhost:8100. Smart mode will be unavailable. Start with: cd browser-use-service && python main.py",
+    "[DEBUG] stdin data chunk, length: 461",
+    "[DEBUG] Received line: {\"type\":\"bootstrap_runtime_context\",\"id\":\"01a79022-d74a-4177-b4ae-ad6ae22a8faf\",\"timestamp\":\"2026-03-25T04:24:32.898Z\",\"payload\":{\"runtimeContext\":{\"platform\":\"darwin\",\"arch\":\"arm64\",\"appDir\":\"/Users/",
+    "[DEBUG] Parsed JSON, type: bootstrap_runtime_context",
+    "[DEBUG] Valid command, handling: bootstrap_runtime_context",
+    "[RuntimeContext] Bootstrapped from desktop: platform=darwin, appDataDir=/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-sora-diag-oGHC0e, sidecarLaunchMode=unknown",
+    "[DEBUG] stdin data chunk, length: 383",
+    "[DEBUG] Received line: {\"type\":\"start_task\",\"id\":\"edc3d873-5aca-4a49-b205-8450841e1f2a\",\"timestamp\":\"2026-03-25T04:24:33.203Z\",\"payload\":{\"taskId\":\"84e73d31-12ea-48ef-99ce-0eaddfcaa98f\",\"title\":\"sora-task-mode-diag\",\"userQu",
+    "[DEBUG] Parsed JSON, type: start_task",
+    "[DEBUG] Valid command, handling: start_task",
+    "[LlmConfig] Loaded config from /var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-sora-diag-oGHC0e/llm-config.json",
+    "[Proxy] LLM proxy enabled from llm-config: http://127.0.0.1:7890",
+    "[LlmConfig] Search provider configured: serper",
+    "[WebSearch] Trying Serper.dev search...",
+    "[WebSearch] Serper failed: ConnectionRefused: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] Fetching SearXNG instances from searx.space...",
+    "[WebSearch] Failed to fetch instances from searx.space: ConnectionRefused: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] Using fallback static instance list",
+    "[WebSearch] Trying 4 SearXNG instances...",
+    "[WebSearch] Trying SearXNG: https://search.inetol.net",
+    "[WebSearch] SearXNG https://search.inetol.net failed: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] Trying SearXNG: https://searx.work",
+    "[WebSearch] SearXNG https://searx.work failed: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] Trying SearXNG: https://search.ononoki.org",
+    "[WebSearch] SearXNG https://search.ononoki.org failed: Unable to connect. Is the computer able to access the url?",
+    "[Heartbeat] Trigger fired: Scheduled Task Runner",
+    "[Heartbeat] trigger_fired: {\"triggerId\":\"scheduled-task-runner\",\"triggerName\":\"Scheduled Task Runner\",\"eventData\":{\"type\":\"interval\",\"intervalMs\":2000}}",
+    "[Heartbeat] trigger_action_started: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[Heartbeat] trigger_action_completed: {\"triggerId\":\"scheduled-task-runner\",\"actionType\":\"execute_task\"}",
+    "[WebSearch] Trying SearXNG: https://searx.namejeff.xyz",
+    "[WebSearch] SearXNG https://searx.namejeff.xyz failed: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] All SearXNG instances failed, trying Google scraping...",
+    "[WebSearch] Trying Google search...",
+    "[WebSearch] Google failed: ConnectionRefused: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] Google failed, trying DuckDuckGo Lite...",
+    "[WebSearch] Trying DuckDuckGo Lite search...",
+    "[WebSearch] DuckDuckGo failed: ConnectionRefused: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] DuckDuckGo Lite failed, trying DuckDuckGo HTML...",
+    "[WebSearch] Trying DuckDuckGo HTML search...",
+    "[WebSearch] DuckDuckGo HTML failed: ConnectionRefused: Unable to connect. Is the computer able to access the url?",
+    "[WebSearch] All free providers failed: SearXNG(https://search.inetol.net): Unable to connect. Is the computer able to access the url? | SearXNG(https://searx.work): Unable to connect. Is the computer able to access the url? | SearXNG(https://search.ononoki.org): Unable to connect. Is the computer able to access the url? | SearXNG(https://searx.namejeff.xyz): Unable to connect. Is the computer able to access the url? | Google: Unable to connect. Is the computer able to access the url? | DDG-Lite: Unable to connect. Is the computer able to access the url? | DDG-HTML: Unable to connect. Is the computer able to access the url?",
+    "[LlmConfig] Loaded config from /var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-sora-diag-oGHC0e/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[LlmConfig] Loaded config from /var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-sora-diag-oGHC0e/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[PackageManager] Detected from lock file: npm",
+    "[Task 84e73d31-12ea-48ef-99ce-0eaddfcaa98f] Package manager detected: npm",
+    "[Skill] Auto-triggered skills: stock-research",
+    "[Skill] Loaded builtin: stock-research",
+    "[Skill] Loaded builtin: task-orchestrator",
+    "[LlmConfig] Loaded config from /var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-sora-diag-oGHC0e/llm-config.json",
+    "[LlmConfig] Search provider configured: serper",
+    "[TLS] Proxy is enabled and openai.allowInsecureTls is not explicitly set. Defaulting allowInsecureTls=true for OpenAI-compatible providers in this sidecar process.",
+    "[OpenAI] Sending 102 tools to API: list_dir, view_file, write_to_file, replace_file_content, create_directory, compute_file_hash, move_file, delete_path, batch_move_files, batch_delete_paths, run_command, search_web, voice_speak, task_create, task_list, task_update, system_status, calendar_check, calendar_create_event, calendar_update_event, calendar_find_free_time, email_check, email_send, email_reply, email_get_thread, check_code_quality, get_quality_metrics, batch_check_quality, remember, recall, save_to_vault, search_vault, think, plan_step, log_finding, crawl_url, extract_content, create_issue, create_pr, list_repos, search_docs, get_doc_page, open_in_browser, get_coworkany_paths, get_coworkany_extension_allowlist, set_coworkany_extension_allowlist, get_coworkany_config, update_coworkany_config, list_coworkany_workspaces, create_coworkany_workspace, update_coworkany_workspace, delete_coworkany_workspace, list_coworkany_skills, get_coworkany_skill, install_coworkany_skill, search_coworkany_skill_marketplace, install_coworkany_skill_from_marketplace, set_coworkany_skill_enabled, approve_coworkany_skill_governance_review, remove_coworkany_skill, analyze_work_request, freeze_work_request, plan_work_execution, reduce_execution_result, present_work_result, update_knowledge, learn_from_task, search_knowledge, check_weather, get_news, set_reminder, quick_note, schedule_task, database_connect, database_query, database_execute, database_disconnect, database_list_connections, browser_connect, browser_disconnect, browser_get_sessions, browser_navigate, browser_screenshot, browser_get_content, browser_click, browser_fill, browser_wait, browser_execute_script, browser_upload_file, browser_set_mode, browser_ai_action, xiaohongshu_post, trigger_learning, query_learning_status, validate_skill, find_learned_capability, record_capability_usage, submit_feedback, rollback_skill, view_skill_history, get_learning_predictions, configure_proactive_learning",
+    "[TLS] Insecure TLS enabled for request. Certificate verification is disabled (Bun fetch tls.rejectUnauthorized=false).",
+    "[Proxy] Using explicit Node proxy bridge for fetch: http://127.0.0.1:7890",
+    "[Retry] Network error on attempt 1 (aiberm.com): Unable to connect. Is the computer able to access the url? (name=ConnectionRefused, code=ConnectionRefused, errno=0). Retrying in 2000ms...",
+    ""
+  ]
+}

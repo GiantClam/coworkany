@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
+import { useStartTask } from '../../hooks/useStartTask';
 import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { getVoiceSettings } from '../../lib/configStore';
+import { useWorkspace } from '../../hooks/useWorkspace';
 import { encodeTaskCollaborationMessage } from '../Chat/collaborationMessage';
 import { TaskCardMessage } from '../Chat/Timeline/components/TaskCardMessage';
 import { buildTimelineItems } from '../Chat/Timeline/hooks/useTimelineItems';
@@ -196,17 +198,27 @@ export function buildBoardTasks(sessions: Iterable<TaskSession>): BoardTask[] {
         });
 }
 
-export const TaskListView: React.FC = () => {
+interface TaskListViewProps {
+    onSwitchToChat?: () => void;
+}
+
+export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) => {
     const { t } = useTranslation();
     const { skills } = useSkills({ autoRefresh: true });
     const { toolpacks } = useToolpacks({ autoRefresh: true });
+    const { startTask, isLoading: isStartingTask, error: startTaskError } = useStartTask();
     const { sendMessage, error: sendMessageError } = useSendTaskMessage();
     const { voiceState, stopPlayback, isStopping, error: stopVoiceError } = useVoicePlayback();
+    const { activeWorkspace } = useWorkspace({ autoLoad: true });
     const sessions = useTaskEventStore((state) => state.sessions);
     const hydrate = useTaskEventStore((state) => state.hydrate);
     const setActiveTask = useTaskEventStore((state) => state.setActiveTask);
+    const deleteSession = useTaskEventStore((state) => state.deleteSession);
     const [isLoading, setIsLoading] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
+    const [taskPrompt, setTaskPrompt] = React.useState('');
+    const [launcherError, setLauncherError] = React.useState<string | null>(null);
+    const launcherInputRef = React.useRef<HTMLTextAreaElement>(null);
 
     const refreshTasks = React.useCallback(async () => {
         setIsLoading(true);
@@ -242,6 +254,96 @@ export const TaskListView: React.FC = () => {
         () => toolpacks.filter((tp) => tp.enabled).map((tp) => tp.manifest.id),
         [toolpacks]
     );
+
+    const quickActions = React.useMemo(() => ([
+        {
+            id: 'research',
+            label: t('dashboard.quickResearch'),
+            prompt: t('dashboard.quickResearchPrompt'),
+        },
+        {
+            id: 'report',
+            label: t('dashboard.quickReport'),
+            prompt: t('dashboard.quickReportPrompt'),
+        },
+        {
+            id: 'plan',
+            label: t('dashboard.quickPlan'),
+            prompt: t('dashboard.quickPlanPrompt'),
+        },
+        {
+            id: 'automation',
+            label: t('dashboard.quickAutomation'),
+            prompt: t('dashboard.quickAutomationPrompt'),
+        },
+    ]), [t]);
+
+    const ensureWorkspacePath = React.useCallback(async (): Promise<string | null> => {
+        if (activeWorkspace?.path) {
+            return activeWorkspace.path;
+        }
+
+        try {
+            return await invoke<string>('get_default_workspace_path');
+        } catch {
+            return null;
+        }
+    }, [activeWorkspace]);
+
+    const submitTaskPrompt = React.useCallback(async () => {
+        const normalized = taskPrompt.trim();
+        if (!normalized || isStartingTask) {
+            return;
+        }
+
+        setLauncherError(null);
+        const workspacePath = await ensureWorkspacePath();
+        if (!workspacePath) {
+            setLauncherError(t('dashboard.workspaceUnavailable'));
+            return;
+        }
+
+        const voiceSettings = await getVoiceSettings();
+        const result = await startTask({
+            title: normalized.slice(0, 60),
+            userQuery: normalized,
+            workspacePath,
+            config: {
+                enabledClaudeSkills: enabledSkills,
+                enabledToolpacks,
+                enabledSkills,
+                voiceProviderMode: voiceSettings.providerMode,
+            },
+        });
+
+        if (!result?.success) {
+            if (result?.error) {
+                setLauncherError(result.error);
+            }
+            return;
+        }
+
+        setActiveTask(result.taskId);
+        setTaskPrompt('');
+    }, [
+        taskPrompt,
+        isStartingTask,
+        ensureWorkspacePath,
+        t,
+        startTask,
+        enabledSkills,
+        enabledToolpacks,
+        setActiveTask,
+    ]);
+
+    const applyQuickAction = React.useCallback((prompt: string) => {
+        setTaskPrompt(prompt);
+        window.requestAnimationFrame(() => {
+            launcherInputRef.current?.focus();
+            const valueLength = prompt.length;
+            launcherInputRef.current?.setSelectionRange(valueLength, valueLength);
+        });
+    }, []);
 
     const handleTaskCardCollaborationSubmit = React.useCallback(async (input: {
         taskId?: string;
@@ -321,9 +423,9 @@ export const TaskListView: React.FC = () => {
         <div className="task-list-view">
             <div className="task-list-header">
                 <div className="task-list-header-copy">
-                    <span className="task-list-kicker">Workflow monitor</span>
-                    <h1 className="task-list-title">{t('dashboard.tasks')}</h1>
-                    <p className="task-list-subtitle">{t('dashboard.managedBy')}</p>
+                    <span className="task-list-kicker">{t('sidebar.tasks')}</span>
+                    <h1 className="task-list-title">{t('dashboard.taskModeHeadline')}</h1>
+                    <p className="task-list-subtitle">{t('dashboard.taskModeHint')}</p>
                     {voiceState.isSpeaking && (
                         <div className="task-list-voice-banner" role="status" aria-live="polite">
                             <div className="task-list-voice-copy">
@@ -361,9 +463,49 @@ export const TaskListView: React.FC = () => {
                 </div>
             </div>
 
-            {(stopVoiceError || sendMessageError) && (
+            <section className="task-mode-launcher">
+                <form
+                    className="task-mode-launcher-form"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        void submitTaskPrompt();
+                    }}
+                >
+                    <textarea
+                        ref={launcherInputRef}
+                        className="task-mode-launcher-input"
+                        rows={1}
+                        value={taskPrompt}
+                        onChange={(event) => setTaskPrompt(event.target.value)}
+                        placeholder={t('dashboard.taskModePlaceholder')}
+                    />
+                    <div className="task-mode-launcher-actions">
+                        <div className="task-mode-quick-actions" aria-label={t('dashboard.quickActions')}>
+                            {quickActions.map((action) => (
+                                <button
+                                    key={action.id}
+                                    type="button"
+                                    className="task-mode-chip"
+                                    onClick={() => applyQuickAction(action.prompt)}
+                                >
+                                    {action.label}
+                                </button>
+                            ))}
+                        </div>
+                        <button
+                            type="submit"
+                            className="task-mode-submit"
+                            disabled={!taskPrompt.trim() || isStartingTask}
+                        >
+                            {isStartingTask ? t('dashboard.taskModeCreating') : t('dashboard.taskModeRun')}
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            {(stopVoiceError || sendMessageError || launcherError || startTaskError) && (
                 <div className="task-list-inline-error" role="alert">
-                    {stopVoiceError || sendMessageError}
+                    {launcherError || startTaskError || stopVoiceError || sendMessageError}
                 </div>
             )}
 
@@ -383,6 +525,10 @@ export const TaskListView: React.FC = () => {
                                     key={task.id}
                                     task={task}
                                     onSelect={setActiveTask}
+                                    onDelete={deleteSession}
+                                    onSwitchToChat={onSwitchToChat}
+                                    openLabel={t('dashboard.openInChat')}
+                                    deleteLabel={t('common.delete')}
                                     onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
                                     onTaskActionClick={handleTaskCardActionClick}
                                 />
@@ -403,6 +549,10 @@ export const TaskListView: React.FC = () => {
                                     key={task.id}
                                     task={task}
                                     onSelect={setActiveTask}
+                                    onDelete={deleteSession}
+                                    onSwitchToChat={onSwitchToChat}
+                                    openLabel={t('dashboard.openInChat')}
+                                    deleteLabel={t('common.delete')}
                                     onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
                                     onTaskActionClick={handleTaskCardActionClick}
                                 />
@@ -422,9 +572,23 @@ const statusTone: Record<TaskStatus, string> = {
     idle: 'pending',
 };
 
+const DeleteIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="3 6 5 6 21 6" />
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <path d="M10 11v6" />
+        <path d="M14 11v6" />
+        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
+);
+
 const TaskBoardTaskCard: React.FC<{
     task: BoardTask;
     onSelect: (taskId: string) => void;
+    onDelete: (taskId: string) => void;
+    onSwitchToChat?: () => void;
+    openLabel: string;
+    deleteLabel: string;
     onTaskCollaborationSubmit: (input: {
         taskId?: string;
         cardId: string;
@@ -437,7 +601,7 @@ const TaskBoardTaskCard: React.FC<{
         actionId?: string;
         value?: string;
     }) => void;
-}> = ({ task, onSelect, onTaskCollaborationSubmit, onTaskActionClick }) => {
+}> = ({ task, onSelect, onDelete, onSwitchToChat, openLabel, deleteLabel, onTaskCollaborationSubmit, onTaskActionClick }) => {
     return (
         <div className="task-board-card-shell">
             <div className="task-board-card-toolbar">
@@ -447,13 +611,27 @@ const TaskBoardTaskCard: React.FC<{
                     </span>
                     <span className="task-card-date">{formatUpdatedAt(task.updatedAt)}</span>
                 </div>
-                <button
-                    type="button"
-                    className="task-board-open-button"
-                    onClick={() => onSelect(task.id)}
-                >
-                    Open task
-                </button>
+                <div className="task-board-card-toolbar-actions">
+                    <button
+                        type="button"
+                        className="task-board-open-button"
+                        onClick={() => {
+                            onSelect(task.id);
+                            onSwitchToChat?.();
+                        }}
+                    >
+                        {openLabel}
+                    </button>
+                    <button
+                        type="button"
+                        className="task-board-delete-button"
+                        onClick={() => onDelete(task.id)}
+                        title={deleteLabel}
+                        aria-label={deleteLabel}
+                    >
+                        <DeleteIcon />
+                    </button>
+                </div>
             </div>
             <TaskCardMessage
                 item={task.taskCard}

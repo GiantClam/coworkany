@@ -447,6 +447,55 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(false);
     });
 
+    test('continues follow-up flow when suspended task was restored from persistence', async () => {
+        const emitted: any[] = [];
+        const resumed: any[] = [];
+        const queued: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            suspendResumeManager: {
+                isSuspended: () => true,
+                getSuspendedTask: () => ({
+                    taskId: 'task-restore',
+                    suspendedAt: Date.now() - 60_000,
+                    reason: 'waiting_for_login',
+                    userMessage: 'Please log in and continue.',
+                    canAutoResume: true,
+                    context: {
+                        restoredFromPersistence: true,
+                    },
+                }),
+                resume: async (taskId, reason) => {
+                    resumed.push({ taskId, reason });
+                    return { success: true };
+                },
+            },
+            enqueueResumeMessage: (taskId, content, config) => {
+                queued.push({ taskId, content, config });
+            },
+            pushConversationMessage: () => [],
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r3-restored',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-restore',
+                content: '继续',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(queued).toHaveLength(0);
+        expect(resumed).toHaveLength(1);
+        expect(continued).toBe(true);
+        expect(emitted.map((message) => message.type)).toContain('send_task_message_response');
+    });
+
     test('handles send_task_message follow-up path and continues agent flow', async () => {
         const emitted: any[] = [];
         const pushed: any[] = [];
@@ -1015,6 +1064,187 @@ describe('runtime commands handler', () => {
         expect(sourceTexts[0]).toContain('用户确认：继续执行');
         expect(sourceTexts[0]).not.toBe('同意');
         expect(emitted.some((message) => message.type === 'TASK_CLARIFICATION_REQUIRED')).toBe(false);
+    });
+
+    test('treats natural chinese setup-confirmation prompt as approval follow-up instead of new clarification', async () => {
+        const emitted: any[] = [];
+        const sourceTexts: string[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'assistant', content: '要我现在就按“从现在开始，每5分钟”来设置吗？' },
+                ],
+                getArtifactContract: () => ({ type: 'old-artifact-contract' }),
+                setArtifactContract: () => {},
+            },
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-old-reminder',
+                    mode: 'immediate_task',
+                    sourceText: '创建持续定时任务，每5分钟提醒我喝水',
+                    tasks: [{ objective: '创建持续定时任务，每5分钟提醒我喝水' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-old-reminder',
+                        title: 'Final response',
+                        type: 'chat_reply',
+                        description: 'Return a final user-facing result.',
+                        required: true,
+                        format: 'chat_message',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async ({ sourceText }) => {
+                sourceTexts.push(sourceText);
+                return {
+                    frozenWorkRequest: {
+                        id: 'wr-new-reminder',
+                        mode: 'immediate_task',
+                        sourceText,
+                        tasks: [{ objective: '创建持续定时任务，每5分钟提醒我喝水' }],
+                        clarification: { required: false },
+                        deliverables: [{
+                            id: 'deliverable-new-reminder',
+                            title: 'Final response',
+                            type: 'chat_reply',
+                            description: 'Return a final user-facing result.',
+                            required: true,
+                            format: 'chat_message',
+                        }],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-new-reminder',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze setup confirmation follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Continue execution after setup confirmation',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '创建持续定时任务，每5分钟提醒我喝水',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-natural-approval-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-natural-approval-followup',
+                content: '确认',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(sourceTexts[0]).toContain('原始任务：创建持续定时任务，每5分钟提醒我喝水');
+        expect(sourceTexts[0]).toContain('用户确认：继续执行');
+        expect(sourceTexts[0]).not.toBe('确认');
+        expect(emitted.some((message) => message.type === 'TASK_CLARIFICATION_REQUIRED')).toBe(false);
+    });
+
+    test('carries approval follow-up for scheduled-task context even without explicit approval prompt pattern', async () => {
+        const sourceTexts: string[] = [];
+        const deps = createRuntimeCommandDeps({
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'assistant', content: '好的，已准备就绪。' },
+                ],
+                getArtifactContract: () => ({ type: 'old-artifact-contract' }),
+                setArtifactContract: () => {},
+            },
+            getActivePreparedWorkRequest: () => ({
+                frozenWorkRequest: {
+                    id: 'wr-old-scheduled',
+                    mode: 'scheduled_task',
+                    sourceText: '1分钟后提醒我喝水',
+                    tasks: [{ objective: '提醒我喝水' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-old-scheduled',
+                        title: 'Final response',
+                        type: 'chat_reply',
+                        description: 'Return a final user-facing result.',
+                        required: true,
+                        format: 'chat_message',
+                    }],
+                },
+            }),
+            prepareWorkRequestContext: async ({ sourceText }) => {
+                sourceTexts.push(sourceText);
+                return {
+                    frozenWorkRequest: {
+                        id: 'wr-new-scheduled',
+                        mode: 'scheduled_task',
+                        sourceText,
+                        tasks: [{ objective: '提醒我喝水' }],
+                        clarification: { required: false },
+                        deliverables: [{
+                            id: 'deliverable-new-scheduled',
+                            title: 'Final response',
+                            type: 'chat_reply',
+                            description: 'Return a final user-facing result.',
+                            required: true,
+                            format: 'chat_message',
+                        }],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-new-scheduled',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze scheduled approval follow-up',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                        ],
+                    },
+                    executionQuery: '1分钟后提醒我喝水',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-scheduled-approval-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-scheduled-approval-followup',
+                content: '确认',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(sourceTexts[0]).toContain('原始任务：1分钟后提醒我喝水');
+        expect(sourceTexts[0]).toContain('用户确认：继续执行');
     });
 
     test('emits contradictory-evidence reopen and rebuilds artifact contract when a follow-up corrects deliverables', async () => {
@@ -2312,7 +2542,7 @@ describe('runtime commands handler', () => {
         expect(emitted[5]?.payload?.riskTier).toBe('high');
     });
 
-    test('blocks high-risk follow-up execution until the user confirms the plan', async () => {
+    test('does not block follow-up execution on legacy confirm_plan checkpoints', async () => {
         const emitted: any[] = [];
         const pushed: any[] = [];
         let continued = false;
@@ -2454,16 +2684,14 @@ describe('runtime commands handler', () => {
         } as any, deps);
 
         expect(handled).toBe(true);
-        expect(continued).toBe(false);
+        expect(continued).toBe(true);
         expect(emitted.map((message) => message.type)).toEqual([
             'send_task_message_response',
             'TASK_RESEARCH_UPDATED',
             'TASK_PLAN_READY',
             'PLAN_UPDATED',
             'TASK_CHECKPOINT_REACHED',
-            'TASK_USER_ACTION_REQUIRED',
-            'CHAT_MESSAGE',
-            'TASK_STATUS',
+            'PLAN_UPDATED',
         ]);
         expect(emitted[2]?.payload?.hitlPolicy).toMatchObject({
             riskTier: 'high',
@@ -2483,11 +2711,9 @@ describe('runtime commands handler', () => {
         expect(emitted[2]?.payload?.tenantIsolationPolicy).toMatchObject({
             workspaceBoundaryMode: 'same_workspace_only',
         });
-        expect(emitted[5]?.payload?.kind).toBe('confirm_plan');
-        expect(emitted[5]?.payload?.executionPolicy).toBe('review_required');
-        expect(emitted[5]?.payload?.riskTier).toBe('high');
-        expect(emitted[7]?.payload?.status).toBe('idle');
-        expect(pushed[pushed.length - 1]?.message?.role).toBe('assistant');
+        expect(emitted.some((event) => event.type === 'TASK_USER_ACTION_REQUIRED')).toBe(false);
+        expect(emitted.some((event) => event.type === 'CHAT_MESSAGE')).toBe(false);
+        expect(pushed[pushed.length - 1]?.message?.role).not.toBe('assistant');
     });
 
     test('denies follow-up workspace overrides once the task session is frozen', async () => {
@@ -2553,6 +2779,7 @@ describe('runtime commands handler', () => {
                 frozenWorkRequest: {
                     id: 'wr-1',
                     mode: 'scheduled_task',
+                    taskDraftRequired: true,
                     schedule: { executeAt: '2026-03-19T06:00:00.000Z' },
                     presentation: { ttsEnabled: true },
                     tasks: [{

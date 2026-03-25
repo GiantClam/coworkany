@@ -188,6 +188,7 @@ import {
     type WorkspaceExtensionAllowlistPolicy,
 } from './extensions/workspaceExtensionAllowlist';
 import {
+    computeNextRecurringExecuteAt,
     ScheduledTaskStore,
     detectScheduledIntent,
     formatScheduledTime,
@@ -3585,6 +3586,63 @@ function requiresBrowserEvidenceForRequest(request?: FrozenWorkRequest): boolean
     });
 }
 
+function hasRequiredWebResearchEvidenceFromToolNames(toolNames: Iterable<string>): boolean {
+    const tools = new Set(toolNames);
+    if (tools.size === 0) {
+        return false;
+    }
+    return [
+        'search_web',
+        'crawl_url',
+        'extract_content',
+        'get_news',
+        'browser_get_content',
+    ].some((toolName) => tools.has(toolName));
+}
+
+function requiresRequiredWebResearchEvidence(request?: FrozenWorkRequest): boolean {
+    if (!request || !Array.isArray(request.researchQueries) || request.researchQueries.length === 0) {
+        return false;
+    }
+    return request.researchQueries.some((query) =>
+        query.required &&
+        query.source === 'web' &&
+        query.status !== 'skipped'
+    );
+}
+
+function shouldFallbackNewsToWebSearch(result: unknown): boolean {
+    if (result == null) {
+        return true;
+    }
+    if (typeof result === 'string') {
+        return /^error:/i.test(result.trim());
+    }
+    if (typeof result !== 'object') {
+        return false;
+    }
+    const payload = result as Record<string, unknown>;
+    if (payload.success === false) {
+        return true;
+    }
+    return typeof payload.error === 'string' && payload.error.trim().length > 0;
+}
+
+function buildNewsFallbackSearchQuery(input: unknown): string {
+    if (!input || typeof input !== 'object') {
+        return 'latest technology news';
+    }
+    const args = input as Record<string, unknown>;
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    if (query.length > 0) {
+        return `${query} latest news official sources`;
+    }
+    const category = typeof args.category === 'string' ? args.category.trim() : '';
+    const country = typeof args.country === 'string' ? args.country.trim() : '';
+    const categoryPart = category.length > 0 ? `${category} news` : 'latest news';
+    return country.length > 0 ? `${categoryPart} ${country}` : categoryPart;
+}
+
 function buildScheduledExecutionQueryWithContext(record: ScheduledTaskRecord, baseExecutionQuery: string): string {
     const normalizedBaseQuery = baseExecutionQuery.trim();
     if (normalizedBaseQuery.length === 0) {
@@ -3849,7 +3907,11 @@ async function executeFreshTask(args: {
         };
     }
 
-    if (frozenWorkRequest.taskDraftRequired && frozenWorkRequest.intentRouting) {
+    const needsTaskDraftConfirmation =
+        frozenWorkRequest.taskDraftRequired
+        && frozenWorkRequest.mode !== 'scheduled_task'
+        && frozenWorkRequest.mode !== 'scheduled_multi_task';
+    if (needsTaskDraftConfirmation && frozenWorkRequest.intentRouting) {
         const draftConfirmation = buildTaskDraftConfirmationPayload(frozenWorkRequest.intentRouting);
         pushConversationMessage(taskId, {
             role: 'user',
@@ -3885,10 +3947,11 @@ async function executeFreshTask(args: {
     const blockingUserAction =
         getBlockingUserAction(
             frozenWorkRequest,
-            frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan'
+            frozenWorkRequest.clarification.required ? 'clarify_input' : undefined
         ) ??
         getBlockingUserAction(frozenWorkRequest);
     const blockingUserActionsFromPlan = (frozenWorkRequest.userActionsRequired ?? [])
+        .filter((action) => action.kind !== 'confirm_plan')
         .filter((action) => isBlockingExecutionPolicy(action.executionPolicy, action.blocking));
     const emittedUserActionIds = new Set<string>();
     const emitUserActionRequired = (action: UserActionRequest): void => {
@@ -4111,7 +4174,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
     };
     scheduledTaskStore.upsert(runningRecord);
 
-    const taskId = randomUUID();
+    const taskId = record.sourceTaskId || randomUUID();
     const baseExecutionQuery = getScheduledTaskExecutionQuery({
         record,
         workRequestStore,
@@ -4283,6 +4346,62 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                     console.error(
                         `[Scheduler] Skip duplicate chained stage scheduling for work request ${resolvedWorkRequest.id}, stage ${nextStage.stageIndex}`
                     );
+                }
+            }
+        }
+
+        if (executionSuccess && resolvedWorkRequest?.schedule?.recurrence) {
+            const supportsRecurringReschedule =
+                (record.totalStages ?? 1) <= 1
+                || record.stageIndex === undefined
+                || record.stageIndex === 0;
+            if (supportsRecurringReschedule) {
+                const nextRecurringExecuteAt = computeNextRecurringExecuteAt({
+                    recurrence: resolvedWorkRequest.schedule.recurrence,
+                    previousExecuteAt: record.executeAt,
+                    now: completedAt,
+                });
+                if (nextRecurringExecuteAt) {
+                    const nextRecurringExecuteAtIso = nextRecurringExecuteAt.toISOString();
+                    const alreadyScheduled = scheduledTaskStore.read().some((item) =>
+                        item.status === 'scheduled'
+                        && item.workRequestId === record.workRequestId
+                        && item.stageTaskId === record.stageTaskId
+                        && item.executeAt === nextRecurringExecuteAtIso
+                    );
+
+                    if (!alreadyScheduled) {
+                        const recurringRecord = scheduleTaskInternal({
+                            title: record.title,
+                            taskQuery: record.taskQuery,
+                            executeAt: nextRecurringExecuteAt,
+                            workspacePath: record.workspacePath,
+                            speakResult: record.speakResult,
+                            sourceTaskId: record.sourceTaskId,
+                            config: record.config,
+                            workRequestId: resolvedWorkRequest.id,
+                            stageTaskId: record.stageTaskId,
+                            stageIndex: record.stageIndex,
+                            totalStages: record.totalStages,
+                            delayMsFromPrevious: record.delayMsFromPrevious,
+                            frozenWorkRequest: resolvedWorkRequest,
+                        });
+                        if (record.sourceTaskId) {
+                            const recurringMessage = `循环任务已续排：${buildScheduledConfirmationMessage(recurringRecord)}`;
+                            pushConversationMessage(record.sourceTaskId, {
+                                role: 'assistant',
+                                content: recurringMessage,
+                            });
+                            emit(createChatMessageEvent(record.sourceTaskId, {
+                                role: 'system',
+                                content: recurringMessage,
+                            }));
+                        }
+                    } else {
+                        console.error(
+                            `[Scheduler] Skip duplicate recurring scheduling for work request ${record.workRequestId ?? 'unknown'}`
+                        );
+                    }
                 }
             }
         }
@@ -5370,6 +5489,16 @@ async function cancelTaskExecution(taskId: string, reason?: string): Promise<{ s
     if (isSuspended) {
         await suspendResumeManager.cancel(taskId, reason || 'Task cancelled by user');
     }
+    const currentMeta = taskRuntimeMeta.get(taskId);
+    if (currentMeta) {
+        taskRuntimeMeta.set(taskId, {
+            ...currentMeta,
+            status: 'idle',
+            suspension: undefined,
+        });
+        syncTaskRuntimeRecord(taskId);
+    }
+    emit(createTaskStatusEvent(taskId, { status: 'idle' }));
     return { success: true };
 }
 
@@ -6244,6 +6373,8 @@ async function runAgentLoop(
     const MAX_GATE_NO_TOOL_REPROMPTS = 2;
     let scheduledBrowserNoToolReprompts = 0;
     const MAX_SCHEDULED_BROWSER_NO_TOOL_REPROMPTS = 3;
+    let requiredWebNoToolReprompts = 0;
+    const MAX_REQUIRED_WEB_NO_TOOL_REPROMPTS = 3;
 
     // Retryable tool categories (network, database, browser, file operations)
     const RETRYABLE_TOOL_PREFIXES = [
@@ -6341,6 +6472,8 @@ async function runAgentLoop(
                 modeForNoToolStep === 'scheduled_task' || modeForNoToolStep === 'scheduled_multi_task';
             const scheduledBrowserEvidenceRequired =
                 isScheduledNoToolStep && requiresBrowserEvidenceForRequest(preparedForNoToolStep?.frozenWorkRequest);
+            const requiredWebResearchEvidence =
+                requiresRequiredWebResearchEvidence(preparedForNoToolStep?.frozenWorkRequest);
 
             if (
                 scheduledBrowserEvidenceRequired &&
@@ -6356,6 +6489,29 @@ async function runAgentLoop(
                     }],
                 });
                 continue;
+            }
+
+            if (
+                requiredWebResearchEvidence &&
+                !hasRequiredWebResearchEvidenceFromToolNames(toolsUsed)
+            ) {
+                if (requiredWebNoToolReprompts < MAX_REQUIRED_WEB_NO_TOOL_REPROMPTS) {
+                    requiredWebNoToolReprompts++;
+                    messages = pushConversationMessage(taskId, {
+                        role: 'user',
+                        content: [{
+                            type: 'text',
+                            text:
+                                '[SYSTEM] This task contract requires required web research before final delivery. ' +
+                                'Do not provide planning/process notes. ' +
+                                'Call research tools now (search_web/crawl_url/extract_content/get_news) and then deliver a final evidence-based analysis.',
+                        }],
+                    });
+                    continue;
+                }
+                throw new Error(
+                    'Execution protocol unmet: required web research evidence was missing after repeated no-tool retries.'
+                );
             }
 
             // ── Stop Gate: Verification + Plan Completion Check ──────
@@ -7404,6 +7560,51 @@ async function runAgentLoop(
                 }
             }
 
+            if (
+                toolUse.name === 'get_news' &&
+                shouldFallbackNewsToWebSearch(result)
+            ) {
+                const fallbackQuery = buildNewsFallbackSearchQuery(toolUse.input);
+                const searchTool = tools.find((candidate) => candidate.name === 'search_web');
+                if (searchTool) {
+                    try {
+                        const fallbackResult = await withTaskControl(
+                            taskId,
+                            searchTool.handler(
+                                {
+                                    query: fallbackQuery,
+                                    count: 10,
+                                    compact: false,
+                                },
+                                {
+                                    taskId,
+                                    workspacePath: workspaceRoot,
+                                    onCancel: (waiter) => taskCancellationRegistry.onCancellation(taskId, waiter),
+                                },
+                            ),
+                            TOOL_EXECUTION_TIMEOUT_MS,
+                            'tool_get_news_fallback_search_web',
+                        );
+                        toolsUsed.add('search_web');
+                        result = {
+                            ...(typeof result === 'object' && result !== null ? result as Record<string, unknown> : {}),
+                            warning: 'get_news failed or returned degraded output; auto-fallback search_web was executed.',
+                            fallback_search_query: fallbackQuery,
+                            fallback_search_result: fallbackResult,
+                        };
+                        isError = false;
+                    } catch (fallbackError) {
+                        const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+                        result = {
+                            ...(typeof result === 'object' && result !== null ? result as Record<string, unknown> : {}),
+                            warning: 'get_news failed and fallback search_web failed as well.',
+                            fallback_search_query: fallbackQuery,
+                            fallback_search_error: message,
+                        };
+                    }
+                }
+            }
+
             if (isError) {
                 const recovery = await recoverMainLoopToolFailure({
                     errorResult: result,
@@ -7979,7 +8180,7 @@ async function assessExecutionProtocolWithLlm(taskId: string, input: {
     verificationEvidence: 'present' | 'absent' | 'unknown';
     confidence?: number;
     rationale?: string;
-} | null> {
+    } | null> {
     if (!input.outputText.trim()) {
         return null;
     }
@@ -7988,6 +8189,22 @@ async function assessExecutionProtocolWithLlm(taskId: string, input: {
     const providerConfig = resolveProviderConfig(llmConfig, {
         maxTokens: 280,
     });
+
+    const hasApprovalGateLanguage = (text: string): boolean => {
+        const normalized = text.trim();
+        if (!normalized) {
+            return false;
+        }
+        const patterns: RegExp[] = [
+            /如果你(?:同意|确认|批准)[^。！？\n]{0,40}我(?:现在|这就|就)?(?:开始|继续|执行|检索|处理|推进|完成)/u,
+            /请(?:先)?(?:回复|确认|同意|批准|选择)[^。！？\n]{0,30}(?:继续|执行|开始|创建|进行)/u,
+            /请(?:回复|输入)\s*(?:确认|同意|继续|开始执行)/u,
+            /if you (?:agree|approve)[^.!?\n]{0,60}i(?:'ll| will)\s+(?:start|continue|proceed|execute)/i,
+            /please (?:confirm|approve|reply)[^.!?\n]{0,40}(?:before|to)\s+(?:continue|proceed|execute|start)/i,
+            /reply(?:\s+with)?\s+(?:confirm|approve|yes|go ahead)/i,
+        ];
+        return patterns.some((pattern) => pattern.test(normalized));
+    };
 
     const protocolJudgePrompt = `You are an execution-protocol judge.
 Return ONLY valid JSON with this exact schema:
@@ -8039,7 +8256,29 @@ Rules:
             'execution_protocol_assessment'
         );
         const text = extractResponseText(response.content);
-        return parseExecutionProtocolAssessment(text);
+        const parsed = parseExecutionProtocolAssessment(text);
+        const heuristicApprovalGate = hasApprovalGateLanguage(input.outputText);
+        if (parsed) {
+            return {
+                ...parsed,
+                asksForAdditionalUserAction: parsed.asksForAdditionalUserAction || heuristicApprovalGate,
+            };
+        }
+        if (!heuristicApprovalGate) {
+            return null;
+        }
+        return {
+            asksForAdditionalUserAction: true,
+            objectiveRefusal: false,
+            objectiveSatisfied: false,
+            objectiveGap: 'Response asks for user approval before continuing execution.',
+            requestedEvidence: 'unknown',
+            deliveredEvidence: 'unknown',
+            completionClaim: 'unknown',
+            verificationEvidence: 'unknown',
+            confidence: 0.95,
+            rationale: 'Heuristic approval-gate detector matched explicit ask-for-consent phrasing.',
+        };
     } catch (error) {
         console.warn('[ProtocolJudge] assessment skipped due to model error:', error);
         return null;
@@ -8076,6 +8315,41 @@ function getLatestAssistantResponseText(taskId: string): string {
     return '';
 }
 
+function replaceLatestAssistantResponseText(taskId: string, text: string): void {
+    const normalized = text.trim();
+    if (!normalized) {
+        return;
+    }
+
+    const conversation = taskSessionStore.getConversation(taskId);
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+        const message = conversation[index];
+        if (message.role !== 'assistant') {
+            continue;
+        }
+
+        if (typeof message.content === 'string') {
+            conversation[index] = {
+                ...message,
+                content: normalized,
+            };
+        } else {
+            conversation[index] = {
+                ...message,
+                content: [{ type: 'text', text: normalized }] as any,
+            };
+        }
+        taskSessionStore.replaceConversation(taskId, conversation);
+        syncTaskRuntimeRecord(taskId);
+        return;
+    }
+
+    pushConversationMessage(taskId, {
+        role: 'assistant',
+        content: normalized,
+    });
+}
+
 function appendArtifactTelemetry(entry: unknown): void {
     try {
         fs.mkdirSync(path.dirname(artifactTelemetryPath), { recursive: true });
@@ -8103,6 +8377,10 @@ function createExecutionSession(taskId: string): ExecutionSession {
 function createExecutionResultReporter(taskId: string): ExecutionResultReporter {
     return new ExecutionResultReporter({
         onFinished: (payload) => {
+            const taskMode = taskSessionStore.getConfig(taskId)?.lastFrozenWorkRequestSnapshot?.mode;
+            if (taskMode !== 'chat') {
+                replaceLatestAssistantResponseText(taskId, payload.summary);
+            }
             clearActivePreparedWorkRequest(taskId);
             archiveTaskRuntimePersistence(taskId, 'finished');
             taskEventBus.emitFinished(taskId, {
@@ -8260,7 +8538,11 @@ function getExecutionRuntimeDeps(taskId: string) {
                     summary: disambiguation.message,
                 };
             }
-            if (frozenWorkRequest.taskDraftRequired && frozenWorkRequest.intentRouting) {
+            const needsTaskDraftConfirmation =
+                frozenWorkRequest.taskDraftRequired
+                && frozenWorkRequest.mode !== 'scheduled_task'
+                && frozenWorkRequest.mode !== 'scheduled_multi_task';
+            if (needsTaskDraftConfirmation && frozenWorkRequest.intentRouting) {
                 const draftConfirmation = buildTaskDraftConfirmationPayload(frozenWorkRequest.intentRouting);
                 pushConversationMessage(runtimeTaskId, {
                     role: 'assistant',
@@ -8284,7 +8566,7 @@ function getExecutionRuntimeDeps(taskId: string) {
             const blockingUserAction =
                 getBlockingUserAction(
                     frozenWorkRequest,
-                    frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan'
+                    frozenWorkRequest.clarification.required ? 'clarify_input' : undefined
                 ) ??
                 getBlockingUserAction(frozenWorkRequest);
             if (blockingUserAction) {

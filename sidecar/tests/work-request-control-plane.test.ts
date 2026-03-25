@@ -46,7 +46,7 @@ describe('work request control plane', () => {
         expect(analyzed.defaultingPolicy?.uiFormat).toBe('chat_message');
     });
 
-    test('marks ambiguous immediate requests for route disambiguation intent routing', () => {
+    test('auto-selects immediate-task route for ambiguous requests without asking for route disambiguation', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: 'React hooks 是什么',
             workspacePath: '/tmp/workspace',
@@ -55,10 +55,27 @@ describe('work request control plane', () => {
         expect(analyzed.mode).toBe('immediate_task');
         expect(analyzed.intentRouting).toMatchObject({
             intent: 'immediate_task',
-            needsDisambiguation: true,
+            needsDisambiguation: false,
         });
         expect(analyzed.intentRouting.reasonCodes).toContain('mixed_or_ambiguous');
         expect(analyzed.intentRouting.confidence).toBeLessThan(0.75);
+    });
+
+    test('treats explicit scheduled-task creation phrasing as scheduled intent without route disambiguation', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '创建定时任务，1 分钟之后检索 openai 为什么关闭 sora，深度分析后回复我',
+            workspacePath: '/tmp/workspace',
+            now: new Date('2026-03-25T10:12:31+08:00'),
+        });
+
+        expect(analyzed.mode).toBe('scheduled_task');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'scheduled_task',
+            needsDisambiguation: false,
+        });
+        expect(analyzed.intentRouting.reasonCodes).toContain('schedule_phrase');
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.taskDraftRequired).toBe(false);
     });
 
     test('respects explicit user route follow-up selection for chat mode', () => {
@@ -132,6 +149,91 @@ describe('work request control plane', () => {
         )).toBe(true);
     });
 
+    test('requires web domain research for explicit external lookup tasks in task mode', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索 openai 为什么关闭 sora，深度分析后回复我',
+            workspacePath: '/tmp/workspace',
+        });
+
+        const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
+            query.kind === 'domain_research' && query.source === 'web' && query.required
+        ) ?? [];
+        expect(requiredDomainResearch.length).toBeGreaterThan(0);
+    });
+
+    test('does not force required web domain research for local repository lookup tasks', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索当前仓库 src 目录下的 TODO，并整理成列表',
+            workspacePath: '/tmp/workspace',
+        });
+
+        const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
+            query.kind === 'domain_research' && query.source === 'web' && query.required
+        ) ?? [];
+        expect(requiredDomainResearch).toHaveLength(0);
+    });
+
+    test('requires execution-target clarification for precision-sensitive lookup requests without unique identifiers', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索今天英伟达股价的涨跌情况，分析为什么最后股价暴涨',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(true);
+        expect(analyzed.clarification.missingFields).toContain('execution_target_identifier');
+        expect(analyzed.clarification.questions[0]).toMatch(/URL|路径|仓库|ID|ticker|交易对|标识/i);
+    });
+
+    test('does not require execution-target clarification when unique identifier is explicit', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索今天 MiniMax (NASDAQ:MMAX) 的股价涨跌，分析尾盘暴涨原因',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+    });
+
+    test('does not require execution-target clarification for broad-scope trend analysis', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '分析今天美股市场整体涨跌情况与领涨板块',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+    });
+
+    test('does not require execution-target clarification when repository identifier is explicit', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索今天 openai/openai-node 最新 release 的变更点',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+    });
+
+    test('requires execution-target clarification for service outage analysis without explicit target identifier', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '分析今天为什么一直 disconnect，最后集中爆发',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(true);
+        expect(analyzed.clarification.missingFields).toContain('execution_target_identifier');
+    });
+
+    test('does not require execution-target clarification for service outage analysis with explicit URL target', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '分析 https://status.openai.com 今天为什么多次 disconnect',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+    });
+
     test('preserves explicit output paths for code file requests', () => {
         const targetPath = '/tmp/.coworkany/gui-test.js';
         const analyzed = analyzeWorkRequest({
@@ -149,7 +251,7 @@ describe('work request control plane', () => {
         expect(analyzed.deliverables?.some((deliverable) =>
             typeof deliverable.path === 'string' && deliverable.path.endsWith('.md')
         )).toBe(false);
-        expect(analyzed.taskDraftRequired).toBe(true);
+        expect(analyzed.taskDraftRequired).toBe(false);
     });
 
     test('does not require task-scope clarification for explicit path corrections that include normal pronouns', () => {
@@ -420,7 +522,7 @@ describe('work request control plane', () => {
         });
 
         expect(analyzed.mode).toBe('scheduled_task');
-        expect(analyzed.taskDraftRequired).toBe(true);
+        expect(analyzed.taskDraftRequired).toBe(false);
         expect(analyzed.schedule?.executeAt).toBeTruthy();
         expect(analyzed.presentation.ttsEnabled).toBe(true);
         expect(analyzed.tasks[0]?.objective).toBe('整理 3 篇 Reddit 内容');
@@ -571,7 +673,7 @@ describe('work request control plane', () => {
         expect(analyzed.knownRisks?.some((risk) => risk.includes('Best-practice assumptions'))).toBe(true);
     });
 
-    test('assigns a blocking high-risk HITL plan review for code-change tasks', () => {
+    test('keeps high-risk metadata for code-change tasks but does not require plan confirmation', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '修复当前项目里的登录 bug，并直接修改代码完成实现',
             workspacePath: '/tmp/workspace',
@@ -579,10 +681,10 @@ describe('work request control plane', () => {
 
         expect(analyzed.hitlPolicy).toMatchObject({
             riskTier: 'high',
-            requiresPlanConfirmation: true,
+            requiresPlanConfirmation: false,
         });
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
-        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(false);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(false);
     });
 
     test('preflights chained scheduled stages for downstream high-risk collaboration gates', () => {
@@ -600,9 +702,9 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[1]?.localPlanHint?.requiresHostAccessGrant).toBe(true);
         expect(analyzed.hitlPolicy).toMatchObject({
             riskTier: 'high',
-            requiresPlanConfirmation: true,
+            requiresPlanConfirmation: false,
         });
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(false);
     });
 
     test('does not force required domain web research for simple scheduled execution intents', () => {
@@ -617,9 +719,9 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[1]?.preferredTools?.some((tool) => tool.startsWith('browser_'))).toBe(true);
         expect(analyzed.hitlPolicy).toMatchObject({
             riskTier: 'high',
-            requiresPlanConfirmation: true,
+            requiresPlanConfirmation: false,
         });
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(false);
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(true);
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth' && action.blocking)).toBe(true);
         const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
@@ -670,11 +772,11 @@ describe('work request control plane', () => {
 
         expect(analyzed.hitlPolicy).toMatchObject({
             riskTier: 'high',
-            requiresPlanConfirmation: true,
+            requiresPlanConfirmation: false,
         });
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(false);
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(true);
-        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(true);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(false);
         expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'manual_action' && checkpoint.blocking)).toBe(true);
         expect(analyzed.defaultingPolicy?.checkpointStrategy).toBe('manual_action');
         expect(analyzed.uncertaintyRegistry?.some((item) => item.topic === 'manual_prerequisite' && item.status === 'inferred')).toBe(true);

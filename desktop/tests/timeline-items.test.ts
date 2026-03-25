@@ -32,6 +32,16 @@ function makeSession(overrides: Partial<TaskSession> = {}): TaskSession {
     };
 }
 
+function explicitTaskIntentRouting() {
+    return {
+        intent: 'immediate_task',
+        confidence: 0.99,
+        reasonCodes: ['user_route_choice'],
+        needsDisambiguation: false,
+        forcedByUserSelection: true,
+    } as const;
+}
+
 describe('buildTimelineItems', () => {
     test('merges task update events into a single task card message', () => {
         const session = makeSession({
@@ -39,6 +49,19 @@ describe('buildTimelineItems', () => {
             events: [
                 makeEvent({
                     sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Initial explicit task plan.',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
                     type: 'TASK_CONTRACT_REOPENED',
                     payload: {
                         summary: 'User follow-up introduced a new task scope: deliverables changed.',
@@ -50,7 +73,7 @@ describe('buildTimelineItems', () => {
                     },
                 }),
                 makeEvent({
-                    sequence: 2,
+                    sequence: 3,
                     type: 'TASK_RESEARCH_UPDATED',
                     payload: {
                         summary: 'Research updated after reopen: 3/3 queries processed.',
@@ -61,14 +84,15 @@ describe('buildTimelineItems', () => {
                     },
                 }),
                 makeEvent({
-                    sequence: 3,
+                    sequence: 4,
                     type: 'TASK_PLAN_READY',
                     payload: {
                         summary: 'Replanned contract now saves a PDF artifact.',
+                        intentRouting: explicitTaskIntentRouting(),
                     },
                 }),
                 makeEvent({
-                    sequence: 4,
+                    sequence: 5,
                     type: 'TASK_USER_ACTION_REQUIRED',
                     payload: {
                         actionId: 'action-new',
@@ -126,6 +150,7 @@ describe('buildTimelineItems', () => {
                     type: 'TASK_PLAN_READY',
                     payload: {
                         summary: 'Plan ready.',
+                        intentRouting: explicitTaskIntentRouting(),
                     },
                 }),
             ],
@@ -147,6 +172,7 @@ describe('buildTimelineItems', () => {
                     type: 'TASK_PLAN_READY',
                     payload: {
                         summary: 'Plan ready.',
+                        intentRouting: explicitTaskIntentRouting(),
                         deliverables: [],
                         checkpoints: [],
                         userActionsRequired: [],
@@ -199,6 +225,7 @@ describe('buildTimelineItems', () => {
                     type: 'TASK_PLAN_READY',
                     payload: {
                         summary: 'Plan with staged tasks.',
+                        intentRouting: explicitTaskIntentRouting(),
                         tasks: [
                             {
                                 id: 'task-a',
@@ -300,7 +327,158 @@ describe('buildTimelineItems', () => {
         expect(assistantMessages).toEqual(['你好，今天需要我帮你做什么？']);
     });
 
-    test('renders task status updates as system events', () => {
+    test('deduplicates task finished summary when it matches streamed assistant draft in chat mode', () => {
+        const session = makeSession({
+            status: 'finished',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Chat mode plan.',
+                        mode: 'chat',
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TEXT_DELTA',
+                    payload: {
+                        role: 'assistant',
+                        delta: '你好呀！',
+                    },
+                }),
+                makeEvent({
+                    sequence: 3,
+                    type: 'TEXT_DELTA',
+                    payload: {
+                        role: 'assistant',
+                        delta: ' 今天想聊点什么？',
+                    },
+                }),
+                makeEvent({
+                    sequence: 4,
+                    type: 'TASK_FINISHED',
+                    payload: {
+                        summary: '你好呀！ 今天想聊点什么？',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const assistantMessages = result.items
+            .filter((item) => item.type === 'assistant_message')
+            .map((item) => item.content);
+
+        expect(assistantMessages).toEqual(['你好呀！ 今天想聊点什么？']);
+    });
+
+    test('deduplicates task finished summary when assistant chat message already exists in chat mode', () => {
+        const session = makeSession({
+            status: 'finished',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Chat mode plan.',
+                        mode: 'chat',
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'assistant',
+                        content: '你好！很高兴见到你。',
+                    },
+                }),
+                makeEvent({
+                    sequence: 3,
+                    type: 'TASK_FINISHED',
+                    payload: {
+                        summary: '你好！很高兴见到你。',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const assistantMessages = result.items
+            .filter((item) => item.type === 'assistant_message')
+            .map((item) => item.content);
+
+        expect(assistantMessages).toEqual(['你好！很高兴见到你。']);
+    });
+
+    test('normalizes routed TASK_STARTED source text to original user query', () => {
+        const session = makeSession({
+            status: 'running',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    payload: {
+                        context: {
+                            userQuery: '原始任务：帮我写一段产品文案\n用户路由：chat',
+                        },
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const userMessages = result.items
+            .filter((item) => item.type === 'user_message')
+            .map((item) => item.content);
+
+        expect(userMessages).toEqual(['帮我写一段产品文案']);
+    });
+
+    test('does not render task card for inferred task mode without explicit create intent', () => {
+        const session = makeSession({
+            status: 'running',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Inferred immediate task plan.',
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.84,
+                            reasonCodes: ['multi_step_cue'],
+                            needsDisambiguation: false,
+                        },
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'assistant',
+                        content: '我先直接回答你的问题。',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = result.items.filter((item) => item.type === 'task_card');
+        const assistantMessages = result.items
+            .filter((item) => item.type === 'assistant_message')
+            .map((item) => item.content);
+
+        expect(taskCards).toHaveLength(0);
+        expect(assistantMessages).toContain('我先直接回答你的问题。');
+    });
+
+    test('does not render task status updates as chat system events', () => {
         const session = makeSession({
             status: 'running',
             events: [
@@ -322,13 +500,10 @@ describe('buildTimelineItems', () => {
             .filter((item) => item.type === 'system_event')
             .map((item) => item.content);
 
-        expect(systemContents).toEqual([
-            'Status updated: in progress',
-            'Status updated: waiting',
-        ]);
+        expect(systemContents).toEqual([]);
     });
 
-    test('renders task failures as system feedback after in-progress updates', () => {
+    test('renders task failures as concise system feedback', () => {
         const session = makeSession({
             status: 'failed',
             events: [
@@ -350,10 +525,49 @@ describe('buildTimelineItems', () => {
             .filter((item) => item.type === 'system_event')
             .map((item) => item.content);
 
-        expect(systemContents).toEqual([
-            'Status updated: in progress',
-            'Task failed: fetch failed',
-        ]);
+        expect(systemContents).toEqual(['Task failed: fetch failed']);
+    });
+
+    test('suppresses runtime control notices inside task context cards', () => {
+        const session = makeSession({
+            status: 'running',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Task-mode plan.',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'system',
+                        content: '[RESUMED] durationMs=48799; reason=User provided follow-up input',
+                    },
+                }),
+                makeEvent({
+                    sequence: 3,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'system',
+                        content: 'Status updated: in progress',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCard = result.items.find((item) => item.type === 'task_card');
+        expect(taskCard?.type).toBe('task_card');
+        expect(taskCard?.sections.some((section) => section.label === 'Process · System updates')).toBe(false);
     });
 
     test('renders route disambiguation clarification as choice buttons in task card', () => {
@@ -366,6 +580,7 @@ describe('buildTimelineItems', () => {
                     payload: {
                         summary: 'Plan pending route selection.',
                         mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
                         deliverables: [],
                         checkpoints: [],
                         userActionsRequired: [],
@@ -384,6 +599,7 @@ describe('buildTimelineItems', () => {
                             { id: 'chat', label: '直接回答', value: '__route_chat__' },
                             { id: 'immediate_task', label: '创建任务', value: '__route_task__' },
                         ],
+                        intentRouting: explicitTaskIntentRouting(),
                     },
                 }),
             ],
@@ -413,6 +629,7 @@ describe('buildTimelineItems', () => {
                         summary: 'Task draft is ready for confirmation.',
                         mode: 'immediate_task',
                         taskDraftRequired: true,
+                        intentRouting: explicitTaskIntentRouting(),
                         deliverables: [],
                         checkpoints: [],
                         userActionsRequired: [],
@@ -431,6 +648,7 @@ describe('buildTimelineItems', () => {
                             { id: 'immediate_task', label: '确认创建', value: '__task_draft_confirm__' },
                             { id: 'chat', label: '改成普通回答', value: '__task_draft_chat__' },
                         ],
+                        intentRouting: explicitTaskIntentRouting(),
                     },
                 }),
             ],

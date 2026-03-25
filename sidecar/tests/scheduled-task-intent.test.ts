@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { detectScheduledIntent } from '../src/scheduling/scheduledTasks';
+import { computeNextRecurringExecuteAt, detectScheduledIntent } from '../src/scheduling/scheduledTasks';
 
 describe('scheduled task intent parsing', () => {
     test('strips chinese voice directive variants without leaving dangling task text', () => {
@@ -63,6 +63,31 @@ describe('scheduled task intent parsing', () => {
         expect(parsed?.executeAt.toISOString()).toBe('2026-03-20T01:18:12.000Z');
     });
 
+    test('supports explicit scheduled-task preamble before chinese relative time', () => {
+        const parsed = detectScheduledIntent(
+            '创建定时任务，1 分钟之后检索 openai 为什么关闭 sora，深度分析后回复我',
+            new Date('2026-03-25T10:12:31+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('检索 openai 为什么关闭 sora，深度分析后回复我');
+        expect(parsed?.speakResult).toBe(false);
+        expect(parsed?.originalTimeExpression).toBe('1分钟之后');
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:13:31.000Z');
+    });
+
+    test('supports english scheduled-task preamble before english relative time', () => {
+        const parsed = detectScheduledIntent(
+            'Create scheduled task: in 2 minutes, summarize OpenAI release notes.',
+            new Date('2026-03-25T10:00:00+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('summarize OpenAI release notes.');
+        expect(parsed?.originalTimeExpression).toBe('in 2 minutes');
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:02:00.000Z');
+    });
+
     test('extracts chained scheduled follow-up stages instead of folding them into constraints', () => {
         const parsed = detectScheduledIntent(
             '1 分钟以后，检索特朗普和伊朗是否有沟通停战的可能性，将结果保存到文件中。然后再等 1 分钟，将分析结果发布到 X 上',
@@ -77,5 +102,63 @@ describe('scheduled task intent parsing', () => {
             originalTimeExpression: '1分钟',
             delayMsFromPrevious: 60_000,
         });
+    });
+
+    test('detects recurring chinese interval scheduling intent', () => {
+        const parsed = detectScheduledIntent(
+            '创建定时任务，从现在开始，每5分钟提醒我喝水',
+            new Date('2026-03-25T10:00:00+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('提醒我喝水');
+        expect(parsed?.recurrence).toEqual({ kind: 'rrule', value: 'FREQ=MINUTELY;INTERVAL=5' });
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:00:00.000Z');
+    });
+
+    test('detects recurring english interval scheduling intent', () => {
+        const parsed = detectScheduledIntent(
+            'Create scheduled task: every 2 hours remind me to stretch.',
+            new Date('2026-03-25T10:00:00+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('remind me to stretch.');
+        expect(parsed?.recurrence).toEqual({ kind: 'rrule', value: 'FREQ=HOURLY;INTERVAL=2' });
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:00:00.000Z');
+    });
+
+    test('respects explicit start time for recurring chinese interval scheduling intent', () => {
+        const parsed = detectScheduledIntent(
+            '创建定时任务，10分钟后开始，每5分钟提醒我喝水',
+            new Date('2026-03-25T10:00:00+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('提醒我喝水');
+        expect(parsed?.recurrence).toEqual({ kind: 'rrule', value: 'FREQ=MINUTELY;INTERVAL=5' });
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:10:00.000Z');
+    });
+
+    test('respects explicit start time for recurring english interval scheduling intent', () => {
+        const parsed = detectScheduledIntent(
+            'Create scheduled task: in 30 minutes every 2 hours remind me to stretch.',
+            new Date('2026-03-25T10:00:00+08:00')
+        );
+
+        expect(parsed).not.toBeNull();
+        expect(parsed?.taskQuery).toBe('remind me to stretch.');
+        expect(parsed?.recurrence).toEqual({ kind: 'rrule', value: 'FREQ=HOURLY;INTERVAL=2' });
+        expect(parsed?.executeAt.toISOString()).toBe('2026-03-25T02:30:00.000Z');
+    });
+
+    test('computes the next recurring execution time from rrule interval', () => {
+        const next = computeNextRecurringExecuteAt({
+            recurrence: { kind: 'rrule', value: 'FREQ=MINUTELY;INTERVAL=5' },
+            previousExecuteAt: '2026-03-25T02:00:00.000Z',
+            now: new Date('2026-03-25T02:12:30.000Z'),
+        });
+
+        expect(next?.toISOString()).toBe('2026-03-25T02:15:00.000Z');
     });
 });

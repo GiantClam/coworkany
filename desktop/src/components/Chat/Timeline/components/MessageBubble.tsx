@@ -27,21 +27,37 @@ interface MessageBubbleProps {
     item: MessageBubbleItem;
     isUser: boolean;
     tone?: 'default' | 'system' | 'status';
+    pending?: boolean;
 }
 
-const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser, tone = 'default' }) => {
+const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser, tone = 'default', pending = false }) => {
     const { t } = useTranslation();
     const [showCopy, setShowCopy] = useState(false);
     const [copied, setCopied] = useState(false);
     const isStreamingAssistant = !isUser && item.isStreaming === true;
+    const isPendingStatusBubble = !isUser && tone === 'status' && pending;
     const userContent = isUser ? parseInlineAttachments(item.content) : null;
     const copyableContent = isUser ? (userContent?.text || item.content) : item.content;
+    const phaseMatch = !isUser
+        ? item.content.match(/^\*\*(Task plan|Thinking|Execute|Summary)\*\*/i)
+        : null;
+    const phaseClass = !isUser
+        ? phaseMatch?.[1]?.toLowerCase() === 'task plan'
+            ? styles.phasePlanBubble
+            : phaseMatch?.[1]?.toLowerCase() === 'thinking'
+                ? styles.phaseThinkingBubble
+                : phaseMatch?.[1]?.toLowerCase() === 'execute'
+                    ? styles.phaseExecuteBubble
+                    : phaseMatch?.[1]?.toLowerCase() === 'summary'
+                        ? styles.phaseSummaryBubble
+                        : ''
+        : '';
     const nonUserToneClass = !isUser
         ? tone === 'system'
             ? styles.systemContentBubble
             : tone === 'status'
                 ? styles.statusContentBubble
-                : ''
+                : phaseClass
         : '';
 
     const handleCopy = async () => {
@@ -53,7 +69,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser, to
     };
 
     // Parse content for verification and quality data
-    const parsed = isUser || isStreamingAssistant ? null : parseMessageContent(item.content);
+    const parsed = isUser || isStreamingAssistant || isPendingStatusBubble ? null : parseMessageContent(item.content);
 
     // Markdown renderer component
     const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => (
@@ -155,6 +171,20 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser, to
                             <MarkdownRenderer content={parsed.afterText} />
                         )}
                     </div>
+                ) : isPendingStatusBubble ? (
+                    <div className={styles.pendingStatusWrap} role="status" aria-live="polite">
+                        <div className={styles.pendingStatusHeader}>
+                            <span className={styles.pendingStatusDots} aria-hidden="true">
+                                <span className={styles.pendingStatusDot} />
+                                <span className={styles.pendingStatusDot} />
+                                <span className={styles.pendingStatusDot} />
+                            </span>
+                            <span className={styles.pendingStatusText}>{item.content}</span>
+                        </div>
+                        <span className={styles.pendingStatusTrack} aria-hidden="true">
+                            <span className={styles.pendingStatusBar} />
+                        </span>
+                    </div>
                 ) : (
                     // Standard markdown rendering
                     isStreamingAssistant ? (
@@ -176,7 +206,8 @@ const arePropsEqual = (prevProps: MessageBubbleProps, nextProps: MessageBubblePr
         prevProps.item.content === nextProps.item.content &&
         prevProps.item.isStreaming === nextProps.item.isStreaming &&
         prevProps.isUser === nextProps.isUser &&
-        prevProps.tone === nextProps.tone
+        prevProps.tone === nextProps.tone &&
+        prevProps.pending === nextProps.pending
     );
 };
 

@@ -8,10 +8,14 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import './WelcomeSection.css';
 
+export type EntryMode = 'chat' | 'task';
+
 interface WelcomeSectionProps {
-    onNewTask: () => void;
-    onOpenProject: () => void;
-    onTaskList: () => void;
+    onFocusInput: () => void;
+    mode: EntryMode;
+    onModeChange: (mode: EntryMode) => void;
+    onUsePrompt?: (prompt: string) => void;
+    suggestedPrompts?: string[];
 }
 
 const ArrowIcon = () => (
@@ -22,45 +26,74 @@ const ArrowIcon = () => (
 );
 
 export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
-    onNewTask,
-    onTaskList,
+    onFocusInput,
+    mode,
+    onModeChange,
+    onUsePrompt,
+    suggestedPrompts = [],
 }) => {
     const { t } = useTranslation();
 
     return (
         <div className="welcome-section">
             <div className="welcome-content">
-                <div className="welcome-kicker">CoworkAny Desktop</div>
+                <div className="welcome-segmented-wrap">
+                    <div className="welcome-segmented" role="tablist" aria-label={t('welcome.modeSelectorTitle')}>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={mode === 'chat'}
+                            className={`welcome-segmented-option ${mode === 'chat' ? 'active' : ''}`}
+                            onClick={() => {
+                                onModeChange('chat');
+                                onFocusInput();
+                            }}
+                        >
+                            {t('welcome.modeChatTitle')}
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            aria-selected={mode === 'task'}
+                            className={`welcome-segmented-option ${mode === 'task' ? 'active' : ''}`}
+                            onClick={() => {
+                                onModeChange('task');
+                                onFocusInput();
+                            }}
+                        >
+                            {t('welcome.modeTaskTitle')}
+                        </button>
+                    </div>
+                </div>
                 <h1 className="welcome-headline">{t('chat.howCanIHelp')}</h1>
-                <p className="welcome-hint">{t('chat.startTaskHint')}</p>
+                <p className="welcome-hint">
+                    {mode === 'chat' ? t('welcome.modeChatDesc') : t('welcome.modeTaskDesc')}
+                </p>
 
-                <div className="welcome-actions">
-                    <button type="button" className="welcome-action-card primary" onClick={onNewTask}>
-                        <div className="welcome-action-copy">
-                            <span className="welcome-action-title">{t('welcome.newTask')}</span>
-                            <span className="welcome-action-desc">{t('welcome.newTaskDesc')}</span>
+                {suggestedPrompts.length > 0 && (
+                    <div className="welcome-recommendations">
+                        <h2 className="welcome-recommendations-title">
+                            {t('welcome.recommendedPrompts')}
+                        </h2>
+                        <div className="welcome-recommendation-list">
+                            {suggestedPrompts.map((prompt) => (
+                                <button
+                                    key={prompt}
+                                    type="button"
+                                    className="welcome-recommendation-item"
+                                    onClick={() => {
+                                        onUsePrompt?.(prompt);
+                                        onFocusInput();
+                                    }}
+                                >
+                                    <span>{prompt}</span>
+                                    <ArrowIcon />
+                                </button>
+                            ))}
                         </div>
-                        <span className="welcome-action-icon">
-                            <ArrowIcon />
-                        </span>
-                    </button>
+                    </div>
+                )}
 
-                    <button type="button" className="welcome-action-card" onClick={onTaskList}>
-                        <div className="welcome-action-copy">
-                            <span className="welcome-action-title">{t('welcome.taskList')}</span>
-                            <span className="welcome-action-desc">{t('welcome.taskListDesc')}</span>
-                        </div>
-                        <span className="welcome-action-icon">
-                            <ArrowIcon />
-                        </span>
-                    </button>
-                </div>
-
-                <div className="welcome-signal-row" aria-hidden="true">
-                    <span className="welcome-signal-pill">Images</span>
-                    <span className="welcome-signal-pill">Models</span>
-                    <span className="welcome-signal-pill">Workspaces</span>
-                </div>
             </div>
         </div>
     );

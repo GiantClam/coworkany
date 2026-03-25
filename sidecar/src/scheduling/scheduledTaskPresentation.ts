@@ -9,7 +9,9 @@ const DROPPED_RESULT_BLOCK_PATTERNS = [
 
 const TRAILING_FOLLOWUP_PATTERNS = [
     /\n{2,}(?:如果你要|如果需要|要的话|我现在也可以|我也可以)[\s\S]*$/u,
+    /\n{1,}(?:如果你愿意|如果你同意|我下一步可以|我可以下一步)[\s\S]*$/u,
     /\n{2,}(?:If you want|If needed|I can also)[\s\S]*$/iu,
+    /\n{1,}(?:If you'd like|If you agree)[\s\S]*$/iu,
     /\n{2,}你回复一句[：:，,\s"'“”]*继续[\s\S]*$/u,
     /\n{2,}继续，按checkpoint格式给我[\s\S]*$/iu,
 ];

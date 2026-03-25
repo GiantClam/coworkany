@@ -113,7 +113,6 @@ function resolveActiveWorkspace(
     currentActive: Workspace | null,
     savedId: string | null,
 ): Workspace | null {
-    if (list.length === 0) return null;
     if (currentActive) {
         const fresh = list.find((workspace) => workspace.id === currentActive.id);
         if (fresh) return fresh;
@@ -123,7 +122,7 @@ function resolveActiveWorkspace(
         const saved = list.find((workspace) => workspace.id === savedId);
         if (saved) return saved;
     }
-    return list[0];
+    return null;
 }
 
 // ============================================================================
@@ -263,12 +262,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                         const newWorkspaces = state.workspaces.filter((workspace) => workspace.id !== id);
                         let newActiveWorkspace = state.activeWorkspace;
                         if (newActiveWorkspace?.id === id) {
-                            newActiveWorkspace = newWorkspaces.length > 0 ? newWorkspaces[0] : null;
-                            if (newActiveWorkspace) {
-                                void saveConfig('activeWorkspaceId', newActiveWorkspace.id);
-                            } else {
-                                void deleteConfig('activeWorkspaceId');
-                            }
+                            newActiveWorkspace = null;
+                            void deleteConfig('activeWorkspaceId');
                         }
                         return {
                             workspaces: newWorkspaces,

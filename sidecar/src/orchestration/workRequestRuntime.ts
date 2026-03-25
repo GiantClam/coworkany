@@ -355,8 +355,14 @@ export function getBlockingUserAction(
         return undefined;
     }
 
+    const actionableUserActions = request.userActionsRequired
+        .filter((action) => action.kind !== 'confirm_plan');
+    if (actionableUserActions.length === 0) {
+        return undefined;
+    }
+
     if (preferredKind) {
-        const preferred = request.userActionsRequired.find((action) =>
+        const preferred = actionableUserActions.find((action) =>
             action.kind === preferredKind && action.blocking
         );
         if (preferred) {
@@ -364,7 +370,7 @@ export function getBlockingUserAction(
         }
     }
 
-    return request.userActionsRequired.find((action) => action.blocking) ?? request.userActionsRequired[0];
+    return actionableUserActions.find((action) => action.blocking) ?? actionableUserActions[0];
 }
 
 export function markWorkRequestExecutionStarted(prepared: PreparedWorkRequestContext): void {

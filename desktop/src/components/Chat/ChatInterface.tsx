@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import './ChatInterface.css';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { useStartTask, useCancelTask } from '../../hooks/useStartTask';
+import { useStartTask, useCancelTask, useSpawnSidecar, useShutdownSidecar } from '../../hooks/useStartTask';
 import { useActiveSession, useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
@@ -21,7 +21,7 @@ import { Timeline } from './Timeline/Timeline';
 import { ModalDialog } from '../Common/ModalDialog';
 import { Header } from './components/Header';
 import { InputArea } from './components/InputArea';
-import { WelcomeSection } from '../Welcome/WelcomeSection';
+import { WelcomeSection, type EntryMode } from '../Welcome/WelcomeSection';
 import { useFileAttachment } from '../../hooks/useFileAttachment';
 import { getPendingTaskStatus } from './Timeline/pendingTaskStatus';
 import { getVoiceSettings } from '../../lib/configStore';
@@ -65,7 +65,6 @@ interface ChatInterfaceProps {
     onOpenSkills?: () => void;
     onOpenMcp?: () => void;
     onOpenSettings?: () => void;
-    onOpenTasks?: () => void;
 }
 
 function isLlmConfigError(error: string | null | undefined): boolean {
@@ -99,11 +98,28 @@ function stripCreateTaskIntentPrefix(text: string): string {
         .trim();
 }
 
+function buildRoutedEntrySourceText(text: string, mode: EntryMode): string {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return text;
+    }
+
+    if (/^\/(?:ask|task)\b/i.test(trimmed)) {
+        return trimmed;
+    }
+
+    if (/^__route_(?:chat|task)__$/i.test(trimmed)) {
+        return trimmed;
+    }
+
+    const route = mode === 'chat' ? 'chat' : 'task';
+    return `原始任务：${trimmed}\n用户路由：${route}`;
+}
+
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenSkills,
     onOpenMcp,
     onOpenSettings,
-    onOpenTasks,
 }) => {
     const { t } = useTranslation();
     const [query, setQuery] = useState('');
@@ -111,19 +127,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showSkillsDialog, setShowSkillsDialog] = useState(false);
     const [showMcpDialog, setShowMcpDialog] = useState(false);
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
+    const [entryMode, setEntryMode] = useState<EntryMode>('task');
+    const [isReconnectingLlm, setIsReconnectingLlm] = useState(false);
 
     const activeSession = useActiveSession();
-    const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
     const addTaskEvent = useTaskEventStore((state) => state.addEvent);
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
     const { resumeInterruptedTask, isLoading: isResuming, error: resumeError } = useResumeInterruptedTask();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
+    const { spawn: spawnSidecar } = useSpawnSidecar();
+    const { shutdown: shutdownSidecar } = useShutdownSidecar();
     const { voiceState, stopPlayback, isStopping: isStoppingVoice, error: stopVoiceError } = useVoicePlayback();
     const { skills } = useSkills({ autoRefresh: true });
     const { toolpacks } = useToolpacks({ autoRefresh: true });
-    const { activeWorkspace, createWorkspace, selectWorkspace, syncWorkspace } = useWorkspace({ autoLoad: true });
+    const { activeWorkspace } = useWorkspace({ autoLoad: true });
     const [llmConfig, setLlmConfig] = useState<LlmConfig>({});
     const {
         attachments,
@@ -191,6 +210,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         [activeSession]
     );
     const canResumeInterruptedTask = activeSession?.failure?.errorCode === 'INTERRUPTED';
+    const showInitialEntry = !activeSession || activeSession.isDraft;
+
+    useEffect(() => {
+        if (!activeSession || activeSession.isDraft) {
+            setEntryMode('task');
+        }
+    }, [activeSession?.taskId, activeSession?.isDraft]);
 
     const setActiveProfile = useCallback(async (id: string) => {
         try {
@@ -283,6 +309,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const effectiveQuery = normalizedQuery || trimmedQuery;
         if (!effectiveQuery && (!includeAttachments || attachments.length === 0)) return false;
         const requestContent = includeAttachments ? buildContentWithAttachments(effectiveQuery) : effectiveQuery;
+        const routedRequestContent = buildRoutedEntrySourceText(
+            requestContent,
+            createTaskIntent ? 'task' : entryMode
+        );
         const titleSource = effectiveQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
         const enabledSkillsForRequest = enabledSkills;
         const enabledToolpacksForRequest = enabledToolpacks;
@@ -347,51 +377,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         const draftTaskId = createTaskIntent ? undefined : (activeSession?.isDraft ? activeSession.taskId : undefined);
 
-        // Auto-create workspace if none selected or path is invalid
-        let currentWorkspace = activeWorkspace;
-        if (!currentWorkspace || !currentWorkspace.path) {
+        let currentPath = activeWorkspace?.path;
+        if (!currentPath) {
             try {
-                if (currentWorkspace) {
-                    console.warn('Active workspace has no path or is invalid, deleting and creating new one');
-                    try {
-                        await invoke('delete_workspace', { input: { id: currentWorkspace.id } });
-                    } catch (delErr) {
-                        console.error('Failed to delete invalid workspace:', delErr);
-                    }
-                }
-
-                const newWorkspace = await createWorkspace();
-                if (newWorkspace) {
-                    selectWorkspace(newWorkspace);
-                    currentWorkspace = newWorkspace;
-                }
+                currentPath = await invoke<string>('get_default_workspace_path');
             } catch (err) {
-                console.error('Failed to auto-create workspace', err);
+                console.error('Failed to resolve default workspace path', err);
             }
         }
-
-        if (!currentWorkspace?.path) {
-            try {
-                const fallbackPath = await invoke<string>('get_default_workspace_path');
-                const fallbackWorkspace = {
-                    id: crypto.randomUUID(),
-                    name: 'New workspace',
-                    path: fallbackPath,
-                    createdAt: new Date().toISOString(),
-                    lastUsedAt: new Date().toISOString(),
-                    autoNamed: true,
-                    defaultSkills: [],
-                    defaultToolpacks: ['builtin-websearch'],
-                };
-                syncWorkspace(fallbackWorkspace);
-                selectWorkspace(fallbackWorkspace);
-                currentWorkspace = fallbackWorkspace;
-            } catch (err) {
-                console.error('Failed to provision fallback workspace', err);
-            }
-        }
-
-        const currentPath = currentWorkspace?.path;
         if (!currentPath) {
             setWorkspaceError('Workspace path is not available and could not be created.');
             return false;
@@ -401,7 +394,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const voiceSettings = await getVoiceSettings();
         const result = await startTask({
             title: titleSource.slice(0, 60),
-            userQuery: requestContent,
+            userQuery: routedRequestContent,
             workspacePath: currentPath,
             config: {
                 enabledClaudeSkills: enabledSkillsForRequest,
@@ -417,7 +410,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         return result?.success === true;
-    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, createWorkspace, selectWorkspace, startTask, syncWorkspace, addTaskEvent, appendLocalTaskEvent]);
+    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, addTaskEvent, appendLocalTaskEvent, entryMode]);
 
     const handleSubmit = useCallback(async () => {
         await submitRequest(query, { includeAttachments: true });
@@ -574,29 +567,46 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 ?.focus();
         });
     }, []);
-
-    const handleCreateSession = useCallback(() => {
-        createDraftSession({
-            title: t('chat.newSessionTitle'),
-            workspacePath: activeWorkspace?.path,
-        });
+    const handleReconnectLlm = useCallback(async () => {
+        if (isReconnectingLlm) {
+            return;
+        }
+        setIsReconnectingLlm(true);
         setWorkspaceError(null);
-        setQuery('');
-        clearAttachments();
-        focusComposer();
-    }, [activeWorkspace?.path, clearAttachments, createDraftSession, focusComposer, t]);
+        try {
+            try {
+                await shutdownSidecar();
+            } catch {
+                // No-op: best-effort shutdown before spawn.
+            }
+            await spawnSidecar();
+        } catch (error) {
+            setWorkspaceError(error instanceof Error ? error.message : String(error));
+        } finally {
+            setIsReconnectingLlm(false);
+        }
+    }, [isReconnectingLlm, shutdownSidecar, spawnSidecar]);
 
     const currentError = workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError;
     const showErrorBanner = Boolean(currentError);
     const isLlmError = isLlmConfigError(currentError);
+    const suggestedPrompts = useMemo(() => ([
+        t('welcome.promptSummarize'),
+        t('welcome.promptUseGuide'),
+        t('welcome.promptCapabilities'),
+    ]), [t]);
 
-    if (!activeSession) {
+    if (showInitialEntry) {
         return (
             <div className="chat-interface">
                 <WelcomeSection
-                    onNewTask={focusComposer}
-                    onOpenProject={() => {}}
-                    onTaskList={onOpenTasks ?? (() => {})}
+                    onFocusInput={focusComposer}
+                    mode={entryMode}
+                    onModeChange={setEntryMode}
+                    onUsePrompt={(prompt) => {
+                        setQuery(prompt);
+                    }}
+                    suggestedPrompts={suggestedPrompts}
                 />
                 {showErrorBanner && (
                     <div className={`chat-error${isLlmError ? ' chat-error--llm' : ''}`}>
@@ -614,7 +624,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 )}
                 <InputArea
                     query={query}
-                    placeholder={t('chat.placeholderBuild')}
+                    placeholder={entryMode === 'chat' ? t('chat.placeholderChatMode') : t('dashboard.taskModePlaceholder')}
                     disabled={isStarting}
                     onQueryChange={setQuery}
                     onSubmit={handleSubmit}
@@ -644,14 +654,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 enabledToolpacksCount={enabledToolpacks.length}
                 isClearing={isClearing}
                 isCancelling={isCancelling}
+                isReconnectingLlm={isReconnectingLlm}
                 isSpeaking={voiceState.isSpeaking}
                 isStoppingVoice={isStoppingVoice}
                 onShowSettings={handleShowSettings}
                 onShowSkills={handleShowSkills}
                 onShowMcp={handleShowMcp}
-                onCreateSession={handleCreateSession}
                 onClearHistory={handleClearHistory}
                 onCancel={handleCancel}
+                onReconnectLlm={handleReconnectLlm}
                 onStopVoice={handleStopVoice}
                 canClearHistory={!activeSession.isDraft}
             />

@@ -16,24 +16,18 @@ interface HeaderProps {
     enabledToolpacksCount: number;
     isClearing: boolean;
     isCancelling: boolean;
+    isReconnectingLlm: boolean;
     isSpeaking: boolean;
     isStoppingVoice: boolean;
     onShowSettings: () => void;
     onShowSkills: () => void;
     onShowMcp: () => void;
-    onCreateSession: () => void;
     onClearHistory: () => void;
     onCancel: () => void;
+    onReconnectLlm: () => void;
     onStopVoice: () => void;
     canClearHistory: boolean;
 }
-
-const PlusIcon = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-);
 
 function abbreviateTitle(title: string): string {
     if (title.length <= 20) {
@@ -52,26 +46,30 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     enabledToolpacksCount,
     isClearing,
     isCancelling,
+    isReconnectingLlm,
     isSpeaking,
     isStoppingVoice,
     onShowSettings,
     onShowSkills,
     onShowMcp,
-    onCreateSession,
     onClearHistory,
     onCancel,
+    onReconnectLlm,
     onStopVoice,
     canClearHistory,
 }) => {
     const { t } = useTranslation();
 
     const displayTitle = abbreviateTitle(title);
-    const isStatusActionDisabled = !isSpeaking && status !== 'running';
+    const canReconnectLlm = status === 'finished';
+    const isStatusActionDisabled = !isSpeaking && status !== 'running' && !canReconnectLlm;
     const statusActionHint = isSpeaking
         ? (isStoppingVoice ? t('chat.stoppingVoice') : t('chat.stopVoice'))
         : status === 'running'
             ? t('common.cancel')
-            : null;
+            : canReconnectLlm
+                ? t('chat.reconnectLlm')
+                : null;
     const statusActionClassName = `chat-header-chip chat-status-chip ${status} ${isSpeaking ? 'warning' : ''}`.trim();
 
     return (
@@ -96,9 +94,13 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                         }
                         if (status === 'running') {
                             onCancel();
+                            return;
+                        }
+                        if (canReconnectLlm) {
+                            onReconnectLlm();
                         }
                     }}
-                    disabled={isStatusActionDisabled || isCancelling || isStoppingVoice}
+                    disabled={isStatusActionDisabled || isCancelling || isStoppingVoice || isReconnectingLlm}
                     title={statusLabel}
                     aria-label={statusLabel}
                 >
@@ -140,16 +142,6 @@ const HeaderComponent: React.FC<HeaderProps> = ({
                 >
                     <span className="chat-header-icon-button-text">MCP</span>
                     <span className="chat-header-icon-button-count">{enabledToolpacksCount}</span>
-                </button>
-
-                <button
-                    type="button"
-                    className="chat-header-icon-button"
-                    onClick={onCreateSession}
-                    title={t('chat.createNewSession')}
-                    aria-label={t('chat.createNewSession')}
-                >
-                    <PlusIcon />
                 </button>
 
                 <button

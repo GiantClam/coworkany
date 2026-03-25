@@ -332,6 +332,46 @@ class ResumeSidecarHarness {
         };
     }
 
+    async sendTaskMessage(input: {
+        taskId: string;
+        content: string;
+        enabledClaudeSkills?: string[];
+        enabledSkills?: string[];
+        enabledToolpacks?: string[];
+    }): Promise<{ success: boolean; taskId: string; error: string | null }> {
+        const response = await this.sendSidecarCommand('send_task_message', {
+            taskId: input.taskId,
+            content: input.content,
+            config: {
+                enabledClaudeSkills: input.enabledClaudeSkills ?? [],
+                enabledSkills: input.enabledSkills ?? [],
+                enabledToolpacks: input.enabledToolpacks ?? [],
+            },
+        });
+        const payload = response.payload ?? {};
+        return {
+            success: Boolean(payload.success),
+            taskId: String(payload.taskId ?? input.taskId),
+            error: typeof payload.error === 'string' ? payload.error : null,
+        };
+    }
+
+    async cancelTask(input: {
+        taskId: string;
+        reason?: string;
+    }): Promise<{ success: boolean; taskId: string; error: string | null }> {
+        const response = await this.sendSidecarCommand('cancel_task', {
+            taskId: input.taskId,
+            reason: input.reason,
+        });
+        const payload = response.payload ?? {};
+        return {
+            success: Boolean(payload.success),
+            taskId: String(payload.taskId ?? input.taskId),
+            error: typeof payload.error === 'string' ? payload.error : null,
+        };
+    }
+
     async listClaudeSkills(): Promise<ListedSkillRecord[]> {
         const response = await this.sendSidecarCommand('list_claude_skills', {
             includeDisabled: true,
@@ -685,6 +725,15 @@ class ResumeSidecarHarness {
                 this.resumeResults.push(result);
                 return result;
             }
+            case 'cancel_task': {
+                const response = await this.sendSidecarCommand('cancel_task', args.input as Record<string, unknown>);
+                const payload = response.payload ?? {};
+                return {
+                    success: Boolean(payload.success),
+                    taskId: String(payload.taskId ?? ''),
+                    error: typeof payload.error === 'string' ? payload.error : null,
+                };
+            }
             default:
                 throw new Error(`Unsupported mocked Tauri command: ${cmd}`);
         }
@@ -793,6 +842,25 @@ type PersistedRuntimeRecord = {
     }>;
 };
 
+type PersistedScheduledTaskRecord = {
+    id?: string;
+    sourceTaskId?: string;
+    workRequestId?: string;
+    title?: string;
+    taskQuery?: string;
+    executeAt?: string;
+    status?: string;
+    stageIndex?: number;
+    frozenWorkRequest?: {
+        schedule?: {
+            recurrence?: {
+                kind?: string;
+                value?: string;
+            } | null;
+        };
+    };
+};
+
 function readPersistedRuntimeRecords(appDataDir: string): PersistedRuntimeRecord[] {
     const runtimePath = path.join(appDataDir, 'task-runtime.json');
     if (!fs.existsSync(runtimePath)) {
@@ -806,6 +874,27 @@ function getPersistedConversationText(record: PersistedRuntimeRecord): string {
     return (record.conversation ?? [])
         .map((item) => (typeof item.content === 'string' ? item.content : ''))
         .join('\n');
+}
+
+function readPersistedScheduledTaskRecords(appDataDir: string): PersistedScheduledTaskRecord[] {
+    const scheduledPath = path.join(appDataDir, 'scheduled-tasks.json');
+    if (!fs.existsSync(scheduledPath)) {
+        return [];
+    }
+    const parsed = JSON.parse(fs.readFileSync(scheduledPath, 'utf-8')) as unknown;
+    return Array.isArray(parsed) ? parsed as PersistedScheduledTaskRecord[] : [];
+}
+
+function getEventsSince(events: SidecarEvent[], cursor: number): SidecarEvent[] {
+    return events.slice(Math.max(0, cursor));
+}
+
+function isScheduledStartedNoticeEvent(event: SidecarEvent, sourceTaskId: string): boolean {
+    if (event.taskId !== sourceTaskId || event.type !== 'CHAT_MESSAGE') {
+        return false;
+    }
+    const content = String((event.payload as Record<string, unknown>)?.content ?? '');
+    return content.includes('已开始执行');
 }
 
 async function waitForTaskRuntimeRecords(
@@ -884,6 +973,10 @@ function buildConcurrentTaskInputs(
 
 function collectTaskEvents(events: SidecarEvent[], taskId: string): SidecarEvent[] {
     return events.filter((event) => event.taskId === taskId);
+}
+
+function isTaskCollaborationEvent(event: SidecarEvent): boolean {
+    return event.type === 'TASK_CLARIFICATION_REQUIRED' || event.type === 'TASK_USER_ACTION_REQUIRED';
 }
 
 function getStartedDescription(taskEvents: SidecarEvent[]): string {
@@ -1154,6 +1247,15 @@ const SCHEDULED_DESKTOP_SCENARIOS: ScheduledDesktopScenario[] = [
         expectVoiceConfirmation: true,
     },
 ];
+
+const SCHEDULED_ACCEPTANCE_QUERIES = {
+    oneTimeImmediate: '0秒之后，只回复：一次性立即执行',
+    oneTimeDelayed: '3秒之后，只回复：一次性延迟执行',
+    recurringImmediate: '创建定时任务，每5分钟只回复：喝水提醒',
+    recurringDelayed: '创建定时任务，3秒后开始，每5分钟只回复：喝水提醒',
+    chainedImmediate: '0秒之后，只回复：阶段1完成。然后再等1秒，只回复：阶段2完成。',
+    cancellableLongRunning: `扫描${HOST_SCAN_PATH}/目录下的文件夹，给出分类列表即可`,
+} as const;
 
 async function waitForValue<T>(
     resolver: () => T | undefined,
@@ -1636,6 +1738,580 @@ test.describe('Desktop GUI smoke - interrupted task recovery with real sidecar',
 
             writeJsonFile(path.join(appDataDir, 'scheduled-scenario-results.json'), results);
             expect(results).toHaveLength(SCHEDULED_DESKTOP_SCENARIOS.length);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('one-time scheduled task starts immediately when delay is zero', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-one-time-immediate-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const eventCursor = harness.getTaskEvents().length;
+            const startedAt = Date.now();
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'One-time immediate schedule',
+                userQuery: SCHEDULED_ACCEPTANCE_QUERIES.oneTimeImmediate,
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            const confirmation = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                const finished = events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'TASK_FINISHED'
+                        && String((event.payload as Record<string, unknown>)?.summary ?? '').includes('已安排在'),
+                );
+                if (!finished) return undefined;
+                return String((finished.payload as Record<string, unknown>)?.summary ?? '');
+            }, 40_000, 'one-time immediate scenario should show scheduled confirmation');
+            expect(confirmation).toContain('已安排在');
+
+            await expect(page.getByRole('button', { name: /\[Scheduled\] 只回复：一次性立即执行/ }).first()).toBeVisible({
+                timeout: 20_000,
+            });
+
+            const scheduledStarted = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find((event) => isScheduledStartedNoticeEvent(event, sourceTaskId));
+            }, 45_000, 'scheduled execution should start immediately for zero-delay one-time task');
+            const scheduledStartedAtMs = new Date(scheduledStarted.timestamp).getTime();
+            expect(scheduledStartedAtMs - startedAt).toBeLessThan(25_000);
+
+            const scheduledRecords = readPersistedScheduledTaskRecords(appDataDir)
+                .filter((record) => record.sourceTaskId === sourceTaskId);
+            expect(scheduledRecords.length).toBeGreaterThan(0);
+            const firstRecord = scheduledRecords[0]!;
+            const executeAtMs = new Date(String(firstRecord.executeAt ?? '')).getTime();
+            expect(Number.isFinite(executeAtMs)).toBe(true);
+            expect(executeAtMs - startedAt).toBeLessThan(20_000);
+            expect(firstRecord.frozenWorkRequest?.schedule?.recurrence ?? null).toBeNull();
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('one-time scheduled task respects explicit delayed start time', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-one-time-delayed-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const eventCursor = harness.getTaskEvents().length;
+            const startedAt = Date.now();
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'One-time delayed schedule',
+                userQuery: SCHEDULED_ACCEPTANCE_QUERIES.oneTimeDelayed,
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'TASK_FINISHED'
+                        && String((event.payload as Record<string, unknown>)?.summary ?? '').includes('已安排在'),
+                );
+            }, 40_000, 'one-time delayed scenario should show scheduled confirmation');
+
+            await wait(1500);
+            const earlyScheduledStarts = getEventsSince(harness.getTaskEvents(), eventCursor).filter((event) => {
+                return isScheduledStartedNoticeEvent(event, sourceTaskId);
+            });
+            expect(earlyScheduledStarts.length).toBe(0);
+
+            const delayedStartEvent = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find((event) => isScheduledStartedNoticeEvent(event, sourceTaskId));
+            }, 45_000, 'one-time delayed scenario should eventually start');
+            const delayedStartAtMs = new Date(delayedStartEvent.timestamp).getTime();
+            expect(delayedStartAtMs - startedAt).toBeGreaterThanOrEqual(2_000);
+
+            const scheduledRecords = readPersistedScheduledTaskRecords(appDataDir)
+                .filter((record) => record.sourceTaskId === sourceTaskId);
+            expect(scheduledRecords.length).toBeGreaterThan(0);
+            const firstRecord = scheduledRecords[0]!;
+            const executeAtMs = new Date(String(firstRecord.executeAt ?? '')).getTime();
+            expect(Number.isFinite(executeAtMs)).toBe(true);
+            expect(executeAtMs - startedAt).toBeGreaterThanOrEqual(2_000);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('recurring scheduled task starts immediately when no explicit start time is provided', async ({ page }, testInfo) => {
+        testInfo.setTimeout(5 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-recurring-immediate-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const eventCursor = harness.getTaskEvents().length;
+            const startedAt = Date.now();
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'Recurring immediate schedule',
+                userQuery: SCHEDULED_ACCEPTANCE_QUERIES.recurringImmediate,
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'TASK_FINISHED'
+                        && String((event.payload as Record<string, unknown>)?.summary ?? '').includes('已安排在'),
+                );
+            }, 45_000, 'recurring immediate scenario should show scheduled confirmation');
+
+            await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find((event) => isScheduledStartedNoticeEvent(event, sourceTaskId));
+            }, 60_000, 'recurring immediate scenario should start scheduled execution quickly');
+
+            const records = await waitForValue(() => {
+                const candidate = readPersistedScheduledTaskRecords(appDataDir)
+                    .filter((record) => record.sourceTaskId === sourceTaskId);
+                const recurring = candidate.find((record) =>
+                    record.frozenWorkRequest?.schedule?.recurrence?.value === 'FREQ=MINUTELY;INTERVAL=5'
+                );
+                const hasNextScheduled = candidate.some((record) => record.status === 'scheduled');
+                if (!recurring || !hasNextScheduled || candidate.length < 2) {
+                    return undefined;
+                }
+                return candidate;
+            }, 120_000, 'recurring immediate scenario should auto-reschedule next run');
+            const sortedByExecuteAt = [...records].sort((left, right) =>
+                new Date(String(left.executeAt ?? '')).getTime() - new Date(String(right.executeAt ?? '')).getTime()
+            );
+            const first = sortedByExecuteAt[0]!;
+            const nextScheduled = sortedByExecuteAt.find((record) => record.status === 'scheduled');
+            expect(nextScheduled).toBeDefined();
+            const firstExecuteAtMs = new Date(String(first.executeAt ?? '')).getTime();
+            const nextExecuteAtMs = new Date(String(nextScheduled?.executeAt ?? '')).getTime();
+            expect(firstExecuteAtMs - startedAt).toBeLessThan(20_000);
+            expect(nextExecuteAtMs - firstExecuteAtMs).toBeGreaterThanOrEqual(4 * 60_000);
+            expect(nextExecuteAtMs - firstExecuteAtMs).toBeLessThanOrEqual(6 * 60_000);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('recurring scheduled task respects explicit delayed start time', async ({ page }, testInfo) => {
+        testInfo.setTimeout(5 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-recurring-delayed-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const eventCursor = harness.getTaskEvents().length;
+            const startedAt = Date.now();
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'Recurring delayed schedule',
+                userQuery: SCHEDULED_ACCEPTANCE_QUERIES.recurringDelayed,
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'TASK_FINISHED'
+                        && String((event.payload as Record<string, unknown>)?.summary ?? '').includes('已安排在'),
+                );
+            }, 45_000, 'recurring delayed scenario should show scheduled confirmation');
+
+            await wait(1500);
+            const earlyScheduledStarts = getEventsSince(harness.getTaskEvents(), eventCursor).filter((event) => {
+                return isScheduledStartedNoticeEvent(event, sourceTaskId);
+            });
+            expect(earlyScheduledStarts.length).toBe(0);
+
+            const delayedStartEvent = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find((event) => isScheduledStartedNoticeEvent(event, sourceTaskId));
+            }, 60_000, 'recurring delayed scenario should eventually start');
+            const delayedStartAtMs = new Date(delayedStartEvent.timestamp).getTime();
+            expect(delayedStartAtMs - startedAt).toBeGreaterThanOrEqual(2_000);
+
+            const records = readPersistedScheduledTaskRecords(appDataDir)
+                .filter((record) => record.sourceTaskId === sourceTaskId);
+            expect(records.length).toBeGreaterThan(0);
+            const first = records[0]!;
+            expect(first.frozenWorkRequest?.schedule?.recurrence?.value).toBe('FREQ=MINUTELY;INTERVAL=5');
+            const executeAtMs = new Date(String(first.executeAt ?? '')).getTime();
+            expect(executeAtMs - startedAt).toBeGreaterThanOrEqual(2_000);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('cancels in-progress task from desktop UI and persists cancellation outcome', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-cancel-ui-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const taskId = randomUUID();
+            const startResult = await harness.startTask({
+                taskId,
+                title: 'Cancellation scenario',
+                userQuery: SCHEDULED_ACCEPTANCE_QUERIES.cancellableLongRunning,
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            await expect.poll(() => harness.getAwaitingEffectCount(taskId), {
+                timeout: 40_000,
+                message: 'task should reach awaiting_confirmation before cancellation',
+            }).toBeGreaterThan(0);
+
+            const cancelResult = await page.evaluate(async (input) => {
+                const internals = (window as any).__TAURI_INTERNALS__;
+                return internals.invoke('cancel_task', { input });
+            }, {
+                taskId,
+                reason: 'desktop-e2e-cancel',
+            }) as { success?: boolean; taskId?: string };
+            expect(cancelResult.success).toBe(true);
+            expect(cancelResult.taskId).toBe(taskId);
+
+            await expect.poll(() => {
+                const record = readPersistedRuntimeRecords(appDataDir).find((item) => item.taskId === taskId);
+                return record?.status ?? null;
+            }, {
+                timeout: 20_000,
+                message: 'cancelled task should not remain running in persisted runtime',
+            }).not.toBe('running');
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('chained flow asks required collaboration only before execution and does not ask again after user input', async ({ page }, testInfo) => {
+        testInfo.setTimeout(6 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-chain-collab-gate-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const startCursor = harness.getTaskEvents().length;
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'Chain collaboration gate',
+                userQuery: '继续处理这个',
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            const planReadyBeforeClarification = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), startCursor)
+                    .filter((event) => event.taskId === sourceTaskId);
+                const planReady = events.find((event) => event.type === 'TASK_PLAN_READY');
+                const clarification = events.find((event) => event.type === 'TASK_CLARIFICATION_REQUIRED');
+                if (!planReady || !clarification) {
+                    return undefined;
+                }
+                return {
+                    planReady,
+                    clarification,
+                    events,
+                };
+            }, 60_000, 'chain collaboration scenario should emit plan-ready and clarification gate');
+            expect(planReadyBeforeClarification.planReady.sequence).toBeLessThan(planReadyBeforeClarification.clarification.sequence);
+            expect(
+                planReadyBeforeClarification.events.some((event) => event.type === 'TOOL_CALL'),
+                'execution should not start before clarification is provided',
+            ).toBe(false);
+            expect(planReadyBeforeClarification.events.some((event) => event.type === 'TASK_FINISHED')).toBe(false);
+            const clarificationPayload = planReadyBeforeClarification.clarification.payload as Record<string, unknown>;
+            const missingFields = Array.isArray(clarificationPayload.missingFields)
+                ? clarificationPayload.missingFields.map((field) => String(field))
+                : [];
+            expect(missingFields).toContain('task_scope');
+
+            const followUpCursor = harness.getTaskEvents().length;
+            const followUpResult = await harness.sendTaskMessage({
+                taskId: sourceTaskId,
+                content: SCHEDULED_ACCEPTANCE_QUERIES.chainedImmediate,
+            });
+            expect(followUpResult.success).toBe(true);
+
+            const chainConfirmation = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), followUpCursor);
+                const finished = events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'TASK_FINISHED'
+                        && String((event.payload as Record<string, unknown>)?.summary ?? '').includes('已拆解为 2 个链式阶段任务'),
+                );
+                if (!finished) return undefined;
+                return String((finished.payload as Record<string, unknown>)?.summary ?? '');
+            }, 60_000, 'chain collaboration scenario should finish with chained-stage scheduling confirmation');
+            expect(chainConfirmation).toContain('已拆解为 2 个链式阶段任务');
+            await expect(page.getByRole('button', { name: /\[Scheduled\] 只回复：阶段1完成/ }).first()).toBeVisible({
+                timeout: 20_000,
+            });
+
+            await expect.poll(() => {
+                const events = getEventsSince(harness.getTaskEvents(), followUpCursor).filter((event) =>
+                    isScheduledStartedNoticeEvent(event, sourceTaskId)
+                );
+                return events.length;
+            }, {
+                timeout: 120_000,
+                message: 'chain collaboration scenario should start both chained stages',
+            }).toBeGreaterThanOrEqual(2);
+
+            const collaborationEventsAfterInput = getEventsSince(harness.getTaskEvents(), followUpCursor)
+                .filter((event) => event.taskId === sourceTaskId)
+                .filter((event) => isTaskCollaborationEvent(event));
+            expect(collaborationEventsAfterInput).toEqual([]);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('concurrent flows gate collaboration per task before execution and avoid re-confirmation after input', async ({ page }, testInfo) => {
+        testInfo.setTimeout(6 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-concurrent-collab-gate-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const taskInputs = [1, 2, 3].map((index) => ({
+                taskId: randomUUID(),
+                title: `Concurrent collaboration gate ${index}`,
+                userQuery: '继续处理这个',
+                marker: `CONCURRENT_COLLAB_DONE_${index}_${randomUUID().slice(0, 8)}`,
+            }));
+            const eventCursor = harness.getTaskEvents().length;
+            const startResults = await Promise.all(taskInputs.map((input) =>
+                harness.startTask({
+                    taskId: input.taskId,
+                    title: input.title,
+                    userQuery: input.userQuery,
+                    workspacePath: harness.workspace.path,
+                })
+            ));
+            expect(startResults.every((result) => result.success)).toBe(true);
+
+            await expect.poll(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return taskInputs.map((task) => {
+                    const taskEvents = collectTaskEvents(events, task.taskId);
+                    const planReady = taskEvents.find((event) => event.type === 'TASK_PLAN_READY');
+                    const clarification = taskEvents.find((event) => event.type === 'TASK_CLARIFICATION_REQUIRED');
+                    const hasToolCall = taskEvents.some((event) => event.type === 'TOOL_CALL');
+                    if (!planReady || !clarification || hasToolCall) {
+                        return false;
+                    }
+                    if (planReady.sequence >= clarification.sequence) {
+                        return false;
+                    }
+                    const clarificationPayload = clarification.payload as Record<string, unknown>;
+                    const missingFields = Array.isArray(clarificationPayload.missingFields)
+                        ? clarificationPayload.missingFields.map((field) => String(field))
+                        : [];
+                    return missingFields.includes('task_scope');
+                });
+            }, {
+                timeout: 70_000,
+                message: 'all concurrent tasks should emit plan-ready + pre-execution clarification without tool execution',
+            }).toEqual(taskInputs.map(() => true));
+
+            const followUpCursorByTask = new Map<string, number>();
+            for (const [index, task] of taskInputs.entries()) {
+                followUpCursorByTask.set(task.taskId, harness.getTaskEvents().length);
+                const sendResult = await harness.sendTaskMessage({
+                    taskId: task.taskId,
+                    content: `请直接回复：并发任务${index + 1}完成，标记：${task.marker}`,
+                });
+                expect(sendResult.success).toBe(true);
+            }
+
+            await expect.poll(() => {
+                const events = harness.getTaskEvents();
+                return taskInputs.map((task) => {
+                    const sinceCursor = getEventsSince(events, followUpCursorByTask.get(task.taskId) ?? 0)
+                        .filter((event) => event.taskId === task.taskId);
+                    const finished = sinceCursor.some((event) => event.type === 'TASK_FINISHED');
+                    const ownMarkerInReply = sinceCursor.some((event) =>
+                        event.type === 'CHAT_MESSAGE'
+                        && String((event.payload as Record<string, unknown>)?.content ?? '').includes(task.marker)
+                    );
+                    const unexpectedCollaboration = sinceCursor.some((event) => isTaskCollaborationEvent(event));
+                    return finished && ownMarkerInReply && !unexpectedCollaboration;
+                });
+            }, {
+                timeout: 90_000,
+                message: 'concurrent tasks should finish after one clarification round and avoid extra collaboration prompts',
+            }).toEqual(taskInputs.map(() => true));
+
+            const events = harness.getTaskEvents();
+            for (const task of taskInputs) {
+                const taskEvents = collectTaskEvents(events, task.taskId);
+                const ownMarkerHits = taskEvents.filter((event) =>
+                    event.type === 'CHAT_MESSAGE'
+                    && String((event.payload as Record<string, unknown>)?.content ?? '').includes(task.marker)
+                );
+                expect(ownMarkerHits.length).toBeGreaterThan(0);
+                const foreignMarkers = taskInputs
+                    .filter((candidate) => candidate.taskId !== task.taskId)
+                    .filter((candidate) =>
+                        taskEvents.some((event) =>
+                            event.type === 'CHAT_MESSAGE'
+                            && String((event.payload as Record<string, unknown>)?.content ?? '').includes(candidate.marker)
+                        )
+                    );
+                expect(foreignMarkers).toEqual([]);
+            }
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('chained scheduled task runs stage-by-stage with continuation scheduling message', async ({ page }, testInfo) => {
+        testInfo.setTimeout(6 * 60 * 1000);
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-chain-scheduled-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const sourceTaskId = randomUUID();
+            const eventCursor = harness.getTaskEvents().length;
+            const startResult = await harness.startTask({
+                taskId: sourceTaskId,
+                title: 'Chained scheduled scenario',
+                userQuery: SCHEDULED_ACCEPTANCE_QUERIES.chainedImmediate,
+                workspacePath: harness.workspace.path,
+            });
+            expect(startResult.success).toBe(true);
+
+            const chainConfirmation = await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                const finished = events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'TASK_FINISHED'
+                        && String((event.payload as Record<string, unknown>)?.summary ?? '').includes('已拆解为 2 个链式阶段任务'),
+                );
+                if (!finished) return undefined;
+                return String((finished.payload as Record<string, unknown>)?.summary ?? '');
+            }, 60_000, 'chained scheduled scenario should emit chain confirmation');
+            expect(chainConfirmation).toContain('已拆解为 2 个链式阶段任务');
+
+            await expect(page.getByRole('button', { name: /Chained scheduled scenario/i }).first()).toBeVisible({
+                timeout: 20_000,
+            });
+
+            await waitForValue(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor);
+                return events.find(
+                    (event) =>
+                        event.taskId === sourceTaskId
+                        && event.type === 'CHAT_MESSAGE'
+                        && String((event.payload as Record<string, unknown>)?.content ?? '').includes('链式任务继续排程'),
+                );
+            }, 120_000, 'chained scheduled scenario should emit continuation scheduling message');
+
+            await expect.poll(() => {
+                const events = getEventsSince(harness.getTaskEvents(), eventCursor).filter((event) => {
+                    return isScheduledStartedNoticeEvent(event, sourceTaskId);
+                });
+                return events.length;
+            }, {
+                timeout: 120_000,
+                message: 'both chained scheduled stages should start',
+            }).toBeGreaterThanOrEqual(2);
+
+            const stagedRecords = readPersistedScheduledTaskRecords(appDataDir)
+                .filter((record) => record.sourceTaskId === sourceTaskId);
+            const stageIndexes = new Set(stagedRecords.map((record) => Number(record.stageIndex)));
+            expect(stageIndexes.has(0)).toBe(true);
+            expect(stageIndexes.has(1)).toBe(true);
+        } finally {
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
+
+    test('concurrent tasks remain isolated in runtime persistence while running together', async ({ page }) => {
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-concurrent-acceptance-'));
+        const harness = new ResumeSidecarHarness(await getFreePort(), appDataDir);
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+
+            const scenario = buildConcurrentScenarioMatrix()[0]!;
+            const taskInputs = buildConcurrentTaskInputs(scenario, harness.workspace.path);
+            const startResults = await Promise.all(taskInputs.map((input) => harness.startTask(input)));
+            expect(startResults.every((result) => result.success)).toBe(true);
+
+            await waitForConcurrentScenarioReadiness(harness, scenario, taskInputs);
+            assertNoCrossTaskMarkerInterference(harness, scenario, taskInputs);
+            await waitForTaskRuntimeRecords(appDataDir, taskInputs.map((input) => input.taskId), 40_000);
+            assertNoCrossTaskMarkerInterferenceInRuntime(
+                appDataDir,
+                'concurrent-acceptance',
+                taskInputs.map((input, index) => ({
+                    ...input,
+                    skillId: `scenario-${index + 1}`,
+                    skillKind: 'system',
+                }))
+            );
         } finally {
             await harness.stop();
             fs.rmSync(appDataDir, { recursive: true, force: true });

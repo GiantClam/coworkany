@@ -309,6 +309,96 @@ describe('execution runtime', () => {
         expect(emittedSummary).toBe('autonomous summary');
     });
 
+    test('executePreparedTaskFlow bypasses autonomous execution for web-research objectives', async () => {
+        let autonomousConfigured = false;
+        let agentLoopCalled = false;
+        let autonomousStartCalled = false;
+
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '检索 openai 为什么关闭 sora，深度分析后回复我';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-web-research-bypass-autonomous',
+            userQuery: prepared.executionQuery,
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            allowAutonomousFallback: true,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            shouldRunAutonomously: () => true,
+            prepareAutonomousProvider: () => {
+                autonomousConfigured = true;
+            },
+            getAutonomousAgent: () => ({
+                startTask: async () => {
+                    autonomousStartCalled = true;
+                    return {
+                        createdAt: new Date().toISOString(),
+                        summary: 'autonomous summary',
+                        decomposedTasks: [{ status: 'completed' }],
+                        verificationResult: { goalMet: true },
+                    };
+                },
+            }),
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return { artifactsCreated: [], toolsUsed: ['search_web'] };
+            },
+            session: new ExecutionSession({
+                taskId: 'task-web-research-bypass-autonomous',
+                conversationReader: {
+                    buildConversationText: () => 'https://example.com/evidence',
+                    getLatestAssistantResponseText: () => '结论如下。https://example.com/evidence',
+                },
+            }),
+        }));
+
+        expect(autonomousConfigured).toBe(false);
+        expect(autonomousStartCalled).toBe(false);
+        expect(agentLoopCalled).toBe(true);
+        expect(result.success).toBe(true);
+    });
+
+    test('executePreparedTaskFlow strips trailing follow-up suggestions from autonomous summaries', async () => {
+        let emittedSummary = '';
+
+        const result = await executePreparedTaskFlow({
+            taskId: 'task-autonomous-summary-strip',
+            userQuery: '整理一下这个主题',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: makePreparedWorkRequest(),
+            allowAutonomousFallback: true,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+            startedAt: Date.now(),
+        }, makeDeps({
+            shouldRunAutonomously: () => true,
+            getAutonomousAgent: () => ({
+                startTask: async () => ({
+                    createdAt: new Date().toISOString(),
+                    summary: '结论已完成。\n\n如果你愿意，我可以继续跟踪后续变化。',
+                    decomposedTasks: [{ status: 'completed' }],
+                    verificationResult: { goalMet: true },
+                }),
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: ({ summary }) => {
+                    emittedSummary = summary;
+                },
+                onFailed: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(result.summary).toBe('结论已完成。');
+        expect(emittedSummary).toBe('结论已完成。');
+    });
+
     test('continuePreparedAgentFlow runs agent execution and emits finished status after successful reduction', async () => {
         const statuses: string[] = [];
         const summaries: string[] = [];
@@ -532,7 +622,7 @@ describe('execution runtime', () => {
         expect(failures.length).toBe(0);
     });
 
-    test('continuePreparedAgentFlow does not block user-action phrasing when protocol judge is unavailable', async () => {
+    test('continuePreparedAgentFlow blocks user-action phrasing when protocol judge is unavailable', async () => {
         const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
         const prepared = makePreparedWorkRequest();
 
@@ -567,9 +657,9 @@ describe('execution runtime', () => {
             }),
         }));
 
-        expect(result.success).toBe(true);
-        expect(result.summary).toBe('reduced summary');
-        expect(failures.length).toBe(0);
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('requested additional user approval/execution');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
     });
 
     test('continuePreparedAgentFlow flags capability-refusal phrasing even when protocol judge is unavailable', async () => {
@@ -612,7 +702,7 @@ describe('execution runtime', () => {
         expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
     });
 
-    test('continuePreparedAgentFlow allows optional follow-up prompts once completion is already claimed', async () => {
+    test('continuePreparedAgentFlow blocks optional follow-up prompts even when completion is already claimed', async () => {
         const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
         const prepared = makePreparedWorkRequest();
 
@@ -653,9 +743,59 @@ describe('execution runtime', () => {
             }),
         }));
 
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('requested additional user approval/execution');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow appends source links for required web-research deliverables', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '检索 openai 为什么关闭 sora，深度分析后回复我';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+        prepared.frozenWorkRequest.researchQueries = [
+            {
+                id: 'rq-web-1',
+                kind: 'domain_research',
+                source: 'web',
+                objective: 'Collect latest official and media evidence.',
+                required: true,
+                status: 'completed',
+            },
+        ];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-source-links-append',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-source-links-append',
+                conversationReader: {
+                    buildConversationText: () =>
+                        'tool_result:\nhttps://www.cnn.com/2026/03/24/business/video/openai-sora-gold-live-032404pseg2-cnni-business-fast\nhttps://help.openai.com/en/articles/12461230-sora-app-and-sora-2-supported-countries',
+                    getLatestAssistantResponseText: () => '结论：目前更准确的说法是 Sora app 形态调整，而非底层能力永久终止。',
+                },
+            }),
+            reduceWorkResult: ({ canonicalResult, artifacts }) => ({
+                canonicalResult,
+                uiSummary: canonicalResult,
+                ttsSummary: canonicalResult,
+                artifacts: artifacts ?? [],
+            }),
+        }));
+
         expect(result.success).toBe(true);
-        expect(result.summary).toBe('reduced summary');
-        expect(failures.length).toBe(0);
+        expect(result.summary).toContain('来源链接');
+        expect(result.summary).toContain('https://www.cnn.com/2026/03/24/business/video/openai-sora-gold-live-032404pseg2-cnni-business-fast');
     });
 
     test('continuePreparedAgentFlow blocks scheduled stock-analysis output that asks for extra user confirmation', async () => {

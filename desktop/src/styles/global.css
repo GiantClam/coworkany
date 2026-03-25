@@ -6,11 +6,7 @@ body {
     width: 100%;
     font-size: 12px;
     font-family: var(--font-body);
-    background:
-        radial-gradient(980px 620px at 8% -12%, rgba(59, 130, 246, 0.18), transparent 58%),
-        radial-gradient(780px 480px at 88% 10%, rgba(249, 115, 22, 0.1), transparent 54%),
-        radial-gradient(1120px 700px at 50% 118%, rgba(37, 99, 235, 0.14), transparent 60%),
-        linear-gradient(145deg, #030916 0%, #061022 44%, #0a1833 100%);
+    background: var(--bg-app);
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -123,11 +119,11 @@ option,
 }
 
 .app-shell {
-    --app-aurora-blur: 42px;
-    --app-aurora-opacity: 0.32;
-    --app-noise-opacity: 0.18;
-    --surface-blur-strong: blur(14px) saturate(128%);
-    --surface-blur-medium: blur(12px) saturate(124%);
+    --app-aurora-blur: 0;
+    --app-aurora-opacity: 0;
+    --app-noise-opacity: 0;
+    --surface-blur-strong: none;
+    --surface-blur-medium: none;
     position: relative;
     isolation: isolate;
     width: 100%;
@@ -151,13 +147,7 @@ option,
 }
 
 .app-aurora {
-    position: absolute;
-    inset: auto;
-    border-radius: 9999px;
-    filter: blur(var(--app-aurora-blur));
-    opacity: var(--app-aurora-opacity);
-    pointer-events: none;
-    z-index: 0;
+    display: none;
 }
 
 .app-aurora-one {
@@ -185,15 +175,7 @@ option,
 }
 
 .app-noise-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    opacity: var(--app-noise-opacity);
-    background-image:
-        radial-gradient(rgba(183, 223, 255, 0.34) 0.5px, transparent 0.5px);
-    background-size: 3px 3px;
-    mix-blend-mode: screen;
+    display: none;
 }
 
 .app-content {
@@ -206,10 +188,7 @@ option,
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    background:
-        radial-gradient(920px 520px at 0% 0%, rgba(59, 130, 246, 0.06), transparent 58%),
-        radial-gradient(680px 460px at 100% 12%, rgba(249, 115, 22, 0.05), transparent 56%),
-        linear-gradient(180deg, rgba(4, 12, 29, 0.98), rgba(3, 16, 15, 1));
+    background: var(--bg-app);
     -webkit-app-region: no-drag;
     app-region: no-drag;
 }

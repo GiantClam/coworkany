@@ -5,15 +5,33 @@
 .timeline {
     display: flex;
     flex-direction: column;
-    gap: var(--space-6);
-    padding: var(--space-6) var(--space-5);
+    gap: var(--space-3);
+    padding: var(--space-2);
     overflow-y: auto;
     flex: 1;
     min-height: 0;
-    max-width: min(1280px, 100%);
-    margin: 0 auto;
+    max-width: 100%;
+    margin: 0;
     width: 100%;
     box-sizing: border-box;
+}
+
+.historyToggle {
+    align-self: center;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-panel);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.historyToggle:hover {
+    background: var(--bg-element-hover);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
 }
 
 /* ============================================================================
@@ -92,29 +110,129 @@
 }
 
 .timelineItem.assistant .contentBubble {
-    background: rgba(14, 26, 44, 0.62);
-    border: 1px solid var(--glass-border);
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-subtle);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-xl);
     max-width: 85%;
 }
 
 .systemContentBubble {
-    background: rgba(38, 60, 86, 0.42) !important;
-    border-color: rgba(147, 197, 253, 0.28) !important;
+    background: rgba(27, 45, 70, 0.5) !important;
+    border-color: var(--border-subtle) !important;
 }
 
 .statusContentBubble {
-    background: rgba(11, 38, 52, 0.58) !important;
+    background: rgba(12, 34, 46, 0.66) !important;
     border-color: rgba(52, 211, 153, 0.26) !important;
 }
 
+.phasePlanBubble {
+    background: rgba(16, 36, 58, 0.64) !important;
+    border-color: rgba(96, 165, 250, 0.34) !important;
+}
+
+.phaseThinkingBubble {
+    background: rgba(20, 36, 66, 0.62) !important;
+    border-color: rgba(59, 130, 246, 0.32) !important;
+}
+
+.phaseExecuteBubble {
+    background: rgba(12, 40, 32, 0.62) !important;
+    border-color: rgba(34, 197, 94, 0.3) !important;
+}
+
+.phaseSummaryBubble {
+    background: rgba(42, 28, 12, 0.62) !important;
+    border-color: rgba(251, 191, 36, 0.32) !important;
+}
+
+.pendingStatusWrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pendingStatusHeader {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pendingStatusText {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.pendingStatusDots {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.pendingStatusDot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: rgba(110, 231, 183, 0.94);
+    animation: pendingDotBounce 1.05s ease-in-out infinite;
+}
+
+.pendingStatusDot:nth-child(2) {
+    animation-delay: 120ms;
+}
+
+.pendingStatusDot:nth-child(3) {
+    animation-delay: 240ms;
+}
+
+.pendingStatusTrack {
+    position: relative;
+    display: block;
+    width: min(360px, 100%);
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(52, 211, 153, 0.14);
+    overflow: hidden;
+}
+
+.pendingStatusBar {
+    position: absolute;
+    inset: 0 auto 0 -42%;
+    width: 42%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(52, 211, 153, 0), rgba(52, 211, 153, 0.94), rgba(52, 211, 153, 0));
+    animation: pendingStatusSweep 1.2s linear infinite;
+}
+
+@keyframes pendingDotBounce {
+    0%,
+    80%,
+    100% {
+        opacity: 0.35;
+        transform: translateY(0);
+    }
+    40% {
+        opacity: 1;
+        transform: translateY(-2px);
+    }
+}
+
+@keyframes pendingStatusSweep {
+    0% {
+        transform: translateX(0);
+    }
+    100% {
+        transform: translateX(330%);
+    }
+}
+
 .taskCardMessage {
-    background:
-        linear-gradient(180deg, rgba(10, 27, 48, 0.78), rgba(7, 18, 35, 0.9)),
-        rgba(18, 26, 42, 0.72) !important;
-    border-color: rgba(96, 165, 250, 0.2) !important;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    background: var(--bg-subtle) !important;
+    border-color: var(--border-subtle) !important;
+    box-shadow: none;
 }
 
 .taskCardBoardLayout {
@@ -199,6 +317,153 @@
     gap: 10px;
 }
 
+.taskCardLane {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    column-gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(100, 116, 139, 0.25);
+}
+
+.taskCardThinkingLane {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.44), rgba(15, 23, 42, 0.28));
+    border-color: rgba(59, 130, 246, 0.32);
+}
+
+.taskCardExecutionLane {
+    background: linear-gradient(180deg, rgba(9, 26, 22, 0.44), rgba(9, 26, 22, 0.3));
+    border-color: rgba(34, 197, 94, 0.32);
+}
+
+.taskCardLaneHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.taskCardLaneTitle {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+}
+
+.taskTimelineNode {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    padding-top: 5px;
+}
+
+.taskTimelineNodeDot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    border: 2px solid rgba(148, 163, 184, 0.5);
+    background: rgba(30, 41, 59, 0.8);
+    z-index: 1;
+}
+
+.taskTimelineNodeDotcompleted {
+    border-color: rgba(59, 130, 246, 0.9);
+    background: #60a5fa;
+}
+
+.taskTimelineNodeDotactive {
+    border-color: rgba(16, 185, 129, 0.9);
+    background: #34d399;
+}
+
+.taskTimelineNodeDotfailed {
+    border-color: rgba(248, 113, 113, 0.9);
+    background: #f87171;
+}
+
+.taskTimelineNodeDotpending {
+    border-color: rgba(148, 163, 184, 0.5);
+    background: rgba(148, 163, 184, 0.4);
+}
+
+.taskTimelineNodeLine {
+    position: absolute;
+    top: 13px;
+    bottom: -14px;
+    width: 2px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.26);
+}
+
+.taskCardLaneBody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.taskCardLaneHeaderButton {
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    width: 100%;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.taskCardLaneSummary {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
+.taskCardLaneChevron {
+    align-self: flex-end;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1;
+}
+
+.taskCardLaneStatusChip {
+    font-size: 10px;
+    line-height: 1.2;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #cbd5e1;
+    padding: 2px 6px;
+    white-space: nowrap;
+}
+
+.taskCardLaneStatuscompleted {
+    border-color: rgba(59, 130, 246, 0.48);
+    color: #bfdbfe;
+}
+
+.taskCardLaneStatusactive {
+    border-color: rgba(34, 197, 94, 0.45);
+    color: #bbf7d0;
+}
+
+.taskCardLaneStatusfailed {
+    border-color: rgba(248, 113, 113, 0.5);
+    color: #fecaca;
+}
+
+.taskCardLaneStatuspending {
+    border-color: rgba(148, 163, 184, 0.35);
+    color: #cbd5e1;
+}
+
+.taskCardLaneSections {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .taskCardSection {
     display: flex;
     flex-direction: column;
@@ -221,6 +486,63 @@
     color: var(--text-secondary);
     padding-left: 12px;
     border-left: 2px solid rgba(96, 165, 250, 0.16);
+}
+
+.taskCardExecutionLane .taskCardSectionLines span {
+    border-left-color: rgba(110, 231, 183, 0.22);
+}
+
+.taskCardResultTabsSection {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.taskCardTabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.taskCardTabButton {
+    border: 1px solid rgba(100, 116, 139, 0.32);
+    background: rgba(15, 23, 42, 0.32);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 5px 11px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.taskCardTabButton:hover {
+    border-color: rgba(96, 165, 250, 0.5);
+    color: var(--text-primary);
+}
+
+.activeTaskCardTabButton {
+    background: rgba(59, 130, 246, 0.22);
+    border-color: rgba(96, 165, 250, 0.56);
+    color: #dbeafe;
+}
+
+.taskCardTabPanel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border: 1px solid rgba(100, 116, 139, 0.24);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.36);
+    padding: 10px 12px;
+}
+
+.taskCardTabPanel span {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    padding-left: 12px;
+    border-left: 2px solid rgba(96, 165, 250, 0.2);
 }
 
 .taskListInCard {
@@ -739,5 +1061,12 @@
 
     .timelineItem.assistant .contentBubble {
         max-width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pendingStatusDot,
+    .pendingStatusBar {
+        animation: none;
     }
 }

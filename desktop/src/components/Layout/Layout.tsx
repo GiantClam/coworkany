@@ -1,20 +1,18 @@
 import React from 'react';
 import './Layout.css';
-import { Sidebar, SidebarTab } from '../Sidebar/Sidebar';
+import { Sidebar } from '../Sidebar/Sidebar';
 
 interface LayoutProps {
     children: React.ReactNode;
-    activeTab: SidebarTab;
-    onTabChange: (tab: SidebarTab) => void;
     onOpenSettings?: () => void;
 }
 
-export const MainLayout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, onOpenSettings }) => {
+export const MainLayout: React.FC<LayoutProps> = ({ children, onOpenSettings }) => {
     return (
         <div className="layout">
             <div className="layout-body">
                 <aside className="layout-sidebar">
-                    <Sidebar activeTab={activeTab} onTabChange={onTabChange} onOpenSettings={onOpenSettings} />
+                    <Sidebar onOpenSettings={onOpenSettings} />
                 </aside>
                 <main className="layout-content">
                     {children}

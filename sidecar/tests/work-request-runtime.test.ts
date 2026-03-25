@@ -92,6 +92,28 @@ describe('workRequestRuntime', () => {
         expect(getScheduledTaskExecutionQuery({ record, workRequestStore: store })).toContain('只回复：HELLO');
     });
 
+    test('preserves recurrence in frozen work request for recurring scheduled intents', async () => {
+        const dir = makeTempDir();
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+        const beforeMs = Date.now();
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '创建定时任务，从现在开始，每5分钟提醒我喝水',
+            workspacePath: dir,
+            workRequestStore: store,
+        });
+        const afterMs = Date.now();
+
+        expect(prepared.frozenWorkRequest.mode).toBe('scheduled_task');
+        expect(prepared.frozenWorkRequest.schedule?.recurrence).toEqual({
+            kind: 'rrule',
+            value: 'FREQ=MINUTELY;INTERVAL=5',
+        });
+        const executeAtMs = new Date(prepared.frozenWorkRequest.schedule?.executeAt || '').getTime();
+        expect(Number.isFinite(executeAtMs)).toBe(true);
+        expect(executeAtMs).toBeGreaterThanOrEqual(beforeMs - 2_000);
+        expect(executeAtMs).toBeLessThanOrEqual(afterMs + 2_000);
+    });
+
     test('strips synthesized deliverable/checkpoint clauses from scheduled execution query', async () => {
         const dir = makeTempDir();
         const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));

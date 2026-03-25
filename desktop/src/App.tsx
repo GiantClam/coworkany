@@ -11,7 +11,6 @@ import { UpdateChecker } from './components/Common/UpdateChecker';
 import { OfflineBanner } from './components/Common/OfflineBanner';
 import { SetupWizard } from './components/Setup/SetupWizard';
 import { MainLayout } from './components/Layout/Layout';
-import type { SidebarTab } from './components/Sidebar/Sidebar';
 import { TitleBar } from './components/TitleBar/TitleBar';
 import { isFirstRun, DEFAULT_SHORTCUTS, getShortcuts } from './lib/configStore';
 import { CommandPalette } from './components/CommandPalette/CommandPalette';
@@ -29,7 +28,8 @@ import { IS_STARTUP_BASELINE } from './lib/startupProfile';
 import { recordStartupMetric } from './lib/startupMetrics';
 import { isTauri } from './lib/tauri';
 import { isExternalHref, openExternalUrl } from './lib/externalLinks';
-import { TaskListView } from './components/jarvis/TaskListView';
+import { useTaskEventStore } from './stores/useTaskEventStore';
+import { useWorkspace } from './hooks/useWorkspace';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('./components/Skills/SkillsView');
@@ -80,12 +80,20 @@ function App() {
     const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
     const [startupReadySent, setStartupReadySent] = useState(false);
     const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
-    const [activeTab, setActiveTab] = useState<SidebarTab>('chat');
     const startupSkeletonStartRef = useRef<number>(performance.now());
     const titlebarOffset = useNativeMacTitleBar ? 0 : 40;
     const appShellClassName = useNativeMacTitleBar
         ? 'app-shell app-shell-macos bg-app font-sans text-primary'
         : 'app-shell bg-app font-sans text-primary';
+    const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
+    const { activeWorkspace } = useWorkspace({ autoLoad: true });
+
+    const createNewTaskSession = useCallback(() => {
+        createDraftSession({
+            title: t('chat.newSessionTitle'),
+            workspacePath: activeWorkspace?.path,
+        });
+    }, [activeWorkspace, createDraftSession, t]);
 
     useEffect(() => {
         let cancelled = false;
@@ -263,7 +271,7 @@ function App() {
                 shell: {
                     singleWindowShell: true,
                 },
-                activeTab,
+                navigation: 'single-surface',
                 overlays: {
                     commandPaletteOpen,
                     shortcutsOverlayOpen,
@@ -284,7 +292,6 @@ function App() {
             toast.error(t('diagnostics.failedTitle'), t('diagnostics.failedDescription'));
         }
     }, [
-        activeTab,
         commandPaletteOpen,
         shortcutsOverlayOpen,
         skillsDialogOpen,
@@ -304,11 +311,11 @@ function App() {
     const commands = useMemo(() => createCommandRegistry(
         t,
         {
-            onNewTask: () => setActiveTab('chat'),
+            onNewTask: () => { void createNewTaskSession(); },
             onOpenProject: () => {
                 // TODO: implement project picker
             },
-            onTaskList: () => setActiveTab('tasks'),
+            onTaskList: () => { void createNewTaskSession(); },
             onOpenSkills: () => setSkillsDialogOpen(true),
             onOpenMcp: () => setMcpDialogOpen(true),
             onOpenSettings: () => setSettingsDialogOpen(true),
@@ -323,6 +330,7 @@ function App() {
         }
     ), [
         t,
+        createNewTaskSession,
         exportDiagnostics,
         newTaskShortcut,
         commandPaletteShortcut,
@@ -364,7 +372,9 @@ function App() {
 
     useGlobalShortcuts({
         commandPalette: useCallback(() => setCommandPaletteOpen(true), []),
-        newTask: useCallback(() => setActiveTab('chat'), []),
+        newTask: useCallback(() => {
+            void createNewTaskSession();
+        }, [createNewTaskSession]),
         showShortcuts: useCallback(() => setShortcutsOverlayOpen(true), []),
         openSettings: useCallback(() => setSettingsDialogOpen(true), []),
     });
@@ -419,23 +429,14 @@ function App() {
                     }}
                 />
 
-                <MainLayout
-                    activeTab={activeTab}
-                    onTabChange={setActiveTab}
-                    onOpenSettings={() => setSettingsDialogOpen(true)}
-                >
-                    <SectionErrorBoundary resetKeys={[activeTab]}>
+                <MainLayout onOpenSettings={() => setSettingsDialogOpen(true)}>
+                    <SectionErrorBoundary resetKeys={['main-chat-surface']}>
                         <div className="app-main-pane">
-                            {activeTab === 'tasks' ? (
-                                <TaskListView />
-                            ) : (
-                                <ChatInterface
-                                    onOpenSkills={() => setSkillsDialogOpen(true)}
-                                    onOpenMcp={() => setMcpDialogOpen(true)}
-                                    onOpenSettings={() => setSettingsDialogOpen(true)}
-                                    onOpenTasks={() => setActiveTab('tasks')}
-                                />
-                            )}
+                            <ChatInterface
+                                onOpenSkills={() => setSkillsDialogOpen(true)}
+                                onOpenMcp={() => setMcpDialogOpen(true)}
+                                onOpenSettings={() => setSettingsDialogOpen(true)}
+                            />
                         </div>
                     </SectionErrorBoundary>
                 </MainLayout>

@@ -18,7 +18,6 @@ import { useTimelineItems } from './hooks/useTimelineItems';
 import { MessageBubble } from './components/MessageBubble';
 import { TaskCardMessage } from './components/TaskCardMessage';
 import { ToolCard } from './components/ToolCard';
-import { IS_STARTUP_BASELINE } from '../../../lib/startupProfile';
 import { getPendingTaskStatus } from './pendingTaskStatus';
 
 // ============================================================================
@@ -110,9 +109,13 @@ const TimelineComponent: React.FC<TimelineProps> = ({
     onTaskActionClick,
 }) => {
     const { t } = useTranslation();
+    const latestVisibleMessageCount = 10;
     const [showFullHistory, setShowFullHistory] = React.useState(false);
-    const shouldCollapseHistory = !IS_STARTUP_BASELINE && !showFullHistory && session.events.length > 320;
-    const { items, hiddenEventCount } = useTimelineItems(session, shouldCollapseHistory ? 320 : undefined);
+    const { items } = useTimelineItems(session);
+    const hiddenMessageCount = Math.max(items.length - latestVisibleMessageCount, 0);
+    const visibleItems = showFullHistory || hiddenMessageCount === 0
+        ? items
+        : items.slice(-latestVisibleMessageCount);
     const pendingStatus = React.useMemo(() => getPendingTaskStatus(session), [session]);
     const pendingLabel = React.useMemo(() => {
         switch (pendingStatus?.phase) {
@@ -169,34 +172,27 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 clearTimeout(scrollTimeoutRef.current);
             }
         };
-    }, [items.length, userScrolled]);
+    }, [visibleItems.length, userScrolled]);
 
     // Reset userScrolled when new message starts (items.length changes)
     React.useEffect(() => {
         setUserScrolled(false);
-    }, [items.length]);
+    }, [visibleItems.length]);
 
     return (
         <div className={styles.timeline} ref={containerRef}>
-            {hiddenEventCount > 0 && (
+            {hiddenMessageCount > 0 && (
                 <button
                     type="button"
-                    onClick={() => setShowFullHistory(true)}
-                    style={{
-                        alignSelf: 'center',
-                        border: '1px solid var(--border-subtle)',
-                        background: 'var(--bg-panel)',
-                        color: 'var(--text-secondary)',
-                        borderRadius: '999px',
-                        padding: '6px 12px',
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                    }}
+                    onClick={() => setShowFullHistory((prev) => !prev)}
+                    className={styles.historyToggle}
                 >
-                    Show earlier activity ({hiddenEventCount} hidden events)
+                    {showFullHistory
+                        ? t('chat.collapseEarlierMessages')
+                        : t('chat.showEarlierMessages', { count: hiddenMessageCount })}
                 </button>
             )}
-            {items.map((item) => {
+            {visibleItems.map((item) => {
                 switch (item.type) {
                     case 'user_message':
                         return <MessageBubble key={item.id} item={item} isUser={true} />;
@@ -263,6 +259,7 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                     }}
                     isUser={false}
                     tone="status"
+                    pending
                 />
             )}
             <div ref={endRef} />

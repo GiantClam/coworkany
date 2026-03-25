@@ -108,36 +108,29 @@ describe('WS-02: Provider Fallback', () => {
 // ============================================================================
 
 describe('WS-03: DuckDuckGo CAPTCHA 检测', () => {
-    test('CAPTCHA HTML 应被明确检测并报告', async () => {
-        // We test the CAPTCHA detection by importing and checking the function
-        // The detectDuckDuckGoCaptcha function is internal, so we test via performSearch
-        // with a config that will only try DDG (no API keys, no SearXNG)
+    test('无 API key 时默认禁用 search_web（不走免费抓取 fallback）', async () => {
+        const previousFallbackEnv = process.env.ENABLE_WEBSEARCH_FREE_FALLBACK;
+        delete process.env.ENABLE_WEBSEARCH_FREE_FALLBACK;
+
         const config: SearchConfig = {
             provider: 'searxng',
-            // No API keys — will fall through to DDG
-            // No SearXNG URL — will use public instances that may fail
         };
 
         const result = await performSearch('test captcha detection', 3, config);
+
+        if (typeof previousFallbackEnv === 'undefined') {
+            delete process.env.ENABLE_WEBSEARCH_FREE_FALLBACK;
+        } else {
+            process.env.ENABLE_WEBSEARCH_FREE_FALLBACK = previousFallbackEnv;
+        }
 
         console.log(`[Test] Provider: ${result.provider}`);
         console.log(`[Test] Results: ${result.results.length}`);
         console.log(`[Test] Error: ${result.error || 'none'}`);
 
-        // The key assertion: if DDG returned a CAPTCHA, the error should mention it explicitly
-        if (result.error && result.results.length === 0) {
-            const errorLower = result.error.toLowerCase();
-            // Check that error messages are informative (not just "0 results")
-            const isInformative = errorLower.includes('captcha') ||
-                                  errorLower.includes('rate') ||
-                                  errorLower.includes('429') ||
-                                  errorLower.includes('failed') ||
-                                  errorLower.includes('api key');
-            console.log(`[Test] Error is informative: ${isInformative}`);
-            expect(isInformative).toBe(true);
-        } else if (result.results.length > 0) {
-            console.log('[INFO] Search succeeded (no CAPTCHA encountered).');
-        }
+        expect(result.results.length).toBe(0);
+        expect(result.provider).toBe('disabled');
+        expect((result.error || '').toLowerCase()).toContain('disabled');
     }, 30000);
 });
 

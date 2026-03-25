@@ -61,6 +61,7 @@ interface TaskEventStoreState {
     addAuditEvent: (event: AuditEvent) => void;
     getSession: (taskId: string) => TaskSession | undefined;
     setActiveTask: (taskId: string | null) => void;
+    deleteSession: (taskId: string) => void;
     createDraftSession: (seed?: Pick<TaskSession, 'title' | 'workspacePath'>) => string;
     ensureSession: (taskId: string, seed?: Partial<TaskSession>, makeActive?: boolean) => void;
     promoteDraftSession: (
@@ -193,6 +194,22 @@ function shouldPersistEvent(event: TaskEvent): boolean {
 
 function getPersistDelayMs(event: TaskEvent): number {
     return HIGH_PRIORITY_PERSIST_EVENT_TYPES.has(event.type) ? 180 : 1200;
+}
+
+function pickMostRecentTaskId(sessions: Map<string, TaskSession>): string | null {
+    let latestTaskId: string | null = null;
+    let latestTimestamp = -Infinity;
+
+    for (const [taskId, session] of sessions.entries()) {
+        const rawTimestamp = new Date(session.updatedAt || session.createdAt || '').getTime();
+        const timestamp = Number.isNaN(rawTimestamp) ? 0 : rawTimestamp;
+        if (timestamp > latestTimestamp) {
+            latestTimestamp = timestamp;
+            latestTaskId = taskId;
+        }
+    }
+
+    return latestTaskId;
 }
 
 function persistStateSnapshot(
@@ -374,6 +391,33 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
             set((state) => {
                 persistStateSnapshot(state.sessions, taskId);
                 return { activeTaskId: taskId };
+            });
+        },
+
+        deleteSession: (taskId: string) => {
+            const normalizedTaskId = normalizeTaskId(taskId);
+            if (!normalizedTaskId) {
+                return;
+            }
+
+            set((state) => {
+                if (!state.sessions.has(normalizedTaskId)) {
+                    return { sessions: state.sessions, activeTaskId: state.activeTaskId };
+                }
+
+                const sessions = new Map(state.sessions);
+                sessions.delete(normalizedTaskId);
+                deleteEventIndex(normalizedTaskId);
+
+                const activeTaskId = state.activeTaskId === normalizedTaskId
+                    ? pickMostRecentTaskId(sessions)
+                    : state.activeTaskId;
+                persistStateSnapshot(sessions, activeTaskId);
+
+                return {
+                    sessions,
+                    activeTaskId,
+                };
             });
         },
 

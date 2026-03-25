@@ -32,6 +32,7 @@ import { detectScheduledIntent, type ParsedScheduledIntent } from '../scheduling
 import { cleanScheduledTaskResultText, normalizeScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
 import { analyzeLocalTaskIntent } from './localTaskIntent';
 import type { SystemFolderResolutionOptions } from '../system/wellKnownFolders';
+import { TARGET_RESOLUTION_RULE_TABLE, matchesAnyPattern } from './targetResolutionRules';
 
 function detectLanguage(text: string): string {
     return /[\u4e00-\u9fff]/.test(text) ? 'zh-CN' : 'en';
@@ -40,6 +41,31 @@ function detectLanguage(text: string): string {
 function isPriceSensitiveInvestmentTask(text: string): boolean {
     return /(买入价|买入价格|买入区间|建仓价|建仓区间|入场价|买点|目标价|target price|entry price|buy price|buy range|entry range|price range|at what price)/i
         .test(text);
+}
+
+function isPrecisionSensitiveLookupTask(text: string): boolean {
+    const lookupIntent = matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.precisionIntentPatterns);
+    const precisionSignal = matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.precisionSubjectPatterns);
+    return lookupIntent && precisionSignal;
+}
+
+function isBroadTopicScopeTask(text: string): boolean {
+    return matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.broadScopePatterns);
+}
+
+function hasExplicitExecutionTargetIdentifier(text: string): boolean {
+    return matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.explicitIdentifierPatterns);
+}
+
+function requiresExecutionTargetIdentifierClarification(text: string): boolean {
+    const targetSensitiveTask = isPrecisionSensitiveLookupTask(text) || isPriceSensitiveInvestmentTask(text);
+    if (!targetSensitiveTask) {
+        return false;
+    }
+    if (isBroadTopicScopeTask(text)) {
+        return false;
+    }
+    return !hasExplicitExecutionTargetIdentifier(text);
 }
 
 function languageAwareQuestions(language: string): string[] {
@@ -62,6 +88,45 @@ function isComplexPlanningTask(text: string, mode: NormalizedWorkRequest['mode']
     }
 
     return /(计划|规划|拆分|分解|设计|方案|架构|实现|多步|multi-step|plan|break down|decompose|workflow|research)/i.test(text);
+}
+
+function hasExplicitWebLookupIntent(text: string): boolean {
+    if (text.trim().length === 0) {
+        return false;
+    }
+
+    const hasLookupCue =
+        /(检索|搜索|查找|查询|搜集|收集|爬取|crawl|scrape|search|lookup|find|news|新闻|latest|最新|事实核验|核验|source|来源|证据|时间线|timeline)/i
+            .test(text);
+    if (hasLookupCue) {
+        return true;
+    }
+
+    const hasAnalysisCue = /(深度分析|深入分析|analysis|why|为什么|原因|解读)/i.test(text);
+    const hasFreshnessOrStatusCue = /(最新|today|今日|最近|近期|news|动态|官方|公告|关闭|关停|停用|下线)/i.test(text);
+    return hasAnalysisCue && hasFreshnessOrStatusCue;
+}
+
+function isLocalSearchScopeText(text: string): boolean {
+    return /(当前项目|当前仓库|现有流程|workspace|repo|repository|代码库|本地|目录|文件夹|文件|路径|log|日志|代码|src|package\.json)/i
+        .test(text);
+}
+
+function shouldRequireWebDomainResearch(input: {
+    text: string;
+    mode: NormalizedWorkRequest['mode'];
+    taskDefinition: TaskDefinition;
+}): boolean {
+    if (input.mode === 'chat') {
+        return false;
+    }
+    if (input.taskDefinition.localPlanHint) {
+        return false;
+    }
+    if (isLocalSearchScopeText(input.text)) {
+        return false;
+    }
+    return hasExplicitWebLookupIntent(input.text);
 }
 
 function normalizeOutputSlug(text: string): string {
@@ -251,10 +316,7 @@ function buildHitlPolicy(input: {
         !codeChangeTask &&
         !selfManagementTask;
 
-    const requiresPlanConfirmation = !hostAccessOnlyReview
-        && riskTier !== 'low'
-        && !input.planAlreadyApproved
-        && !hasPlanApprovalCue(input.text);
+    const requiresPlanConfirmation = false;
 
     return {
         riskTier,
@@ -822,6 +884,20 @@ function buildResearchQueries(input: {
         });
     }
 
+    if (shouldRequireWebDomainResearch({
+        text: normalizedText,
+        mode: input.mode,
+        taskDefinition: input.taskDefinition,
+    })) {
+        appendResearchQuery(queries, seen, {
+            kind: 'domain_research',
+            source: 'web',
+            objective: 'Collect and verify the latest external web evidence (official sources first) before final delivery.',
+            required: true,
+            status: 'pending',
+        });
+    }
+
     if (isComplexPlanningTask(normalizedText, input.mode) || /(最佳实践|best practice|调研|research|架构|方案|设计)/i.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'domain_research',
@@ -1320,11 +1396,7 @@ function buildIntentRouting(input: {
     }
 
     const confidence = reasonCodes.includes('mixed_or_ambiguous') ? 0.62 : 0.84;
-    const needsDisambiguation =
-        !input.clarification.required &&
-        intent === 'immediate_task' &&
-        confidence < 0.75 &&
-        !input.hasExplicitTaskCue;
+    const needsDisambiguation = false;
 
     return {
         intent,
@@ -1351,16 +1423,8 @@ function buildTaskDraftRequired(input: {
     }
 
     const isScheduled = input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task';
-    if (isScheduled) {
-        return true;
-    }
-
-    if (input.hasManualAction) {
-        return true;
-    }
-
-    if (hasExplicitArtifactOutputIntent(input.sourceText)) {
-        return true;
+    if (isScheduled || input.hasManualAction || hasExplicitArtifactOutputIntent(input.sourceText)) {
+        return false;
     }
 
     const hasStateChangingDeliverable = input.deliverables.some((deliverable) =>
@@ -1370,7 +1434,7 @@ function buildTaskDraftRequired(input: {
         || deliverable.type === 'code_change'
     );
     if (hasStateChangingDeliverable && isComplexPlanningTask(input.sourceText, 'immediate_task')) {
-        return true;
+        return false;
     }
 
     return false;
@@ -1396,6 +1460,22 @@ function buildClarificationDecision(input: {
     const ambiguousReference =
         isAmbiguousReferenceRequest(trimmed);
     const tooShortToAct = trimmed.length > 0 && trimmed.length < 8;
+    const missingExecutionTargetIdentifier = requiresExecutionTargetIdentifierClarification(trimmed);
+
+    if (missingExecutionTargetIdentifier) {
+        return {
+            required: true,
+            reason: language.startsWith('zh')
+                ? '当前请求需要精确定位执行标的，但缺少唯一标识。'
+                : 'This request needs a uniquely resolvable execution target identifier before execution.',
+            questions: language.startsWith('zh')
+                ? ['请提供可唯一定位的目标标识（如 URL、文件路径、仓库名、工单 ID、交易所:ticker 或交易对），我再继续。']
+                : ['Please provide a uniquely resolvable target identifier (for example URL, file path, repository, ticket ID, exchange:ticker, or trading pair) so I can continue.'],
+            missingFields: ['execution_target_identifier'],
+            canDefault: false,
+            assumptions: [],
+        };
+    }
 
     if (ambiguousReference || tooShortToAct) {
         return {
@@ -1799,7 +1879,7 @@ export function analyzeWorkRequest(input: {
             ? {
                 executeAt: scheduledIntent.executeAt.toISOString(),
                 timezone: 'Asia/Shanghai',
-                recurrence: null,
+                recurrence: scheduledIntent.recurrence ?? null,
                 stages: scheduledStages.length > 0 ? scheduledStages : undefined,
             }
             : undefined,

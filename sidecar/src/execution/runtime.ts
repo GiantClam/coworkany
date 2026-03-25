@@ -13,6 +13,7 @@ import { type ExecutionResultReporter } from './resultReporter';
 import { type ExecutionSession } from './session';
 import type { LocalTaskPlanHint } from '../orchestration/localTaskIntent';
 import { TaskCancelledError } from './taskCancellationRegistry';
+import { cleanScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
 
 export type ExecutionTaskConfig = {
     modelId?: string;
@@ -539,8 +540,130 @@ const GROUNDED_INSPECTION_INTENT_PATTERN = new RegExp(
     'i',
 );
 
+const WEB_RESEARCH_TOOLS = new Set([
+    'search_web',
+    'crawl_url',
+    'extract_content',
+    'get_news',
+    'browser_get_content',
+]);
+
 function hasGroundedInspectionToolEvidence(toolsUsed: string[]): boolean {
     return toolsUsed.some((tool) => GROUNDED_INSPECTION_TOOLS.has(tool));
+}
+
+function requiresSourceLinksInFinalOutput(input: {
+    prepared: PreparedWorkRequestContext;
+    executionQuery: string;
+    toolsUsed: string[];
+}): boolean {
+    const mode = input.prepared.frozenWorkRequest.mode;
+    if (mode === 'chat') {
+        return false;
+    }
+
+    const hasRequiredWebResearch = (input.prepared.frozenWorkRequest.researchQueries ?? []).some((query) =>
+        query.required && query.source === 'web' && query.status !== 'skipped'
+    );
+    if (hasRequiredWebResearch) {
+        return true;
+    }
+
+    const usedWebResearchTools = input.toolsUsed.some((tool) => WEB_RESEARCH_TOOLS.has(tool));
+    if (usedWebResearchTools) {
+        return true;
+    }
+
+    const sourceSignal = `${input.executionQuery}\n${input.prepared.frozenWorkRequest.sourceText ?? ''}`.trim();
+    return /(检索|搜索|查找|查询|news|latest|最新|官方|来源|source|evidence|证据)/i
+        .test(sourceSignal);
+}
+
+function shouldBypassAutonomousFallback(prepared: PreparedWorkRequestContext): boolean {
+    const mode = prepared.frozenWorkRequest.mode;
+    if (mode === 'chat') {
+        return false;
+    }
+
+    const hasRequiredWebResearch = (prepared.frozenWorkRequest.researchQueries ?? []).some((query) =>
+        query.required && query.source === 'web' && query.status !== 'skipped'
+    );
+    if (hasRequiredWebResearch) {
+        return true;
+    }
+
+    const query = (prepared.executionQuery || prepared.frozenWorkRequest.sourceText || '').trim();
+    if (!query) {
+        return false;
+    }
+
+    return /(检索|搜索|查找|查询|research|latest|最新|新闻|news|来源|source|证据|evidence)/i.test(query);
+}
+
+function hasHyperlink(text: string): boolean {
+    return /https?:\/\/[^\s)\]]+/i.test(text);
+}
+
+function extractHyperlinks(text: string): string[] {
+    if (!text.trim()) {
+        return [];
+    }
+    const matches = text.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const rawUrl of matches) {
+        const url = rawUrl.replace(/[.,;:!?]+$/g, '');
+        if (!url || seen.has(url)) {
+            continue;
+        }
+        seen.add(url);
+        normalized.push(url);
+    }
+    return normalized;
+}
+
+function stripTrailingExecutionFollowup(text: string): string {
+    let cleaned = cleanScheduledTaskResultText(text).trim();
+    const patterns: RegExp[] = [
+        /\n{1,}(?:如果你愿意|如果你同意|如需我继续|如果需要我继续|我下一步可以|我可以下一步)[\s\S]*$/u,
+        /\n{1,}(?:if you want|if you'd like|if needed)[\s\S]*$/iu,
+    ];
+    for (const pattern of patterns) {
+        cleaned = cleaned.replace(pattern, '').trim();
+    }
+    return cleaned;
+}
+
+function ensureFinalOutputHasSourceLinks(input: {
+    outputText: string;
+    prepared: PreparedWorkRequestContext;
+    executionQuery: string;
+    toolsUsed: string[];
+    conversationText: string;
+}): string {
+    const base = stripTrailingExecutionFollowup(input.outputText);
+    if (
+        !requiresSourceLinksInFinalOutput({
+            prepared: input.prepared,
+            executionQuery: input.executionQuery,
+            toolsUsed: input.toolsUsed,
+        })
+    ) {
+        return base;
+    }
+    if (hasHyperlink(base)) {
+        return base;
+    }
+
+    const sourceLinks = extractHyperlinks(input.conversationText).slice(0, 6);
+    if (sourceLinks.length === 0) {
+        return base;
+    }
+
+    const heading = /[\u4e00-\u9fff]/.test(input.prepared.frozenWorkRequest.sourceText ?? '')
+        ? '来源链接'
+        : 'Sources';
+    return `${base}\n\n${heading}:\n${sourceLinks.map((url) => `- ${url}`).join('\n')}`;
 }
 
 function isMetadataOnlyExecution(toolsUsed: string[]): boolean {
@@ -621,6 +744,21 @@ function isLikelyCapabilityRefusal(outputText: string): boolean {
     return refusalPatterns.some((pattern) => pattern.test(trimmed));
 }
 
+function isLikelyApprovalGateRequest(outputText: string): boolean {
+    const trimmed = outputText.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const approvalPatterns: RegExp[] = [
+        /如果你(?:愿意|同意|确认|批准)[^。！？\n]{0,50}(?:我|我就|我可以|我下一步|我会)/u,
+        /(?:我下一步可以|我可以下一步|你回复一句|请回复|请选择)[^。！？\n]{0,50}(?:继续|执行|开始|确认)/u,
+        /if you (?:want|agree|approve|confirm)[^.!?\n]{0,80}(?:i|i'll|i will)/i,
+        /please (?:reply|confirm|approve)[^.!?\n]{0,60}(?:continue|proceed|execute|start)/i,
+    ];
+    return approvalPatterns.some((pattern) => pattern.test(trimmed));
+}
+
 async function evaluateExecutionProtocolCompliance(input: {
     preparedWorkRequest: PreparedWorkRequestContext;
     executionQuery: string;
@@ -629,21 +767,18 @@ async function evaluateExecutionProtocolCompliance(input: {
     assessExecutionProtocol?: ExecutionRuntimeDeps['assessExecutionProtocol'];
 }): Promise<{ trigger: ReplanTrigger; error: string; suggestion: string } | null> {
     const hasBlockingUserAction = hasPlannedBlockingUserAction(input.preparedWorkRequest);
-    const mode = input.preparedWorkRequest.frozenWorkRequest.mode;
-    const isScheduledExecution = mode === 'scheduled_task' || mode === 'scheduled_multi_task';
     const assessedProtocol = await input.assessExecutionProtocol?.({
         executionQuery: input.executionQuery,
         outputText: input.outputText,
         toolsUsed: input.toolsUsed,
         hasBlockingUserAction,
     });
-    const asksForAdditionalUserAction = assessedProtocol?.asksForAdditionalUserAction === true;
+    const asksForAdditionalUserAction =
+        assessedProtocol?.asksForAdditionalUserAction === true ||
+        isLikelyApprovalGateRequest(input.outputText);
     const objectiveRefusal = assessedProtocol?.objectiveRefusal === true || isLikelyCapabilityRefusal(input.outputText);
     const objectiveSatisfied = assessedProtocol?.objectiveSatisfied;
-    const completionClaim = assessedProtocol?.completionClaim ?? 'unknown';
-    const requestsBlockingAdditionalAction =
-        asksForAdditionalUserAction &&
-        (isScheduledExecution || completionClaim !== 'present');
+    const requestsBlockingAdditionalAction = asksForAdditionalUserAction;
 
     if (
         requestsBlockingAdditionalAction &&
@@ -695,6 +830,23 @@ async function evaluateExecutionProtocolCompliance(input: {
                     'Provide a concrete buy-price value or range, include currency units, and anchor it to a specific market timepoint.',
             };
         }
+    }
+
+    if (
+        requiresSourceLinksInFinalOutput({
+            prepared: input.preparedWorkRequest,
+            executionQuery: input.executionQuery,
+            toolsUsed: input.toolsUsed,
+        }) &&
+        !hasHyperlink(input.outputText)
+    ) {
+        return {
+            trigger: 'contradictory_evidence',
+            error:
+                'Execution protocol unmet: web-research task finished without source links in the final response.',
+            suggestion:
+                'Include a source-links section in the final output using concrete URLs gathered from web research tools.',
+        };
     }
 
     const requestedGroundedEvidence =
@@ -795,6 +947,7 @@ export async function executePreparedTaskFlow(input: {
     if (
         !hasExplicitSkillSelection &&
         input.allowAutonomousFallback &&
+        !shouldBypassAutonomousFallback(input.preparedWorkRequest) &&
         deps.shouldRunAutonomously(input.preparedWorkRequest.executionQuery)
     ) {
         const autonomousResult = await executeAutonomousFlow(input, deps);
@@ -896,23 +1049,24 @@ async function executeAutonomousFlow(input: {
                 input.preparedWorkRequest.executionQuery
             );
             if (deterministicFallbackSummary) {
+                const normalizedSummary = stripTrailingExecutionFollowup(deterministicFallbackSummary);
                 deps.markWorkRequestExecutionCompleted(
                     input.preparedWorkRequest,
-                    deterministicFallbackSummary
+                    normalizedSummary
                 );
                 deps.reporter.finished({
-                    summary: deterministicFallbackSummary,
+                    summary: normalizedSummary,
                     duration: Date.now() - new Date(task.createdAt).getTime(),
                 });
                 return {
                     success: true,
-                    summary: deterministicFallbackSummary,
+                    summary: normalizedSummary,
                     artifactsCreated: [],
                 };
             }
             return null;
         } else {
-            const summary = task.summary || 'Autonomous task completed';
+            const summary = stripTrailingExecutionFollowup(task.summary || 'Autonomous task completed');
             deps.markWorkRequestExecutionCompleted(input.preparedWorkRequest, summary);
             deps.reporter.finished({
                 summary,
@@ -1060,10 +1214,18 @@ async function runPreparedAgentExecution(input: {
             : mergedArtifacts;
         const fullConversationText = deps.session.buildConversationText();
         const latestAssistantOutputText = deps.session.getLatestAssistantResponseText();
+        const normalizedLatestOutput = ensureFinalOutputHasSourceLinks({
+            outputText:
+                typeof latestAssistantOutputText === 'string' && latestAssistantOutputText.trim().length > 0
+                    ? latestAssistantOutputText
+                    : fullConversationText,
+            prepared: preparedWorkRequest,
+            executionQuery,
+            toolsUsed: loopResult.toolsUsed,
+            conversationText: fullConversationText,
+        });
         const protocolOutputText =
-            typeof latestAssistantOutputText === 'string' && latestAssistantOutputText.trim().length > 0
-                ? latestAssistantOutputText
-                : fullConversationText;
+            normalizedLatestOutput;
         const protocolViolation = await evaluateExecutionProtocolCompliance({
             preparedWorkRequest,
             executionQuery,
@@ -1236,7 +1398,14 @@ async function runPreparedAgentExecution(input: {
             };
         }
 
-        const finalAssistantText = deps.session.getLatestAssistantResponseText() || 'Task completed';
+        const latestTextForDelivery = deps.session.getLatestAssistantResponseText() || protocolOutputText || 'Task completed';
+        const finalAssistantText = ensureFinalOutputHasSourceLinks({
+            outputText: latestTextForDelivery,
+            prepared: preparedWorkRequest,
+            executionQuery,
+            toolsUsed: loopResult.toolsUsed,
+            conversationText: fullConversationText,
+        });
         markWorkRequestReductionStarted(preparedWorkRequest);
         deps.emitPlanUpdated(taskId, preparedWorkRequest);
         const reducedPresentation = deps.reduceWorkResult({

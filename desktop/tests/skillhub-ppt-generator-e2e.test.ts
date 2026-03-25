@@ -44,6 +44,30 @@ type WorkspaceRecord = {
     defaultToolpacks: string[];
 };
 
+type ClaudeSkillRecord = {
+    manifest: {
+        id: string;
+        name: string;
+        version: string;
+        description?: string;
+        allowedTools?: string[];
+        tags?: string[];
+    };
+    rootPath: string;
+    source: string;
+    installedAt: string;
+    enabled: boolean;
+    permissions?: Record<string, unknown>;
+    provenance?: Record<string, unknown>;
+    trust?: Record<string, unknown>;
+};
+
+type StartTaskResult = {
+    success: boolean;
+    taskId: string;
+    error?: string;
+};
+
 function ensureDir(dirPath: string): void {
     fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -99,6 +123,138 @@ function readJsonIfExists<T>(filePath: string, fallback: T): T {
     }
 }
 
+function writeJson(filePath: string, payload: unknown): void {
+    ensureDir(path.dirname(filePath));
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
+}
+
+function buildSeededLlmConfigFromEnv(): Record<string, unknown> | null {
+    const profileId = 'skillhub-e2e-profile';
+    const modelId = process.env.TEST_MODEL_ID?.trim();
+    const aibermApiKey = process.env.E2E_AIBERM_API_KEY?.trim();
+    const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
+    const openRouterApiKey = process.env.OPENROUTER_API_KEY?.trim();
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim();
+
+    if (aibermApiKey) {
+        return {
+            provider: 'aiberm',
+            activeProfileId: profileId,
+            maxHistoryMessages: 20,
+            profiles: [
+                {
+                    id: profileId,
+                    name: 'Aiberm Skillhub E2E',
+                    provider: 'aiberm',
+                    verified: true,
+                    openai: {
+                        apiKey: aibermApiKey,
+                        baseUrl: process.env.E2E_AIBERM_BASE_URL?.trim() || 'https://aiberm.com/v1',
+                        model: modelId || 'gpt-5.3-codex',
+                    },
+                },
+            ],
+        };
+    }
+
+    if (openAiApiKey) {
+        return {
+            provider: 'openai',
+            activeProfileId: profileId,
+            maxHistoryMessages: 20,
+            profiles: [
+                {
+                    id: profileId,
+                    name: 'OpenAI Skillhub E2E',
+                    provider: 'openai',
+                    verified: true,
+                    openai: {
+                        apiKey: openAiApiKey,
+                        baseUrl: process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
+                        model: modelId || 'gpt-4o',
+                    },
+                },
+            ],
+        };
+    }
+
+    if (openRouterApiKey) {
+        return {
+            provider: 'openrouter',
+            activeProfileId: profileId,
+            maxHistoryMessages: 20,
+            profiles: [
+                {
+                    id: profileId,
+                    name: 'OpenRouter Skillhub E2E',
+                    provider: 'openrouter',
+                    verified: true,
+                    openrouter: {
+                        apiKey: openRouterApiKey,
+                        model: modelId || 'anthropic/claude-sonnet-4.5',
+                    },
+                },
+            ],
+        };
+    }
+
+    if (anthropicApiKey) {
+        return {
+            provider: 'anthropic',
+            activeProfileId: profileId,
+            maxHistoryMessages: 20,
+            profiles: [
+                {
+                    id: profileId,
+                    name: 'Anthropic Skillhub E2E',
+                    provider: 'anthropic',
+                    verified: true,
+                    anthropic: {
+                        apiKey: anthropicApiKey,
+                        model: modelId || 'claude-sonnet-4-5',
+                    },
+                },
+            ],
+        };
+    }
+
+    return null;
+}
+
+function isValidLlmConfig(value: unknown): value is Record<string, unknown> {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+    const config = value as { activeProfileId?: unknown; profiles?: unknown };
+    if (typeof config.activeProfileId !== 'string' || !config.activeProfileId.trim()) {
+        return false;
+    }
+    if (!Array.isArray(config.profiles) || config.profiles.length === 0) {
+        return false;
+    }
+    return true;
+}
+
+function seedHarnessAppData(appDataDir: string, defaultAppDataDir: string): void {
+    ensureDir(appDataDir);
+    const targetConfigPath = path.join(appDataDir, 'llm-config.json');
+    if (fs.existsSync(targetConfigPath)) {
+        return;
+    }
+
+    const envConfig = buildSeededLlmConfigFromEnv();
+    if (envConfig) {
+        writeJson(targetConfigPath, envConfig);
+        return;
+    }
+
+    const defaultConfigPath = path.join(defaultAppDataDir, 'llm-config.json');
+    const fallbackConfig = readJsonIfExists<Record<string, unknown> | null>(defaultConfigPath, null);
+    if (isValidLlmConfig(fallbackConfig)) {
+        writeJson(targetConfigPath, fallbackConfig);
+    }
+}
+
 function sanitizeSkillhubName(slug: string, rawName?: string): string {
     const candidate = (rawName ?? '').trim();
     if (!candidate || candidate.startsWith('description:')) {
@@ -109,6 +265,35 @@ function sanitizeSkillhubName(slug: string, rawName?: string): string {
 
 function countSlides(html: string): number {
     return (html.match(/class=["'][^"']*\bslide\b[^"']*["']/g) || []).length;
+}
+
+function extractFrontmatter(content: string): string | null {
+    const match = content.match(/^---\n([\s\S]*?)\n---/);
+    return match?.[1] ?? null;
+}
+
+function hasOpenClawCompatibilitySignals(content: string): boolean {
+    return /openclaw|clawdbot|clawdhub/i.test(content);
+}
+
+async function waitForValue<T>(
+    resolver: () => T | undefined,
+    timeoutMs: number,
+    message: string,
+): Promise<T> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        const value = resolver();
+        if (value !== undefined) {
+            return value;
+        }
+        await wait(250);
+    }
+    throw new Error(message);
+}
+
+function isTaskTerminalEventType(type: string): boolean {
+    return type === 'TASK_FINISHED' || type === 'TASK_FAILED' || type === 'TASK_CANCELLED';
 }
 
 async function findChatInput(page: Page): Promise<Locator | null> {
@@ -173,10 +358,14 @@ class BrowserDesktopHarness {
     private stderrBuffer = '';
     private taskEvents: SidecarEvent[] = [];
 
-    constructor(devServerPort: number) {
+    constructor(devServerPort: number, appDataDir?: string) {
         this.desktopDir = process.cwd();
         this.sidecarDir = path.resolve(this.desktopDir, '..', 'sidecar');
-        this.appDataDir = path.join(os.homedir(), 'Library', 'Application Support', 'com.coworkany.desktop');
+        const defaultAppDataDir = path.join(os.homedir(), 'Library', 'Application Support', 'com.coworkany.desktop');
+        this.appDataDir = appDataDir ?? defaultAppDataDir;
+        if (appDataDir) {
+            seedHarnessAppData(this.appDataDir, defaultAppDataDir);
+        }
         this.devServerPort = devServerPort;
         this.devServerUrl = `http://127.0.0.1:${devServerPort}/`;
         this.workspace = {
@@ -225,6 +414,56 @@ class BrowserDesktopHarness {
 
     getTaskEvents(): SidecarEvent[] {
         return [...this.taskEvents];
+    }
+
+    async listSkills(includeDisabled = true): Promise<ClaudeSkillRecord[]> {
+        const response = await this.sendSidecarCommand('list_claude_skills', { includeDisabled });
+        const payload = response.payload ?? {};
+        const skills = payload.skills;
+        return Array.isArray(skills) ? (skills as ClaudeSkillRecord[]) : [];
+    }
+
+    async setSkillEnabled(skillId: string, enabled: boolean): Promise<{ success: boolean; error?: string }> {
+        const response = await this.sendSidecarCommand('set_claude_skill_enabled', { skillId, enabled });
+        const payload = response.payload ?? {};
+        return {
+            success: Boolean(payload.success),
+            error: typeof payload.error === 'string' ? payload.error : undefined,
+        };
+    }
+
+    async removeSkill(skillId: string, deleteFiles = true): Promise<{ success: boolean; error?: string }> {
+        const response = await this.sendSidecarCommand('remove_claude_skill', { skillId, deleteFiles });
+        const payload = response.payload ?? {};
+        return {
+            success: Boolean(payload.success),
+            error: typeof payload.error === 'string' ? payload.error : undefined,
+        };
+    }
+
+    async startTask(input: {
+        title: string;
+        userQuery: string;
+        workspacePath?: string;
+        config?: Record<string, unknown>;
+        taskId?: string;
+    }): Promise<StartTaskResult> {
+        const taskId = input.taskId ?? randomUUID();
+        const response = await this.sendSidecarCommand('start_task', {
+            taskId,
+            title: input.title,
+            userQuery: input.userQuery,
+            context: {
+                workspacePath: input.workspacePath ?? this.workspace.path,
+            },
+            config: input.config ?? {},
+        });
+        const payload = response.payload ?? {};
+        return {
+            success: Boolean(payload.success),
+            taskId: String(payload.taskId ?? taskId),
+            error: typeof payload.error === 'string' ? payload.error : undefined,
+        };
     }
 
     async gotoApp(): Promise<void> {
@@ -344,11 +583,18 @@ class BrowserDesktopHarness {
     }
 
     private async startSidecar(): Promise<void> {
+        const skillhubBinDir = path.join(os.homedir(), '.local', 'bin');
+        const currentPath = process.env.PATH ?? '';
+        const mergedPath = currentPath.includes(skillhubBinDir)
+            ? currentPath
+            : `${skillhubBinDir}:${currentPath}`;
+
         this.sidecarProc = spawn('bun', ['run', 'src/main.ts'], {
             cwd: this.sidecarDir,
             env: {
                 ...process.env,
                 COWORKANY_APP_DATA_DIR: this.appDataDir,
+                PATH: mergedPath,
             },
             stdio: ['pipe', 'pipe', 'pipe'],
             shell: process.platform === 'win32',
@@ -857,4 +1103,332 @@ test.describe('Desktop E2E - Skillhub ppt-generator', () => {
             await harness.stop();
         }
     });
+});
+
+type SkillLifecycleScenario = {
+    slug: 'weather' | 'self-improving-agent' | 'summarize';
+    expectedSkillId: string;
+    buildInvocationQuery: (input: {
+        skillId: string;
+        skillMdPath: string;
+        artifactDir: string;
+    }) => string;
+    verifyInvocation: (input: {
+        toolCalls: SidecarEvent[];
+        skillMdPath: string;
+        artifactDir: string;
+    }) => void;
+};
+
+const SKILL_LIFECYCLE_SCENARIOS: SkillLifecycleScenario[] = [
+    {
+        slug: 'weather',
+        expectedSkillId: 'weather',
+        buildInvocationQuery: ({ skillId }) => [
+            `当前已启用技能：${skillId}。`,
+            '禁止安装、搜索、卸载或管理任何技能。',
+            '必须调用 run_command 工具且仅调用一次。',
+            'run_command 的命令必须是：curl -s "wttr.in/Shanghai?format=3"',
+            '禁止调用 search_web、crawl_url。',
+            '最后只回复命令输出，不要额外解释。',
+        ].join('\n'),
+        verifyInvocation: ({ toolCalls }) => {
+            expect(
+                toolCalls.some((event) => {
+                    if (event.payload.name !== 'run_command') return false;
+                    const inputText = JSON.stringify(event.payload.input ?? {});
+                    return inputText.includes('wttr.in/Shanghai');
+                }),
+                'weather skill invocation should run wttr.in command',
+            ).toBe(true);
+        },
+    },
+    {
+        slug: 'self-improving-agent',
+        expectedSkillId: 'self-improvement',
+        buildInvocationQuery: ({ skillId, artifactDir }) => {
+            const learningFile = path.join(artifactDir, '.learnings', 'LEARNINGS.md');
+            return [
+                `当前已启用技能：${skillId}。`,
+                '禁止安装、搜索、卸载或管理任何技能。',
+                '必须调用 write_to_file 或 replace_file_content 工具。',
+                '禁止调用 search_web、crawl_url。',
+                `然后在 ${learningFile} 写入一条 correction 类型学习记录，必须包含 "Source:"、"Pattern-Key:"、"Learning:" 三行。`,
+                '最后只回复：SELF_IMPROVEMENT_OK',
+            ].join('\n');
+        },
+        verifyInvocation: ({ toolCalls, skillMdPath, artifactDir }) => {
+            const learningFile = path.join(artifactDir, '.learnings', 'LEARNINGS.md');
+            expect(
+                toolCalls.some((event) => {
+                    if (event.payload.name !== 'write_to_file' && event.payload.name !== 'replace_file_content') {
+                        return false;
+                    }
+                    return JSON.stringify(event.payload.input ?? {}).includes(learningFile);
+                }),
+                'self-improving-agent invocation should write learning log file',
+            ).toBe(true);
+            expect(fs.existsSync(learningFile), 'learning log file should exist').toBe(true);
+            const content = fs.readFileSync(learningFile, 'utf-8');
+            expect(content).toContain('Source:');
+            expect(content).toContain('Pattern-Key:');
+            expect(content).toContain('Learning:');
+        },
+    },
+    {
+        slug: 'summarize',
+        expectedSkillId: 'summarize',
+        buildInvocationQuery: ({ skillId, artifactDir }) => {
+            const outputPath = path.join(artifactDir, 'summarize-commands.txt');
+            return [
+                `当前已启用技能：${skillId}。`,
+                '禁止安装、搜索、卸载或管理任何技能。',
+                '必须调用 write_to_file 或 replace_file_content 工具。',
+                '禁止调用 search_web、crawl_url。',
+                `然后生成 2 条 summarize CLI 可执行命令（一个 URL，一个本地 PDF），写入文件：${outputPath}`,
+                '命令必须以 summarize 开头，最后只回复：SUMMARIZE_OK',
+            ].join('\n');
+        },
+        verifyInvocation: ({ toolCalls, skillMdPath, artifactDir }) => {
+            const outputPath = path.join(artifactDir, 'summarize-commands.txt');
+            expect(
+                toolCalls.some((event) => {
+                    if (event.payload.name !== 'write_to_file' && event.payload.name !== 'replace_file_content') {
+                        return false;
+                    }
+                    return JSON.stringify(event.payload.input ?? {}).includes(outputPath);
+                }),
+                'summarize invocation should write command output file',
+            ).toBe(true);
+            expect(fs.existsSync(outputPath), 'summarize command output file should exist').toBe(true);
+            const content = fs.readFileSync(outputPath, 'utf-8');
+            expect(content).toContain('summarize ');
+        },
+    },
+];
+
+async function openSkillManagerDialog(page: Page): Promise<Locator> {
+    const manageSkillsButton = page
+        .locator('button[aria-label="管理技能"], button[aria-label="Manage Skills"]')
+        .first();
+    const immediateVisible = await manageSkillsButton.isVisible({ timeout: 4_000 }).catch(() => false);
+    if (!immediateVisible) {
+        await ensureComposerVisible(page);
+        await submitQuery(page, '你好');
+    }
+    await manageSkillsButton.waitFor({ state: 'visible', timeout: 60_000 });
+    await manageSkillsButton.click();
+    const dialog = page.locator('.modal-dialog-content').first();
+    await dialog.waitFor({ state: 'visible', timeout: 30_000 });
+    return dialog;
+}
+
+async function switchToMarketTab(dialog: Locator): Promise<void> {
+    const marketTab = dialog.locator('button').filter({ hasText: /^Market$/ }).first();
+    await marketTab.waitFor({ state: 'visible', timeout: 15_000 });
+    await marketTab.click();
+}
+
+async function switchToInstallTab(dialog: Locator): Promise<void> {
+    const installTab = dialog.locator('button').filter({ hasText: /^(安装|Install)$/ }).first();
+    await installTab.waitFor({ state: 'visible', timeout: 15_000 });
+    await installTab.click();
+}
+
+function getSkillRowLocator(dialog: Locator, displayName: string): Locator {
+    const skillNameNode = dialog.getByText(displayName, { exact: true }).first();
+    return skillNameNode.locator('xpath=ancestor::div[contains(@style,"padding: 12px")][1]');
+}
+
+test.describe('Desktop E2E - Skillhub skill lifecycle matrix', () => {
+    test.setTimeout(TEST_TIMEOUT_MS + 240_000);
+
+    for (const scenario of SKILL_LIFECYCLE_SCENARIOS) {
+        test(`skillhub lifecycle: ${scenario.slug}`, async ({ page }, testInfo) => {
+            testInfo.setTimeout(TEST_TIMEOUT_MS + 240_000);
+            const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `coworkany-skillhub-${scenario.slug}-`));
+            const harness = new BrowserDesktopHarness(await getFreePort(), appDataDir);
+            const skillDir = path.join(harness.desktopDir, '.coworkany', 'skills', scenario.slug);
+            const skillMdPath = path.join(skillDir, 'SKILL.md');
+            const artifactDir = path.join(harness.desktopDir, 'test-results', 'skillhub-lifecycle', scenario.slug);
+            fs.rmSync(skillDir, { recursive: true, force: true });
+            ensureDir(artifactDir);
+
+            page.on('dialog', async (dialog) => {
+                await dialog.accept();
+            });
+
+            try {
+                await harness.start(page);
+                await harness.gotoApp();
+                await page.waitForLoadState('domcontentloaded');
+                await page.waitForTimeout(3000);
+                await ensureComposerVisible(page);
+
+                const dialog = await openSkillManagerDialog(page);
+                await switchToMarketTab(dialog);
+
+                const sourceInput = dialog
+                    .locator('input[placeholder="skillhub keyword or github:owner/repo"]')
+                    .first();
+                await sourceInput.waitFor({ state: 'visible', timeout: 15_000 });
+                await sourceInput.fill(scenario.slug);
+                await dialog.locator('button').filter({ hasText: /^Search$/ }).first().click();
+
+                const sourceEntry = dialog.getByText(`skillhub:${scenario.slug}`, { exact: true });
+                await sourceEntry.waitFor({ state: 'visible', timeout: 90_000 });
+
+                const installResult = await page.evaluate(async ({ workspacePath, slug }) => {
+                    const tauri = (window as Window & {
+                        __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
+                    }).__TAURI_INTERNALS__;
+                    return tauri.invoke('install_from_skillhub', {
+                        input: {
+                            workspacePath,
+                            slug,
+                        },
+                    });
+                }, {
+                    workspacePath: harness.desktopDir,
+                    slug: scenario.slug,
+                });
+
+                const installResultRecord = (installResult ?? {}) as Record<string, unknown>;
+                expect(Boolean(installResultRecord.success ?? true), 'skillhub install command should succeed').toBe(true);
+
+                await expect.poll(() => fs.existsSync(skillMdPath), {
+                    timeout: 120_000,
+                    message: `${scenario.slug} should be installed with SKILL.md`,
+                }).toBe(true);
+
+                const installedSkillContent = fs.readFileSync(skillMdPath, 'utf-8');
+                const frontmatter = extractFrontmatter(installedSkillContent);
+                expect(frontmatter, 'installed skill should have frontmatter').not.toBeNull();
+                expect(frontmatter!).toMatch(/name:/);
+                expect(frontmatter!).toMatch(/description:/);
+                expect(
+                    hasOpenClawCompatibilitySignals(installedSkillContent),
+                    `${scenario.slug} should include OpenClaw compatibility signals`,
+                ).toBe(true);
+
+                const skillsAfterInstall = await harness.listSkills(true);
+                const installedRecord = skillsAfterInstall.find((skill) => skill.rootPath === skillDir);
+                expect(installedRecord, 'installed skill should be listed by list_claude_skills').toBeDefined();
+                const skillId = installedRecord?.manifest.id ?? scenario.expectedSkillId;
+                const skillDisplayName = installedRecord?.manifest.name ?? skillId;
+                expect(skillId).toBe(scenario.expectedSkillId);
+                expect(installedRecord?.source).toBe('local_folder');
+                expect(installedRecord?.rootPath).toBe(skillDir);
+                expect(installedRecord?.manifest.version).toBeTruthy();
+
+                const disableResult = await harness.setSkillEnabled(skillId, false);
+                expect(disableResult.success, 'set_claude_skill_enabled(false) should succeed').toBe(true);
+                await expect.poll(async () => {
+                    const list = await harness.listSkills(true);
+                    return list.find((skill) => skill.manifest.id === skillId)?.enabled ?? true;
+                }, {
+                    timeout: 30_000,
+                    message: 'skill should be disabled after toggle',
+                }).toBe(false);
+
+                await switchToInstallTab(dialog);
+                await dialog.locator('button').filter({ hasText: /^(刷新|Refresh)$/ }).first().click();
+                const skillRowAfterDisable = getSkillRowLocator(dialog, skillDisplayName);
+                await skillRowAfterDisable.waitFor({ state: 'visible', timeout: 30_000 });
+                await expect(skillRowAfterDisable.locator('input[type="checkbox"]').first()).not.toBeChecked();
+
+                const enableResult = await harness.setSkillEnabled(skillId, true);
+                expect(enableResult.success, 'set_claude_skill_enabled(true) should succeed').toBe(true);
+                await expect.poll(async () => {
+                    const list = await harness.listSkills(true);
+                    return list.find((skill) => skill.manifest.id === skillId)?.enabled ?? false;
+                }, {
+                    timeout: 30_000,
+                    message: 'skill should be enabled after toggle',
+                }).toBe(true);
+
+                await dialog.locator('button').filter({ hasText: /^(刷新|Refresh)$/ }).first().click();
+                const skillRowAfterEnable = getSkillRowLocator(dialog, skillDisplayName);
+                await skillRowAfterEnable.waitFor({ state: 'visible', timeout: 30_000 });
+                await expect(skillRowAfterEnable.locator('input[type="checkbox"]').first()).toBeChecked();
+
+                const startedTask = await harness.startTask({
+                    title: `Skill lifecycle invoke ${scenario.slug}`,
+                    userQuery: scenario.buildInvocationQuery({
+                        skillId,
+                        skillMdPath,
+                        artifactDir,
+                    }),
+                    workspacePath: harness.desktopDir,
+                    config: {
+                        enabledClaudeSkills: [skillId],
+                    },
+                });
+                expect(startedTask.success, 'skill invocation task should start').toBe(true);
+
+                const terminalEvent = await waitForValue(() => {
+                    return harness.getTaskEvents().find((event) =>
+                        event.taskId === startedTask.taskId && isTaskTerminalEventType(event.type));
+                }, TEST_TIMEOUT_MS, `skill invocation task should finish for ${scenario.slug}`);
+
+                const taskEvents = harness.getTaskEvents().filter((event) => event.taskId === startedTask.taskId);
+                const toolCalls = taskEvents.filter((event) => event.type === 'TOOL_CALL');
+                const invocationLogs = harness.getRawSidecarLogs();
+                const terminalPayload = (terminalEvent.payload ?? {}) as Record<string, unknown>;
+                const terminalErrorCode = String(terminalPayload.errorCode ?? '');
+                const terminalError = String(terminalPayload.error ?? '');
+
+                if (terminalEvent.type === 'TASK_FINISHED') {
+                    expect(toolCalls.length).toBeGreaterThan(0);
+                    scenario.verifyInvocation({
+                        toolCalls,
+                        skillMdPath,
+                        artifactDir,
+                    });
+                } else {
+                    expect(
+                        ['MODEL_STREAM_ERROR', 'MODEL_REQUEST_FAILED', 'MODEL_PROVIDER_ERROR', 'LLM_UNAVAILABLE'].includes(terminalErrorCode),
+                        `unexpected terminal error for ${scenario.slug}: ${terminalErrorCode} ${terminalError}`,
+                    ).toBe(true);
+                    expect(
+                        `${terminalErrorCode} ${terminalError}`.includes('MARKETPLACE_INSTALL_FAILED'),
+                        'skill invocation should not regress into marketplace auto-install failure',
+                    ).toBe(false);
+                }
+
+                expect(
+                    invocationLogs.includes(skillId) || invocationLogs.includes(skillDisplayName),
+                    'sidecar logs should contain installed skill identifier during lifecycle test',
+                ).toBe(true);
+                expect(
+                    invocationLogs.includes(`Loaded from filesystem: ${skillId}`) || invocationLogs.includes(`Installed skill: ${skillId}`),
+                    'sidecar logs should show local skill loading/registration during invocation phase',
+                ).toBe(true);
+
+                await switchToInstallTab(dialog);
+                const uninstallRow = getSkillRowLocator(dialog, skillDisplayName);
+                await uninstallRow.waitFor({ state: 'visible', timeout: 30_000 });
+                await uninstallRow.click();
+                const uninstallButton = dialog.locator('button').filter({ hasText: /^(卸载技能|Uninstall Skill)$/ }).first();
+                await uninstallButton.waitFor({ state: 'visible', timeout: 30_000 });
+                await uninstallButton.click();
+
+                await expect.poll(() => fs.existsSync(skillDir), {
+                    timeout: 45_000,
+                    message: `${scenario.slug} skill directory should be removed after uninstall`,
+                }).toBe(false);
+
+                await expect.poll(async () => {
+                    const list = await harness.listSkills(true);
+                    return list.some((skill) => skill.manifest.id === skillId || skill.rootPath === skillDir);
+                }, {
+                    timeout: 30_000,
+                    message: 'uninstalled skill should not remain in list_claude_skills',
+                }).toBe(false);
+            } finally {
+                await harness.stop();
+                fs.rmSync(appDataDir, { recursive: true, force: true });
+            }
+        });
+    }
 });

@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
@@ -282,6 +283,7 @@ pub struct SidecarManager {
     child: Option<Child>,
     command_writer: Option<SharedCommandWriter>,
     stdout_handle: Option<thread::JoinHandle<()>>,
+    stdout_drain_handle: Option<thread::JoinHandle<()>>,
     stderr_handle: Option<thread::JoinHandle<()>>,
     pending_responses: Arc<Mutex<HashMap<String, Sender<serde_json::Value>>>>,
     transport_healthy: Arc<AtomicBool>,
@@ -361,6 +363,7 @@ impl SidecarManager {
             child: None,
             command_writer: None,
             stdout_handle: None,
+            stdout_drain_handle: None,
             stderr_handle: None,
             pending_responses: Arc::new(Mutex::new(HashMap::new())),
             transport_healthy: Arc::new(AtomicBool::new(false)),
@@ -397,11 +400,11 @@ impl SidecarManager {
                 self.invalidate_transport("failed to bootstrap attached sidecar runtime context");
                 return Err(error);
             }
-            if let Err(error) = self.request_runtime_snapshot() {
-                warn!(
-                    "Failed to request runtime snapshot after sidecar attach: {}",
-                    error
+            if let Err(error) = self.wait_for_runtime_snapshot(Duration::from_secs(5)) {
+                self.invalidate_transport(
+                    "runtime snapshot handshake failed after sidecar attach",
                 );
+                return Err(error);
             }
 
             return Ok(());
@@ -437,43 +440,58 @@ impl SidecarManager {
 
         info!("Sidecar spawned with PID: {:?}", child.id());
 
-        // Keep consuming child stdout for event stream and to avoid pipe backpressure.
+        // Keep consuming child stdout to avoid pipe backpressure.
         let stdout = child.stdout.take().expect("Failed to get stdout");
         let stderr = child.stderr.take().expect("Failed to get stderr");
-        let command_writer = if let Some(attached) = Self::try_attach_singleton_transport_with_retry(
+        let attached = Self::try_attach_singleton_transport_with_retry(
             &app_data_dir,
-            120,
+            300,
             Duration::from_millis(50),
-        )? {
-            info!(
-                "Connected to spawned sidecar singleton transport; routing commands via {}",
-                attached.descriptor
-            );
-            // Close the direct stdin pipe when singleton transport is active so command
-            // delivery does not depend on stdin behavior of the packaged runtime.
-            let _ = child.stdin.take();
-            attached.writer
-        } else {
-            warn!(
-                "Spawned sidecar singleton transport not available yet; falling back to stdin command pipe"
-            );
-            Arc::new(Mutex::new(CommandWriter::Child(
-                child.stdin.take().expect("Failed to get stdin"),
-            )))
-        };
+        )?;
+        let (reader, command_writer, using_socket_transport): (
+            Box<dyn Read + Send>,
+            SharedCommandWriter,
+            bool,
+        ) =
+            if let Some(attached) = attached {
+                info!(
+                    "Connected to spawned sidecar singleton transport; routing commands+events via {}",
+                    attached.descriptor
+                );
+                // Close the direct stdin pipe when singleton transport is active so command
+                // delivery does not depend on stdin behavior of the packaged runtime.
+                let _ = child.stdin.take();
+                self.stdout_drain_handle = Some(Self::start_stdout_drain_thread(stdout));
+                (attached.reader, attached.writer, true)
+            } else {
+                warn!(
+                    "Spawned sidecar singleton transport not available yet; falling back to stdin/stdout transport"
+                );
+                (
+                    Box::new(stdout),
+                    Arc::new(Mutex::new(CommandWriter::Child(
+                        child.stdin.take().expect("Failed to get stdin"),
+                    ))),
+                    false,
+                )
+            };
         self.command_writer = Some(command_writer.clone());
         self.child = Some(child);
 
         let runtime_context = build_platform_runtime_context(&app_handle, Some(&launch_mode));
-        self.start_reader_threads(Box::new(stdout), Some(stderr), app_handle, command_writer);
+        self.start_reader_threads(reader, Some(stderr), app_handle, command_writer);
 
         if let Err(error) = self.send_runtime_bootstrap(&runtime_context) {
             self.invalidate_transport("failed to bootstrap sidecar runtime context");
             return Err(error);
         }
-        if let Err(error) = self.request_runtime_snapshot() {
+        if let Err(error) = self.wait_for_runtime_snapshot(Duration::from_secs(5)) {
+            if using_socket_transport {
+                self.invalidate_transport("runtime snapshot handshake failed after sidecar spawn");
+                return Err(error);
+            }
             warn!(
-                "Failed to request runtime snapshot after sidecar spawn: {}",
+                "Runtime snapshot handshake failed on stdin/stdout fallback transport: {}",
                 error
             );
         }
@@ -544,14 +562,28 @@ impl SidecarManager {
         self.send_raw_command(command)
     }
 
-    fn request_runtime_snapshot(&self) -> Result<(), SidecarError> {
+    fn wait_for_runtime_snapshot(&self, timeout: Duration) -> Result<(), SidecarError> {
         let command = json!({
             "id": Uuid::new_v4().to_string(),
             "timestamp": chrono_now(),
             "type": "get_runtime_snapshot",
             "payload": {}
         });
-        self.send_raw_command(command)
+        let receiver = self.send_command_async(command)?;
+        let response = receiver.recv_timeout(timeout).map_err(|error| {
+            SidecarError::SendError(format!("runtime snapshot handshake timeout: {}", error))
+        })?;
+        let success = response
+            .get("payload")
+            .and_then(|payload| payload.get("success"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if success {
+            return Ok(());
+        }
+        Err(SidecarError::SendError(
+            "runtime snapshot handshake returned unsuccessful response".to_string(),
+        ))
     }
 
     /// Shutdown the sidecar process
@@ -576,6 +608,10 @@ impl SidecarManager {
 
             info!("Sidecar shutdown complete");
         }
+
+        if let Some(handle) = self.stdout_drain_handle.take() {
+            let _ = handle.join();
+        }
     }
 
     pub fn invalidate_transport(&mut self, reason: &str) {
@@ -592,6 +628,10 @@ impl SidecarManager {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+
+        if let Some(handle) = self.stdout_drain_handle.take() {
+            let _ = handle.join();
         }
     }
 
@@ -655,6 +695,22 @@ impl SidecarManager {
                 Self::stderr_reader_loop(stderr);
             })
         });
+    }
+
+    fn start_stdout_drain_thread(stdout: std::process::ChildStdout) -> JoinHandle<()> {
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line_result in reader.lines() {
+                match line_result {
+                    Ok(_line) => {}
+                    Err(error) => {
+                        debug!("Error draining sidecar stdout: {}", error);
+                        break;
+                    }
+                }
+            }
+            debug!("Stdout drain loop ended");
+        })
     }
 
     fn close_command_writer(&mut self) {

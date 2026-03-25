@@ -119,11 +119,11 @@
     --input-height: 40px;
     --button-height: 40px;
     --header-height: 48px;
-    --sidebar-width: 304px;
+    --sidebar-width: 280px;
     
     /* Collapsible Sidebar */
     --sidebar-collapsed-width: 56px;
-    --sidebar-expanded-width: 304px;
+    --sidebar-expanded-width: 280px;
     
     /* Brand Colors (Enterprise Blue) */
     --brand-50: #0a1838;

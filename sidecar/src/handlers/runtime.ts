@@ -334,7 +334,8 @@ export type RuntimeCommandDeps = {
     };
     suspendResumeManager: {
         isSuspended: (taskId: string) => boolean;
-        resume: (taskId: string, reason: string) => Promise<{ success: boolean }>;
+        getSuspendedTask?: (taskId: string) => { context?: Record<string, unknown> } | undefined;
+        resume: (taskId: string, reason: string) => Promise<{ success: boolean; context?: Record<string, unknown> }>;
     };
     enqueueResumeMessage: (taskId: string, content: string, config?: Record<string, unknown>) => void;
     getTaskConfig: (taskId: string) => any;
@@ -510,7 +511,7 @@ function isGenericContinueReply(text: string): boolean {
 }
 
 function assistantPromptedForPlanApproval(text: string): boolean {
-    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|final authorization|authorization token|confirm publish|please reply.*(?:confirm|approve|go ahead)|确认是否.*(?:继续|执行|发布)|请直接回复.*(?:确认|批准|授权)|回复.*(?:确认|批准|approval|授权)|显式批准|最终授权|授权口令|确认发布)/i
+    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|final authorization|authorization token|confirm publish|please reply.*(?:confirm|approve|go ahead)|确认是否.*(?:继续|执行|发布)|请直接回复.*(?:确认|批准|授权)|回复.*(?:确认|批准|approval|授权)|显式批准|最终授权|授权口令|确认发布|要我(?:现在(?:就)?|这就|就)?按.*(?:设置|执行|开始).*(?:吗|\?|？)|要不要我(?:现在(?:就)?|这就|就)?.*(?:设置|执行|开始))/i
         .test(text);
 }
 
@@ -604,13 +605,15 @@ function buildFollowUpSourceText(input: {
     const promptedForApproval = assistantPromptedForPlanApproval(latestAssistantMessage);
     const hasCarryForwardDeliverable = (input.previousSnapshot?.deliverables ?? [])
         .some((deliverable) => deliverable.type !== 'chat_reply');
+    const shouldCarryForwardScheduledApproval =
+        preferFullSourceTextForApproval && isPlanApprovalReply(input.promptText);
     const isApprovalReply =
         isPlanApprovalReply(input.promptText) ||
         (promptedForApproval && isCompactApprovalSelectionReply(input.promptText));
     if (
         approvalBaseObjective &&
         isApprovalReply &&
-        (promptedForApproval || hasCarryForwardDeliverable)
+        (promptedForApproval || hasCarryForwardDeliverable || shouldCarryForwardScheduledApproval)
     ) {
         return buildApprovalFollowUpSourceText({
             promptText: input.promptText,
@@ -820,8 +823,9 @@ function emitBlockingCollaborationEvents(
         }));
     }
 
-    const preferredActionKind = frozenWorkRequest.clarification.required ? 'clarify_input' : 'confirm_plan';
+    const preferredActionKind = frozenWorkRequest.clarification.required ? 'clarify_input' : undefined;
     const blockingUserActionsFromPlan = (frozenWorkRequest.userActionsRequired ?? [])
+        .filter((action) => action.kind !== 'confirm_plan')
         .filter((action) => isBlockingPolicy(action.executionPolicy, action.blocking));
     const blockingUserActionFromPlan =
         getBlockingUserAction(frozenWorkRequest, preferredActionKind) ??
@@ -1158,14 +1162,32 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const conversationContent = parsedUserInput.conversationContent;
 
             if (deps.suspendResumeManager.isSuspended(taskId)) {
-                deps.enqueueResumeMessage(taskId, content, payload.config);
+                const suspendedTask = deps.suspendResumeManager.getSuspendedTask?.(taskId);
+                const restoredFromPersistence = Boolean(suspendedTask?.context?.restoredFromPersistence);
+                if (!restoredFromPersistence) {
+                    deps.enqueueResumeMessage(taskId, content, payload.config);
+                }
                 const resume = await deps.suspendResumeManager.resume(taskId, 'User provided follow-up input');
-                deps.emit(respond(command.id, 'send_task_message_response', {
-                    success: resume.success,
-                    taskId,
-                    error: resume.success ? undefined : 'resume_failed',
-                }));
-                return true;
+                if (!resume.success) {
+                    deps.emit(respond(command.id, 'send_task_message_response', {
+                        success: false,
+                        taskId,
+                        error: 'resume_failed',
+                    }));
+                    return true;
+                }
+
+                // For runtime suspensions inside an active loop, keep historical behavior:
+                // resume + queue replay happens in the loop listener.
+                // For persisted suspended tasks restored after sidecar restart, there is no
+                // active loop listener, so continue through the normal send path below.
+                if (!restoredFromPersistence) {
+                    deps.emit(respond(command.id, 'send_task_message_response', {
+                        success: true,
+                        taskId,
+                    }));
+                    return true;
+                }
             }
 
             deps.taskEventBus.emitChatMessage(taskId, {
@@ -1291,7 +1313,11 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 return true;
             }
 
-            if (frozenWorkRequest.taskDraftRequired) {
+            const needsTaskDraftConfirmation =
+                frozenWorkRequest.taskDraftRequired
+                && frozenWorkRequest.mode !== 'scheduled_task'
+                && frozenWorkRequest.mode !== 'scheduled_multi_task';
+            if (needsTaskDraftConfirmation) {
                 const draftMessage = '任务草稿已生成。请先确认创建执行任务，或改成普通回答。你也可以直接输入修改内容后提交。';
                 deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
                 deps.pushConversationMessage(taskId, { role: 'assistant', content: draftMessage });
@@ -1598,7 +1624,11 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 return true;
             }
 
-            if (preparedWorkRequest.frozenWorkRequest.taskDraftRequired) {
+            const needsTaskDraftConfirmation =
+                preparedWorkRequest.frozenWorkRequest.taskDraftRequired
+                && preparedWorkRequest.frozenWorkRequest.mode !== 'scheduled_task'
+                && preparedWorkRequest.frozenWorkRequest.mode !== 'scheduled_multi_task';
+            if (needsTaskDraftConfirmation) {
                 const draftMessage = '任务草稿已生成。请先确认创建执行任务，或改成普通回答。你也可以直接输入修改内容后提交。';
                 deps.pushConversationMessage(taskId, {
                     role: 'assistant',

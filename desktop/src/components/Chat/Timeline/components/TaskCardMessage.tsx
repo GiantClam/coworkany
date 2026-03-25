@@ -42,6 +42,74 @@ function taskStatusLabel(status: NonNullable<TaskCardItem['tasks']>[number]['sta
     }
 }
 
+type SectionBucket = 'thinking' | 'execution' | 'result' | 'other';
+
+type SectionView = {
+    id: string;
+    label: string;
+    lines: string[];
+    bucket: SectionBucket;
+    shortLabel: string;
+};
+
+type ResultTab = {
+    id: string;
+    label: string;
+    lines: string[];
+};
+
+type LaneKey = 'thinking' | 'execution';
+type LaneStatus = 'completed' | 'active' | 'failed' | 'pending';
+
+type LaneView = {
+    key: LaneKey;
+    title: string;
+    sections: SectionView[];
+    status: LaneStatus;
+    summary: string;
+};
+
+function sectionBucketFromLabel(label: string): SectionBucket {
+    const head = label.split('·')[0]?.trim().toLowerCase();
+    if (head === 'plan' || head === 'research' || head === 'contract') {
+        return 'thinking';
+    }
+    if (head === 'process' || head === 'action' || head === 'checkpoint' || head === 'task') {
+        return 'execution';
+    }
+    if (head === 'result') {
+        return 'result';
+    }
+    return 'other';
+}
+
+function sectionShortLabel(label: string): string {
+    const parts = label.split('·').map((part) => part.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+        return label;
+    }
+    return parts.slice(1).join(' · ');
+}
+
+function slugifyLabel(input: string): string {
+    const slug = input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return slug || 'tab';
+}
+
+function laneStatusLabel(status: LaneStatus): string {
+    switch (status) {
+        case 'completed':
+            return 'Completed';
+        case 'active':
+            return 'In progress';
+        case 'failed':
+            return 'Failed';
+        case 'pending':
+        default:
+            return 'Waiting';
+    }
+}
+
 const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
     item,
     layout = 'timeline',
@@ -50,12 +118,117 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
     onTaskActionClick,
 }) => {
     const [inputValue, setInputValue] = React.useState('');
+    const sectionViews = React.useMemo<SectionView[]>(
+        () => item.sections.map((section) => ({
+            id: `${item.id}-${slugifyLabel(section.label)}`,
+            label: section.label,
+            lines: section.lines,
+            bucket: sectionBucketFromLabel(section.label),
+            shortLabel: sectionShortLabel(section.label),
+        })),
+        [item.id, item.sections]
+    );
+    const thinkingSections = React.useMemo(
+        () => sectionViews.filter((section) => section.bucket === 'thinking'),
+        [sectionViews]
+    );
+    const executionSections = React.useMemo(
+        () => sectionViews.filter((section) => section.bucket === 'execution' || section.bucket === 'other'),
+        [sectionViews]
+    );
+    const laneViews = React.useMemo<LaneView[]>(() => {
+        const summarizeLane = (sections: SectionView[]): string => {
+            const updateCount = sections.reduce((total, section) => total + section.lines.length, 0);
+            if (updateCount === 0) {
+                return 'No updates yet';
+            }
+            const latestLine = sections.at(-1)?.lines.at(-1) ?? '';
+            const compactLatest = latestLine.length > 92 ? `${latestLine.slice(0, 91)}…` : latestLine;
+            return `${updateCount} updates · ${compactLatest || 'latest update recorded'}`;
+        };
+
+        const thinkingStatus: LaneStatus = thinkingSections.length === 0
+            ? 'pending'
+            : executionSections.length > 0 || item.status === 'finished' || item.status === 'failed'
+                ? 'completed'
+                : 'active';
+
+        const executionStatus: LaneStatus = item.status === 'failed'
+            ? 'failed'
+            : item.status === 'finished'
+                ? 'completed'
+                : executionSections.length > 0 || item.status === 'running'
+                    ? 'active'
+                    : 'pending';
+
+        return [
+            {
+                key: 'thinking',
+                title: 'Thinking',
+                sections: thinkingSections,
+                status: thinkingStatus,
+                summary: summarizeLane(thinkingSections),
+            },
+            {
+                key: 'execution',
+                title: 'Execution',
+                sections: executionSections,
+                status: executionStatus,
+                summary: summarizeLane(executionSections),
+            },
+        ];
+    }, [executionSections, item.status, thinkingSections]);
+    const resultTabs = React.useMemo<ResultTab[]>(() => {
+        const tabs: ResultTab[] = [];
+        const existingKeys = new Set<string>();
+        const addTab = (id: string, label: string, lines: Array<string | undefined>) => {
+            const normalizedLines = lines.map((line) => (line || '').trim()).filter((line) => line.length > 0);
+            if (normalizedLines.length === 0 || existingKeys.has(id)) {
+                return;
+            }
+            tabs.push({ id, label, lines: normalizedLines });
+            existingKeys.add(id);
+        };
+
+        for (const section of sectionViews.filter((entry) => entry.bucket === 'result')) {
+            const id = slugifyLabel(section.shortLabel || section.label);
+            addTab(id, section.shortLabel || section.label, section.lines);
+        }
+
+        addTab('summary', 'Summary', [item.result?.summary]);
+        addTab('artifacts', 'Artifacts', item.result?.artifacts ?? []);
+        addTab('files', 'Files Changed', item.result?.files ?? []);
+        addTab('error', 'Error', [item.result?.error, item.result?.suggestion]);
+        return tabs;
+    }, [item.result?.artifacts, item.result?.error, item.result?.files, item.result?.summary, item.result?.suggestion, sectionViews]);
+    const [activeResultTabId, setActiveResultTabId] = React.useState<string>('');
+    const [collapsedLaneByKey, setCollapsedLaneByKey] = React.useState<Record<LaneKey, boolean>>({
+        thinking: false,
+        execution: false,
+    });
 
     React.useEffect(() => {
         setInputValue('');
     }, [item.id, item.collaboration?.actionId]);
+    React.useEffect(() => {
+        setCollapsedLaneByKey({
+            thinking: executionSections.length > 0,
+            execution: false,
+        });
+    }, [item.id, executionSections.length]);
+    React.useEffect(() => {
+        const firstTab = resultTabs[0]?.id ?? '';
+        if (!activeResultTabId || !resultTabs.some((tab) => tab.id === activeResultTabId)) {
+            setActiveResultTabId(firstTab);
+        }
+    }, [activeResultTabId, resultTabs]);
 
     const collaboration = item.collaboration;
+    const activeResultTab = React.useMemo(
+        () => resultTabs.find((tab) => tab.id === activeResultTabId) ?? resultTabs[0],
+        [activeResultTabId, resultTabs]
+    );
+    const isSimplifiedTaskCenterCard = layout === 'timeline' && item.id.startsWith('task-center-');
 
     const handleSubmit = React.useCallback(() => {
         const value = inputValue.trim();
@@ -136,19 +309,86 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
                     </section>
                 ) : null}
 
-                {item.sections.length > 0 ? (
+                {!isSimplifiedTaskCenterCard && (thinkingSections.length > 0 || executionSections.length > 0) ? (
                     <div className={styles.taskCardSections}>
-                        {item.sections.map((section) => (
-                            <section key={`${item.id}-${section.label}`} className={styles.taskCardSection}>
-                                <span className={styles.taskCardSectionLabel}>{section.label}</span>
-                                <div className={styles.taskCardSectionLines}>
-                                    {section.lines.map((line) => (
-                                        <span key={`${item.id}-${section.label}-${line}`}>{line}</span>
-                                    ))}
-                                </div>
-                            </section>
-                        ))}
+                        {laneViews.map((lane, laneIndex) => {
+                            if (lane.sections.length === 0 && lane.status === 'pending') {
+                                return null;
+                            }
+                            const collapsed = collapsedLaneByKey[lane.key];
+                            const laneClassName = lane.key === 'thinking'
+                                ? styles.taskCardThinkingLane
+                                : styles.taskCardExecutionLane;
+                            return (
+                                <section key={`${item.id}-${lane.key}`} className={`${styles.taskCardLane} ${laneClassName}`}>
+                                    <div className={styles.taskTimelineNode}>
+                                        <span
+                                            className={`${styles.taskTimelineNodeDot} ${styles[`taskTimelineNodeDot${lane.status}`]}`}
+                                            aria-hidden
+                                        />
+                                        {laneIndex < laneViews.length - 1 ? <span className={styles.taskTimelineNodeLine} aria-hidden /> : null}
+                                    </div>
+                                    <div className={styles.taskCardLaneBody}>
+                                        <button
+                                            type="button"
+                                            className={styles.taskCardLaneHeaderButton}
+                                            onClick={() => setCollapsedLaneByKey((prev) => ({ ...prev, [lane.key]: !prev[lane.key] }))}
+                                        >
+                                            <div className={styles.taskCardLaneHeader}>
+                                                <span className={styles.taskCardLaneTitle}>{lane.title}</span>
+                                                <span className={`${styles.taskCardLaneStatusChip} ${styles[`taskCardLaneStatus${lane.status}`]}`}>
+                                                    {laneStatusLabel(lane.status)}
+                                                </span>
+                                            </div>
+                                            <span className={styles.taskCardLaneSummary}>{lane.summary}</span>
+                                            <span className={styles.taskCardLaneChevron}>{collapsed ? '▸' : '▾'}</span>
+                                        </button>
+                                        {!collapsed ? (
+                                            <div className={styles.taskCardLaneSections}>
+                                                {lane.sections.map((section) => (
+                                                    <section key={section.id} className={styles.taskCardSection}>
+                                                        <span className={styles.taskCardSectionLabel}>{section.shortLabel}</span>
+                                                        <div className={styles.taskCardSectionLines}>
+                                                            {section.lines.map((line) => (
+                                                                <span key={`${section.id}-${line}`}>{line}</span>
+                                                            ))}
+                                                        </div>
+                                                    </section>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                </section>
+                            );
+                        })}
                     </div>
+                ) : null}
+
+                {!isSimplifiedTaskCenterCard && resultTabs.length > 0 && activeResultTab ? (
+                    <section className={styles.taskCardResultTabsSection}>
+                        <div className={styles.taskCardTabs} role="tablist" aria-label="Task result tabs">
+                            {resultTabs.map((tab) => {
+                                const active = tab.id === activeResultTab.id;
+                                return (
+                                    <button
+                                        key={`${item.id}-tab-${tab.id}`}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={active}
+                                        className={`${styles.taskCardTabButton} ${active ? styles.activeTaskCardTabButton : ''}`}
+                                        onClick={() => setActiveResultTabId(tab.id)}
+                                    >
+                                        {tab.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className={styles.taskCardTabPanel} role="tabpanel">
+                            {activeResultTab.lines.map((line) => (
+                                <span key={`${item.id}-${activeResultTab.id}-${line}`}>{line}</span>
+                            ))}
+                        </div>
+                    </section>
                 ) : null}
 
                 {collaboration ? (

@@ -40,6 +40,11 @@ export interface SearchResponse {
     error?: string;
 }
 
+function isFreeWebSearchFallbackEnabled(): boolean {
+    const value = process.env.ENABLE_WEBSEARCH_FREE_FALLBACK?.trim().toLowerCase();
+    return value === '1' || value === 'true' || value === 'yes';
+}
+
 // SearXNG instance info from searx.space
 interface SearXNGInstance {
     url: string;
@@ -875,7 +880,7 @@ async function searchDuckDuckGoHTML(
  * Try multiple SearXNG instances until one works.
  * Uses dynamic instance list from searx.space, with static fallback.
  *
- * Scraping fallback chain (last resort — used only when no API keys are configured):
+ * Scraping fallback chain (last resort — used only when ENABLE_WEBSEARCH_FREE_FALLBACK=1):
  *   SearXNG instances -> Google scraping -> DuckDuckGo Lite -> DuckDuckGo HTML
  *
  * NOTE: Public SearXNG instances and free scraping are increasingly unreliable
@@ -965,6 +970,17 @@ export async function performSearch(
     config: SearchConfig
 ): Promise<SearchResponse> {
     const { provider, searxngUrl, tavilyApiKey, braveApiKey, serperApiKey } = config;
+    const hasSearchApiKey = Boolean(serperApiKey || tavilyApiKey || braveApiKey);
+    const allowFreeFallback = isFreeWebSearchFallbackEnabled();
+
+    if (!hasSearchApiKey && !allowFreeFallback) {
+        return {
+            results: [],
+            query,
+            provider: 'disabled',
+            error: 'search_web is disabled because no API key is configured. Set SERPER_API_KEY, TAVILY_API_KEY, or BRAVE_API_KEY. To force free fallback for debugging only, set ENABLE_WEBSEARCH_FREE_FALLBACK=1.',
+        };
+    }
 
     // Try primary provider
     let result: SearchResponse;
@@ -997,8 +1013,9 @@ export async function performSearch(
             break;
     }
 
-    // If primary failed and we have fallback options, try them
-    // Fallback chain: Serper -> Tavily -> Brave -> SearXNG (API-first, scraping last)
+    // If primary failed and we have fallback options, try them.
+    // Default policy: only API providers participate in fallback.
+    // Free scraping fallback (SearXNG/DDG/Google) is opt-in via ENABLE_WEBSEARCH_FREE_FALLBACK=1.
     if (result.error || result.results.length === 0) {
         if (provider !== 'serper' && serperApiKey) {
             const serperResult = await searchSerper(query, count, serperApiKey);
@@ -1021,7 +1038,7 @@ export async function performSearch(
             }
         }
 
-        if (provider !== 'searxng') {
+        if (allowFreeFallback && provider !== 'searxng') {
             const searxResult = await searchSearXNGWithFallback(query, count, searxngUrl);
             if (!searxResult.error && searxResult.results.length > 0) {
                 return searxResult;
@@ -1183,7 +1200,11 @@ export function loadSearchConfigFromEnv(): void {
             globalSearchConfig.provider = 'brave';
             console.error('[WebSearch] Auto-selected provider: brave (BRAVE_API_KEY found)');
         } else {
-            console.error('[WebSearch] No API keys found — using SearXNG fallback (unreliable with public instances)');
+            if (isFreeWebSearchFallbackEnabled()) {
+                console.error('[WebSearch] No API keys found — ENABLE_WEBSEARCH_FREE_FALLBACK=1, using SearXNG/scraping fallback (unreliable)');
+            } else {
+                console.error('[WebSearch] No API keys found — search_web disabled (configure SERPER_API_KEY/TAVILY_API_KEY/BRAVE_API_KEY)');
+            }
         }
     }
 }
