@@ -56,6 +56,53 @@ const HitlPolicySchema = z.object({
     reasons: z.array(z.string()),
 });
 
+const ExecutionProfileSchema = z.object({
+    primaryHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']),
+    requiredCapabilities: z.array(z.enum([
+        'browser_interaction',
+        'external_auth',
+        'workspace_write',
+        'host_access',
+        'human_review',
+    ])),
+    blockingRisk: z.enum(['none', 'missing_info', 'auth', 'permission', 'manual_step', 'policy_review']),
+    interactionMode: z.enum(['passive_status', 'input_first', 'action_first', 'review_first']),
+    executionShape: z.enum(['single_step', 'staged', 'exploratory', 'deterministic_workflow']),
+    reasons: z.array(z.string()),
+});
+
+const CapabilityPlanSchema = z.object({
+    missingCapability: z.enum([
+        'none',
+        'existing_skill_gap',
+        'existing_tool_gap',
+        'new_runtime_tool_needed',
+        'workflow_gap',
+        'external_blocker',
+    ]),
+    learningRequired: z.boolean(),
+    canProceedWithoutLearning: z.boolean(),
+    learningScope: z.enum(['none', 'knowledge', 'skill', 'runtime_tool']),
+    replayStrategy: z.enum(['none', 'resume_from_checkpoint', 'restart_execution']),
+    sideEffectRisk: z.enum(['none', 'read_only', 'write_external']),
+    userAssistRequired: z.boolean(),
+    userAssistReason: z.enum(['none', 'auth', 'captcha', 'permission', 'policy', 'ambiguous_goal']),
+    boundedLearningBudget: z.object({
+        complexityTier: z.enum(['simple', 'moderate', 'complex']),
+        maxRounds: z.number().int().positive(),
+        maxResearchTimeMs: z.number().int().nonnegative(),
+        maxValidationAttempts: z.number().int().positive(),
+    }),
+    reasons: z.array(z.string()),
+});
+
+const CapabilityReviewStateSchema = z.object({
+    status: z.enum(['pending', 'approved']),
+    summary: z.string(),
+    learnedEntityId: z.string().optional(),
+    updatedAt: z.string().optional(),
+});
+
 const RuntimeIsolationPolicySchema = z.object({
     connectorIsolationMode: z.literal('deny_by_default'),
     filesystemMode: z.enum(['workspace_only', 'workspace_plus_resolved_targets']),
@@ -257,6 +304,9 @@ export const TaskPlanReadyEventSchema = BaseEventSchema.extend({
         deliverables: z.array(DeliverableContractSchema),
         checkpoints: z.array(CheckpointContractSchema),
         userActionsRequired: z.array(UserActionRequestSchema),
+        executionProfile: ExecutionProfileSchema.optional(),
+        capabilityPlan: CapabilityPlanSchema.optional(),
+        capabilityReview: CapabilityReviewStateSchema.optional(),
         hitlPolicy: HitlPolicySchema.optional(),
         runtimeIsolationPolicy: RuntimeIsolationPolicySchema.optional(),
         sessionIsolationPolicy: SessionIsolationPolicySchema.optional(),
@@ -283,6 +333,8 @@ export const TaskCheckpointReachedEventSchema = BaseEventSchema.extend({
         executionPolicy: z.enum(['auto', 'review_required', 'hard_block']).optional(),
         requiresUserConfirmation: z.boolean(),
         blocking: z.boolean(),
+        activeHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']).optional(),
+        blockingReason: z.string().optional(),
     }),
 });
 
@@ -305,6 +357,8 @@ export const TaskUserActionRequiredEventSchema = BaseEventSchema.extend({
         authUrl: z.string().optional(),
         authDomain: z.string().optional(),
         canAutoResume: z.boolean().optional(),
+        activeHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']).optional(),
+        blockingReason: z.string().optional(),
     }),
 });
 
@@ -341,6 +395,8 @@ export const TaskStatusEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_STATUS'),
     payload: z.object({
         status: z.enum(['idle', 'running', 'finished', 'failed']),
+        activeHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']).optional(),
+        blockingReason: z.string().optional(),
     }),
 });
 
@@ -360,6 +416,8 @@ export const TaskClarificationRequiredEventSchema = BaseEventSchema.extend({
             value: z.string(),
         })).optional(),
         intentRouting: IntentRoutingSchema.optional(),
+        activeHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']).optional(),
+        blockingReason: z.string().optional(),
     }),
 });
 

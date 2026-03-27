@@ -1,6 +1,117 @@
 # Progress Log
 
+## 2026-03-28
+
+- Added a second capability-acquisition slice so the internal self-learning loop is no longer a black box during task execution:
+  - `SelfLearningController.acquireCapabilityForTask(...)` now emits stable progress phases for reuse-check, research, generation, validation, and save
+  - `learn(...)`, `runGapDetection(...)`, and `processGap(...)` now accept a focused progress observer instead of leaking raw self-learning events into the task protocol
+- Wired capability-acquisition progress into the task runtime:
+  - `main.ts` now maps each acquisition phase to `TASK_STATUS(running)` with `activeHardness=multi_step`
+  - desktop can reuse existing blocker/status rendering to show internal learning progress without treating it as a user-input blocker
+- Closed the first review/resume loop for externally risky generated capabilities:
+  - task session config now persists `pendingCapabilityReview`
+  - `review_required` acquisition results mark the generated capability as awaiting approval
+  - `resume_interrupted_task` now upgrades that review to approved and continues the original active prepared task instead of forcing a fresh re-plan
+- Synced the review-approved resume semantics into desktop task cards:
+  - desktop task sessions and task cards now retain `lastResumeReason`
+  - `TASK_RESUMED(capability_review_approved)` now renders as an explicit “approved generated capability, resuming task” state instead of a generic resume
+- Extended the same resume semantics into timeline phase bubbles:
+  - legacy and canonical timeline builders now keep ordinary `TASK_RESUMED` as no-op noise
+  - only `capability_review_approved` is promoted into a visible assistant-turn system event / execute-phase note
+- Moved the canonical source of truth for capability-review resume into sidecar:
+  - `TASK_RESUMED(capability_review_approved)` now maps to a canonical runtime status part with a user-facing label
+  - desktop timeline tests now prove the notice can be reconstructed from canonical/task events, with local `lastResumeReason` retained only as fallback session state
+- Added focused coverage in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/self-learning-controller.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/runtime-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/canonical-task-stream.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/structured-card-view-models.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts`
+- Verification:
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/self-learning-controller.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/self-learning-controller.test.ts tests/runtime-commands.test.ts tests/execution-runtime.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run typecheck`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/canonical-task-stream.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun test tests/task-reducer-suspension.test.ts tests/structured-card-view-models.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && ./node_modules/.bin/tsc --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun test tests/timeline-items.test.ts tests/task-reducer-suspension.test.ts tests/structured-card-view-models.test.ts`
+
 ## 2026-03-27
+
+- Started the first capability-acquisition implementation slice on top of the hardness-first control plane:
+  - added `capabilityPlan` to the frozen work-request contract
+  - extended social publish detection to recognize `wechat_official` / 微信公众号 publishing requests
+  - classified missing dedicated external publish capabilities as internal `new_runtime_tool_needed` gaps instead of immediate user clarification
+- Wired plan/event payloads through sidecar and desktop:
+  - `TASK_PLAN_READY` now carries `capabilityPlan`
+  - canonical task-stream plan-ready data now preserves `capabilityPlan`
+  - desktop task session state now stores `capabilityPlan` and shows capability-acquisition details on task cards
+- Added a first runtime capability gate:
+  - `continuePreparedAgentFlow` / `runPreparedAgentExecution` now checks `capabilityPlan.learningRequired`
+  - runtime can call `SelfLearningController.acquireCapabilityForTask(...)`
+  - successful acquisition clears the temporary capability-gap blocker and continues execution
+  - generated external-write capabilities currently enter a review checkpoint instead of auto-running live side effects
+- Updated desktop blocker semantics for the new internal phase:
+  - `TASK_STATUS(running)` with a capability-gap reason now remains internal progress, not a user-input blocker
+  - reducer preserves explicit capability-gap status text without inventing clarification UI
+- Added focused regressions in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-control-plane.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/canonical-task-stream.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execution-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/task-reducer-suspension.test.ts`
+- Verification:
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/work-request-control-plane.test.ts tests/canonical-task-stream.test.ts tests/execution-runtime.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/runtime-commands.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun test tests/task-reducer-suspension.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun test tests/structured-card-view-models.test.ts tests/task-card-message-interaction.test.tsx`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run typecheck`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && ./node_modules/.bin/tsc --noEmit`
+
+- Implemented the first hardness-first control-plane slice across sidecar and desktop.
+- Sidecar changes:
+  - added `executionProfile` to the work-request schema
+  - inferred `primaryHardness`, `requiredCapabilities`, `blockingRisk`, `interactionMode`, and `executionShape` in `workRequestAnalyzer.ts`
+  - emitted `executionProfile` through `TASK_PLAN_READY` payloads and canonical task-stream plan-ready data
+- Desktop changes:
+  - added execution-profile/session hardness types to `desktop/src/types/events.ts`
+  - stored `executionProfile`, `primaryHardness`, and derived `activeHardness` in the task reducer
+  - synced execution-profile metadata onto task cards in both legacy and canonical timeline builders
+  - updated `taskCardViewModel.ts` so task-center cards render hardness-first summary text and an execution-profile section
+- Added/updated focused regressions for:
+  - analyzer execution-profile inference
+  - runtime plan-ready payload passthrough
+  - canonical task-stream passthrough
+  - reducer active-hardness derivation
+  - task-card hardness-first view model rendering
+- Verification:
+  - `bun test sidecar/tests/work-request-control-plane.test.ts sidecar/tests/runtime-commands.test.ts sidecar/tests/canonical-task-stream.test.ts`
+  - `cd desktop && bun test tests/task-reducer-suspension.test.ts tests/structured-card-view-models.test.ts tests/task-card-message-interaction.test.tsx tests/timeline-items.test.ts`
+  - `bunx tsc --noEmit --pretty false -p sidecar/tsconfig.json`
+  - `bunx tsc --noEmit --pretty false -p desktop/tsconfig.json`
+- Continued the hardness-first refactor by extracting the remaining sidecar checkpoint/action policy logic into `/Users/beihuang/Documents/github/coworkany/sidecar/src/orchestration/workRequestPolicy.ts`.
+- `workRequestAnalyzer.ts` now computes task facts and delegates:
+  - execution-profile inference
+  - checkpoint generation
+  - user-action generation
+  to the dedicated policy module instead of owning those branches inline.
+- Added focused pure-module coverage in `/Users/beihuang/Documents/github/coworkany/sidecar/tests/work-request-policy.test.ts`.
+- Verification for the extraction slice:
+  - `bun test sidecar/tests/work-request-policy.test.ts sidecar/tests/work-request-control-plane.test.ts sidecar/tests/runtime-commands.test.ts sidecar/tests/canonical-task-stream.test.ts`
+  - `bunx tsc --noEmit --pretty false -p sidecar/tsconfig.json`
+
+- Started design-phase work for control-plane decomposition after confirming the current architecture is still rule-first.
+- Reviewed:
+  - `sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - `sidecar/src/orchestration/workRequestRuntime.ts`
+  - `sidecar/src/orchestration/localTaskIntent.ts`
+  - `sidecar/src/orchestration/localWorkflowRegistry.ts`
+  - `sidecar/src/main.ts`
+- Confirmed initial design constraint:
+  - `preferredSkills` are prompt-selection hints
+  - flow control still lives in analyzer/runtime policy code
+  - the first refactor should separate policy decisions from execution-strategy selection, not move policy into skills
 
 - Made canonical timeline rendering the default desktop path for sessions whose source events are fully covered by the canonical mapper:
   - desktop now locally synthesizes canonical messages from legacy `TaskEvent`s when the shadow canonical store is empty

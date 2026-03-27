@@ -2215,6 +2215,7 @@ export class BrowserUseBackend implements BrowserBackend {
     readonly name = 'browser-use';
     private serviceUrl: string;
     private connected: boolean = false;
+    private connectedCdpUrl: string | null = null;
 
     constructor(serviceUrl: string = 'http://localhost:8100') {
         this.serviceUrl = this.normalizeServiceUrl(serviceUrl);
@@ -2236,6 +2237,7 @@ export class BrowserUseBackend implements BrowserBackend {
         }
         this.serviceUrl = nextUrl;
         this.connected = false;
+        this.connectedCdpUrl = null;
     }
 
     /**
@@ -2288,6 +2290,10 @@ export class BrowserUseBackend implements BrowserBackend {
         return this.connected;
     }
 
+    isConnectedToCdp(cdpUrl: string): boolean {
+        return this.connected && this.connectedCdpUrl === cdpUrl;
+    }
+
     async connect(options: ConnectOptions = {}): Promise<BrowserConnection> {
         const result = await this.post<{ success: boolean; message: string; profile: string }>('/connect', {
             profile_name: options.profileName || 'Default',
@@ -2305,6 +2311,7 @@ export class BrowserUseBackend implements BrowserBackend {
         }
 
         this.connected = true;
+        this.connectedCdpUrl = options.cdpUrl?.trim() || null;
 
         // Return a synthetic BrowserConnection (no actual Playwright objects)
         return {
@@ -2323,6 +2330,7 @@ export class BrowserUseBackend implements BrowserBackend {
             console.error('[BrowserUseBackend] Disconnect error:', error);
         }
         this.connected = false;
+        this.connectedCdpUrl = null;
     }
 
     async navigate(url: string, options: NavigateOptions = {}): Promise<NavigateResult> {
@@ -2554,6 +2562,8 @@ export class BrowserService {
     private browserUseBackend: BrowserUseBackend;
     private _mode: BrowserMode = 'auto';
     private _browserUseAvailable: boolean | null = null; // Cached availability
+    private smartAttachPromise: Promise<void> | null = null;
+    private smartAttachTarget: string | null = null;
 
     constructor(browserUseServiceUrl?: string) {
         this.playwrightBackend = new PlaywrightBackend();
@@ -2584,6 +2594,83 @@ export class BrowserService {
 
     clearBrowserUseAvailabilityCache(): void {
         this._browserUseAvailable = null;
+    }
+
+    private async ensureBrowserUseAttachedToActiveCdp(options?: {
+        signal?: AbortSignal;
+    }): Promise<{ attached: boolean; reason?: string; sharedCdpUrl?: string }> {
+        const available = await this.isBrowserUseAvailable();
+        if (!available) {
+            return {
+                attached: false,
+                reason: 'browser-use-service is unavailable and could not be auto-started.',
+            };
+        }
+
+        const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
+        if (!activeCdpPort) {
+            return {
+                attached: false,
+                reason: 'No shared CDP Chrome session. Connect browser first to enable smart mode.',
+            };
+        }
+
+        const sharedCdpUrl = `http://localhost:${activeCdpPort}`;
+        if (this.browserUseBackend.isConnectedToCdp(sharedCdpUrl)) {
+            return {
+                attached: true,
+                sharedCdpUrl,
+            };
+        }
+
+        if (this.smartAttachPromise && this.smartAttachTarget === sharedCdpUrl) {
+            try {
+                await this.smartAttachPromise;
+            } catch (error) {
+                return {
+                    attached: false,
+                    sharedCdpUrl,
+                    reason: error instanceof Error ? error.message : String(error),
+                };
+            }
+            return {
+                attached: this.browserUseBackend.isConnectedToCdp(sharedCdpUrl),
+                sharedCdpUrl,
+                reason: this.browserUseBackend.isConnectedToCdp(sharedCdpUrl)
+                    ? undefined
+                    : 'browser-use backend did not attach to the shared CDP session.',
+            };
+        }
+
+        const attachPromise = this.browserUseBackend.connect({
+            cdpUrl: sharedCdpUrl,
+            signal: options?.signal,
+        }).then(() => undefined);
+
+        this.smartAttachPromise = attachPromise;
+        this.smartAttachTarget = sharedCdpUrl;
+
+        try {
+            await attachPromise;
+            return {
+                attached: this.browserUseBackend.isConnectedToCdp(sharedCdpUrl),
+                sharedCdpUrl,
+                reason: this.browserUseBackend.isConnectedToCdp(sharedCdpUrl)
+                    ? undefined
+                    : 'browser-use backend did not attach to the shared CDP session.',
+            };
+        } catch (error) {
+            return {
+                attached: false,
+                sharedCdpUrl,
+                reason: error instanceof Error ? error.message : String(error),
+            };
+        } finally {
+            if (this.smartAttachPromise === attachPromise) {
+                this.smartAttachPromise = null;
+                this.smartAttachTarget = null;
+            }
+        }
     }
 
     // ========================================================================
@@ -2716,25 +2803,11 @@ export class BrowserService {
      * 2) an active shared CDP-backed Playwright session
      */
     async getSmartModeStatus(): Promise<{ available: boolean; reason?: string; sharedCdpUrl?: string }> {
-        const available = await this.isBrowserUseAvailable();
-        if (!available) {
-            return {
-                available: false,
-                reason: 'browser-use-service is unavailable and could not be auto-started.',
-            };
-        }
-
-        const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
-        if (!activeCdpPort) {
-            return {
-                available: false,
-                reason: 'No shared CDP Chrome session. Connect browser first to enable smart mode.',
-            };
-        }
-
+        const status = await this.ensureBrowserUseAttachedToActiveCdp();
         return {
-            available: true,
-            sharedCdpUrl: `http://localhost:${activeCdpPort}`,
+            available: status.attached,
+            reason: status.reason,
+            sharedCdpUrl: status.sharedCdpUrl,
         };
     }
 
@@ -2812,19 +2885,19 @@ export class BrowserService {
         // Always connect Playwright backend (primary)
         const connection = await this.playwrightBackend.connect(options);
 
-        // Try to connect browser-use backend in the background (non-blocking)
-        // Pass CDP URL so browser-use connects to the SAME Chrome instance launched by Playwright.
-        const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
-        if (activeCdpPort) {
-            const cdpUrl = `http://localhost:${activeCdpPort}`;
-            this.browserUseBackend.connect({ ...options, cdpUrl }).catch(err => {
-                console.error('[BrowserService] BrowserUse background connect failed (non-critical):', err);
+        // If we connected to a shared CDP-backed Chrome session, synchronously
+        // attach browser-use to the same session so smart-mode tools don't race
+        // the background bootstrap path.
+        if (connection.isUserProfile) {
+            const smartStatus = await this.ensureBrowserUseAttachedToActiveCdp({
+                signal: options.signal,
             });
+            if (!smartStatus.attached) {
+                console.error(
+                    `[BrowserService] BrowserUse shared-session attach failed (non-critical): ${smartStatus.reason || 'unknown error'}`
+                );
+            }
         }
-
-        // Best-effort small delay to give browser-use backend time to attach when available.
-        // This reduces transient race where first smart operation happens before background connect completes.
-        await new Promise(resolve => setTimeout(resolve, 200));
 
         return connection;
     }
@@ -2891,6 +2964,8 @@ export class BrowserService {
             this.playwrightBackend.disconnect(),
             this.browserUseBackend.disconnect().catch(() => {}),
         ]);
+        this.smartAttachPromise = null;
+        this.smartAttachTarget = null;
     }
 
     // ========================================================================
@@ -2929,14 +3004,10 @@ export class BrowserService {
                 });
             }
 
-            const activeCdpPort = this.playwrightBackend.getActiveCdpPort();
-            if (activeCdpPort) {
-                // Always present the active CDP endpoint to browser-use so it can
-                // reuse the same Chrome instance as Playwright (or switch to it).
-                await this.browserUseBackend.connect({
-                    cdpUrl: `http://localhost:${activeCdpPort}`,
-                    signal: options.signal,
-                });
+            const sharedStatus = await this.ensureBrowserUseAttachedToActiveCdp({
+                signal: options.signal,
+            });
+            if (sharedStatus.attached) {
                 return;
             }
 
@@ -2949,7 +3020,7 @@ export class BrowserService {
 
             // If smart mode had to launch its own browser session, sync it to the
             // currently active Playwright page so ai_action works on the same URL.
-            if (!activeCdpPort && this.playwrightBackend.isConnected()) {
+            if (!this.playwrightBackend.getActiveCdpPort() && this.playwrightBackend.isConnected()) {
                 try {
                     const currentPage = await this.playwrightBackend.getContent(true, {
                         signal: options.signal,

@@ -26,6 +26,24 @@ import { ToolDefinition, type ToolContext } from './standard';
 import { browserService } from '../services/browserService';
 
 const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish';
+const LOGIN_URL_PATTERNS = [
+    /creator\.xiaohongshu\.com\/login/i,
+    /redirectReason=401/i,
+];
+
+type PublishSurfaceState = {
+    url: string;
+    title: string;
+    hasLoginPrompt: boolean;
+    isLoginRedirect: boolean;
+    hasDashboardShell: boolean;
+    hasUploadTab: boolean;
+    hasFileInput: boolean;
+    hasTitleField: boolean;
+    hasContentField: boolean;
+    hasPublishButton: boolean;
+    visibleActionTexts: string[];
+};
 
 // ============================================================================
 // Helpers
@@ -191,6 +209,117 @@ async function getCurrentUrl(control?: FlowControl): Promise<string> {
     }
 }
 
+function isLoginRedirectUrl(url: string): boolean {
+    return LOGIN_URL_PATTERNS.some((pattern) => pattern.test(url));
+}
+
+function parsePublishSurfaceState(raw: string): PublishSurfaceState {
+    try {
+        const parsed = JSON.parse(raw) as Partial<PublishSurfaceState>;
+        return {
+            url: parsed.url || '',
+            title: parsed.title || '',
+            hasLoginPrompt: parsed.hasLoginPrompt === true,
+            isLoginRedirect: parsed.isLoginRedirect === true,
+            hasDashboardShell: parsed.hasDashboardShell === true,
+            hasUploadTab: parsed.hasUploadTab === true,
+            hasFileInput: parsed.hasFileInput === true,
+            hasTitleField: parsed.hasTitleField === true,
+            hasContentField: parsed.hasContentField === true,
+            hasPublishButton: parsed.hasPublishButton === true,
+            visibleActionTexts: Array.isArray(parsed.visibleActionTexts)
+                ? parsed.visibleActionTexts.filter((item): item is string => typeof item === 'string')
+                : [],
+        };
+    } catch {
+        return {
+            url: '',
+            title: '',
+            hasLoginPrompt: false,
+            isLoginRedirect: false,
+            hasDashboardShell: false,
+            hasUploadTab: false,
+            hasFileInput: false,
+            hasTitleField: false,
+            hasContentField: false,
+            hasPublishButton: false,
+            visibleActionTexts: [],
+        };
+    }
+}
+
+async function getPublishSurfaceState(control?: FlowControl): Promise<PublishSurfaceState> {
+    const raw = await execScript(`(() => {
+        const text = document.body?.innerText || '';
+        const lowerText = text.toLowerCase();
+        const url = window.location.href;
+        const visibleActionTexts = [];
+
+        const titleSelectors = [
+            'input[type="text"]',
+            'input:not([type])',
+            'textarea',
+            '[contenteditable="true"]',
+        ];
+
+        const titleLike = Array.from(document.querySelectorAll(titleSelectors.join(','))).some((el) => {
+            if (el.offsetParent === null) return false;
+            const placeholder = ((el.placeholder || el.getAttribute?.('placeholder') || el.getAttribute?.('data-placeholder') || '') + '').toLowerCase();
+            const aria = ((el.getAttribute?.('aria-label') || '') + '').toLowerCase();
+            const cls = ((el.className || '') + '').toLowerCase();
+            return placeholder.includes('标题') || placeholder.includes('title') ||
+                aria.includes('标题') || aria.includes('title') ||
+                cls.includes('title');
+        });
+
+        const contentLike = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [class*="editor"], [class*="content"]')).some((el) => {
+            if (el.offsetParent === null) return false;
+            const placeholder = ((el.placeholder || el.getAttribute?.('placeholder') || el.getAttribute?.('data-placeholder') || '') + '').toLowerCase();
+            const aria = ((el.getAttribute?.('aria-label') || '') + '').toLowerCase();
+            const cls = ((el.className || '') + '').toLowerCase();
+            const rect = el.getBoundingClientRect();
+            if (placeholder.includes('内容') || placeholder.includes('正文') || placeholder.includes('说点什么') || placeholder.includes('描述')) return true;
+            if (aria.includes('内容') || aria.includes('正文')) return true;
+            if (cls.includes('editor') || cls.includes('content') || cls.includes('desc') || cls.includes('body')) return true;
+            return rect.height >= 80;
+        });
+
+        document.querySelectorAll('button, [role="button"], a, div, span').forEach((el) => {
+            if (el.offsetParent === null) return;
+            const txt = (el.textContent || '').trim();
+            if (!txt || txt.length > 16) return;
+            if (['发布', '发布笔记', '上传图文', '发布图文', '图文', '去发布'].includes(txt)) {
+                visibleActionTexts.push(txt);
+            }
+        });
+
+        const result = {
+            url,
+            title: document.title || '',
+            hasLoginPrompt: ['密码登录', '验证码登录', '扫码登录', '手机号登录', '短信登录'].some((kw) => text.includes(kw)),
+            isLoginRedirect: /creator\\.xiaohongshu\\.com\\/login/i.test(url) || /redirectReason=401/i.test(url),
+            hasDashboardShell: ['创作中心', '业务合作', '发现', '直播', '通知'].some((kw) => text.includes(kw)),
+            hasUploadTab: ['上传图文', '发布图文', '图文'].some((kw) => text.includes(kw)),
+            hasFileInput: document.querySelectorAll('input[type="file"]').length > 0,
+            hasTitleField: titleLike,
+            hasContentField: contentLike,
+            hasPublishButton: ['发布', '发布笔记', '立即发布'].some((kw) => lowerText.includes(kw.toLowerCase())),
+            visibleActionTexts: Array.from(new Set(visibleActionTexts)).slice(0, 12),
+        };
+
+        return JSON.stringify(result);
+    })()`, control);
+
+    return parsePublishSurfaceState(raw);
+}
+
+function isPublishSurfaceReady(state: PublishSurfaceState): boolean {
+    if (state.isLoginRedirect || state.hasLoginPrompt) {
+        return false;
+    }
+    return state.hasUploadTab || state.hasFileInput || state.hasTitleField || state.hasContentField || state.hasPublishButton;
+}
+
 /**
  * Click an element by its visible text. Searches ALL elements, not just
  * <button> or [role="button"], because XHS uses styled divs/spans.
@@ -202,27 +331,41 @@ async function clickByText(text: string, control?: FlowControl): Promise<string>
     return execScript(`(() => {
         const target = '${escapedText}';
         const all = document.querySelectorAll('*');
+        const candidates = [];
         for (let i = 0; i < all.length; i++) {
             const el = all[i];
-            if (el.children.length > 0) continue;          // leaf nodes only
-            if (el.offsetParent === null && el.style.display !== 'contents') continue; // visible
+            if (el.offsetParent === null && el.style.display !== 'contents') continue;
             const txt = (el.textContent || '').trim();
-            if (txt === target) {
-                el.scrollIntoView({ behavior: 'instant', block: 'center' });
-                // Full event sequence for Vue/React compatibility
-                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(ev => {
-                    el.dispatchEvent(new PointerEvent(ev, { bubbles: true, cancelable: true, view: window }));
-                });
-                // Also bubble to parent (some XHS elements have the handler on the parent)
-                if (el.parentElement) {
-                    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(ev => {
-                        el.parentElement.dispatchEvent(new PointerEvent(ev, { bubbles: true, cancelable: true, view: window }));
-                    });
-                }
-                return 'clicked: ' + el.tagName + '.' + (el.className || '').substring(0, 40) + ' text=' + txt;
-            }
+            if (!txt) continue;
+            if (txt !== target && !txt.includes(target) && !target.includes(txt)) continue;
+            const rect = el.getBoundingClientRect();
+            let score = 0;
+            if (txt === target) score += 200;
+            if (el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') score += 100;
+            if (el.children.length === 0) score += 30;
+            if (rect.width >= 48 && rect.height >= 24) score += 20;
+            score += Math.min(txt.length, 20);
+            candidates.push({ el, txt, score });
         }
-        return 'ERROR: element not found with text: ' + target;
+        if (candidates.length === 0) {
+            return 'ERROR: element not found with text: ' + target;
+        }
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0].el;
+        best.scrollIntoView({ behavior: 'instant', block: 'center' });
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(ev => {
+            best.dispatchEvent(new PointerEvent(ev, { bubbles: true, cancelable: true, view: window }));
+        });
+        if (best.parentElement) {
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(ev => {
+                best.parentElement.dispatchEvent(new PointerEvent(ev, { bubbles: true, cancelable: true, view: window }));
+            });
+        }
+        if (typeof best.click === 'function') {
+            best.click();
+        }
+        return 'clicked: ' + best.tagName + '.' + (best.className || '').substring(0, 40) + ' text=' + (best.textContent || '').trim();
+        
     })()`, control);
 }
 
@@ -329,6 +472,86 @@ async function waitForLogin(
 
     console.log('[XHS-Post] Login wait timed out');
     return false;
+}
+
+async function ensurePublishSurface(control?: FlowControl): Promise<{
+    ready: boolean;
+    state: PublishSurfaceState;
+    message: string;
+}> {
+    let lastState = await getPublishSurfaceState(control);
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+        control?.throwIfCancelled();
+        lastState = await getPublishSurfaceState(control);
+        console.log(`[XHS-Post] Publish surface check #${attempt + 1}: ${JSON.stringify({
+            url: lastState.url,
+            hasLoginPrompt: lastState.hasLoginPrompt,
+            isLoginRedirect: lastState.isLoginRedirect,
+            hasDashboardShell: lastState.hasDashboardShell,
+            hasUploadTab: lastState.hasUploadTab,
+            hasFileInput: lastState.hasFileInput,
+            hasTitleField: lastState.hasTitleField,
+            hasContentField: lastState.hasContentField,
+            hasPublishButton: lastState.hasPublishButton,
+            visibleActionTexts: lastState.visibleActionTexts,
+        }).substring(0, 300)}`);
+
+        if (isPublishSurfaceReady(lastState)) {
+            return {
+                ready: true,
+                state: lastState,
+                message: `Publish surface ready on ${lastState.url || 'current page'}`,
+            };
+        }
+
+        if (lastState.hasDashboardShell) {
+            const clickResult = await clickByText('发布', control);
+            console.log(`[XHS-Post] Dashboard publish entry click: ${clickResult}`);
+            await sleep(2000, control);
+            lastState = await getPublishSurfaceState(control);
+            if (isPublishSurfaceReady(lastState)) {
+                return {
+                    ready: true,
+                    state: lastState,
+                    message: `Publish surface opened from dashboard on ${lastState.url || 'current page'}`,
+                };
+            }
+        }
+
+        if (lastState.isLoginRedirect || lastState.hasLoginPrompt || isLoginRedirectUrl(lastState.url)) {
+            const backoffMs = 2000 + attempt * 1500;
+            console.log(`[XHS-Post] Publish surface still auth-blocked, waiting ${backoffMs}ms before retry...`);
+            await sleep(backoffMs, control);
+            await browserService.navigate(PUBLISH_URL, { signal: control?.signal });
+            await sleep(3000, control);
+            continue;
+        }
+
+        const actionTexts = ['上传图文', '发布图文', '图文', '发布笔记', '去发布'];
+        let clicked = false;
+        for (const text of actionTexts) {
+            const clickResult = await clickByText(text, control);
+            if (!clickResult.includes('ERROR')) {
+                console.log(`[XHS-Post] Clicked publish-surface action "${text}": ${clickResult}`);
+                clicked = true;
+                await sleep(2000, control);
+                break;
+            }
+        }
+
+        if (!clicked) {
+            await browserService.navigate(PUBLISH_URL, { signal: control?.signal });
+            await sleep(2500, control);
+        }
+    }
+
+    lastState = await getPublishSurfaceState(control);
+    return {
+        ready: false,
+        state: lastState,
+        message: `Publish surface unavailable. url=${lastState.url} actions=${lastState.visibleActionTexts.join(', ') || 'none'}`,
+    };
 }
 
 // ============================================================================
@@ -519,32 +742,18 @@ async function waitForPostEditor(maxWaitMs: number = 20000, control?: FlowContro
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
         control?.throwIfCancelled();
-        const check = await execScript(`(() => {
-            // Look for title-like inputs or contenteditables
-            const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
-            for (const inp of inputs) {
-                if (inp.offsetParent === null || inp.type === 'file' || inp.type === 'hidden') continue;
-                const ph = (inp.placeholder || '').toLowerCase();
-                if (ph.includes('标题') || ph.includes('title')) return 'title-input-found';
-            }
-            const editors = document.querySelectorAll('[contenteditable="true"]');
-            for (const ed of editors) {
-                if (ed.offsetParent === null) continue;
-                const ph = (ed.getAttribute('data-placeholder') || '').toLowerCase();
-                if (ph.includes('标题') || ph.includes('title')) return 'title-editor-found';
-            }
-            // Also check for "发布" button-like element
-            const all = document.querySelectorAll('*');
-            for (const el of all) {
-                if (el.children.length > 0) continue;
-                if (el.offsetParent === null) continue;
-                if ((el.textContent || '').trim() === '发布') return 'publish-found';
-            }
-            return 'waiting';
-        })()`, control);
-
-        if (check !== 'waiting') {
-            console.log(`[XHS-Post] Post editor detected: ${check}`);
+        const state = await getPublishSurfaceState(control);
+        if (state.isLoginRedirect || state.hasLoginPrompt) {
+            console.log(`[XHS-Post] Post editor wait saw auth redirect: ${state.url}`);
+            return false;
+        }
+        if (state.hasTitleField || state.hasContentField || state.hasPublishButton) {
+            console.log(`[XHS-Post] Post editor detected: ${JSON.stringify({
+                url: state.url,
+                hasTitleField: state.hasTitleField,
+                hasContentField: state.hasContentField,
+                hasPublishButton: state.hasPublishButton,
+            })}`);
             return true;
         }
         await sleep(1000, control);
@@ -564,19 +773,26 @@ async function fillTitle(title: string, control?: FlowControl): Promise<string> 
     return execScript(`(() => {
         const title = '${safeTitle}';
 
-        // Strategy 1: Input with title placeholder
-        const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+        // Strategy 1: Input with title placeholder / aria / class
+        const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
         for (const inp of inputs) {
             if (inp.offsetParent === null || inp.type === 'file' || inp.type === 'hidden') continue;
-            const ph = (inp.placeholder || '').toLowerCase();
-            const cls = (inp.className || '').toLowerCase();
-            if (ph.includes('标题') || ph.includes('title') || cls.includes('title')) {
+            const ph = ((inp.placeholder || '') + '').toLowerCase();
+            const aria = ((inp.getAttribute?.('aria-label') || '') + '').toLowerCase();
+            const cls = ((inp.className || '') + '').toLowerCase();
+            const maxLength = Number(inp.getAttribute?.('maxlength') || 0);
+            const likelyTitle = ph.includes('标题') || ph.includes('title') || aria.includes('标题') ||
+                aria.includes('title') || cls.includes('title') || (maxLength > 0 && maxLength <= 40);
+            if (likelyTitle) {
                 inp.focus();
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                const prototype = inp.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
                 setter.call(inp, title);
                 inp.dispatchEvent(new Event('input', { bubbles: true }));
                 inp.dispatchEvent(new Event('change', { bubbles: true }));
-                return 'filled-input: ph=' + inp.placeholder;
+                return 'filled-input: ph=' + (inp.placeholder || inp.getAttribute?.('aria-label') || 'none');
             }
         }
 
@@ -585,8 +801,9 @@ async function fillTitle(title: string, control?: FlowControl): Promise<string> 
         for (const ed of editors) {
             if (ed.offsetParent === null) continue;
             const ph = (ed.getAttribute('data-placeholder') || '').toLowerCase();
+            const aria = (ed.getAttribute('aria-label') || '').toLowerCase();
             const cls = (ed.className || '').toLowerCase();
-            if (ph.includes('标题') || ph.includes('title') || cls.includes('title')) {
+            if (ph.includes('标题') || ph.includes('title') || aria.includes('标题') || aria.includes('title') || cls.includes('title')) {
                 ed.focus();
                 ed.innerHTML = '';
                 document.execCommand('insertText', false, title);
@@ -598,15 +815,20 @@ async function fillTitle(title: string, control?: FlowControl): Promise<string> 
             }
         }
 
-        // Strategy 3: First visible short input (likely title)
+        // Strategy 3: First visible short input-like element (likely title)
         for (const inp of inputs) {
             if (inp.offsetParent === null || inp.type === 'file' || inp.type === 'hidden' || inp.type === 'search') continue;
+            const rect = inp.getBoundingClientRect();
+            if (rect.height > 120) continue;
             inp.focus();
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            const prototype = inp.tagName === 'TEXTAREA'
+                ? window.HTMLTextAreaElement.prototype
+                : window.HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
             setter.call(inp, title);
             inp.dispatchEvent(new Event('input', { bubbles: true }));
             inp.dispatchEvent(new Event('change', { bubbles: true }));
-            return 'filled-first-input: ph=' + (inp.placeholder || 'none');
+            return 'filled-first-input: ph=' + (inp.placeholder || inp.getAttribute?.('aria-label') || 'none');
         }
 
         return 'ERROR: no title field found';
@@ -623,25 +845,27 @@ async function fillContent(content: string, control?: FlowControl): Promise<stri
         const content = '${safeContent}';
 
         // Find content editor (contenteditable, not title)
-        const editors = document.querySelectorAll('[contenteditable="true"]');
+        const editors = document.querySelectorAll('[contenteditable="true"], [class*="editor"], [class*="content"], [class*="body"]');
         for (const ed of editors) {
             if (ed.offsetParent === null) continue;
-            const ph = (ed.getAttribute('data-placeholder') || '').toLowerCase();
+            const ph = ((ed.getAttribute('data-placeholder') || ed.getAttribute('placeholder') || '') + '').toLowerCase();
+            const aria = ((ed.getAttribute('aria-label') || '') + '').toLowerCase();
             const cls = (ed.className || '').toLowerCase();
+            const text = (ed.textContent || '').trim();
 
             // Skip title editors
-            if (cls.includes('title') || ph.includes('标题') || ph.includes('title')) continue;
+            if (cls.includes('title') || ph.includes('标题') || ph.includes('title') || aria.includes('标题') || aria.includes('title')) continue;
 
             // Content editor indicators
             const isContent = ph.includes('内容') || ph.includes('content') || ph.includes('正文') ||
-                              ph.includes('描述') || ph.includes('输入') || ph.includes('说点什么') ||
+                              ph.includes('描述') || ph.includes('输入') || ph.includes('说点什么') || aria.includes('正文') ||
                               cls.includes('content') || cls.includes('body') || cls.includes('editor') ||
-                              cls.includes('desc') || ed.getBoundingClientRect().height > 80;
+                              cls.includes('desc') || ed.getBoundingClientRect().height > 80 || text.length === 0;
 
             if (isContent) {
                 ed.focus();
                 // Use execCommand for framework compatibility
-                const existing = ed.textContent || '';
+                const existing = text;
                 if (existing.trim().length === 0) {
                     document.execCommand('insertText', false, content);
                     // Fallback
@@ -658,15 +882,21 @@ async function fillContent(content: string, control?: FlowControl): Promise<stri
         }
 
         // Try textarea
-        const textareas = document.querySelectorAll('textarea');
+        const textareas = document.querySelectorAll('textarea, input[type="text"], input:not([type])');
         for (const ta of textareas) {
             if (ta.offsetParent === null) continue;
+            const ph = ((ta.placeholder || ta.getAttribute?.('aria-label') || '') + '').toLowerCase();
+            const cls = ((ta.className || '') + '').toLowerCase();
+            if (ph.includes('标题') || cls.includes('title')) continue;
             ta.focus();
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+            const prototype = ta.tagName === 'TEXTAREA'
+                ? window.HTMLTextAreaElement.prototype
+                : window.HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
             setter.call(ta, content);
             ta.dispatchEvent(new Event('input', { bubbles: true }));
             ta.dispatchEvent(new Event('change', { bubbles: true }));
-            return 'filled-textarea';
+            return 'filled-textarea-or-input';
         }
 
         // Last resort: any unfilled contenteditable
@@ -861,12 +1091,17 @@ async function tryPlaywrightClickPublish(control?: FlowControl): Promise<string>
             // Community best practice: button containing "发布"
             'button:has-text("发布笔记")',
             'button:has-text("发布")',
+            'button:has-text("立即发布")',
+            '[role="button"]:has-text("发布笔记")',
+            '[role="button"]:has-text("发布")',
             // XHS-specific classes
             '[class*="publishBtn"]',
             '[class*="submit"]',
+            '[class*="publish"]:has-text("发布")',
             '[class*="el-button--primary"]:has-text("发布")',
             // Generic
             '[data-testid*="publish"]',
+            '[type="submit"]',
         ];
 
         for (const sel of selectors) {
@@ -994,11 +1229,27 @@ async function executePostingFlow(
         steps.push({ step: 'login_check', result: 'Already logged in', success: true });
     }
 
-    // Re-navigate if needed (login might have changed page)
+    // Rebuild the publish surface after login/redirect churn.
     const url1 = await getCurrentUrl(control);
-    if (!url1.includes('creator.xiaohongshu.com/publish')) {
+    if (!url1.includes('creator.xiaohongshu.com/publish') || isLoginRedirectUrl(url1)) {
         await browserService.navigate(PUBLISH_URL, { signal: control?.signal });
         await sleep(3000, control);
+    }
+    const publishSurface = await ensurePublishSurface(control);
+    steps.push({
+        step: 'ensure_publish_surface',
+        result: publishSurface.message,
+        success: publishSurface.ready,
+    });
+    if (!publishSurface.ready) {
+        const authBlocked = publishSurface.state.isLoginRedirect || publishSurface.state.hasLoginPrompt;
+        return {
+            success: false,
+            message: authBlocked
+                ? 'Browser login session is not authorized for the Xiaohongshu publish surface yet. Please reopen the creator publish page after login and try again.'
+                : `Publish surface did not become ready. ${publishSurface.message}`,
+            steps,
+        };
     }
 
     // ── Step 4: Initial page diagnosis ───────────────────────────────
@@ -1006,9 +1257,23 @@ async function executePostingFlow(
     steps.push({ step: 'page_diagnosis', result: diag1.substring(0, 300), success: true });
 
     // ── Step 5: Click "上传图文" tab ─────────────────────────────────
-    const tabResult = await clickByText('上传图文', control);
+    let tabResult = 'already on image-post surface';
+    const surfaceBeforeUpload = await getPublishSurfaceState(control);
+    const needsImageTabSelection =
+        !surfaceBeforeUpload.hasFileInput &&
+        !surfaceBeforeUpload.hasTitleField &&
+        !surfaceBeforeUpload.hasContentField;
+    if (needsImageTabSelection) {
+        tabResult = await clickByText('上传图文', control);
+        if (tabResult.includes('ERROR')) {
+            tabResult = await clickByText('发布图文', control);
+        }
+        if (tabResult.includes('ERROR')) {
+            tabResult = await clickByText('图文', control);
+        }
+        await sleep(2000, control);
+    }
     steps.push({ step: 'click_image_tab', result: tabResult, success: !tabResult.includes('ERROR') });
-    await sleep(2000, control);
 
     // ── Step 6: Upload image (required by XHS before editor appears) ─
     let imageUploaded = false;
@@ -1042,7 +1307,7 @@ async function executePostingFlow(
             const page = await browserService.getPage();
             if (page && typeof page.evaluate === 'function') {
                 // Generate image base64 in browser, then pass to bridge for upload
-                const base64 = await withCancellation(page.evaluate(({ text }: { text: string }) => {
+                const base64 = await withCancellation(page.evaluate((rawTitle: string) => {
                     const canvas = document.createElement('canvas');
                     canvas.width = 1080;
                     canvas.height = 1080;
@@ -1059,9 +1324,9 @@ async function executePostingFlow(
                     ctx.fillStyle = '#333';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillText(text.substring(0, 20), 540, 540);
+                    ctx.fillText(rawTitle.substring(0, 20), 540, 540);
                     return canvas.toDataURL('image/png').split(',')[1];
-                }, { text: title }), control);
+                }, title), control);
 
                 if (base64) {
                     // Write to temp file via sidecar fs
@@ -1331,4 +1596,10 @@ Use this tool when asked to post on Xiaohongshu. Provide title and content.`,
             control.cleanup();
         }
     },
+};
+
+export const __internal = {
+    isLoginRedirectUrl,
+    parsePublishSurfaceState,
+    isPublishSurfaceReady,
 };

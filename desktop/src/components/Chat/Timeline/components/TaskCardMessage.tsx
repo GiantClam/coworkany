@@ -4,6 +4,7 @@ import type { TaskCardItem } from '../../../../types';
 import { StructuredMessageCard } from './StructuredMessageCard';
 import { buildTaskCardViewModel, type TaskCardViewModel } from './taskCardViewModel';
 import {
+    StructuredButtonRow,
     StructuredInfoSection,
     StructuredInputRow,
     StructuredTaskListSection,
@@ -32,24 +33,18 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
         () => viewModel ?? (item ? buildTaskCardViewModel(item, { layout }) : null),
         [item, layout, viewModel],
     );
-
-    if (!model) {
-        return null;
-    }
-
-    if (model.presentation === 'hidden') {
-        return null;
-    }
+    const collaboration = model?.collaboration;
 
     React.useEffect(() => {
+        if (!model) {
+            return;
+        }
         setInputValue('');
-    }, [model.collaboration?.actionId, model.id]);
-
-    const collaboration = model.collaboration;
+    }, [model?.collaboration?.actionId, model?.id]);
 
     const handleSubmit = React.useCallback(() => {
         const value = inputValue.trim();
-        if (!value || !collaboration?.input) {
+        if (!value || !collaboration?.input || !model) {
             return;
         }
         onTaskCollaborationSubmit?.({
@@ -59,7 +54,28 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
             value,
         });
         setInputValue('');
-    }, [collaboration?.actionId, collaboration?.input, inputValue, model.id, model.taskId, onTaskCollaborationSubmit]);
+    }, [collaboration?.actionId, collaboration?.input, inputValue, model, onTaskCollaborationSubmit]);
+
+    const submitCollaborationValue = React.useCallback((value: string) => {
+        const normalizedValue = value.trim();
+        if (!normalizedValue || !model) {
+            return;
+        }
+        onTaskCollaborationSubmit?.({
+            taskId: model.taskId,
+            cardId: model.id,
+            actionId: collaboration?.actionId,
+            value: normalizedValue,
+        });
+    }, [collaboration?.actionId, model, onTaskCollaborationSubmit]);
+
+    if (!model) {
+        return null;
+    }
+
+    if (model.presentation === 'hidden') {
+        return null;
+    }
 
     return (
         <StructuredMessageCard
@@ -120,6 +136,24 @@ const TaskCardMessageComponent: React.FC<TaskCardMessageProps> = ({
                             ) : null}
                             <StructuredInfoSection label="Questions" lines={collaboration.questions} />
                             <StructuredInfoSection label="Instructions" lines={collaboration.instructions} />
+                            {!collaboration.input && collaboration.choices && collaboration.choices.length > 0 ? (
+                                <StructuredButtonRow
+                                    buttons={collaboration.choices.map((choice) => ({
+                                        key: choice.value,
+                                        label: choice.label,
+                                    }))}
+                                    onPress={submitCollaborationValue}
+                                />
+                            ) : null}
+                            {!collaboration.input && collaboration.action ? (
+                                <StructuredButtonRow
+                                    buttons={[{
+                                        key: collaboration.action.label,
+                                        label: collaboration.action.label,
+                                    }]}
+                                    onPress={submitCollaborationValue}
+                                />
+                            ) : null}
                             {collaboration.input ? (
                                 <StructuredInputRow
                                     value={inputValue}

@@ -121,6 +121,80 @@ export interface ResumeStrategy {
     preserveArtifacts: boolean;
 }
 
+export type TaskHardness =
+    | 'trivial'
+    | 'bounded'
+    | 'multi_step'
+    | 'externally_blocked'
+    | 'high_risk';
+
+export type RequiredCapability =
+    | 'browser_interaction'
+    | 'external_auth'
+    | 'workspace_write'
+    | 'host_access'
+    | 'human_review';
+
+export type BlockingRisk =
+    | 'none'
+    | 'missing_info'
+    | 'auth'
+    | 'permission'
+    | 'manual_step'
+    | 'policy_review';
+
+export type InteractionMode =
+    | 'passive_status'
+    | 'input_first'
+    | 'action_first'
+    | 'review_first';
+
+export type ExecutionShape =
+    | 'single_step'
+    | 'staged'
+    | 'exploratory'
+    | 'deterministic_workflow';
+
+export interface ExecutionProfile {
+    primaryHardness: TaskHardness;
+    requiredCapabilities: RequiredCapability[];
+    blockingRisk: BlockingRisk;
+    interactionMode: InteractionMode;
+    executionShape: ExecutionShape;
+    reasons: string[];
+}
+
+export interface CapabilityPlan {
+    missingCapability:
+        | 'none'
+        | 'existing_skill_gap'
+        | 'existing_tool_gap'
+        | 'new_runtime_tool_needed'
+        | 'workflow_gap'
+        | 'external_blocker';
+    learningRequired: boolean;
+    canProceedWithoutLearning: boolean;
+    learningScope: 'none' | 'knowledge' | 'skill' | 'runtime_tool';
+    replayStrategy: 'none' | 'resume_from_checkpoint' | 'restart_execution';
+    sideEffectRisk: 'none' | 'read_only' | 'write_external';
+    userAssistRequired: boolean;
+    userAssistReason: 'none' | 'auth' | 'captcha' | 'permission' | 'policy' | 'ambiguous_goal';
+    boundedLearningBudget: {
+        complexityTier: 'simple' | 'moderate' | 'complex';
+        maxRounds: number;
+        maxResearchTimeMs: number;
+        maxValidationAttempts: number;
+    };
+    reasons: string[];
+}
+
+export interface CapabilityReviewState {
+    status: 'pending' | 'approved';
+    summary: string;
+    learnedEntityId?: string;
+    updatedAt?: string;
+}
+
 export interface IntentRouting {
     intent: 'chat' | 'immediate_task' | 'scheduled_task';
     confidence: number;
@@ -227,6 +301,13 @@ export interface TaskSession {
     plannedDeliverables?: PlannedDeliverable[];
     plannedCheckpoints?: PlannedCheckpoint[];
     plannedUserActions?: PlannedUserAction[];
+    executionProfile?: ExecutionProfile;
+    capabilityPlan?: CapabilityPlan;
+    capabilityReview?: CapabilityReviewState;
+    primaryHardness?: TaskHardness;
+    activeHardness?: TaskHardness;
+    blockingReason?: string;
+    lastResumeReason?: string;
     missingInfo?: MissingInfoItem[];
     defaultingPolicy?: DefaultingPolicy;
     resumeStrategy?: ResumeStrategy;
@@ -297,6 +378,13 @@ export interface TaskCardItem extends BaseEvent {
     subtitle?: string;
     status?: TaskStatus;
     workflow?: 'single' | 'sequential' | 'parallel' | 'dag';
+    executionProfile?: ExecutionProfile;
+    capabilityPlan?: CapabilityPlan;
+    capabilityReview?: CapabilityReviewState;
+    primaryHardness?: TaskHardness;
+    activeHardness?: TaskHardness;
+    blockingReason?: string;
+    lastResumeReason?: string;
     tasks?: Array<{
         id: string;
         title: string;
@@ -427,6 +515,7 @@ export interface TaskPlanReadyPayload {
     deliverables: PlannedDeliverable[];
     checkpoints: PlannedCheckpoint[];
     userActionsRequired: PlannedUserAction[];
+    executionProfile?: ExecutionProfile;
     missingInfo: MissingInfoItem[];
     defaultingPolicy?: DefaultingPolicy;
     resumeStrategy?: ResumeStrategy;

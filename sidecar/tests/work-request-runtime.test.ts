@@ -6,6 +6,7 @@ import { WorkRequestStore } from '../src/orchestration/workRequestStore';
 import {
     buildPlanUpdatedPayload,
     buildClarificationMessage,
+    getBlockingCheckpoint,
     getScheduledTaskExecutionQuery,
     markWorkRequestExecutionResumed,
     markWorkRequestExecutionStarted,
@@ -68,6 +69,86 @@ describe('workRequestRuntime', () => {
         expect(fs.existsSync(path.join(workspacePath, '.coworkany', 'task_plan.md'))).toBe(true);
         expect(fs.existsSync(path.join(workspacePath, '.coworkany', 'findings.md'))).toBe(true);
         expect(fs.existsSync(path.join(workspacePath, '.coworkany', 'progress.md'))).toBe(true);
+    });
+
+    test('uses structured follow-up context to resolve short continuation prompts without task-scope clarification', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '确认发送',
+            workspacePath,
+            followUpContext: {
+                baseObjective: '检索今天 minimax 的股价，分析走势，并发送到 X 上',
+                latestAssistantMessage: '已生成可直接发布到 X 的文案，确认后即可继续执行发布。',
+                recentMessages: [
+                    { role: 'user', content: '检索今天 minimax 的股价，分析走势，并发送到 X 上' },
+                    { role: 'assistant', content: '已生成可直接发布到 X 的文案，确认后即可继续执行发布。' },
+                ],
+            },
+            workRequestStore: store,
+        });
+
+        expect(prepared.frozenWorkRequest.clarification.required).toBe(false);
+        expect(prepared.frozenWorkRequest.clarification.missingFields).toEqual([]);
+        expect(prepared.frozenWorkRequest.tasks[0]?.objective).toBe('检索今天 minimax 的股价，分析走势，并发送到 X 上');
+        expect(prepared.executionQuery).toContain('检索今天 minimax 的股价，分析走势，并发送到 X 上');
+    });
+
+    test('allows structured capability plan classification to override the deterministic draft', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '将内容发布到微信公众号',
+            workspacePath,
+            workRequestStore: store,
+            capabilityPlanClassifier: async ({ analyzed }) => ({
+                ...(analyzed.capabilityPlan ?? {
+                    missingCapability: 'none',
+                    learningRequired: false,
+                    canProceedWithoutLearning: true,
+                    learningScope: 'none',
+                    replayStrategy: 'none',
+                    sideEffectRisk: 'none',
+                    userAssistRequired: false,
+                    userAssistReason: 'none',
+                    boundedLearningBudget: {
+                        complexityTier: 'simple',
+                        maxRounds: 1,
+                        maxResearchTimeMs: 15000,
+                        maxValidationAttempts: 1,
+                    },
+                    reasons: [],
+                }),
+                missingCapability: 'new_runtime_tool_needed',
+                learningRequired: true,
+                sideEffectRisk: 'write_external',
+                boundedLearningBudget: {
+                    complexityTier: 'complex',
+                    maxRounds: 4,
+                    maxResearchTimeMs: 180000,
+                    maxValidationAttempts: 3,
+                },
+                reasons: ['Structured classifier selected runtime-tool acquisition.'],
+            }),
+        });
+
+        expect(prepared.frozenWorkRequest.capabilityPlan).toMatchObject({
+            missingCapability: 'new_runtime_tool_needed',
+            learningRequired: true,
+            sideEffectRisk: 'write_external',
+        });
+        expect(prepared.frozenWorkRequest.capabilityPlan?.boundedLearningBudget).toEqual({
+            complexityTier: 'complex',
+            maxRounds: 4,
+            maxResearchTimeMs: 180000,
+            maxValidationAttempts: 3,
+        });
     });
 
     test('resolves scheduled task execution query from linked frozen work request', async () => {
@@ -588,6 +669,57 @@ describe('workRequestRuntime', () => {
         expect(prepared.workRequestExecutionPrompt).toContain('Coworkany leads the task');
         expect(prepared.workRequestExecutionPrompt).toContain('Known Risks');
         expect(prepared.workRequestExecutionPrompt).toContain('Re-Planning Rules');
+    });
+
+    test('keeps login-dependent social publishing as a non-blocking freeze-time risk until runtime confirms a blocker', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上',
+            workspacePath,
+            workRequestStore: store,
+        });
+
+        expect(prepared.frozenWorkRequest.executionProfile).toMatchObject({
+            primaryHardness: 'high_risk',
+            interactionMode: 'passive_status',
+        });
+        expect(prepared.frozenWorkRequest.executionProfile?.requiredCapabilities).toContain('external_auth');
+        expect(prepared.frozenWorkRequest.userActionsRequired?.some((action) =>
+            action.kind === 'external_auth'
+            && action.blocking === true
+        )).toBe(false);
+        expect(prepared.frozenWorkRequest.checkpoints?.some((checkpoint) =>
+            checkpoint.kind === 'manual_action'
+        )).toBe(false);
+        expect(prepared.workRequestExecutionPrompt).not.toContain('### User Actions Required');
+        expect(getBlockingCheckpoint(prepared.frozenWorkRequest)).toBeUndefined();
+    });
+
+    test('includes publish intent in execution prompt for xiaohongshu publish tasks', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '检索今天 minimax 的股价，分析走势，并发送到 xiaohongshu 上',
+            workspacePath,
+            workRequestStore: store,
+        });
+
+        expect(prepared.frozenWorkRequest.publishIntent).toMatchObject({
+            platform: 'xiaohongshu',
+            executionMode: 'direct_publish',
+            requiresSideEffect: true,
+        });
+        expect(prepared.workRequestExecutionPrompt).toContain('### Publish Intent');
+        expect(prepared.workRequestExecutionPrompt).toContain('Platform: xiaohongshu');
+        expect(prepared.workRequestExecutionPrompt).toContain('Execution mode: direct_publish');
+        expect(prepared.workRequestExecutionPrompt).not.toContain('### User Actions Required');
     });
 
     test('runs web and connected-app research resolvers before freezing the contract', async () => {

@@ -51,6 +51,30 @@ type AgentLoopResult = {
     toolsUsed: string[];
 };
 
+type CapabilityAcquisitionResult =
+    | {
+        outcome: 'reused';
+        summary: string;
+    }
+    | {
+        outcome: 'learned';
+        summary: string;
+    }
+    | {
+        outcome: 'review_required';
+        summary: string;
+    }
+    | {
+        outcome: 'blocked';
+        summary: string;
+        blockerType?: 'external_auth' | 'manual_step';
+    }
+    | {
+        outcome: 'failed';
+        summary: string;
+        error?: string;
+    };
+
 type AutonomousTaskResult = {
     createdAt: string;
     summary?: string;
@@ -198,6 +222,11 @@ export type ExecutionRuntimeDeps = {
         prepared: PreparedWorkRequestContext,
         error: string
     ) => void;
+    acquireCapabilityForTask?: (input: {
+        taskId: string;
+        preparedWorkRequest: PreparedWorkRequestContext;
+        userMessage: string;
+    }) => Promise<CapabilityAcquisitionResult>;
     quickLearnFromError?: (
         error: string,
         query: string,
@@ -576,7 +605,7 @@ function collectRequiredToolEvidenceCapabilities(prepared: PreparedWorkRequestCo
 
 function hasBrowserInteractionEvidence(toolsUsed: string[]): boolean {
     const used = new Set(toolsUsed);
-    if (used.has('browser_ai_action')) {
+    if (used.has('browser_ai_action') || used.has('xiaohongshu_post')) {
         return true;
     }
     const hasConnect = used.has('browser_connect');
@@ -800,6 +829,10 @@ function isLikelyApprovalGateRequest(outputText: string): boolean {
     }
 
     const approvalPatterns: RegExp[] = [
+        /请你确认[^。！？\n]{0,80}(?:后|之后)?(?:我|我就|我会|再|然后)/u,
+        /你说的[^。！？\n]{0,80}(?:是指|指的是)[^。！？\n]{0,80}(?:吗|么)/u,
+        /(?:是要|要不要|还是要)[^。！？\n]{0,80}(?:还是|或者)/u,
+        /(?:先给你看草稿再发|先给你看草稿|先看草稿再发|直接发正式内容还是先给你看草稿再发)/u,
         /如果你(?:愿意|同意|确认|批准)[^。！？\n]{0,50}(?:我|我就|我可以|我下一步|我会)/u,
         /(?:我下一步可以|我可以下一步|你回复一句|请回复|请选择)[^。！？\n]{0,50}(?:继续|执行|开始|确认)/u,
         /if you (?:want|agree|approve|confirm)[^.!?\n]{0,80}(?:i|i'll|i will)/i,
@@ -1229,6 +1262,49 @@ async function runPreparedAgentExecution(input: {
     deps.activatePreparedWorkRequest(taskId, preparedWorkRequest);
 
     try {
+        if (preparedWorkRequest.frozenWorkRequest.capabilityPlan?.learningRequired && deps.acquireCapabilityForTask) {
+            const acquisition = await deps.acquireCapabilityForTask({
+                taskId,
+                preparedWorkRequest,
+                userMessage,
+            });
+            if (acquisition.outcome === 'reused' || acquisition.outcome === 'learned') {
+                preparedWorkRequest.frozenWorkRequest.capabilityPlan = {
+                    ...preparedWorkRequest.frozenWorkRequest.capabilityPlan,
+                    learningRequired: false,
+                    canProceedWithoutLearning: true,
+                    replayStrategy: 'resume_from_checkpoint',
+                    reasons: Array.from(new Set([
+                        ...(preparedWorkRequest.frozenWorkRequest.capabilityPlan?.reasons ?? []),
+                        acquisition.summary,
+                    ])),
+                };
+            } else if (acquisition.outcome === 'review_required' || acquisition.outcome === 'blocked') {
+                return {
+                    success: false,
+                    summary: acquisition.summary,
+                    error: acquisition.summary,
+                    artifactsCreated: [],
+                    toolsUsed: [],
+                };
+            } else {
+                deps.markWorkRequestExecutionFailed(preparedWorkRequest, acquisition.error || acquisition.summary);
+                deps.reporter.failed({
+                    error: acquisition.error || acquisition.summary,
+                    errorCode: 'CAPABILITY_ACQUISITION_FAILED',
+                    recoverable: true,
+                    suggestion: acquisition.summary,
+                });
+                return {
+                    success: false,
+                    summary: '',
+                    error: acquisition.error || acquisition.summary,
+                    artifactsCreated: [],
+                    toolsUsed: [],
+                };
+            }
+        }
+
         const marketplaceInstallResult = await tryMarketplaceSkillInstallFastPath({
             taskId,
             workspacePath,

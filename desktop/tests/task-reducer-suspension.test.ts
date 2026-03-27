@@ -302,6 +302,14 @@ describe('task reducer suspension handling', () => {
                         fulfillsCheckpointId: 'checkpoint-new',
                     },
                 ],
+                executionProfile: {
+                    primaryHardness: 'high_risk',
+                    requiredCapabilities: ['workspace_write', 'human_review'],
+                    blockingRisk: 'permission',
+                    interactionMode: 'action_first',
+                    executionShape: 'staged',
+                    reasons: ['Execution is expected to write files or mutate workspace state.'],
+                },
                 missingInfo: [],
             },
         }));
@@ -331,6 +339,8 @@ describe('task reducer suspension handling', () => {
         expect(blocked.plannedCheckpoints?.[0]?.id).toBe('checkpoint-new');
         expect(blocked.currentCheckpoint).toBeUndefined();
         expect(blocked.currentUserAction?.id).toBe('action-new');
+        expect(blocked.primaryHardness).toBe('high_risk');
+        expect(blocked.activeHardness).toBe('externally_blocked');
         expect(blocked.status).toBe('idle');
     });
 
@@ -422,6 +432,235 @@ describe('task reducer suspension handling', () => {
         ]);
     });
 
+    test('prefers explicit activeHardness from sidecar events over local fallback derivation', () => {
+        const planned = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_PLAN_READY',
+            payload: {
+                summary: 'Task starts as multi-step.',
+                deliverables: [],
+                checkpoints: [],
+                userActionsRequired: [],
+                executionProfile: {
+                    primaryHardness: 'multi_step',
+                    requiredCapabilities: ['workspace_write'],
+                    blockingRisk: 'none',
+                    interactionMode: 'passive_status',
+                    executionShape: 'staged',
+                    reasons: ['Execution is expected to write files or mutate workspace state.'],
+                },
+                missingInfo: [],
+            },
+        }));
+
+        const clarificationRequired = applyTaskEvent(planned, makeEvent({
+            sequence: 2,
+            type: 'TASK_CLARIFICATION_REQUIRED',
+            payload: {
+                reason: 'Need clarification before continuing.',
+                questions: ['Which target file should be updated?'],
+                activeHardness: 'bounded',
+                blockingReason: 'Need clarification before continuing.',
+            },
+        }));
+
+        const idleStatus = applyTaskEvent(clarificationRequired, makeEvent({
+            sequence: 3,
+            type: 'TASK_STATUS',
+            payload: {
+                status: 'idle',
+                activeHardness: 'high_risk',
+            },
+        }));
+
+        expect(clarificationRequired.activeHardness).toBe('bounded');
+        expect(clarificationRequired.blockingReason).toBe('Need clarification before continuing.');
+        expect(idleStatus.activeHardness).toBe('high_risk');
+    });
+
+    test('stores capability plan and keeps capability-gap running status as internal progress', () => {
+        const planned = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_PLAN_READY',
+            payload: {
+                summary: 'Acquire missing capability before publishing.',
+                deliverables: [],
+                checkpoints: [],
+                userActionsRequired: [],
+                executionProfile: {
+                    primaryHardness: 'high_risk',
+                    requiredCapabilities: ['browser_interaction', 'external_auth'],
+                    blockingRisk: 'none',
+                    interactionMode: 'passive_status',
+                    executionShape: 'staged',
+                    reasons: ['Execution must complete a real publish action on the target platform.'],
+                },
+                capabilityPlan: {
+                    missingCapability: 'new_runtime_tool_needed',
+                    learningRequired: true,
+                    canProceedWithoutLearning: false,
+                    learningScope: 'runtime_tool',
+                    replayStrategy: 'resume_from_checkpoint',
+                    sideEffectRisk: 'write_external',
+                    userAssistRequired: false,
+                    userAssistReason: 'none',
+                    boundedLearningBudget: {
+                        complexityTier: 'complex',
+                        maxRounds: 4,
+                        maxResearchTimeMs: 180000,
+                        maxValidationAttempts: 3,
+                    },
+                    reasons: ['Coworkany does not have a dedicated validated publish capability for the target platform.'],
+                },
+                capabilityReview: {
+                    status: 'pending',
+                    summary: 'Generated capability requires review before execution can resume.',
+                    learnedEntityId: 'skill-wechat-official-post',
+                    updatedAt: '2026-03-28T09:30:00.000Z',
+                },
+                missingInfo: [],
+            },
+        }));
+
+        const running = applyTaskEvent(planned, makeEvent({
+            sequence: 2,
+            type: 'TASK_STATUS',
+            payload: {
+                status: 'running',
+                activeHardness: 'multi_step',
+                blockingReason: 'Acquiring the missing capability before continuing execution.',
+            },
+        }));
+
+        expect(planned.capabilityPlan?.learningRequired).toBe(true);
+        expect(planned.capabilityReview).toEqual({
+            status: 'pending',
+            summary: 'Generated capability requires review before execution can resume.',
+            learnedEntityId: 'skill-wechat-official-post',
+            updatedAt: '2026-03-28T09:30:00.000Z',
+        });
+        expect(running.status).toBe('running');
+        expect(running.activeHardness).toBe('multi_step');
+        expect(running.blockingReason).toBe('Acquiring the missing capability before continuing execution.');
+        expect(running.currentUserAction).toBeUndefined();
+        expect(running.clarificationQuestions).toBeUndefined();
+    });
+
+    test('clears pending capability review once capability review approval resumes the task', () => {
+        const planned = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_PLAN_READY',
+            payload: {
+                summary: 'Review generated capability before resuming execution.',
+                deliverables: [],
+                checkpoints: [],
+                userActionsRequired: [],
+                capabilityReview: {
+                    status: 'pending',
+                    summary: 'Generated capability requires review before execution can resume.',
+                },
+                missingInfo: [],
+            },
+        }));
+
+        const resumed = applyTaskEvent(planned, makeEvent({
+            sequence: 2,
+            type: 'TASK_RESUMED',
+            payload: {
+                resumeReason: 'capability_review_approved',
+                suspendDurationMs: 1000,
+            },
+        }));
+
+        expect(planned.capabilityReview?.status).toBe('pending');
+        expect(resumed.capabilityReview).toBeUndefined();
+        expect(resumed.lastResumeReason).toBe('capability_review_approved');
+    });
+
+    test('preserves explicit runtime hardness and blocking reason across blocker, idle, resume, and running replay', () => {
+        const started = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_STARTED',
+            payload: {
+                title: 'Publish weekly update',
+                context: {
+                    userQuery: 'Publish the weekly update to X',
+                    workspacePath: '/tmp/ws',
+                },
+            },
+        }));
+
+        const planned = applyTaskEvent(started, makeEvent({
+            sequence: 2,
+            type: 'TASK_PLAN_READY',
+            payload: {
+                summary: 'Publish the prepared update after validation.',
+                deliverables: [],
+                checkpoints: [],
+                userActionsRequired: [],
+                executionProfile: {
+                    primaryHardness: 'multi_step',
+                    requiredCapabilities: ['browser_interaction', 'external_auth'],
+                    blockingRisk: 'auth',
+                    interactionMode: 'action_first',
+                    executionShape: 'staged',
+                    reasons: ['Execution may require a real account/login state.'],
+                },
+                missingInfo: [],
+            },
+        }));
+
+        const blocked = applyTaskEvent(planned, makeEvent({
+            sequence: 3,
+            type: 'TASK_USER_ACTION_REQUIRED',
+            payload: {
+                actionId: 'auth-login',
+                title: 'Login to X',
+                kind: 'external_auth',
+                description: 'Please log in to continue publishing.',
+                blocking: true,
+                questions: [],
+                instructions: ['Open the login page and confirm once signed in.'],
+                activeHardness: 'externally_blocked',
+                blockingReason: 'Please log in to continue publishing.',
+            },
+        }));
+
+        const idle = applyTaskEvent(blocked, makeEvent({
+            sequence: 4,
+            type: 'TASK_STATUS',
+            payload: {
+                status: 'idle',
+                activeHardness: 'externally_blocked',
+                blockingReason: 'Please log in to continue publishing.',
+            },
+        }));
+
+        const resumed = applyTaskEvent(idle, makeEvent({
+            sequence: 5,
+            type: 'TASK_RESUMED',
+            payload: {},
+        }));
+
+        const running = applyTaskEvent(resumed, makeEvent({
+            sequence: 6,
+            type: 'TASK_STATUS',
+            payload: {
+                status: 'running',
+                activeHardness: 'multi_step',
+            },
+        }));
+
+        expect(blocked.status).toBe('idle');
+        expect(blocked.activeHardness).toBe('externally_blocked');
+        expect(blocked.blockingReason).toBe('Please log in to continue publishing.');
+        expect(idle.status).toBe('idle');
+        expect(idle.activeHardness).toBe('externally_blocked');
+        expect(idle.blockingReason).toBe('Please log in to continue publishing.');
+        expect(resumed.status).toBe('running');
+        expect(resumed.activeHardness).toBe('multi_step');
+        expect(resumed.blockingReason).toBeUndefined();
+        expect(running.status).toBe('running');
+        expect(running.activeHardness).toBe('multi_step');
+        expect(running.blockingReason).toBeUndefined();
+    });
+
     test('clears failure metadata when task resumes running', () => {
         const failed = applyTaskEvent(makeSession(), makeEvent({
             type: 'TASK_FAILED',
@@ -440,6 +679,20 @@ describe('task reducer suspension handling', () => {
 
         expect(resumed.status).toBe('running');
         expect(resumed.failure).toBeUndefined();
+    });
+
+    test('stores capability-review resume reason when task resumes', () => {
+        const resumed = applyTaskEvent(makeSession(), makeEvent({
+            type: 'TASK_RESUMED',
+            payload: {
+                resumeReason: 'capability_review_approved',
+                suspendDurationMs: 0,
+            },
+        }));
+
+        expect(resumed.status).toBe('running');
+        expect(resumed.lastResumeReason).toBe('capability_review_approved');
+        expect(resumed.blockingReason).toBeUndefined();
     });
 
     test('TASK_HISTORY_CLEARED resets session history state and visible timeline events', () => {

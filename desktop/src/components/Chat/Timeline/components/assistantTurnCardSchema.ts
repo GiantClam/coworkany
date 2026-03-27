@@ -97,6 +97,7 @@ export function buildAssistantTurnCardSchemas(
     const safeSystemEvents = (item.systemEvents || [])
         .map((entry) => sanitizeDisplayText(entry))
         .filter((entry) => entry.length > 0);
+    const hasRenderedAssistantMessages = safeMessages.length > 0;
 
     if (safePendingLabel) {
         cards.push({
@@ -158,7 +159,10 @@ export function buildAssistantTurnCardSchemas(
         cards.push({
             type: 'task-card',
             id: item.taskCard.id,
-            viewModel: buildTaskCardViewModel(item.taskCard),
+            viewModel: buildTaskCardViewModel(item.taskCard, {
+                hiddenSectionLabels: hasRenderedAssistantMessages ? ['Summary'] : [],
+                hideResultSection: hasRenderedAssistantMessages,
+            }),
             placement: 'primary',
         });
     }

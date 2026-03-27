@@ -3,12 +3,18 @@ import type {
     AssistantTurnStep,
     PlanStep,
     TaskCardItem,
+    TaskSession,
     TimelineItemType,
 } from '../../../../types';
 
 export type TaskCardTask = NonNullable<TaskCardItem['tasks']>[number];
 export type TaskPhaseKey = 'plan' | 'thinking' | 'execute' | 'summary';
 export type AssistantThreadItem = Exclude<TimelineItemType, { type: 'user_message' | 'assistant_turn' }>;
+export const TASK_DRAFT_CONFIRMATION_INSTRUCTION = '可直接确认创建，或先输入修改内容后点击“编辑后创建”。';
+export const TASK_DRAFT_CONFIRMATION_INPUT = {
+    placeholder: '输入修改后的任务说明（可选）',
+    submitLabel: '编辑后创建',
+} as const;
 
 export function normalizeText(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -19,6 +25,12 @@ export function normalizeLines(values: unknown[]): string[] {
         .map((value) => normalizeText(value))
         .filter((line) => line.length > 0);
     return Array.from(new Set(lines));
+}
+
+function asObjectArray(value: unknown): Array<Record<string, unknown>> {
+    return Array.isArray(value)
+        ? value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+        : [];
 }
 
 export function normalizeComparableText(value: unknown): string {
@@ -102,6 +114,111 @@ export function setTaskList(card: TaskCardItem, tasks: TaskCardTask[]): void {
 
     card.tasks = tasks;
     card.workflow = inferWorkflow(tasks);
+}
+
+export function syncTaskCardExecutionProfile(card: TaskCardItem, session: TaskSession): void {
+    card.executionProfile = session.executionProfile;
+    card.capabilityPlan = session.capabilityPlan;
+    card.capabilityReview = session.capabilityReview;
+    card.primaryHardness = session.primaryHardness ?? session.executionProfile?.primaryHardness;
+    card.activeHardness = session.activeHardness ?? card.primaryHardness;
+    card.blockingReason = session.blockingReason;
+    card.lastResumeReason = session.lastResumeReason;
+}
+
+export function buildPlannedTaskList(value: unknown): TaskCardTask[] {
+    return asObjectArray(value)
+        .map((task) => ({
+            id: normalizeText(task.id),
+            title: normalizeText(task.title) || normalizeText(task.objective) || 'Task',
+            status: 'pending' as PlanStep['status'],
+            dependencies: normalizeLines(Array.isArray(task.dependencies) ? task.dependencies : []),
+        }))
+        .filter((task) => task.id.length > 0);
+}
+
+export function buildPlanSummaryLines(
+    data: Record<string, unknown>,
+    tasks: TaskCardTask[],
+    summary: unknown,
+): string[] {
+    const deliverableLines = asObjectArray(data.deliverables)
+        .map((deliverable) => {
+            const title = normalizeText(deliverable.title);
+            const path = normalizeText(deliverable.path);
+            const description = normalizeText(deliverable.description);
+            if (path) return `${title || 'Deliverable'}: ${path}`;
+            if (description) return `${title || 'Deliverable'}: ${description}`;
+            return title || '';
+        });
+    const checkpointLines = asObjectArray(data.checkpoints)
+        .map((checkpoint) => {
+            const title = normalizeText(checkpoint.title);
+            const reason = normalizeText(checkpoint.reason);
+            return reason ? `${title || 'Checkpoint'}: ${reason}` : title;
+        });
+    const userActionLines = asObjectArray(data.userActionsRequired)
+        .map((action) => {
+            const title = normalizeText(action.title);
+            const description = normalizeText(action.description);
+            return description ? `${title || 'Action'}: ${description}` : title;
+        });
+    const missingInfoLines = asObjectArray(data.missingInfo)
+        .map((entry) => {
+            const field = normalizeText(entry.field);
+            const question = normalizeText(entry.question);
+            const reason = normalizeText(entry.reason);
+            return question || reason ? `${field || 'Item'}: ${question || reason}` : field;
+        });
+    const capabilityReview = data.capabilityReview && typeof data.capabilityReview === 'object'
+        ? data.capabilityReview as Record<string, unknown>
+        : undefined;
+    const capabilityReviewLine = capabilityReview
+        ? normalizeText(capabilityReview.summary)
+            || (normalizeText(capabilityReview.status) === 'pending'
+                ? 'Generated capability is pending review before execution can resume.'
+                : '')
+        : '';
+
+    return [
+        normalizeText(summary),
+        ...tasks.map((task) => `Task: ${task.title}`),
+        ...deliverableLines,
+        ...checkpointLines,
+        ...userActionLines,
+        ...missingInfoLines,
+        capabilityReviewLine,
+    ];
+}
+
+export function mergeTaskProgressIntoTaskMap(
+    taskById: Map<string, TaskCardTask>,
+    value: unknown,
+): TaskCardTask[] {
+    const taskProgress = asObjectArray(value)
+        .map((entry) => ({
+            id: normalizeText(entry.taskId),
+            title: normalizeText(entry.title),
+            status: toTaskStatus(entry.status),
+            dependencies: normalizeLines(Array.isArray(entry.dependencies) ? entry.dependencies : []),
+        }))
+        .filter((entry) => entry.id.length > 0);
+
+    if (taskProgress.length === 0) {
+        return [];
+    }
+
+    for (const entry of taskProgress) {
+        const existing = taskById.get(entry.id);
+        taskById.set(entry.id, {
+            id: entry.id,
+            title: entry.title || existing?.title || 'Task',
+            status: entry.status,
+            dependencies: entry.dependencies.length > 0 ? entry.dependencies : (existing?.dependencies ?? []),
+        });
+    }
+
+    return Array.from(taskById.values());
 }
 
 export function toTaskStatus(value: unknown): PlanStep['status'] {

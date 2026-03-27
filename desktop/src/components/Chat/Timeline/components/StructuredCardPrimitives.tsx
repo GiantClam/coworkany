@@ -28,6 +28,15 @@ interface StructuredInputRowProps {
     onSubmit: () => void;
 }
 
+interface StructuredButtonRowProps {
+    buttons: Array<{
+        key: string;
+        label: string;
+        disabled?: boolean;
+    }>;
+    onPress: (key: string) => void;
+}
+
 export const StructuredInfoSection: React.FC<StructuredInfoSectionProps> = ({
     label,
     lines,
@@ -108,3 +117,28 @@ export const StructuredInputRow: React.FC<StructuredInputRowProps> = ({
         </button>
     </div>
 );
+
+export const StructuredButtonRow: React.FC<StructuredButtonRowProps> = ({
+    buttons,
+    onPress,
+}) => {
+    if (buttons.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className={styles.structuredButtonRow}>
+            {buttons.map((button) => (
+                <button
+                    key={button.key}
+                    type="button"
+                    className={styles.structuredActionButton}
+                    onClick={() => onPress(button.key)}
+                    disabled={button.disabled}
+                >
+                    {button.label}
+                </button>
+            ))}
+        </div>
+    );
+};

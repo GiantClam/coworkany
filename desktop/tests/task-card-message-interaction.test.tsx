@@ -36,6 +36,34 @@ function getButtonByText(renderer: ReactTestRenderer, label: string) {
 }
 
 describe('TaskCardMessage interactions', () => {
+    test('can transition from hidden task center card to input panel without hook-order crash', async () => {
+        const hiddenItem = makeTaskCard({
+            id: 'task-center-transition',
+            taskId: 'task-center-transition',
+        });
+        const interactiveItem = makeTaskCard({
+            id: 'task-center-transition',
+            taskId: 'task-center-transition',
+            collaboration: {
+                actionId: 'clarification',
+                title: 'Clarification required',
+                description: '请补充一点上下文',
+                blocking: true,
+                questions: [],
+                instructions: [],
+            },
+        });
+
+        const renderer = create(<TaskCardMessage item={hiddenItem} />);
+        await act(async () => {});
+
+        await act(async () => {
+            renderer.update(<TaskCardMessage item={interactiveItem} />);
+        });
+
+        expect(renderer.root.findByType('input')).toBeDefined();
+    });
+
     test('submits input-only draft confirmation text without rendering choice buttons', async () => {
         const submitCalls: Array<{
             taskId?: string;
@@ -162,5 +190,108 @@ describe('TaskCardMessage interactions', () => {
             value: submitCalls[0]?.value ?? '',
         });
         expect(encoded).toBe('__task_draft_edit_create__:改为生成双语周报并保存到 reports/weekly-bilingual.md');
+    });
+
+    test('renders explicit external auth choices instead of a freeform input', async () => {
+        const submitCalls: Array<{
+            taskId?: string;
+            cardId: string;
+            actionId?: string;
+            value: string;
+        }> = [];
+
+        const item = makeTaskCard({
+            id: 'card-auth',
+            taskId: 'task-auth',
+            collaboration: {
+                actionId: 'auth-login',
+                title: 'Login required',
+                description: 'Please login to continue publishing.',
+                blocking: true,
+                questions: [],
+                instructions: ['Complete login in browser.'],
+                choices: [
+                    { label: '打开登录页面', value: '__auth_open_page__:https://x.com/i/flow/login' },
+                    { label: '我已登录，继续执行', value: '继续执行' },
+                ],
+            },
+        });
+
+        const renderer = create(
+            <TaskCardMessage
+                item={item}
+                onTaskCollaborationSubmit={(input) => submitCalls.push(input)}
+            />
+        );
+        await act(async () => {});
+
+        expect(() => renderer.root.findByType('input')).toThrow();
+        const openButton = getButtonByText(renderer, '打开登录页面');
+        const continueButton = getButtonByText(renderer, '我已登录，继续执行');
+        expect(openButton).toBeDefined();
+        expect(continueButton).toBeDefined();
+
+        await act(async () => {
+            continueButton?.props.onClick();
+        });
+
+        expect(submitCalls).toEqual([
+            {
+                taskId: 'task-auth',
+                cardId: 'card-auth',
+                actionId: 'auth-login',
+                value: '继续执行',
+            },
+        ]);
+    });
+
+    test('renders action-only collaboration as a button instead of a freeform input', async () => {
+        const submitCalls: Array<{
+            taskId?: string;
+            cardId: string;
+            actionId?: string;
+            value: string;
+        }> = [];
+
+        const item = makeTaskCard({
+            id: 'card-checkpoint',
+            taskId: 'task-checkpoint',
+            collaboration: {
+                actionId: 'checkpoint-1',
+                title: 'Checkpoint reached',
+                description: 'Review this stage before continuing.',
+                blocking: true,
+                questions: [],
+                instructions: [],
+                action: {
+                    label: 'Continue',
+                },
+            },
+        });
+
+        const renderer = create(
+            <TaskCardMessage
+                item={item}
+                onTaskCollaborationSubmit={(input) => submitCalls.push(input)}
+            />
+        );
+        await act(async () => {});
+
+        expect(() => renderer.root.findByType('input')).toThrow();
+        const continueButton = getButtonByText(renderer, 'Continue');
+        expect(continueButton).toBeDefined();
+
+        await act(async () => {
+            continueButton?.props.onClick();
+        });
+
+        expect(submitCalls).toEqual([
+            {
+                taskId: 'task-checkpoint',
+                cardId: 'card-checkpoint',
+                actionId: 'checkpoint-1',
+                value: 'Continue',
+            },
+        ]);
     });
 });

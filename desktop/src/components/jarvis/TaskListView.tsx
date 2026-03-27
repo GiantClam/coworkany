@@ -154,6 +154,12 @@ function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem 
             lines: [result],
         });
     }
+    if (session.capabilityReview?.status === 'pending' && session.capabilityReview.summary) {
+        sections.push({
+            label: 'Capability review',
+            lines: [session.capabilityReview.summary],
+        });
+    }
     if (sections.length === 0) {
         sections.push({
             label: 'Conversation · Status',
@@ -166,7 +172,7 @@ function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem 
         id: `task-board-${taskId}`,
         taskId,
         title: deriveTitle(session),
-        subtitle: undefined,
+        subtitle: session.capabilityReview?.status === 'pending' ? session.capabilityReview.summary : undefined,
         status: session.status,
         sections,
         result: result ? { summary: result } : undefined,

@@ -101,10 +101,22 @@ describe('browser_upload_file tool', () => {
     });
 
     test('handler returns error when upload fails', async () => {
-        const originalIsConnected = browserService.isConnected;
+        const originalGetConnectionInfo = browserService.getConnectionInfo;
+        const originalConnect = browserService.connect;
         const originalUploadFile = browserService.uploadFile;
 
-        (browserService as any).isConnected = () => true;
+        (browserService as any).getConnectionInfo = () => ({
+            connected: true,
+            isUserProfile: true,
+            mode: 'cdp_user_profile',
+        });
+        (browserService as any).connect = async () => ({
+            browser: null,
+            context: null,
+            page: null,
+            isUserProfile: true,
+            profilePath: '/tmp/profile',
+        });
         (browserService as any).uploadFile = async () => ({
             success: false,
             message: 'File not found',
@@ -118,7 +130,8 @@ describe('browser_upload_file tool', () => {
             );
             expect(result.success).toBe(false);
         } finally {
-            (browserService as any).isConnected = originalIsConnected;
+            (browserService as any).getConnectionInfo = originalGetConnectionInfo;
+            (browserService as any).connect = originalConnect;
             (browserService as any).uploadFile = originalUploadFile;
         }
     });
@@ -215,10 +228,22 @@ describe('browser_ai_action tool', () => {
     });
 
     test('handler returns error when service unavailable', async () => {
-        const originalIsConnected = browserService.isConnected;
+        const originalGetConnectionInfo = browserService.getConnectionInfo;
+        const originalConnect = browserService.connect;
         const originalAiAction = browserService.aiAction;
 
-        (browserService as any).isConnected = () => true;
+        (browserService as any).getConnectionInfo = () => ({
+            connected: true,
+            isUserProfile: true,
+            mode: 'cdp_user_profile',
+        });
+        (browserService as any).connect = async () => ({
+            browser: null,
+            context: null,
+            page: null,
+            isUserProfile: true,
+            profilePath: '/tmp/profile',
+        });
         (browserService as any).aiAction = async () => ({
             success: false,
             error: 'browser-use-service is not available',
@@ -231,7 +256,8 @@ describe('browser_ai_action tool', () => {
             );
             expect(result.success).toBe(false);
         } finally {
-            (browserService as any).isConnected = originalIsConnected;
+            (browserService as any).getConnectionInfo = originalGetConnectionInfo;
+            (browserService as any).connect = originalConnect;
             (browserService as any).aiAction = originalAiAction;
         }
     });

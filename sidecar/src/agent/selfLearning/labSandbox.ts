@@ -125,9 +125,46 @@ export class LabSandbox {
             }
         }
 
-        // 3. Calculate success
-        const passedCount = testResults.filter(r => r.passed).length;
-        const success = passedCount >= testResults.length * 0.7;  // 70% pass rate
+        const validationPolicy = config.validationPolicy ?? {
+            positivePassRateThreshold: 0.9,
+            negativeRejectRateThreshold: 0.95,
+            requireNegativeExamples: config.sideEffectRisk === 'write_external',
+            requireNoUnauthorizedExternalCalls: true,
+            requireReplaySuitability: config.sideEffectRisk === 'write_external',
+        };
+        const unauthorizedExternalCalls = this.detectUnauthorizedExternalCalls(config);
+        const structuralValidationPassed =
+            (!validationPolicy.requireNoUnauthorizedExternalCalls || unauthorizedExternalCalls.length === 0)
+            && depResult.failed.length === 0;
+        const positiveTests = testResults.filter((result) => (result.testCase.expectation ?? 'success') === 'success');
+        const negativeTests = testResults.filter((result) => (result.testCase.expectation ?? 'success') === 'reject');
+        const positivePassed = positiveTests.filter((result) => result.passed).length;
+        const negativeRejected = negativeTests.filter((result) => result.passed).length;
+        const positivePassRate = positiveTests.length > 0 ? positivePassed / positiveTests.length : 1;
+        const negativeRejectRate = negativeTests.length > 0 ? negativeRejected / negativeTests.length : 1;
+        const replaySuitability = this.inferReplaySuitability(config);
+        const replaySuitabilityPassed = !validationPolicy.requireReplaySuitability || (
+            replaySuitability.deterministicEnough
+            && replaySuitability.duplicateRiskHandled
+            && replaySuitability.rollbackOrSafeAbortDefined
+        );
+        const hasRequiredNegativeExamples = !validationPolicy.requireNegativeExamples || negativeTests.length > 0;
+        const success =
+            structuralValidationPassed
+            && positivePassRate >= validationPolicy.positivePassRateThreshold
+            && negativeRejectRate >= validationPolicy.negativeRejectRateThreshold
+            && hasRequiredNegativeExamples
+            && replaySuitabilityPassed;
+
+        if (unauthorizedExternalCalls.length > 0) {
+            discoveredIssues.push(...unauthorizedExternalCalls.map((entry) => `Unauthorized external call pattern detected: ${entry}`));
+        }
+        if (!hasRequiredNegativeExamples) {
+            discoveredIssues.push('Validation did not include the required negative examples for this capability risk tier.');
+        }
+        if (!replaySuitabilityPassed) {
+            discoveredIssues.push('Replay suitability requirements were not fully demonstrated for this capability.');
+        }
 
         return {
             success,
@@ -138,6 +175,14 @@ export class LabSandbox {
             executionTimeMs: Date.now() - startTime,
             finalWorkingCode,
             retryCount,
+            validationSummary: {
+                structuralValidationPassed,
+                noUnauthorizedExternalCalls: unauthorizedExternalCalls.length === 0,
+                positivePassRate,
+                negativeRejectRate,
+                hasNegativeExamples: negativeTests.length > 0,
+                replaySuitability,
+            },
         };
     }
 
@@ -246,24 +291,25 @@ export class LabSandbox {
         result: CodeExecutionResult,
         testCase: TestCase
     ): boolean {
+        const expectation = testCase.expectation ?? 'success';
         // Basic success check
         if (!result.success || result.exitCode !== 0) {
-            return false;
+            return expectation === 'reject';
         }
 
         // Check for explicit success markers
         const output = result.stdout.toLowerCase();
         if (output.includes('success') || output.includes('passed') || output.includes('ok')) {
-            return true;
+            return expectation === 'success';
         }
 
         // Check for explicit failure markers
         if (output.includes('failed') || output.includes('error') || output.includes('exception')) {
-            return false;
+            return expectation === 'reject';
         }
 
         // If no explicit markers and exit code is 0, consider it passed
-        return result.exitCode === 0;
+        return expectation === 'success' ? result.exitCode === 0 : false;
     }
 
     /**
@@ -474,14 +520,26 @@ export class LabSandbox {
      */
     createExperimentConfig(
         knowledge: ProcessedKnowledge,
-        testCases: TestCase[]
+        testCases: TestCase[],
+        options?: {
+            maxValidationAttempts?: number;
+            sideEffectRisk?: 'none' | 'read_only' | 'write_external';
+        },
     ): ExperimentConfig {
         return {
             knowledge,
             testCases,
-            maxRetries: this.config.maxExperimentRetries,
+            maxRetries: Math.max(1, options?.maxValidationAttempts ?? this.config.maxExperimentRetries),
             timeoutMs: 30000,
             isolationLevel: this.config.experimentIsolation,
+            sideEffectRisk: options?.sideEffectRisk ?? 'none',
+            validationPolicy: {
+                positivePassRateThreshold: 0.9,
+                negativeRejectRateThreshold: 0.95,
+                requireNegativeExamples: (options?.sideEffectRisk ?? 'none') === 'write_external',
+                requireNoUnauthorizedExternalCalls: true,
+                requireReplaySuitability: (options?.sideEffectRisk ?? 'none') === 'write_external',
+            },
         };
     }
 
@@ -498,6 +556,14 @@ export class LabSandbox {
                 name: 'Code template syntax check',
                 input: knowledge.codeTemplate,
                 expectedBehavior: 'Code parses without syntax errors',
+                expectation: 'success',
+            });
+            testCases.push({
+                id: crypto.randomUUID(),
+                name: 'Code template invalid input rejection',
+                input: `${knowledge.codeTemplate}\nthis is definitely invalid syntax ###`,
+                expectedBehavior: 'Invalid template input should be rejected',
+                expectation: 'reject',
             });
         }
 
@@ -508,6 +574,7 @@ export class LabSandbox {
                 name: 'First step execution',
                 input: knowledge.steps[0],
                 expectedBehavior: 'First step completes',
+                expectation: 'success',
             });
         }
 
@@ -523,10 +590,66 @@ export class LabSandbox {
                 name: `Import ${dep}`,
                 input: importCode,
                 expectedBehavior: `${dep} can be imported`,
+                expectation: 'success',
             });
         }
 
+        testCases.push({
+            id: crypto.randomUUID(),
+            name: 'Reject missing dependency import',
+            input: `import definitely_missing_capability_dependency\nprint('should not succeed')`,
+            expectedBehavior: 'Missing dependency should be rejected',
+            expectation: 'reject',
+        });
+
         return testCases;
+    }
+
+    private detectUnauthorizedExternalCalls(config: ExperimentConfig): string[] {
+        const suspiciousPatterns = [
+            /https?:\/\//i,
+            /\bfetch\s*\(/i,
+            /\baxios\./i,
+            /\brequests\.(get|post|put|delete)\b/i,
+            /\bcurl\s+/i,
+            /\bbrowser_(navigate|click|fill|ai_action)\b/i,
+        ];
+        const candidates = config.testCases.map((testCase) => testCase.validationScript || testCase.input);
+        return suspiciousPatterns.flatMap((pattern) =>
+            candidates.some((candidate) => pattern.test(candidate))
+                ? [pattern.source]
+                : []
+        );
+    }
+
+    private inferReplaySuitability(config: ExperimentConfig): {
+        deterministicEnough: boolean;
+        duplicateRiskHandled: boolean;
+        rollbackOrSafeAbortDefined: boolean;
+    } {
+        if (config.sideEffectRisk !== 'write_external') {
+            return {
+                deterministicEnough: true,
+                duplicateRiskHandled: true,
+                rollbackOrSafeAbortDefined: true,
+            };
+        }
+
+        const evidenceText = [
+            config.knowledge.summary,
+            config.knowledge.detailedContent,
+            config.knowledge.codeTemplate,
+            ...(config.knowledge.steps ?? []),
+        ]
+            .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            .join('\n')
+            .toLowerCase();
+
+        return {
+            deterministicEnough: Boolean(config.knowledge.steps?.length || config.knowledge.codeTemplate),
+            duplicateRiskHandled: /(idempot|duplicate|already|草稿|查重|去重|重复发布|exists)/i.test(evidenceText),
+            rollbackOrSafeAbortDefined: /(rollback|safe abort|abort|cancel|撤回|回滚|删除草稿|停止发布)/i.test(evidenceText),
+        };
     }
 
     /**

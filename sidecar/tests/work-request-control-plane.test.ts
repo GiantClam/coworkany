@@ -177,6 +177,12 @@ describe('work request control plane', () => {
         expect(analyzed.goalFrame).toMatchObject({
             taskCategory: 'research',
         });
+        expect(analyzed.executionProfile).toMatchObject({
+            primaryHardness: 'multi_step',
+            interactionMode: 'passive_status',
+            executionShape: 'staged',
+        });
+        expect(analyzed.executionProfile?.requiredCapabilities).toContain('workspace_write');
         expect(analyzed.sessionIsolationPolicy).toMatchObject({
             followUpScope: 'same_task_only',
             allowWorkspaceOverride: false,
@@ -294,7 +300,7 @@ describe('work request control plane', () => {
         )).toBe(false);
         expect(analyzed.userActionsRequired?.some((action) =>
             action.kind === 'external_auth'
-        )).toBe(true);
+        )).toBe(false);
         expect(analyzed.userActionsRequired?.some((action) =>
             action.kind === 'external_auth' && action.blocking
         )).toBe(false);
@@ -828,12 +834,16 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[0]?.preferredTools?.some((tool) => tool.startsWith('browser_'))).toBe(false);
         expect(analyzed.tasks[1]?.preferredTools?.some((tool) => tool.startsWith('browser_'))).toBe(true);
         expect(analyzed.hitlPolicy).toMatchObject({
-            riskTier: 'high',
+            riskTier: 'medium',
             requiresPlanConfirmation: false,
         });
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan' && action.blocking)).toBe(false);
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(true);
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth' && action.blocking)).toBe(true);
+        expect(analyzed.userActionsRequired).toEqual([]);
+        expect(analyzed.executionProfile).toMatchObject({
+            primaryHardness: 'high_risk',
+            interactionMode: 'passive_status',
+            blockingRisk: 'none',
+        });
         const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
             query.kind === 'domain_research' && query.source === 'web' && query.required
         ) ?? [];
@@ -871,7 +881,7 @@ describe('work request control plane', () => {
         expect(analyzed.tasks[1]?.objective).toContain('发布到 X 上');
         expect(analyzed.schedule?.stages).toHaveLength(2);
         expect(analyzed.userActionsRequired?.some((action) => action.kind === 'confirm_plan')).toBe(false);
-        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth' && action.blocking)).toBe(false);
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'external_auth')).toBe(false);
     });
 
     test('creates blocking user action requests for login-dependent tasks', () => {
@@ -889,7 +899,78 @@ describe('work request control plane', () => {
         expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'review' && checkpoint.blocking)).toBe(false);
         expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'manual_action' && checkpoint.blocking)).toBe(true);
         expect(analyzed.defaultingPolicy?.checkpointStrategy).toBe('manual_action');
+        expect(analyzed.executionProfile).toMatchObject({
+            primaryHardness: 'externally_blocked',
+            blockingRisk: 'auth',
+            interactionMode: 'action_first',
+        });
+        expect(analyzed.executionProfile?.requiredCapabilities).toEqual(expect.arrayContaining([
+            'browser_interaction',
+            'external_auth',
+            'human_review',
+        ]));
         expect(analyzed.uncertaintyRegistry?.some((item) => item.topic === 'manual_prerequisite' && item.status === 'inferred')).toBe(true);
+    });
+
+    test('freezes xiaohongshu direct publish as a side-effect browser task without premature user action', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索今天 minimax 的股价，分析走势，并发送到 xiaohongshu 上',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.publishIntent).toMatchObject({
+            action: 'publish_social_post',
+            platform: 'xiaohongshu',
+            executionMode: 'direct_publish',
+            requiresSideEffect: true,
+        });
+        expect(analyzed.executionProfile).toMatchObject({
+            primaryHardness: 'high_risk',
+            interactionMode: 'passive_status',
+            blockingRisk: 'none',
+            executionShape: 'staged',
+        });
+        expect(analyzed.executionProfile?.requiredCapabilities).toEqual(expect.arrayContaining([
+            'browser_interaction',
+            'external_auth',
+        ]));
+        expect(analyzed.tasks[0]?.preferredTools).toEqual(expect.arrayContaining([
+            'browser_connect',
+            'browser_ai_action',
+            'xiaohongshu_post',
+        ]));
+        expect(analyzed.tasks[0]?.executionRequirements).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                kind: 'tool_evidence',
+                capability: 'browser_interaction',
+                required: true,
+            }),
+        ]));
+        expect(analyzed.userActionsRequired?.some((action) => action.blocking)).toBe(false);
+        expect(analyzed.checkpoints?.some((checkpoint) => checkpoint.kind === 'manual_action' && checkpoint.blocking)).toBe(false);
+    });
+
+    test('marks wechat official account publish as a capability-acquisition task instead of user clarification', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '把上述信息整理后直接发到微信公众号',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.publishIntent).toMatchObject({
+            action: 'publish_social_post',
+            platform: 'wechat_official',
+            executionMode: 'direct_publish',
+            requiresSideEffect: true,
+        });
+        expect(analyzed.capabilityPlan).toMatchObject({
+            missingCapability: 'new_runtime_tool_needed',
+            learningRequired: true,
+            learningScope: 'runtime_tool',
+            sideEffectRisk: 'write_external',
+            userAssistRequired: false,
+        });
+        expect(analyzed.capabilityPlan?.boundedLearningBudget.complexityTier).toBe('complex');
+        expect(analyzed.userActionsRequired?.some((action) => action.kind === 'clarify_input')).toBe(false);
     });
 
     test('reduces raw execution output into separate ui and tts payloads', () => {

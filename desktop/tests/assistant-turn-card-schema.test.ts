@@ -137,4 +137,40 @@ describe('buildAssistantTurnCardSchemas', () => {
             },
         });
     });
+
+    test('suppresses duplicate summary and result blocks when assistant markdown response is present', () => {
+        const turn = makeAssistantTurn({
+            messages: ['## Final Answer\n\n- item 1\n- item 2'],
+            taskCard: makeTaskCard({
+                id: 'task-card-duplicate-content',
+                status: 'finished',
+                sections: [
+                    { label: 'Summary', lines: ['## Final Answer', '- item 1', '- item 2'] },
+                    { label: 'Plan', lines: ['collect data', 'publish result'] },
+                ],
+                result: {
+                    summary: '## Final Answer\n\n- item 1\n- item 2',
+                    files: ['reports/final.md'],
+                },
+            }),
+        });
+
+        const cards = buildAssistantTurnCardSchemas(turn);
+        const primaryTaskCard = cards.find((card) => card.type === 'task-card' && card.placement === 'primary');
+
+        expect(primaryTaskCard).toMatchObject({
+            type: 'task-card',
+            placement: 'primary',
+            viewModel: {
+                id: 'task-card-duplicate-content',
+                sections: [
+                    {
+                        label: 'Plan',
+                        lines: ['collect data', 'publish result'],
+                    },
+                ],
+                resultSection: undefined,
+            },
+        });
+    });
 });

@@ -68,6 +68,33 @@ Phase 5
 - Planner contract should remain serializable and persistence-safe.
 - Do not require users to specify deliverables/checkpoints up front; infer/default them where safe.
 
+## 2026-03-27 Control-Plane Decomposition Design
+
+### Goal
+Refactor the work-request control plane so deterministic policy decisions stay in a small kernel while task hardness classification and skill/workflow selection become explicit, composable layers.
+
+### Current Phase
+Implementation slice 1 complete
+
+### Phases
+- Discovery and boundary mapping: complete
+- Design proposal and trade-off review: complete
+- Spec writing and review: complete (conversation-approved design + plan file)
+- Implementation planning: complete
+- Implementation slice 1 (execution profile + desktop hardness view): complete
+- Implementation slice 2 (dedicated sidecar policy resolver): complete
+- Follow-up migration of deeper event-level policy and active-hardness emission: pending
+
+### Key Questions
+1. Which decisions must remain deterministic policy-kernel responsibilities?
+2. Which analyzer heuristics should move behind hardness/capability classification?
+3. What is the smallest first implementation slice that reduces rule sprawl without destabilizing runtime behavior?
+
+### Working Decisions
+- Keep permissions, blocking collaboration, irreversible side effects, and checkpoint state transitions in the deterministic kernel.
+- Treat `hardness` and `requiredCapabilities` as planner outputs, not prompt-only conventions.
+- Treat `preferredSkills` and local workflows as execution-policy inputs, not flow-control authorities.
+
 ## 2026-03-21 Deep Research Control Plane Hardening
 
 ### Goal

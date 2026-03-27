@@ -101,6 +101,7 @@ export interface TestCase {
     input: string;
     expectedBehavior: string;
     validationScript?: string;
+    expectation?: 'success' | 'reject';
 }
 
 export interface LearningOutcome {
@@ -121,6 +122,14 @@ export interface ExperimentConfig {
     maxRetries: number;
     timeoutMs: number;
     isolationLevel: 'full' | 'shared_deps';
+    validationPolicy?: {
+        positivePassRateThreshold: number;
+        negativeRejectRateThreshold: number;
+        requireNegativeExamples: boolean;
+        requireNoUnauthorizedExternalCalls: boolean;
+        requireReplaySuitability: boolean;
+    };
+    sideEffectRisk?: 'none' | 'read_only' | 'write_external';
 }
 
 export interface TestResult {
@@ -140,6 +149,18 @@ export interface ExperimentResult {
     executionTimeMs: number;
     finalWorkingCode?: string;
     retryCount: number;
+    validationSummary: {
+        structuralValidationPassed: boolean;
+        noUnauthorizedExternalCalls: boolean;
+        positivePassRate: number;
+        negativeRejectRate: number;
+        hasNegativeExamples: boolean;
+        replaySuitability: {
+            deterministicEnough: boolean;
+            duplicateRiskHandled: boolean;
+            rollbackOrSafeAbortDefined: boolean;
+        };
+    };
 }
 
 // ============================================================================

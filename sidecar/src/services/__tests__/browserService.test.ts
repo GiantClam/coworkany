@@ -559,6 +559,72 @@ describe('BrowserService', () => {
         await service.disconnect();
         expect(true).toBe(true);
     });
+
+    test('connect synchronously attaches browser-use to a shared CDP session', async () => {
+        const service = new BrowserService();
+        const playwrightBackend = (service as any).playwrightBackend;
+        const browserUseBackend = (service as any).browserUseBackend;
+
+        const connectCalls: string[] = [];
+        let attachedCdpUrl: string | null = null;
+
+        playwrightBackend.connect = mock(async () => ({
+            browser: null,
+            context: null,
+            page: null,
+            isUserProfile: true,
+            profilePath: '/tmp/profile',
+        }));
+        playwrightBackend.getActiveCdpPort = () => 9222;
+        browserUseBackend.isServiceAvailable = mock(async () => true);
+        browserUseBackend.isConnectedToCdp = (cdpUrl: string) => attachedCdpUrl === cdpUrl;
+        browserUseBackend.connect = mock(async (options: { cdpUrl?: string }) => {
+            connectCalls.push(options.cdpUrl || '');
+            attachedCdpUrl = options.cdpUrl || null;
+            return {
+                browser: null,
+                context: null,
+                page: null,
+                isUserProfile: true,
+                profilePath: '/tmp/profile',
+            };
+        });
+
+        await service.connect({});
+
+        expect(connectCalls).toEqual(['http://localhost:9222']);
+        expect(browserUseBackend.isConnectedToCdp('http://localhost:9222')).toBe(true);
+    });
+
+    test('getSmartModeStatus only reports available after browser-use attaches to shared CDP', async () => {
+        const service = new BrowserService();
+        const playwrightBackend = (service as any).playwrightBackend;
+        const browserUseBackend = (service as any).browserUseBackend;
+
+        let attachedCdpUrl: string | null = null;
+
+        playwrightBackend.getActiveCdpPort = () => 9222;
+        browserUseBackend.isServiceAvailable = mock(async () => true);
+        browserUseBackend.isConnectedToCdp = (cdpUrl: string) => attachedCdpUrl === cdpUrl;
+        browserUseBackend.connect = mock(async (options: { cdpUrl?: string }) => {
+            attachedCdpUrl = options.cdpUrl || null;
+            return {
+                browser: null,
+                context: null,
+                page: null,
+                isUserProfile: true,
+                profilePath: '/tmp/profile',
+            };
+        });
+
+        const status = await service.getSmartModeStatus();
+
+        expect(status).toEqual({
+            available: true,
+            reason: undefined,
+            sharedCdpUrl: 'http://localhost:9222',
+        });
+    });
 });
 
 // ============================================================================

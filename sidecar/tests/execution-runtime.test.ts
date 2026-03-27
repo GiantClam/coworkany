@@ -271,6 +271,170 @@ describe('execution runtime', () => {
         expect(failures[0]?.error).toBe('Task cancelled by user');
     });
 
+    test('continuePreparedAgentFlow stops cleanly when capability replay is blocked by readiness checks', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.capabilityPlan = {
+            missingCapability: 'new_runtime_tool_needed',
+            learningRequired: true,
+            canProceedWithoutLearning: false,
+            learningScope: 'runtime_tool',
+            replayStrategy: 'resume_from_checkpoint',
+            sideEffectRisk: 'write_external',
+            userAssistRequired: false,
+            userAssistReason: 'none',
+            boundedLearningBudget: {
+                complexityTier: 'moderate',
+                maxRounds: 2,
+                maxResearchTimeMs: 60000,
+                maxValidationAttempts: 2,
+            },
+            reasons: ['Need generated capability.'],
+        };
+
+        let loopCalls = 0;
+        const failures: Array<{ error: string; errorCode: string }> = [];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-capability-blocked',
+            userMessage: 'publish now',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            acquireCapabilityForTask: async () => ({
+                outcome: 'blocked',
+                summary: 'Reconnect the live browser session before replay.',
+                blockerType: 'external_auth',
+            }),
+            runAgentLoop: async () => {
+                loopCalls += 1;
+                return {
+                    artifactsCreated: ['/tmp/out.html'],
+                    toolsUsed: ['write_to_file'],
+                };
+            },
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => failures.push({
+                    error: payload.error,
+                    errorCode: payload.errorCode || '',
+                }),
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }) as any);
+
+        expect(loopCalls).toBe(0);
+        expect(result.success).toBe(false);
+        expect(result.summary).toBe('Reconnect the live browser session before replay.');
+        expect(failures).toHaveLength(0);
+    });
+
+    test('continuePreparedAgentFlow continues after capability acquisition succeeds', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.capabilityPlan = {
+            missingCapability: 'new_runtime_tool_needed',
+            learningRequired: true,
+            canProceedWithoutLearning: false,
+            learningScope: 'runtime_tool',
+            replayStrategy: 'resume_from_checkpoint',
+            sideEffectRisk: 'read_only',
+            userAssistRequired: false,
+            userAssistReason: 'none',
+            boundedLearningBudget: {
+                complexityTier: 'moderate',
+                maxRounds: 2,
+                maxResearchTimeMs: 60000,
+                maxValidationAttempts: 2,
+            },
+            reasons: ['Missing runtime capability.'],
+        };
+
+        let acquisitionCalls = 0;
+        let loopCalls = 0;
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-capability-success',
+            userMessage: 'Do the task',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            acquireCapabilityForTask: async () => {
+                acquisitionCalls += 1;
+                return {
+                    outcome: 'learned',
+                    summary: 'Acquired capability.',
+                };
+            },
+            runAgentLoop: async () => {
+                loopCalls += 1;
+                return {
+                    artifactsCreated: ['/tmp/out.html'],
+                    toolsUsed: ['write_to_file'],
+                };
+            },
+        }));
+
+        expect(acquisitionCalls).toBe(1);
+        expect(loopCalls).toBe(1);
+        expect(prepared.frozenWorkRequest.capabilityPlan.learningRequired).toBe(false);
+        expect(result.success).toBe(true);
+    });
+
+    test('continuePreparedAgentFlow stops before the agent loop when capability acquisition requires review', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.capabilityPlan = {
+            missingCapability: 'new_runtime_tool_needed',
+            learningRequired: true,
+            canProceedWithoutLearning: false,
+            learningScope: 'runtime_tool',
+            replayStrategy: 'resume_from_checkpoint',
+            sideEffectRisk: 'write_external',
+            userAssistRequired: false,
+            userAssistReason: 'none',
+            boundedLearningBudget: {
+                complexityTier: 'complex',
+                maxRounds: 4,
+                maxResearchTimeMs: 180000,
+                maxValidationAttempts: 3,
+            },
+            reasons: ['Missing external publish capability.'],
+        };
+
+        let loopCalls = 0;
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-capability-review',
+            userMessage: 'Publish this',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            acquireCapabilityForTask: async () => ({
+                outcome: 'review_required',
+                summary: 'Generated external-write capability is ready for review before live use.',
+            }),
+            runAgentLoop: async () => {
+                loopCalls += 1;
+                return {
+                    artifactsCreated: ['/tmp/out.html'],
+                    toolsUsed: ['write_to_file'],
+                };
+            },
+        }));
+
+        expect(loopCalls).toBe(0);
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('ready for review');
+    });
+
     test('executePreparedTaskFlow chooses autonomous execution when allowed and no explicit skills are selected', async () => {
         let autonomousConfigured = false;
         let agentLoopCalled = false;
@@ -533,6 +697,48 @@ describe('execution runtime', () => {
         expect(result.error).toContain('requested additional user approval/execution');
         expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
         expect(failures[0]?.suggestion).toContain('Only request user action');
+    });
+
+    test('continuePreparedAgentFlow fails when final response asks unplanned clarification questions', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-unplanned-clarification',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-unplanned-clarification',
+                conversationReader: {
+                    buildConversationText: () =>
+                        '你说的 MiniMax 是指国内 AI 公司“MiniMax（稀宇科技）”吗？小红书发布是要直接发正式内容，还是先给你看草稿再发？',
+                    getLatestAssistantResponseText: () =>
+                        '你说的 MiniMax 是指国内 AI 公司“MiniMax（稀宇科技）”吗？小红书发布是要直接发正式内容，还是先给你看草稿再发？',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('requested additional user approval/execution');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
     });
 
     test('continuePreparedAgentFlow falls back to contract tool hints when protocol assessment is unavailable', async () => {
@@ -1051,6 +1257,61 @@ describe('execution runtime', () => {
         expect(result.success).toBe(true);
         expect(result.summary).toContain('来源链接');
         expect(result.summary).toContain('https://www.cnn.com/2026/03/24/business/video/openai-sora-gold-live-032404pseg2-cnni-business-fast');
+    });
+
+    test('continuePreparedAgentFlow accepts xiaohongshu_post as browser publish evidence', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '把这段内容发送到 xiaohongshu 上';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+        prepared.frozenWorkRequest.tasks[0].objective = prepared.executionQuery;
+        prepared.frozenWorkRequest.publishIntent = {
+            action: 'publish_social_post',
+            platform: 'xiaohongshu',
+            executionMode: 'direct_publish',
+            requiresSideEffect: true,
+        };
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'tool-evidence-browser',
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'Must publish via browser-backed tool evidence.',
+        }];
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['xiaohongshu_post'];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-xiaohongshu-evidence',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['xiaohongshu_post'],
+            }),
+            assessExecutionProtocol: async () => ({
+                asksForAdditionalUserAction: false,
+                objectiveRefusal: false,
+                objectiveSatisfied: true,
+                requestedEvidence: 'standard',
+                deliveredEvidence: 'grounded',
+                completionClaim: 'present',
+                verificationEvidence: 'present',
+                confidence: 0.94,
+            }),
+            session: new ExecutionSession({
+                taskId: 'task-xiaohongshu-evidence',
+                conversationReader: {
+                    buildConversationText: () => '已完成小红书发布，并附上发布结果。',
+                    getLatestAssistantResponseText: () => '已完成小红书发布，并附上发布结果。',
+                },
+            }),
+        }));
+
+        expect(result.success).toBe(true);
     });
 
     test('continuePreparedAgentFlow blocks scheduled stock-analysis output that asks for extra user confirmation', async () => {

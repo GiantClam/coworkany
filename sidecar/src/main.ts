@@ -19,6 +19,7 @@
 // ============================================================================
 import * as fs from 'fs';
 import * as path from 'path';
+import { z } from 'zod';
 
 // ---------- Runtime log file setup ----------
 // Logs are written to .coworkany/logs/sidecar-<date>.log (rotated daily)
@@ -216,12 +217,16 @@ import {
 } from './orchestration/workRequestSnapshot';
 import { WorkRequestStore } from './orchestration/workRequestStore';
 import {
+    type CapabilityPlan,
+    type CapabilityReviewState,
     type CheckpointContract,
     type DeliverableContract,
+    type ExecutionProfile,
     type FrozenWorkRequest,
     type IntentRouting,
     type UserActionRequest,
 } from './orchestration/workRequestSchema';
+import { deriveActiveHardness, deriveBlockingReason } from './orchestration/workRequestPolicy';
 import {
     appendPlanningProgressEntry,
     shouldUsePlanningFiles,
@@ -246,6 +251,7 @@ import {
     markWorkRequestExecutionSuspended,
     prepareWorkRequestContext,
     prepareExecutionContextFromFrozen,
+    type CapabilityPlanClassifierInput,
     type PreparedWorkRequestContext,
 } from './orchestration/workRequestRuntime';
 import { getSelfLearningPrompt } from './data/prompts/selfLearning';
@@ -520,6 +526,8 @@ type AnthropicStreamOptions = {
     systemPrompt?: string | { skills: string };  // Support both legacy string and structured format for caching
     tools?: any[];
     silent?: boolean;
+    thinkingMode?: 'off' | 'auto' | 'on';
+    thinkingBudgetTokens?: number;
 };
 
 type AnthropicMessage = {
@@ -592,7 +600,25 @@ const createTaskCheckpointReachedEvent = taskEventBus.checkpointReached.bind(tas
 const createTaskUserActionRequiredEvent = taskEventBus.userActionRequired.bind(taskEventBus);
 const artifactTelemetryPath = path.join(process.cwd(), '.coworkany', 'self-learning', 'artifact-contract-telemetry.jsonl');
 
-function buildTaskPlanReadyPayload(frozenWorkRequest: FrozenWorkRequest): TaskPlanReadyPayload {
+function toCapabilityReviewState(
+    review: TaskSessionConfig['pendingCapabilityReview'] | undefined,
+): CapabilityReviewState | undefined {
+    if (!review) {
+        return undefined;
+    }
+
+    return {
+        status: review.approved ? 'approved' : 'pending',
+        summary: review.summary,
+        learnedEntityId: review.learnedEntityId,
+        updatedAt: review.updatedAt,
+    };
+}
+
+function buildTaskPlanReadyPayload(
+    frozenWorkRequest: FrozenWorkRequest,
+    pendingCapabilityReview?: TaskSessionConfig['pendingCapabilityReview'],
+): TaskPlanReadyPayload {
     return {
         summary: buildWorkRequestPlanSummary(frozenWorkRequest),
         mode: frozenWorkRequest.mode,
@@ -608,6 +634,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: FrozenWorkRequest): TaskPl
         deliverables: frozenWorkRequest.deliverables ?? [],
         checkpoints: frozenWorkRequest.checkpoints ?? [],
         userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
+        executionProfile: frozenWorkRequest.executionProfile,
+        capabilityPlan: frozenWorkRequest.capabilityPlan,
+        capabilityReview: toCapabilityReviewState(pendingCapabilityReview),
         hitlPolicy: frozenWorkRequest.hitlPolicy,
         runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
         sessionIsolationPolicy: frozenWorkRequest.sessionIsolationPolicy,
@@ -617,6 +646,344 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: FrozenWorkRequest): TaskPl
         defaultingPolicy: frozenWorkRequest.defaultingPolicy,
         resumeStrategy: frozenWorkRequest.resumeStrategy,
     };
+}
+
+const capabilityPlanStructuredSchema = z.object({
+    missingCapability: z.enum([
+        'none',
+        'existing_skill_gap',
+        'existing_tool_gap',
+        'new_runtime_tool_needed',
+        'workflow_gap',
+        'external_blocker',
+    ]),
+    learningRequired: z.boolean(),
+    canProceedWithoutLearning: z.boolean(),
+    learningScope: z.enum(['none', 'knowledge', 'skill', 'runtime_tool']),
+    replayStrategy: z.enum(['none', 'resume_from_checkpoint', 'restart_execution']),
+    sideEffectRisk: z.enum(['none', 'read_only', 'write_external']),
+    userAssistRequired: z.boolean(),
+    userAssistReason: z.enum(['none', 'auth', 'captcha', 'permission', 'policy', 'ambiguous_goal']),
+    boundedLearningBudget: z.object({
+        complexityTier: z.enum(['simple', 'moderate', 'complex']),
+        maxRounds: z.number().int().positive(),
+        maxResearchTimeMs: z.number().int().nonnegative(),
+        maxValidationAttempts: z.number().int().positive(),
+    }),
+    reasons: z.array(z.string()),
+});
+
+const capabilityPlanClassifierTool = {
+    name: 'emit_capability_plan',
+    description: 'Emit the final structured capability plan for the task. Use this exactly once after deciding whether the task has an internal capability gap or a real external blocker.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            missingCapability: {
+                type: 'string',
+                enum: ['none', 'existing_skill_gap', 'existing_tool_gap', 'new_runtime_tool_needed', 'workflow_gap', 'external_blocker'],
+            },
+            learningRequired: { type: 'boolean' },
+            canProceedWithoutLearning: { type: 'boolean' },
+            learningScope: { type: 'string', enum: ['none', 'knowledge', 'skill', 'runtime_tool'] },
+            replayStrategy: { type: 'string', enum: ['none', 'resume_from_checkpoint', 'restart_execution'] },
+            sideEffectRisk: { type: 'string', enum: ['none', 'read_only', 'write_external'] },
+            userAssistRequired: { type: 'boolean' },
+            userAssistReason: { type: 'string', enum: ['none', 'auth', 'captcha', 'permission', 'policy', 'ambiguous_goal'] },
+            boundedLearningBudget: {
+                type: 'object',
+                properties: {
+                    complexityTier: { type: 'string', enum: ['simple', 'moderate', 'complex'] },
+                    maxRounds: { type: 'number' },
+                    maxResearchTimeMs: { type: 'number' },
+                    maxValidationAttempts: { type: 'number' },
+                },
+                required: ['complexityTier', 'maxRounds', 'maxResearchTimeMs', 'maxValidationAttempts'],
+            },
+            reasons: {
+                type: 'array',
+                items: { type: 'string' },
+            },
+        },
+        required: [
+            'missingCapability',
+            'learningRequired',
+            'canProceedWithoutLearning',
+            'learningScope',
+            'replayStrategy',
+            'sideEffectRisk',
+            'userAssistRequired',
+            'userAssistReason',
+            'boundedLearningBudget',
+            'reasons',
+        ],
+    },
+    strict: true,
+    input_examples: [{
+        missingCapability: 'new_runtime_tool_needed',
+        learningRequired: true,
+        canProceedWithoutLearning: false,
+        learningScope: 'runtime_tool',
+        replayStrategy: 'resume_from_checkpoint',
+        sideEffectRisk: 'write_external',
+        userAssistRequired: false,
+        userAssistReason: 'none',
+        boundedLearningBudget: {
+            complexityTier: 'complex',
+            maxRounds: 4,
+            maxResearchTimeMs: 180000,
+            maxValidationAttempts: 3,
+        },
+        reasons: ['The task requires a validated external publishing capability that Coworkany does not currently have.'],
+    }],
+    effects: [],
+};
+
+function coerceCapabilityPlan(value: unknown): CapabilityPlan | undefined {
+    const parsed = capabilityPlanStructuredSchema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+}
+
+function extractCapabilityPlanFromLlmMessage(message: AnthropicMessage): CapabilityPlan | undefined {
+    if (!Array.isArray(message.content)) {
+        return undefined;
+    }
+
+    const toolUse = message.content.find((block) =>
+        typeof block === 'object'
+        && block
+        && (block as { type?: unknown }).type === 'tool_use'
+        && (block as { name?: unknown }).name === capabilityPlanClassifierTool.name
+    ) as { input?: unknown } | undefined;
+
+    return coerceCapabilityPlan(toolUse?.input);
+}
+
+async function classifyCapabilityPlanWithStructuredOutput(
+    input: CapabilityPlanClassifierInput,
+): Promise<CapabilityPlan | undefined> {
+    try {
+        const providerConfig = resolveProviderConfig(loadLlmConfig(input.workspacePath), {
+            maxTokens: 1200,
+        } as AnthropicStreamOptions);
+        if (!providerConfig.baseUrl || !providerConfig.apiKey) {
+            return undefined;
+        }
+
+        const deterministicPlan = input.analyzed.capabilityPlan;
+        if (!deterministicPlan) {
+            return undefined;
+        }
+
+        const response = await streamLlmResponse(
+            `capability_plan_${randomUUID().slice(0, 8)}`,
+            [{
+                role: 'user',
+                content: [
+                    `Task source text:\n${input.sourceText}`,
+                    input.followUpContext?.baseObjective ? `\nBase objective:\n${input.followUpContext.baseObjective}` : '',
+                    input.analyzed.publishIntent ? `\nPublish intent:\n${JSON.stringify(input.analyzed.publishIntent, null, 2)}` : '',
+                    input.analyzed.executionProfile ? `\nExecution profile draft:\n${JSON.stringify(input.analyzed.executionProfile, null, 2)}` : '',
+                    `\nDeterministic capability plan draft:\n${JSON.stringify(deterministicPlan, null, 2)}`,
+                    '\nDecide whether this is an internal capability gap or a true external blocker. Call emit_capability_plan exactly once with the final structured plan. Preserve dynamic budget fields and keep userAssistRequired=false for internal-only capability acquisition.',
+                ].filter(Boolean).join('\n'),
+            }],
+            {
+                modelId: providerConfig.modelId,
+                maxTokens: 1200,
+                silent: true,
+                thinkingMode: 'on',
+                thinkingBudgetTokens: 4000,
+                systemPrompt: 'You are a strict capability-routing classifier. Always emit the final capabilityPlan via the provided tool. Do not answer in free text.',
+                tools: [capabilityPlanClassifierTool],
+            },
+            providerConfig,
+        );
+
+        return extractCapabilityPlanFromLlmMessage(response) ?? deterministicPlan;
+    } catch (error) {
+        console.warn('[CapabilityPlanClassifier] Structured classification failed, falling back to deterministic plan:', error);
+        return undefined;
+    }
+}
+
+async function verifyCapabilityReplayReadiness(input: {
+    taskId: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+}): Promise<{
+    ready: boolean;
+    summary: string;
+    blockerType?: 'external_auth' | 'manual_step';
+}> {
+    const frozen = input.preparedWorkRequest.frozenWorkRequest;
+    if (frozen.capabilityPlan?.sideEffectRisk !== 'write_external' || frozen.publishIntent?.requiresSideEffect !== true) {
+        return { ready: true, summary: 'No live external-write replay readiness check required.' };
+    }
+
+    const requiresBrowser = frozen.executionProfile?.requiredCapabilities.includes('browser_interaction') === true;
+    if (!requiresBrowser) {
+        return { ready: true, summary: 'Capability replay does not require browser readiness checks.' };
+    }
+
+    const browserService = BrowserService.getInstance();
+    const connectionInfo = browserService.getConnectionInfo();
+    if (!connectionInfo.connected || !connectionInfo.isUserProfile) {
+        return {
+            ready: false,
+            blockerType: 'external_auth',
+            summary: 'Capability replay requires a connected Chrome user-profile session before live execution can resume.',
+        };
+    }
+
+    const smartModeStatus = await browserService.getSmartModeStatus();
+    if (!smartModeStatus.available) {
+        return {
+            ready: false,
+            blockerType: 'manual_step',
+            summary: smartModeStatus.reason
+                ? `Capability replay cannot resume until browser smart mode is ready: ${smartModeStatus.reason}`
+                : 'Capability replay cannot resume until browser smart mode is ready.',
+        };
+    }
+
+    const targetUrl = (() => {
+        switch (frozen.publishIntent?.platform) {
+            case 'xiaohongshu':
+                return 'https://creator.xiaohongshu.com/publish/publish';
+            case 'wechat_official':
+                return 'https://mp.weixin.qq.com/';
+            case 'x':
+                return 'https://x.com/compose/post';
+            case 'facebook':
+                return 'https://www.facebook.com/';
+            case 'instagram':
+                return 'https://www.instagram.com/';
+            case 'linkedin':
+                return 'https://www.linkedin.com/feed/';
+            case 'reddit':
+                return 'https://www.reddit.com/submit';
+            default:
+                return undefined;
+        }
+    })();
+
+    if (!targetUrl) {
+        return {
+            ready: true,
+            summary: 'Capability replay passed the generic browser readiness checks.',
+        };
+    }
+
+    try {
+        const navigation = await browserService.navigate(targetUrl, {
+            taskId: input.taskId,
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+        });
+        const content = await browserService.getContent(true, { taskId: input.taskId });
+        const bodyText = `${content.title}\n${content.content}\n${navigation.url}`.toLowerCase();
+        const loginLike = /(登录|login|sign in|扫码|verify|验证码|2fa|auth|unauthorized)/i.test(bodyText);
+        if (loginLike) {
+            return {
+                ready: false,
+                blockerType: 'external_auth',
+                summary: 'Capability replay reached the target surface, but the platform still requires login or account verification.',
+            };
+        }
+
+        if (frozen.publishIntent?.platform === 'xiaohongshu') {
+            const editorReady = /(发布笔记|发布|标题|正文|图文|editor|publish)/i.test(bodyText);
+            if (!editorReady) {
+                return {
+                    ready: false,
+                    blockerType: 'manual_step',
+                    summary: 'Capability replay reached Xiaohongshu, but the publish editor surface is not ready yet.',
+                };
+            }
+        }
+
+        if (frozen.publishIntent?.platform === 'wechat_official') {
+            const editorReady = /(公众号|草稿箱|图文消息|新建|发表|发布|群发)/i.test(bodyText);
+            if (!editorReady) {
+                return {
+                    ready: false,
+                    blockerType: 'manual_step',
+                    summary: 'Capability replay reached WeChat Official Accounts, but the publish surface is not ready yet.',
+                };
+            }
+        }
+
+        return {
+            ready: true,
+            summary: 'Capability replay passed the browser readiness checks.',
+        };
+    } catch (error) {
+        return {
+            ready: false,
+            blockerType: 'manual_step',
+            summary: `Capability replay readiness check failed before live execution: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        };
+    }
+}
+
+function emitCapabilityReplayReadinessBlock(input: {
+    taskId: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    readiness: {
+        ready: boolean;
+        summary: string;
+        blockerType?: 'external_auth' | 'manual_step';
+    };
+}): void {
+    const activeHardness = deriveActiveHardness({
+        executionProfile: input.preparedWorkRequest.frozenWorkRequest.executionProfile,
+        userAction: input.readiness.blockerType === 'external_auth'
+            ? { kind: 'external_auth', blocking: true }
+            : undefined,
+        checkpoint: input.readiness.blockerType === 'manual_step'
+            ? { kind: 'manual_action', blocking: true, requiresUserConfirmation: false }
+            : undefined,
+        status: 'idle',
+    });
+
+    if (input.readiness.blockerType === 'external_auth') {
+        emit(createTaskUserActionRequiredEvent(input.taskId, {
+            actionId: `capability-replay-auth-${input.taskId}`,
+            title: 'Reconnect the live publish account',
+            kind: 'external_auth',
+            description: input.readiness.summary,
+            riskTier: 'high',
+            executionPolicy: 'hard_block',
+            blocking: true,
+            questions: [],
+            instructions: ['Reconnect the required browser user-profile session, then resume the task.'],
+            canAutoResume: true,
+            activeHardness,
+            blockingReason: input.readiness.summary,
+        }));
+    } else {
+        emit(createTaskCheckpointReachedEvent(input.taskId, {
+            checkpointId: `capability-replay-ready-${input.taskId}`,
+            title: 'Prepare the live publish surface',
+            kind: 'manual_action',
+            reason: input.readiness.summary,
+            userMessage: input.readiness.summary,
+            riskTier: 'high',
+            executionPolicy: 'hard_block',
+            requiresUserConfirmation: false,
+            blocking: true,
+            activeHardness,
+            blockingReason: input.readiness.summary,
+        }));
+    }
+
+    emit(createTaskStatusEvent(input.taskId, {
+        status: 'idle',
+        activeHardness,
+        blockingReason: input.readiness.summary,
+    }));
 }
 
 function buildTaskResearchUpdatedPayload(frozenWorkRequest: FrozenWorkRequest): TaskResearchUpdatedPayload {
@@ -705,7 +1072,10 @@ async function resolveConnectedAppResearch(input: {
     };
 }
 
-function toCheckpointReachedPayload(checkpoint: NonNullable<ReturnType<typeof getBlockingCheckpoint>>): TaskCheckpointReachedPayload {
+function toCheckpointReachedPayload(
+    checkpoint: NonNullable<ReturnType<typeof getBlockingCheckpoint>>,
+    executionProfile?: ExecutionProfile,
+): TaskCheckpointReachedPayload {
     return {
         checkpointId: checkpoint.id,
         title: checkpoint.title,
@@ -716,6 +1086,14 @@ function toCheckpointReachedPayload(checkpoint: NonNullable<ReturnType<typeof ge
         executionPolicy: checkpoint.executionPolicy,
         requiresUserConfirmation: checkpoint.requiresUserConfirmation,
         blocking: checkpoint.blocking,
+        activeHardness: deriveActiveHardness({
+            executionProfile,
+            checkpoint,
+        }),
+        blockingReason: deriveBlockingReason({
+            checkpoint,
+            status: checkpoint.blocking ? 'idle' : 'running',
+        }),
     };
 }
 
@@ -745,7 +1123,8 @@ function toUserActionRequiredPayload(
     | 'questions'
     | 'instructions'
     | 'fulfillsCheckpointId'
-    >
+    >,
+    executionProfile?: ExecutionProfile
 ): TaskUserActionRequiredPayload {
     return {
         actionId: action.id,
@@ -758,6 +1137,14 @@ function toUserActionRequiredPayload(
         questions: action.questions,
         instructions: action.instructions,
         fulfillsCheckpointId: action.fulfillsCheckpointId,
+        activeHardness: deriveActiveHardness({
+            executionProfile,
+            userAction: action,
+        }),
+        blockingReason: deriveBlockingReason({
+            userAction: action,
+            status: action.blocking ? 'idle' : 'running',
+        }),
     };
 }
 
@@ -2206,10 +2593,12 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         getTaskConfig,
         applyFrozenWorkRequestSessionPolicy,
         getActivePreparedWorkRequest: (taskId) => activePreparedWorkRequests.get(taskId),
+        verifyPreparedCapabilityReplayReadiness: verifyCapabilityReplayReadiness,
         workspaceRoot,
         workRequestStore,
         prepareWorkRequestContext: (input) => prepareWorkRequestContext({
             ...input,
+            capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
                 webSearch: resolveWebResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
@@ -3316,6 +3705,7 @@ const PERSONAL_TOOLS = createPersonalTools({
             sourceText: args.task_query,
             workspacePath: context.workspacePath,
             workRequestStore,
+            capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
                 webSearch: resolveWebResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
@@ -3801,7 +4191,7 @@ function collectRequiredArtifactsFromWorkspace(input: {
     return Array.from(artifacts);
 }
 
-const SOCIAL_PLATFORM_PATTERN = /(x\.com|twitter|推特|x\s*\(|在\s*x\s*上|到\s*x\s*上|社交平台|小红书|reddit|facebook|instagram|linkedin)/i;
+const SOCIAL_PLATFORM_PATTERN = /(x\.com|twitter|推特|x\s*\(|在\s*x\s*上|到\s*x\s*上|社交平台|小红书|xiaohongshu|rednote|xhs|reddit|facebook|instagram|linkedin)/i;
 const SOCIAL_PUBLISH_ACTION_PATTERN =
     /(?:发布|发帖|发文|推文|发推|发送(?:到|至)?|同步到|推送到|post|publish|tweet|share|send(?:\s+to)?)/i;
 
@@ -3809,6 +4199,9 @@ function hasBrowserEvidenceFromToolNames(toolNames: Iterable<string>): boolean {
     const tools = new Set(toolNames);
     if (tools.size === 0) {
         return false;
+    }
+    if (tools.has('xiaohongshu_post')) {
+        return true;
     }
     const hasConnect = tools.has('browser_connect') || tools.has('browser_ai_action');
     const hasInteractiveBrowserAction = [
@@ -3851,6 +4244,9 @@ function requiresBrowserEvidenceForRequest(request?: FrozenWorkRequest): boolean
     if (!request || !Array.isArray(request.tasks) || request.tasks.length === 0) {
         return false;
     }
+    if (request.publishIntent?.requiresSideEffect) {
+        return true;
+    }
     const scopedTask = request.tasks[0];
     if (!scopedTask) {
         return false;
@@ -3867,7 +4263,7 @@ function requiresBrowserEvidenceForRequest(request?: FrozenWorkRequest): boolean
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
         .join('\n');
     const hasBrowserPreferredTool = (scopedTask.preferredTools ?? []).some((toolName) =>
-        typeof toolName === 'string' && toolName.startsWith('browser_')
+        typeof toolName === 'string' && (toolName.startsWith('browser_') || toolName === 'xiaohongshu_post')
     );
     return hasBrowserPublishIntent({
         text: taskText,
@@ -3989,9 +4385,12 @@ function requiresBrowserEvidenceForScheduledTask(input: {
         .join('\n');
 
     const hasBrowserPreferredTool = (stageTask?.preferredTools ?? []).some((toolName) =>
-        typeof toolName === 'string' && toolName.startsWith('browser_')
+        typeof toolName === 'string' && (toolName.startsWith('browser_') || toolName === 'xiaohongshu_post')
     );
     if (taskRequiresBrowserInteractionEvidence(stageTask)) {
+        return true;
+    }
+    if (request?.publishIntent?.requiresSideEffect) {
         return true;
     }
     const byIntent = hasBrowserPublishIntent({
@@ -4121,6 +4520,7 @@ async function executeFreshTask(args: {
             sourceText: promptUserQuery,
             workspacePath,
             workRequestStore,
+            capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
                 webSearch: resolveWebResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
@@ -4171,7 +4571,10 @@ async function executeFreshTask(args: {
     }
 
     emit(createTaskResearchUpdatedEvent(taskId, buildTaskResearchUpdatedPayload(frozenWorkRequest)));
-    emit(createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
+    emit(createTaskPlanReadyEvent(
+        taskId,
+        buildTaskPlanReadyPayload(frozenWorkRequest, taskSessionStore.getConfig(taskId)?.pendingCapabilityReview),
+    ));
     emitPlanUpdated(taskId, preparedWorkRequest);
 
     if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
@@ -4188,8 +4591,32 @@ async function executeFreshTask(args: {
             role: 'assistant',
             content: disambiguation.message,
         }));
-        emit(createTaskClarificationRequiredEvent(taskId, disambiguation.eventPayload));
-        emit(createTaskStatusEvent(taskId, { status: 'idle' }));
+        const activeHardness = deriveActiveHardness({
+            executionProfile: frozenWorkRequest.executionProfile,
+            status: 'idle',
+        });
+        emit(createTaskClarificationRequiredEvent(taskId, {
+            ...disambiguation.eventPayload,
+            activeHardness,
+            blockingReason: deriveBlockingReason({
+                clarification: {
+                    reason: disambiguation.eventPayload.reason,
+                    questions: disambiguation.eventPayload.questions,
+                },
+                status: 'idle',
+            }),
+        }));
+        emit(createTaskStatusEvent(taskId, {
+            status: 'idle',
+            activeHardness,
+            blockingReason: deriveBlockingReason({
+                clarification: {
+                    reason: disambiguation.eventPayload.reason,
+                    questions: disambiguation.eventPayload.questions,
+                },
+                status: 'idle',
+            }),
+        }));
         return {
             success: true,
             summary: disambiguation.message,
@@ -4217,8 +4644,32 @@ async function executeFreshTask(args: {
             role: 'assistant',
             content: draftConfirmation.message,
         }));
-        emit(createTaskClarificationRequiredEvent(taskId, draftConfirmation.eventPayload));
-        emit(createTaskStatusEvent(taskId, { status: 'idle' }));
+        const activeHardness = deriveActiveHardness({
+            executionProfile: frozenWorkRequest.executionProfile,
+            status: 'idle',
+        });
+        emit(createTaskClarificationRequiredEvent(taskId, {
+            ...draftConfirmation.eventPayload,
+            activeHardness,
+            blockingReason: deriveBlockingReason({
+                clarification: {
+                    reason: draftConfirmation.eventPayload.reason,
+                    questions: draftConfirmation.eventPayload.questions,
+                },
+                status: 'idle',
+            }),
+        }));
+        emit(createTaskStatusEvent(taskId, {
+            status: 'idle',
+            activeHardness,
+            blockingReason: deriveBlockingReason({
+                clarification: {
+                    reason: draftConfirmation.eventPayload.reason,
+                    questions: draftConfirmation.eventPayload.questions,
+                },
+                status: 'idle',
+            }),
+        }));
         return {
             success: true,
             summary: draftConfirmation.message,
@@ -4234,7 +4685,10 @@ async function executeFreshTask(args: {
 
     const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
     if (blockingCheckpoint) {
-        emit(createTaskCheckpointReachedEvent(taskId, toCheckpointReachedPayload(blockingCheckpoint)));
+        emit(createTaskCheckpointReachedEvent(taskId, toCheckpointReachedPayload(
+            blockingCheckpoint,
+            frozenWorkRequest.executionProfile,
+        )));
     }
     const blockingUserAction =
         getBlockingUserAction(
@@ -4251,7 +4705,10 @@ async function executeFreshTask(args: {
             return;
         }
         emittedUserActionIds.add(action.id);
-        emit(createTaskUserActionRequiredEvent(taskId, toUserActionRequiredPayload(action)));
+        emit(createTaskUserActionRequiredEvent(taskId, toUserActionRequiredPayload(
+            action,
+            frozenWorkRequest.executionProfile,
+        )));
     };
     if (blockingUserAction) {
         emitUserActionRequired(blockingUserAction);
@@ -4263,8 +4720,14 @@ async function executeFreshTask(args: {
     if (frozenWorkRequest.clarification.required) {
         const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
         if (args.failOnBlockingUserAction) {
+            const activeHardness = deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                status: 'idle',
+            });
             emit(createTaskStatusEvent(taskId, {
                 status: 'idle',
+                activeHardness,
+                blockingReason: clarificationMessage,
             }));
             return {
                 success: false,
@@ -4293,9 +4756,25 @@ async function executeFreshTask(args: {
             missingFields: frozenWorkRequest.clarification.missingFields,
             clarificationType: 'missing_info',
             intentRouting: frozenWorkRequest.intentRouting,
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                status: 'idle',
+            }),
+            blockingReason: deriveBlockingReason({
+                clarification: frozenWorkRequest.clarification,
+                status: 'idle',
+            }),
         }));
         emit(createTaskStatusEvent(taskId, {
             status: 'idle',
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                status: 'idle',
+            }),
+            blockingReason: deriveBlockingReason({
+                clarification: frozenWorkRequest.clarification,
+                status: 'idle',
+            }),
         }));
         if (shouldUsePlanningFiles(frozenWorkRequest)) {
             appendPlanningProgressEntry(
@@ -4316,6 +4795,12 @@ async function executeFreshTask(args: {
         const blockingMessage = buildBlockingUserActionMessage(blockingUserAction);
         emit(createTaskStatusEvent(taskId, {
             status: 'idle',
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                userAction: blockingUserAction,
+                status: 'idle',
+            }),
+            blockingReason: blockingMessage,
         }));
         return {
             success: false,
@@ -4343,6 +4828,12 @@ async function executeFreshTask(args: {
         }));
         emit(createTaskStatusEvent(taskId, {
             status: 'idle',
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                userAction: blockingUserAction,
+                status: 'idle',
+            }),
+            blockingReason: confirmationMessage,
         }));
         if (shouldUsePlanningFiles(frozenWorkRequest)) {
             appendPlanningProgressEntry(
@@ -5411,6 +5902,40 @@ function getTaskConfig(taskId: string): TaskSessionConfig | undefined {
     return taskSessionStore.getConfig(taskId);
 }
 
+function setPendingCapabilityReview(taskId: string, review: {
+    learnedEntityId?: string;
+    summary: string;
+    approved: boolean;
+}): TaskSessionConfig {
+    const nextConfig: TaskSessionConfig = {
+        ...(taskSessionStore.getConfig(taskId) ?? {}),
+        pendingCapabilityReview: {
+            learnedEntityId: review.learnedEntityId,
+            summary: review.summary,
+            approved: review.approved,
+            updatedAt: new Date().toISOString(),
+        },
+    };
+    taskSessionStore.setConfig(taskId, nextConfig);
+    syncTaskRuntimeRecord(taskId);
+    return nextConfig;
+}
+
+function clearPendingCapabilityReview(taskId: string): TaskSessionConfig | undefined {
+    const existing = taskSessionStore.getConfig(taskId);
+    if (!existing?.pendingCapabilityReview) {
+        return existing;
+    }
+
+    const nextConfig: TaskSessionConfig = {
+        ...existing,
+        pendingCapabilityReview: undefined,
+    };
+    taskSessionStore.setConfig(taskId, nextConfig);
+    syncTaskRuntimeRecord(taskId);
+    return nextConfig;
+}
+
 function persistFrozenWorkRequestSnapshot(
     taskId: string,
     frozenWorkRequest: Pick<FrozenWorkRequest, 'mode' | 'sourceText' | 'tasks' | 'deliverables'>,
@@ -5789,7 +6314,13 @@ async function cancelTaskExecution(taskId: string, reason?: string): Promise<{ s
         });
         syncTaskRuntimeRecord(taskId);
     }
-    emit(createTaskStatusEvent(taskId, { status: 'idle' }));
+    emit(createTaskStatusEvent(taskId, {
+        status: 'idle',
+        activeHardness: deriveActiveHardness({
+            executionProfile: activePreparedWorkRequests.get(taskId)?.frozenWorkRequest.executionProfile,
+            status: 'idle',
+        }),
+    }));
     return { success: true };
 }
 
@@ -6089,11 +6620,17 @@ async function streamAnthropicResponse(
         }
     }
 
-    // Enable extended thinking for Claude 4.5 models
-    if (modelId?.includes('claude-3-7') || modelId?.includes('claude-4-5')) {
+    const thinkingMode = options.thinkingMode ?? 'auto';
+    const shouldEnableThinking = thinkingMode === 'on'
+        || (
+            thinkingMode === 'auto'
+            && (modelId?.includes('claude-3-7') || modelId?.includes('claude-4-5'))
+        );
+
+    if (shouldEnableThinking) {
         (body as any).thinking = {
             type: 'enabled',
-            budget_tokens: 4000
+            budget_tokens: options.thinkingBudgetTokens ?? 4000,
         };
         // Max tokens must be higher when thinking is enabled
         if ((options.maxTokens || 4096) < 8192) {
@@ -6107,6 +6644,8 @@ async function streamAnthropicResponse(
             name: t.name,
             description: t.description,
             input_schema: t.input_schema,
+            ...(t.strict === true ? { strict: true } : {}),
+            ...(Array.isArray(t.input_examples) ? { input_examples: t.input_examples } : {}),
         }));
         const serializedTools = body.tools as { name: string }[];
         console.error(`[Anthropic] Sending ${serializedTools.length} tools to API: ${serializedTools.map(t => t.name).join(', ')}`);
@@ -6343,6 +6882,7 @@ async function streamOpenAIResponse(
                 name: t.name,
                 description: t.description,
                 parameters: t.input_schema,
+                ...(t.strict === true ? { strict: true } : {}),
             },
         }));
         body.tool_choice = 'auto';
@@ -7065,7 +7605,13 @@ async function runAgentLoop(
                         }, {
                             sequence: 0,
                         });
-                        taskEventBus.emitStatus(taskId, { status: 'finished' }, {
+                        taskEventBus.emitStatus(taskId, {
+                            status: 'finished',
+                            activeHardness: deriveActiveHardness({
+                                executionProfile: activePreparedWorkRequests.get(taskId)?.frozenWorkRequest.executionProfile,
+                                status: 'finished',
+                            }),
+                        }, {
                             sequence: 0,
                         });
                         break;
@@ -7118,7 +7664,13 @@ async function runAgentLoop(
                     }, {
                         sequence: 0,
                     });
-                    taskEventBus.emitStatus(taskId, { status: 'finished' }, {
+                    taskEventBus.emitStatus(taskId, {
+                        status: 'finished',
+                        activeHardness: deriveActiveHardness({
+                            executionProfile: activePreparedWorkRequests.get(taskId)?.frozenWorkRequest.executionProfile,
+                            status: 'finished',
+                        }),
+                    }, {
                         sequence: 0,
                     });
                     return { artifactsCreated: [], toolsUsed: Array.from(toolsUsed) };
@@ -8207,6 +8759,8 @@ async function runAgentLoop(
                     executionPolicy: 'hard_block',
                     requiresUserConfirmation: true,
                     blocking: true,
+                    activeHardness: 'externally_blocked',
+                    blockingReason: suspended.userMessage,
                 }));
                 emit(createTaskUserActionRequiredEvent(taskId, {
                     actionId: `runtime-suspension-${taskId}`,
@@ -8221,6 +8775,8 @@ async function runAgentLoop(
                     authUrl,
                     authDomain,
                     canAutoResume,
+                    activeHardness: 'externally_blocked',
+                    blockingReason: suspended.userMessage,
                 }));
                 const preparedWorkRequest = activePreparedWorkRequests.get(taskId);
                 if (preparedWorkRequest) {
@@ -8540,6 +9096,10 @@ async function assessExecutionProtocolWithLlm(taskId: string, input: {
             return false;
         }
         const patterns: RegExp[] = [
+            /请你确认[^。！？\n]{0,80}(?:后|之后)?(?:我|我就|我会|再|然后)/u,
+            /你说的[^。！？\n]{0,80}(?:是指|指的是)[^。！？\n]{0,80}(?:吗|么)/u,
+            /(?:是要|要不要|还是要)[^。！？\n]{0,80}(?:还是|或者)/u,
+            /(?:先给你看草稿再发|先给你看草稿|先看草稿再发|直接发正式内容还是先给你看草稿再发)/u,
             /如果你(?:同意|确认|批准)[^。！？\n]{0,40}我(?:现在|这就|就)?(?:开始|继续|执行|检索|处理|推进|完成)/u,
             /请(?:先)?(?:回复|确认|同意|批准|选择)[^。！？\n]{0,30}(?:继续|执行|开始|创建|进行)/u,
             /请(?:回复|输入)\s*(?:确认|同意|继续|开始执行)/u,
@@ -8566,7 +9126,7 @@ Return ONLY valid JSON with this exact schema:
 }
 
 Rules:
-- asksForAdditionalUserAction=true if the assistant asks user to approve/confirm/execute/continue/reply as a required next action (before or after completion wording).
+- asksForAdditionalUserAction=true if the assistant asks user to approve/confirm/execute/continue/reply as a required next action, OR asks a clarification/preference question that requires user input before execution can continue (for example "你说的是…吗" / "是要A还是B").
 - objectiveRefusal=true if the assistant refuses the core objective (e.g. "I cannot provide...") instead of executing it, without proving a concrete technical blocker.
 - objectiveSatisfied=true only when the final response directly satisfies the core objective with the requested output.
 - objectiveGap should briefly describe what core output is missing. Use empty string when objectiveSatisfied=true.
@@ -8739,7 +9299,18 @@ function createExecutionResultReporter(taskId: string): ExecutionResultReporter 
             taskEventBus.emitFailed(taskId, payload);
         },
         onStatus: (payload) => {
-            taskEventBus.emitStatus(taskId, payload);
+            const statusPayload = payload as {
+                status: 'running' | 'failed' | 'idle' | 'finished';
+                activeHardness?: ExecutionProfile['primaryHardness'];
+                blockingReason?: string;
+            };
+            taskEventBus.emitStatus(taskId, {
+                ...statusPayload,
+                activeHardness: statusPayload.activeHardness ?? deriveActiveHardness({
+                    executionProfile: activePreparedWorkRequests.get(taskId)?.frozenWorkRequest.executionProfile,
+                    status: statusPayload.status,
+                }),
+            });
         },
         onArtifactTelemetry: appendArtifactTelemetry,
     });
@@ -8864,7 +9435,13 @@ function getExecutionRuntimeDeps(taskId: string) {
             const frozenWorkRequest = prepared.frozenWorkRequest;
             applyFrozenWorkRequestSessionPolicy(runtimeTaskId, frozenWorkRequest);
             emit(createTaskResearchUpdatedEvent(runtimeTaskId, buildTaskResearchUpdatedPayload(prepared.frozenWorkRequest)));
-            emit(createTaskPlanReadyEvent(runtimeTaskId, buildTaskPlanReadyPayload(prepared.frozenWorkRequest)));
+            emit(createTaskPlanReadyEvent(
+                runtimeTaskId,
+                buildTaskPlanReadyPayload(
+                    prepared.frozenWorkRequest,
+                    taskSessionStore.getConfig(runtimeTaskId)?.pendingCapabilityReview,
+                ),
+            ));
             if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
                 const disambiguation = buildRouteDisambiguationPayload(frozenWorkRequest.intentRouting);
                 pushConversationMessage(runtimeTaskId, {
@@ -8875,8 +9452,32 @@ function getExecutionRuntimeDeps(taskId: string) {
                     role: 'assistant',
                     content: disambiguation.message,
                 }));
-                emit(createTaskClarificationRequiredEvent(runtimeTaskId, disambiguation.eventPayload));
-                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                const activeHardness = deriveActiveHardness({
+                    executionProfile: frozenWorkRequest.executionProfile,
+                    status: 'idle',
+                });
+                emit(createTaskClarificationRequiredEvent(runtimeTaskId, {
+                    ...disambiguation.eventPayload,
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: disambiguation.eventPayload.reason,
+                            questions: disambiguation.eventPayload.questions,
+                        },
+                        status: 'idle',
+                    }),
+                }));
+                emit(createTaskStatusEvent(runtimeTaskId, {
+                    status: 'idle',
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: disambiguation.eventPayload.reason,
+                            questions: disambiguation.eventPayload.questions,
+                        },
+                        status: 'idle',
+                    }),
+                }));
                 return {
                     blocked: true,
                     summary: disambiguation.message,
@@ -8896,8 +9497,32 @@ function getExecutionRuntimeDeps(taskId: string) {
                     role: 'assistant',
                     content: draftConfirmation.message,
                 }));
-                emit(createTaskClarificationRequiredEvent(runtimeTaskId, draftConfirmation.eventPayload));
-                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                const activeHardness = deriveActiveHardness({
+                    executionProfile: frozenWorkRequest.executionProfile,
+                    status: 'idle',
+                });
+                emit(createTaskClarificationRequiredEvent(runtimeTaskId, {
+                    ...draftConfirmation.eventPayload,
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: draftConfirmation.eventPayload.reason,
+                            questions: draftConfirmation.eventPayload.questions,
+                        },
+                        status: 'idle',
+                    }),
+                }));
+                emit(createTaskStatusEvent(runtimeTaskId, {
+                    status: 'idle',
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: draftConfirmation.eventPayload.reason,
+                            questions: draftConfirmation.eventPayload.questions,
+                        },
+                        status: 'idle',
+                    }),
+                }));
                 return {
                     blocked: true,
                     summary: draftConfirmation.message,
@@ -8905,7 +9530,10 @@ function getExecutionRuntimeDeps(taskId: string) {
             }
             const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
             if (blockingCheckpoint) {
-                emit(createTaskCheckpointReachedEvent(runtimeTaskId, toCheckpointReachedPayload(blockingCheckpoint)));
+                emit(createTaskCheckpointReachedEvent(runtimeTaskId, toCheckpointReachedPayload(
+                    blockingCheckpoint,
+                    frozenWorkRequest.executionProfile,
+                )));
             }
             const blockingUserAction =
                 getBlockingUserAction(
@@ -8914,7 +9542,10 @@ function getExecutionRuntimeDeps(taskId: string) {
                 ) ??
                 getBlockingUserAction(frozenWorkRequest);
             if (blockingUserAction) {
-                emit(createTaskUserActionRequiredEvent(runtimeTaskId, toUserActionRequiredPayload(blockingUserAction)));
+                emit(createTaskUserActionRequiredEvent(runtimeTaskId, toUserActionRequiredPayload(
+                    blockingUserAction,
+                    frozenWorkRequest.executionProfile,
+                )));
             }
             if (frozenWorkRequest.clarification.required) {
                 const clarificationMessage = buildClarificationMessage(frozenWorkRequest);
@@ -8932,8 +9563,26 @@ function getExecutionRuntimeDeps(taskId: string) {
                     missingFields: frozenWorkRequest.clarification.missingFields,
                     clarificationType: 'missing_info',
                     intentRouting: frozenWorkRequest.intentRouting,
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: frozenWorkRequest.clarification,
+                        status: 'idle',
+                    }),
                 }));
-                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                emit(createTaskStatusEvent(runtimeTaskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: frozenWorkRequest.clarification,
+                        status: 'idle',
+                    }),
+                }));
                 return {
                     blocked: true,
                     summary: clarificationMessage,
@@ -8949,7 +9598,15 @@ function getExecutionRuntimeDeps(taskId: string) {
                     role: 'assistant',
                     content: confirmationMessage,
                 }));
-                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                emit(createTaskStatusEvent(runtimeTaskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: frozenWorkRequest.executionProfile,
+                        userAction: blockingUserAction,
+                        status: 'idle',
+                    }),
+                    blockingReason: confirmationMessage,
+                }));
                 return {
                     blocked: true,
                     summary: confirmationMessage,
@@ -8972,15 +9629,34 @@ function getExecutionRuntimeDeps(taskId: string) {
                     blocking: true,
                     questions: [],
                     instructions: [reason],
+                    activeHardness: 'externally_blocked',
+                    blockingReason: reason,
                 }));
-                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                emit(createTaskStatusEvent(runtimeTaskId, {
+                    status: 'idle',
+                    activeHardness: 'externally_blocked',
+                    blockingReason: reason,
+                }));
                 return {
                     blocked: true,
                     summary: reason,
                 };
             }
             if (blockingUserAction?.blocking || blockingCheckpoint?.blocking) {
-                emit(createTaskStatusEvent(runtimeTaskId, { status: 'idle' }));
+                emit(createTaskStatusEvent(runtimeTaskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: frozenWorkRequest.executionProfile,
+                        checkpoint: blockingCheckpoint,
+                        userAction: blockingUserAction,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        checkpoint: blockingCheckpoint,
+                        userAction: blockingUserAction,
+                        status: 'idle',
+                    }),
+                }));
                 return {
                     blocked: true,
                     summary: blockingUserAction?.description || blockingCheckpoint?.userMessage || blockingCheckpoint?.reason,
@@ -9000,6 +9676,118 @@ function getExecutionRuntimeDeps(taskId: string) {
         activatePreparedWorkRequest: setActivePreparedWorkRequest,
         clearPreparedWorkRequest: clearActivePreparedWorkRequest,
         markWorkRequestExecutionFailed,
+        acquireCapabilityForTask: async (input: {
+            taskId: string;
+            preparedWorkRequest: PreparedWorkRequestContext;
+            userMessage: string;
+        }) => {
+            const capabilityPlan = input.preparedWorkRequest.frozenWorkRequest.capabilityPlan;
+            const pendingCapabilityReview = taskSessionStore.getConfig(input.taskId)?.pendingCapabilityReview;
+            if (pendingCapabilityReview?.approved) {
+                const readiness = await verifyCapabilityReplayReadiness({
+                    taskId: input.taskId,
+                    preparedWorkRequest: input.preparedWorkRequest,
+                });
+                if (!readiness.ready) {
+                    emitCapabilityReplayReadinessBlock({
+                        taskId: input.taskId,
+                        preparedWorkRequest: input.preparedWorkRequest,
+                        readiness,
+                    });
+                    return {
+                        outcome: 'blocked' as const,
+                        summary: readiness.summary,
+                        blockerType: readiness.blockerType,
+                    };
+                }
+                clearPendingCapabilityReview(input.taskId);
+                return {
+                    outcome: 'learned' as const,
+                    summary: pendingCapabilityReview.summary,
+                    learnedEntityId: pendingCapabilityReview.learnedEntityId,
+                };
+            }
+
+            if (!capabilityPlan?.learningRequired) {
+                return {
+                    outcome: 'reused' as const,
+                    summary: 'No capability acquisition required.',
+                };
+            }
+
+            const runningReason = 'Acquiring the missing capability before continuing execution.';
+            emit(createTaskStatusEvent(input.taskId, {
+                status: 'running',
+                activeHardness: 'multi_step',
+                blockingReason: runningReason,
+            }));
+
+            const acquisition = await selfLearningController.acquireCapabilityForTask({
+                query: input.preparedWorkRequest.executionQuery || input.userMessage,
+                maxRounds: capabilityPlan.boundedLearningBudget.maxRounds,
+                maxValidationAttempts: capabilityPlan.boundedLearningBudget.maxValidationAttempts,
+                sideEffectRisk: capabilityPlan.sideEffectRisk,
+                onProgress: (progress) => {
+                    emit(createTaskStatusEvent(input.taskId, {
+                        status: 'running',
+                        activeHardness: 'multi_step',
+                        blockingReason: progress.summary,
+                    }));
+                },
+            });
+
+            if (acquisition.outcome === 'reused' || acquisition.outcome === 'learned') {
+                clearPendingCapabilityReview(input.taskId);
+                emit(createTaskStatusEvent(input.taskId, {
+                    status: 'running',
+                    activeHardness: input.preparedWorkRequest.frozenWorkRequest.executionProfile?.primaryHardness,
+                    blockingReason: undefined,
+                }));
+            }
+
+            if (acquisition.outcome === 'review_required') {
+                const reviewReason = acquisition.summary;
+                const nextConfig = setPendingCapabilityReview(input.taskId, {
+                    learnedEntityId: acquisition.learnedEntityId,
+                    summary: reviewReason,
+                    approved: false,
+                });
+                emit(createTaskPlanReadyEvent(
+                    input.taskId,
+                    buildTaskPlanReadyPayload(input.preparedWorkRequest.frozenWorkRequest, nextConfig.pendingCapabilityReview),
+                ));
+                emit(createTaskCheckpointReachedEvent(input.taskId, {
+                    checkpointId: `capability-review-${input.taskId}`,
+                    title: 'Review generated capability',
+                    kind: 'review',
+                    reason: reviewReason,
+                    userMessage: reviewReason,
+                    riskTier: 'high',
+                    executionPolicy: 'review_required',
+                    requiresUserConfirmation: true,
+                    blocking: true,
+                    activeHardness: 'high_risk',
+                    blockingReason: reviewReason,
+                }));
+                emit(createTaskStatusEvent(input.taskId, {
+                    status: 'idle',
+                    activeHardness: 'high_risk',
+                    blockingReason: reviewReason,
+                }));
+                return acquisition;
+            }
+
+            if (acquisition.outcome === 'failed') {
+                clearPendingCapabilityReview(input.taskId);
+                emit(createTaskStatusEvent(input.taskId, {
+                    status: 'running',
+                    activeHardness: 'multi_step',
+                    blockingReason: acquisition.summary,
+                }));
+            }
+
+            return acquisition;
+        },
         quickLearnFromError: (error: string, query: string, severity: number) =>
             selfLearningController.quickLearnFromError(error, query, severity),
     };

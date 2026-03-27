@@ -217,6 +217,18 @@ export class PostExecutionLearningManager {
                 refinements: [],
                 executionTimeMs: session.duration,
                 retryCount: 0,
+                validationSummary: {
+                    structuralValidationPassed: false,
+                    noUnauthorizedExternalCalls: true,
+                    positivePassRate: 0,
+                    negativeRejectRate: 1,
+                    hasNegativeExamples: false,
+                    replaySuitability: {
+                        deterministicEnough: false,
+                        duplicateRiskHandled: false,
+                        rollbackOrSafeAbortDefined: false,
+                    },
+                },
             });
             
             if (result.success) {
@@ -366,6 +378,18 @@ export class PostExecutionLearningManager {
                 refinements: [],
                 executionTimeMs: 0,
                 retryCount: 0,
+                validationSummary: {
+                    structuralValidationPassed: true,
+                    noUnauthorizedExternalCalls: true,
+                    positivePassRate: 1,
+                    negativeRejectRate: 1,
+                    hasNegativeExamples: true,
+                    replaySuitability: {
+                        deterministicEnough: true,
+                        duplicateRiskHandled: true,
+                        rollbackOrSafeAbortDefined: true,
+                    },
+                },
             });
 
             if (result.success) {

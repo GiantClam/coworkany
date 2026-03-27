@@ -2,17 +2,22 @@ import { AUTH_OPEN_PAGE_PREFIX } from '../../collaborationMessage';
 import { sanitizeDisplayText, sanitizeNoiseText } from '../textSanitizer';
 import type { AssistantTurnItem, AssistantTurnStep, PlanStep, TaskCardItem, TaskSession, TimelineItemType } from '../../../../types';
 import {
+    buildPlannedTaskList,
+    buildPlanSummaryLines,
     buildAssistantTurnSteps,
     cleanTaskCardTitle,
     hasExplicitTaskIntent,
     isProceduralLead,
     isScheduledMode,
     mapStatusLabel,
+    mergeTaskProgressIntoTaskMap,
     normalizeComparableText,
     normalizeLines,
     normalizeText,
+    syncTaskCardExecutionProfile,
     setTaskList,
-    toTaskStatus,
+    TASK_DRAFT_CONFIRMATION_INPUT,
+    TASK_DRAFT_CONFIRMATION_INSTRUCTION,
     type AssistantThreadItem,
     type TaskCardTask,
     type TaskPhaseKey,
@@ -118,6 +123,14 @@ function isRuntimeNoiseSystemEvent(content: string): boolean {
         || normalized.toLowerCase().startsWith('status updated:');
 }
 
+function formatResumeReasonNotice(reason: unknown): string | null {
+    const normalized = normalizeText(reason);
+    if (normalized === 'capability_review_approved') {
+        return 'Approved the generated capability and resumed the original task.';
+    }
+    return null;
+}
+
 function upsertPhaseBubble(
     state: BuildState,
     phase: TaskPhaseKey,
@@ -156,11 +169,13 @@ function ensureTaskCard(
             sections: [],
             timestamp: event.timestamp,
         };
+        syncTaskCardExecutionProfile(nextCard, session);
         const index = appendItem(state, nextCard);
         state.taskCardIndex = index;
         return nextCard;
     }
 
+    syncTaskCardExecutionProfile(card, session);
     return card;
 }
 
@@ -196,6 +211,7 @@ function updateTaskCard(
 ): void {
     const card = ensureTaskCard(state, session, event);
     updater(card);
+    syncTaskCardExecutionProfile(card, session);
     card.timestamp = event.timestamp;
     commitTaskCard(state, card);
 }
@@ -543,6 +559,20 @@ function processEvent(state: BuildState, session: TaskSession, event: TaskSessio
             break;
         }
 
+        case 'TASK_RESUMED': {
+            const resumeNotice = formatResumeReasonNotice(payload.resumeReason);
+            if (!resumeNotice || !state.hasTaskContext) {
+                break;
+            }
+            updateTaskCard(state, session, event, (card) => {
+                upsertPhaseBubble(state, 'execute', event, [resumeNotice], { mode: 'append', maxLines: 10 });
+                if (!card.subtitle) {
+                    card.subtitle = resumeNotice;
+                }
+            });
+            break;
+        }
+
         case 'TASK_PLAN_READY': {
             const mode = normalizeText(payload.mode) as TaskSession['taskMode'] | '';
             state.isChatMode = mode === 'chat' || session.taskMode === 'chat';
@@ -557,57 +587,20 @@ function processEvent(state: BuildState, session: TaskSession, event: TaskSessio
             updateTaskCard(state, session, event, (card) => {
                 card.subtitle = normalizeText(payload.summary) || card.subtitle;
 
-                const tasks = ((Array.isArray(payload.tasks) ? payload.tasks : []) as Array<Record<string, unknown>>)
-                    .map((task) => ({
-                        id: normalizeText(task.id),
-                        title: normalizeText(task.title) || normalizeText(task.objective) || 'Task',
-                        status: 'pending' as PlanStep['status'],
-                        dependencies: normalizeLines(Array.isArray(task.dependencies) ? task.dependencies : []),
-                    }))
-                    .filter((task) => task.id.length > 0);
+                const tasks = buildPlannedTaskList(payload.tasks);
 
                 if (tasks.length > 0) {
                     state.taskById = new Map(tasks.map((task) => [task.id, task]));
                     setTaskList(card, tasks);
                 }
 
-                const deliverableLines = ((Array.isArray(payload.deliverables) ? payload.deliverables : []) as Array<Record<string, unknown>>)
-                    .map((deliverable) => {
-                        const title = normalizeText(deliverable.title);
-                        const path = normalizeText(deliverable.path);
-                        const description = normalizeText(deliverable.description);
-                        if (path) return `${title || 'Deliverable'}: ${path}`;
-                        if (description) return `${title || 'Deliverable'}: ${description}`;
-                        return title || '';
-                    });
-                const checkpointLines = ((Array.isArray(payload.checkpoints) ? payload.checkpoints : []) as Array<Record<string, unknown>>)
-                    .map((checkpoint) => {
-                        const title = normalizeText(checkpoint.title);
-                        const reason = normalizeText(checkpoint.reason);
-                        return reason ? `${title || 'Checkpoint'}: ${reason}` : title;
-                    });
-                const userActionLines = ((Array.isArray(payload.userActionsRequired) ? payload.userActionsRequired : []) as Array<Record<string, unknown>>)
-                    .map((action) => {
-                        const title = normalizeText(action.title);
-                        const description = normalizeText(action.description);
-                        return description ? `${title || 'Action'}: ${description}` : title;
-                    });
-                const missingInfoLines = ((Array.isArray(payload.missingInfo) ? payload.missingInfo : []) as Array<Record<string, unknown>>)
-                    .map((entry) => {
-                        const field = normalizeText(entry.field);
-                        const question = normalizeText(entry.question);
-                        const reason = normalizeText(entry.reason);
-                        return question || reason ? `${field || 'Item'}: ${question || reason}` : field;
-                    });
-
-                upsertPhaseBubble(state, 'plan', event, [
-                    normalizeText(payload.summary),
-                    ...tasks.map((task) => `Task: ${task.title}`),
-                    ...deliverableLines,
-                    ...checkpointLines,
-                    ...userActionLines,
-                    ...missingInfoLines,
-                ], { mode: 'replace', maxLines: 10 });
+                upsertPhaseBubble(
+                    state,
+                    'plan',
+                    event,
+                    buildPlanSummaryLines(payload, tasks, payload.summary),
+                    { mode: 'replace', maxLines: 10 },
+                );
             });
             break;
         }
@@ -618,26 +611,10 @@ function processEvent(state: BuildState, session: TaskSession, event: TaskSessio
             }
             updateTaskCard(state, session, event, (card) => {
                 upsertPhaseBubble(state, 'execute', event, [payload.summary], { mode: 'append', maxLines: 10 });
-                const taskProgress = ((Array.isArray(payload.taskProgress) ? payload.taskProgress : []) as Array<Record<string, unknown>>)
-                    .map((entry) => ({
-                        id: normalizeText(entry.taskId),
-                        title: normalizeText(entry.title),
-                        status: toTaskStatus(entry.status),
-                        dependencies: normalizeLines(Array.isArray(entry.dependencies) ? entry.dependencies : []),
-                    }))
-                    .filter((entry) => entry.id.length > 0);
+                const tasks = mergeTaskProgressIntoTaskMap(state.taskById, payload.taskProgress);
 
-                if (taskProgress.length > 0) {
-                    for (const entry of taskProgress) {
-                        const existing = state.taskById.get(entry.id);
-                        state.taskById.set(entry.id, {
-                            id: entry.id,
-                            title: entry.title || existing?.title || 'Task',
-                            status: entry.status,
-                            dependencies: entry.dependencies.length > 0 ? entry.dependencies : (existing?.dependencies ?? []),
-                        });
-                    }
-                    setTaskList(card, Array.from(state.taskById.values()));
+                if (tasks.length > 0) {
+                    setTaskList(card, tasks);
                 }
             });
             break;
@@ -802,12 +779,9 @@ function processEvent(state: BuildState, session: TaskSession, event: TaskSessio
                         description: normalizeText(payload.reason),
                         blocking: true,
                         questions,
-                        instructions: isTaskDraftConfirmation ? ['可直接确认创建，或先输入修改内容后点击“编辑后创建”。'] : [],
+                        instructions: isTaskDraftConfirmation ? [TASK_DRAFT_CONFIRMATION_INSTRUCTION] : [],
                         input: isTaskDraftConfirmation
-                            ? {
-                                placeholder: '输入修改后的任务说明（可选）',
-                                submitLabel: '编辑后创建',
-                            }
+                            ? TASK_DRAFT_CONFIRMATION_INPUT
                             : undefined,
                         choices: routeChoices,
                     };

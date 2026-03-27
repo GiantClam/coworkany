@@ -63,6 +63,10 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         enqueueResumeMessage: () => {},
         getTaskConfig: () => undefined,
         getActivePreparedWorkRequest: () => undefined,
+        verifyPreparedCapabilityReplayReadiness: async () => ({
+            ready: true,
+            summary: 'ready',
+        }),
         workspaceRoot: '/tmp/workspace',
         workRequestStore: {},
         prepareWorkRequestContext: async () => ({
@@ -162,6 +166,214 @@ describe('runtime commands handler', () => {
         expect(bootstrapped).toHaveLength(1);
         expect(restored).toBe(true);
         expect(emitted[0]?.type).toBe('bootstrap_runtime_context_response');
+    });
+
+    test('resume_interrupted_task approves pending capability review and continues the active prepared task', async () => {
+        const emitted: any[] = [];
+        const continued: any[] = [];
+        const conversation: any[] = [{ role: 'user', content: '继续执行之前的任务' }];
+        let storedConfig: any = {
+            workspacePath: '/tmp/workspace',
+            pendingCapabilityReview: {
+                learnedEntityId: 'skill-wechat-publish',
+                summary: 'Generated external-write capability is ready for review before live use.',
+                approved: false,
+                updatedAt: '2026-03-28T00:00:00.000Z',
+            },
+        };
+        const artifactContract = { type: 'artifact' };
+        const activePreparedWorkRequest = {
+            frozenWorkRequest: {
+                id: 'wr-cap-review',
+                workspacePath: '/tmp/workspace',
+                clarification: { required: false, reason: undefined, questions: [], missingFields: [] },
+                mode: 'immediate_task',
+                deliverables: [],
+                intentRouting: { needsDisambiguation: false },
+                taskDraftRequired: false,
+                executionProfile: {
+                    primaryHardness: 'high_risk',
+                    requiredCapabilities: ['workspace_write'],
+                    blockingRisk: 'policy_review',
+                    interactionMode: 'passive_status',
+                    executionShape: 'staged',
+                    reasons: ['Generated capability must be reviewed before use.'],
+                },
+            },
+            executionPlan: {
+                workRequestId: 'wr-cap-review',
+                runMode: 'single',
+                steps: [
+                    {
+                        stepId: 'step-analysis',
+                        kind: 'analysis',
+                        title: 'Analyze',
+                        description: 'Analyze',
+                        status: 'completed',
+                        dependencies: [],
+                    },
+                    {
+                        stepId: 'step-execution',
+                        kind: 'execution',
+                        title: 'Execute',
+                        description: 'Execute',
+                        status: 'pending',
+                        dependencies: ['step-analysis'],
+                    },
+                ],
+            },
+            executionQuery: 'Publish the prepared content',
+            preferredSkillIds: [],
+            workRequestExecutionPrompt: 'prompt',
+        } as any;
+
+        await handleRuntimeCommand({
+            id: 'cmd-capability-review-resume',
+            type: 'resume_interrupted_task',
+            timestamp: new Date().toISOString(),
+            payload: {
+                taskId: 'task-cap-review',
+            },
+        } as any, createRuntimeCommandDeps({
+            emit: (event) => emitted.push(event),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: (_taskId, config) => {
+                    storedConfig = config;
+                    return config;
+                },
+                getConfig: () => storedConfig,
+                getConversation: () => conversation,
+                getArtifactContract: () => artifactContract,
+                setArtifactContract: () => {},
+            },
+            getTaskConfig: () => storedConfig,
+            getActivePreparedWorkRequest: () => activePreparedWorkRequest,
+            pushConversationMessage: (_taskId, message) => {
+                conversation.push(message);
+                return [...conversation];
+            },
+            continuePreparedAgentFlow: async (input) => {
+                continued.push(input);
+            },
+            markWorkRequestExecutionStarted: () => {},
+        }));
+
+        expect(storedConfig.pendingCapabilityReview?.approved).toBe(true);
+        expect(continued).toHaveLength(1);
+        expect(continued[0]?.preparedWorkRequest).toBe(activePreparedWorkRequest);
+        expect(continued[0]?.artifactContract).toBe(artifactContract);
+        expect(String(continued[0]?.conversation.at(-1)?.content ?? '')).toContain('CAPABILITY_REVIEW_APPROVED');
+        expect(emitted.map((event) => event.type)).toContain('TASK_RESUMED');
+        expect(
+            emitted.find((event) => event.type === 'TASK_RESUMED')?.payload?.resumeReason
+        ).toBe('capability_review_approved');
+    });
+
+    test('resume_interrupted_task keeps the task blocked when replay readiness fails after approval', async () => {
+        const emitted: any[] = [];
+        const continued: any[] = [];
+        let storedConfig: any = {
+            workspacePath: '/tmp/workspace',
+            pendingCapabilityReview: {
+                learnedEntityId: 'skill-wechat-publish',
+                summary: 'Generated external-write capability is ready for review before live use.',
+                approved: false,
+                updatedAt: '2026-03-28T00:00:00.000Z',
+            },
+        };
+        const activePreparedWorkRequest = {
+            frozenWorkRequest: {
+                id: 'wr-cap-review',
+                workspacePath: '/tmp/workspace',
+                clarification: { required: false, reason: undefined, questions: [], missingFields: [] },
+                mode: 'immediate_task',
+                deliverables: [],
+                intentRouting: { needsDisambiguation: false },
+                taskDraftRequired: false,
+                executionProfile: {
+                    primaryHardness: 'high_risk',
+                    requiredCapabilities: ['browser_interaction'],
+                    blockingRisk: 'policy_review',
+                    interactionMode: 'passive_status',
+                    executionShape: 'staged',
+                    reasons: ['Generated capability must be reviewed before use.'],
+                },
+                capabilityPlan: {
+                    missingCapability: 'new_runtime_tool_needed',
+                    learningRequired: true,
+                    canProceedWithoutLearning: false,
+                    learningScope: 'runtime_tool',
+                    replayStrategy: 'resume_from_checkpoint',
+                    sideEffectRisk: 'write_external',
+                    userAssistRequired: false,
+                    userAssistReason: 'none',
+                    boundedLearningBudget: {
+                        complexityTier: 'complex',
+                        maxRounds: 4,
+                        maxResearchTimeMs: 180000,
+                        maxValidationAttempts: 3,
+                    },
+                    reasons: ['Need live publish capability.'],
+                },
+                publishIntent: {
+                    action: 'publish_social_post',
+                    platform: 'wechat_official',
+                    executionMode: 'direct_publish',
+                    requiresSideEffect: true,
+                },
+            },
+            executionPlan: {
+                workRequestId: 'wr-cap-review',
+                runMode: 'single',
+                steps: [],
+            },
+            executionQuery: 'Publish the prepared content',
+            preferredSkillIds: [],
+            workRequestExecutionPrompt: 'prompt',
+        } as any;
+
+        await handleRuntimeCommand({
+            id: 'cmd-capability-review-blocked',
+            type: 'resume_interrupted_task',
+            timestamp: new Date().toISOString(),
+            payload: {
+                taskId: 'task-cap-review',
+            },
+        } as any, createRuntimeCommandDeps({
+            emit: (event) => emitted.push(event),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: (_taskId, config) => {
+                    storedConfig = config;
+                    return config;
+                },
+                getConfig: () => storedConfig,
+                getConversation: () => [{ role: 'user', content: '继续执行之前的任务' }],
+                getArtifactContract: () => ({ type: 'artifact' }),
+                setArtifactContract: () => {},
+            },
+            getTaskConfig: () => storedConfig,
+            getActivePreparedWorkRequest: () => activePreparedWorkRequest,
+            continuePreparedAgentFlow: async (input) => {
+                continued.push(input);
+            },
+            verifyPreparedCapabilityReplayReadiness: async () => ({
+                ready: false,
+                summary: 'Reconnect Chrome and reopen the WeChat publish surface before replay.',
+                blockerType: 'external_auth',
+            }),
+        }));
+
+        expect(storedConfig.pendingCapabilityReview?.approved).toBe(true);
+        expect(continued).toHaveLength(0);
+        expect(emitted.map((event) => event.type)).toContain('TASK_PLAN_READY');
+        expect(emitted.map((event) => event.type)).toContain('TASK_USER_ACTION_REQUIRED');
+        expect(emitted.map((event) => event.type)).not.toContain('TASK_RESUMED');
     });
 
     test('handles get_runtime_snapshot and emits snapshot response', async () => {
@@ -698,6 +910,14 @@ describe('runtime commands handler', () => {
                         required: true,
                         format: 'chat_message',
                     }],
+                    executionProfile: {
+                        primaryHardness: 'bounded',
+                        requiredCapabilities: [],
+                        blockingRisk: 'missing_info',
+                        interactionMode: 'input_first',
+                        executionShape: 'single_step',
+                        reasons: [],
+                    },
                     userActionsRequired: [{
                         id: 'action-clarify',
                         title: 'Provide missing task details',
@@ -750,6 +970,11 @@ describe('runtime commands handler', () => {
             'TASK_CLARIFICATION_REQUIRED',
             'TASK_STATUS',
         ]);
+        expect(emitted[2]?.payload?.executionProfile).toMatchObject({
+            primaryHardness: 'bounded',
+            blockingRisk: 'missing_info',
+            interactionMode: 'input_first',
+        });
         expect(emitted[7]?.payload?.status).toBe('idle');
     });
 
@@ -1842,6 +2067,14 @@ describe('runtime commands handler', () => {
         expect(preparedInputs[0]?.sourceText).toContain('原始任务：基于过去一个月的股价波动走势，预测未来最佳买入时间点');
         expect(preparedInputs[0]?.sourceText).toContain('需要补充：你只要发我：股票代码（港股数字代码）。');
         expect(preparedInputs[0]?.sourceText).toContain('用户补充：00100');
+        expect(preparedInputs[0]?.followUpContext).toEqual({
+            baseObjective: '基于过去一个月的股价波动走势，预测未来最佳买入时间点',
+            latestAssistantMessage: '你只要发我：股票代码（港股数字代码）。',
+            recentMessages: [
+                { role: 'user', content: '基于过去一个月的股价波动走势，预测未来最佳买入时间点' },
+                { role: 'assistant', content: '你只要发我：股票代码（港股数字代码）。' },
+            ],
+        });
         expect(continued).toBe(true);
         expect(artifactContractCalls[0]?.deliverables).toEqual([
             expect.objectContaining({
@@ -1849,6 +2082,126 @@ describe('runtime commands handler', () => {
                 type: 'report_file',
             }),
         ]);
+    });
+
+    test('recovers the original objective from conversation history when the last frozen snapshot became synthetic', async () => {
+        const preparedInputs: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: '[SYSTEM] This task contract requires browser-interaction tool evidence before final delivery.',
+                    primaryObjective: '[SYSTEM] This task contract requires browser-interaction tool evidence before final delivery.',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'x_post',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '检索今天 minimax 的股价，分析走势，并发送到 X 上' },
+                    {
+                        role: 'assistant',
+                        content:
+                            '已按要求完成浏览器交互取证并拿到结果。'
+                            + '可直接发到 X 的文案如下：MiniMax Group Inc (0100.HK) 今日报 990.000，涨 +4.000（+0.41%）。'
+                            + '如果你要我继续发布，回复“确认发送”即可。',
+                    },
+                    { role: 'user', content: '发送到 X' },
+                    {
+                        role: 'assistant',
+                        content:
+                            'A downstream stage likely depends on external auth/account preparation. '
+                            + 'Please prepare the required account/auth state before the downstream stage starts.',
+                    },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false, missingFields: [] },
+                        mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-followup-history-recovery',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze historical follow-up context',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-execution',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Resume publish flow',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '检索今天 minimax 的股价，分析走势，并发送到 X 上',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-followup-history-recovery',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-followup-history-recovery',
+                content: '确认发送',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toBe('确认发送');
+        expect(preparedInputs[0]?.followUpContext).toEqual({
+            baseObjective: '检索今天 minimax 的股价，分析走势，并发送到 X 上',
+            latestAssistantMessage:
+                'A downstream stage likely depends on external auth/account preparation. '
+                + 'Please prepare the required account/auth state before the downstream stage starts.',
+            recentMessages: [
+                { role: 'user', content: '检索今天 minimax 的股价，分析走势，并发送到 X 上' },
+                {
+                    role: 'assistant',
+                    content:
+                        '已按要求完成浏览器交互取证并拿到结果。'
+                        + '可直接发到 X 的文案如下：MiniMax Group Inc (0100.HK) 今日报 990.000，涨 +4.000（+0.41%）。'
+                        + '如果你要我继续发布，回复“确认发送”即可。',
+                },
+                { role: 'user', content: '发送到 X' },
+                {
+                    role: 'assistant',
+                    content:
+                        'A downstream stage likely depends on external auth/account preparation. '
+                        + 'Please prepare the required account/auth state before the downstream stage starts.',
+                },
+            ],
+        });
+        expect(continued).toBe(true);
     });
 
     test('blocks send_task_message execution when required research remains blocking_unknown', async () => {
@@ -2628,6 +2981,14 @@ describe('runtime commands handler', () => {
                 frozenWorkRequest: {
                     id: 'wr-clarify',
                     sourceText: '继续处理这个',
+                    executionProfile: {
+                        primaryHardness: 'multi_step',
+                        requiredCapabilities: ['workspace_write'],
+                        blockingRisk: 'missing_info',
+                        interactionMode: 'input_first',
+                        executionShape: 'staged',
+                        reasons: ['Need more input before execution can continue.'],
+                    },
                     tasks: [
                         {
                             objective: '继续处理这个',
@@ -2732,9 +3093,17 @@ describe('runtime commands handler', () => {
         expect(emitted[4]?.payload?.checkpointId).toBe('checkpoint-1');
         expect(emitted[4]?.payload?.executionPolicy).toBe('hard_block');
         expect(emitted[4]?.payload?.riskTier).toBe('high');
+        expect(emitted[4]?.payload?.activeHardness).toBe('externally_blocked');
+        expect(emitted[4]?.payload?.blockingReason).toBe('Please tell Coworkany what should be continued.');
         expect(emitted[5]?.payload?.actionId).toBe('action-1');
         expect(emitted[5]?.payload?.executionPolicy).toBe('hard_block');
         expect(emitted[5]?.payload?.riskTier).toBe('high');
+        expect(emitted[5]?.payload?.activeHardness).toBe('multi_step');
+        expect(emitted[5]?.payload?.blockingReason).toBe('Coworkany needs the exact object to continue.');
+        expect(emitted[7]?.payload?.activeHardness).toBe('multi_step');
+        expect(emitted[7]?.payload?.blockingReason).toBe('Need the missing object');
+        expect(emitted[8]?.payload?.activeHardness).toBe('multi_step');
+        expect(emitted[8]?.payload?.blockingReason).toBe('Need the missing object');
     });
 
     test('does not block follow-up execution on legacy confirm_plan checkpoints', async () => {

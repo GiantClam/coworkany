@@ -1,5 +1,18 @@
 # Findings
 
+## 2026-03-27 Control-Plane Decomposition Design
+
+- Current control-plane behavior is still primarily rule-first, not skill-first.
+- The heaviest hardcoding is in `sidecar/src/orchestration/workRequestAnalyzer.ts`, where task complexity, web lookup need, browser/manual-action inference, deliverables, checkpoints, HITL policy, and preferred skills are all inferred through regex and threshold logic.
+- `preferredSkills` today is a static analyzer output, not an execution-state authority. The analyzer currently hardcodes additions like `task-orchestrator`, `browser-automation`, and `planning-with-files`.
+- Runtime only aggregates those skill ids from frozen tasks and passes them into the system prompt; it does not let skills govern blocking, permission, or checkpoint transitions.
+- Local file workflows are also static registry-driven today: local intent detection, file kinds, preferred tools, required access, and workflow ids are all enumerated in code.
+- This means a full skill-first workflow engine would be a category error for the current architecture. The better direction is a layered model:
+  - deterministic policy kernel
+  - hardness/capability classification
+  - skill/workflow selection
+  - runtime state machine
+
 ## 2026-03-27 Canonical Task Stream Phase 1
 
 - The lowest-risk insertion point for protocol unification is `sidecar/src/main.ts` `emit(...)`, because all runtime/UI task events already pass through that function before reaching stdout and singleton clients.

@@ -1,9 +1,11 @@
 import type { ConfirmationPolicy, IpcCommand, IpcResponse } from '../protocol';
 import type { ArtifactContract } from '../agent/artifactContract';
 import type {
+    CapabilityReviewState,
     CheckpointContract,
     DefaultingPolicy,
     DeliverableContract,
+    ExecutionProfile,
     FrozenWorkRequest,
     HitlPolicy,
     IntentRouting,
@@ -14,6 +16,7 @@ import type {
     SessionIsolationPolicy,
     TenantIsolationPolicy,
     UserActionRequest,
+    WorkRequestFollowUpContext,
 } from '../orchestration/workRequestSchema';
 import {
     snapshotFrozenWorkRequest,
@@ -23,6 +26,8 @@ import {
 import { assertWorkspaceOverrideAllowed } from '../execution/taskIsolationPolicyStore';
 import { parseInlineAttachmentContent } from '../llm/attachmentContent';
 import {
+    deriveActiveHardness,
+    deriveBlockingReason,
     buildBlockingUserActionMessage,
     buildPlanUpdatedPayload,
     planScheduledExecutionStages,
@@ -30,6 +35,7 @@ import {
     buildWorkRequestPlanSummary,
     getBlockingCheckpoint,
     getBlockingUserAction,
+    type PreparedWorkRequestContext,
 } from '../orchestration/workRequestRuntime';
 
 function respond(commandId: string, type: string, payload: Record<string, unknown>): IpcResponse {
@@ -187,6 +193,8 @@ export type RuntimeCommandDeps = {
             value: string;
         }>;
         intentRouting?: IntentRouting;
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
     }) => Record<string, unknown>;
     createTaskContractReopenedEvent: (taskId: string, payload: {
         summary: string;
@@ -296,6 +304,8 @@ export type RuntimeCommandDeps = {
         executionPolicy: 'auto' | 'review_required' | 'hard_block';
         requiresUserConfirmation: boolean;
         blocking: boolean;
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
     }) => Record<string, unknown>;
     createTaskUserActionRequiredEvent: (taskId: string, payload: {
         actionId: string;
@@ -311,9 +321,13 @@ export type RuntimeCommandDeps = {
         authUrl?: string;
         authDomain?: string;
         canAutoResume?: boolean;
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
     }) => Record<string, unknown>;
     createTaskStatusEvent: (taskId: string, payload: {
         status: 'running' | 'failed' | 'idle' | 'finished';
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
     }) => Record<string, unknown>;
     createTaskResumedEvent: (taskId: string, payload: {
         resumeReason?: string;
@@ -338,7 +352,11 @@ export type RuntimeCommandDeps = {
     taskEventBus: {
         emitRaw: (taskId: string, type: string, payload: unknown) => void;
         emitChatMessage: (taskId: string, payload: { role: 'assistant' | 'system' | 'user'; content: string }) => void;
-        emitStatus: (taskId: string, payload: { status: 'running' | 'failed' | 'idle' | 'finished' }) => void;
+        emitStatus: (taskId: string, payload: {
+            status: 'running' | 'failed' | 'idle' | 'finished';
+            activeHardness?: ExecutionProfile['primaryHardness'];
+            blockingReason?: string;
+        }) => void;
         reset: (taskId: string) => void;
         emitStarted: (taskId: string, payload: { title: string; description?: string; context: { workspacePath?: string; userQuery: string } }) => void;
         emitFinished: (taskId: string, payload: { summary: string; duration: number }) => void;
@@ -355,9 +373,15 @@ export type RuntimeCommandDeps = {
     enqueueResumeMessage: (taskId: string, content: string, config?: Record<string, unknown>) => void;
     getTaskConfig: (taskId: string) => any;
     applyFrozenWorkRequestSessionPolicy?: (taskId: string, frozenWorkRequest: FrozenWorkRequest, baseConfig?: any) => any;
-    getActivePreparedWorkRequest?: (taskId: string) => {
-        frozenWorkRequest: FrozenWorkRequest;
-    } | undefined;
+    getActivePreparedWorkRequest?: (taskId: string) => PreparedWorkRequestContext | undefined;
+    verifyPreparedCapabilityReplayReadiness?: (input: {
+        taskId: string;
+        preparedWorkRequest: PreparedWorkRequestContext;
+    }) => Promise<{
+        ready: boolean;
+        summary: string;
+        blockerType?: 'external_auth' | 'manual_step';
+    }>;
     workspaceRoot: string;
     workRequestStore: any;
     prepareWorkRequestContext: (input: any) => Promise<any>;
@@ -460,6 +484,28 @@ function getLatestMeaningfulUserMessage(
     return '';
 }
 
+function getLatestSubstantialUserMessage(
+    conversation: Array<{ role?: string; content?: unknown }>
+): string {
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+        const message = conversation[index];
+        if (message?.role !== 'user') {
+            continue;
+        }
+
+        const text = extractMessageText(message.content);
+        if (!text || isResumeControlMessage(text)) {
+            continue;
+        }
+
+        if (text.trim().length >= 8) {
+            return text;
+        }
+    }
+
+    return '';
+}
+
 function getLatestMeaningfulAssistantMessage(
     conversation: Array<{ role?: string; content?: unknown }>
 ): string {
@@ -478,6 +524,60 @@ function getLatestMeaningfulAssistantMessage(
     }
 
     return '';
+}
+
+function buildRecentFollowUpMessages(
+    conversation: Array<{ role?: string; content?: unknown }>
+): NonNullable<WorkRequestFollowUpContext['recentMessages']> {
+    const messages: NonNullable<WorkRequestFollowUpContext['recentMessages']> = [];
+
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+        const message = conversation[index];
+        if (message?.role !== 'user' && message?.role !== 'assistant') {
+            continue;
+        }
+
+        const text = extractMessageText(message.content).trim();
+        if (!text || (message.role === 'user' && isResumeControlMessage(text))) {
+            continue;
+        }
+
+        messages.unshift({
+            role: message.role,
+            content: text,
+        });
+        if (messages.length >= 6) {
+            break;
+        }
+    }
+
+    return messages;
+}
+
+function isSyntheticObjective(text: string): boolean {
+    return text.trim().startsWith('[SYSTEM]');
+}
+
+function buildFollowUpContext(input: {
+    conversation: Array<{ role?: string; content?: unknown }>;
+    previousSnapshot?: FrozenWorkRequestSnapshot;
+}): WorkRequestFollowUpContext | undefined {
+    const snapshotObjective = input.previousSnapshot?.primaryObjective?.trim();
+    const baseObjective = snapshotObjective && !isSyntheticObjective(snapshotObjective)
+        ? snapshotObjective
+        : getLatestSubstantialUserMessage(input.conversation);
+    const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
+    const recentMessages = buildRecentFollowUpMessages(input.conversation);
+
+    if (!baseObjective && !latestAssistantMessage && recentMessages.length === 0) {
+        return undefined;
+    }
+
+    return {
+        baseObjective: baseObjective || undefined,
+        latestAssistantMessage: latestAssistantMessage || undefined,
+        recentMessages,
+    };
 }
 
 function shouldAugmentFollowUpPrompt(input: {
@@ -878,6 +978,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
     checkpoints?: CheckpointContract[];
     userActionsRequired?: UserActionRequest[];
     hitlPolicy?: HitlPolicy;
+    executionProfile?: ExecutionProfile;
+    capabilityPlan?: import('../orchestration/workRequestSchema').CapabilityPlan;
+    capabilityReview?: CapabilityReviewState;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;
     memoryIsolationPolicy?: MemoryIsolationPolicy;
@@ -899,6 +1002,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
     deliverables: DeliverableContract[];
     checkpoints: CheckpointContract[];
     userActionsRequired: UserActionRequest[];
+    executionProfile?: ExecutionProfile;
+    capabilityPlan?: import('../orchestration/workRequestSchema').CapabilityPlan;
+    capabilityReview?: CapabilityReviewState;
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;
@@ -923,6 +1029,9 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
         deliverables: frozenWorkRequest.deliverables ?? [],
         checkpoints: frozenWorkRequest.checkpoints ?? [],
         userActionsRequired: frozenWorkRequest.userActionsRequired ?? [],
+        executionProfile: frozenWorkRequest.executionProfile,
+        capabilityPlan: frozenWorkRequest.capabilityPlan,
+        capabilityReview: frozenWorkRequest.capabilityReview,
         hitlPolicy: frozenWorkRequest.hitlPolicy,
         runtimeIsolationPolicy: frozenWorkRequest.runtimeIsolationPolicy,
         sessionIsolationPolicy: frozenWorkRequest.sessionIsolationPolicy,
@@ -932,6 +1041,85 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
         defaultingPolicy: frozenWorkRequest.defaultingPolicy,
         resumeStrategy: frozenWorkRequest.resumeStrategy,
     };
+}
+
+function toCapabilityReviewState(
+    review: {
+        learnedEntityId?: string;
+        summary: string;
+        approved: boolean;
+        updatedAt: string;
+    } | undefined,
+): CapabilityReviewState | undefined {
+    if (!review) {
+        return undefined;
+    }
+
+    return {
+        status: review.approved ? 'approved' : 'pending',
+        summary: review.summary,
+        learnedEntityId: review.learnedEntityId,
+        updatedAt: review.updatedAt,
+    };
+}
+
+function emitCapabilityReplayReadinessBlock(input: {
+    deps: RuntimeCommandDeps;
+    taskId: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    readiness: {
+        ready: boolean;
+        summary: string;
+        blockerType?: 'external_auth' | 'manual_step';
+    };
+}): void {
+    const activeHardness = deriveActiveHardness({
+        executionProfile: input.preparedWorkRequest.frozenWorkRequest.executionProfile,
+        userAction: input.readiness.blockerType === 'external_auth'
+            ? { kind: 'external_auth', blocking: true }
+            : undefined,
+        checkpoint: input.readiness.blockerType === 'manual_step'
+            ? { kind: 'manual_action', blocking: true, requiresUserConfirmation: false }
+            : undefined,
+        status: 'idle',
+    });
+
+    if (input.readiness.blockerType === 'external_auth') {
+        input.deps.emit(input.deps.createTaskUserActionRequiredEvent(input.taskId, {
+            actionId: `capability-replay-auth-${input.taskId}`,
+            title: 'Reconnect the live publish account',
+            kind: 'external_auth',
+            description: input.readiness.summary,
+            riskTier: 'high',
+            executionPolicy: 'hard_block',
+            blocking: true,
+            questions: [],
+            instructions: ['Reconnect the required browser user-profile session, then resume the task.'],
+            canAutoResume: true,
+            activeHardness,
+            blockingReason: input.readiness.summary,
+        }));
+    } else {
+        input.deps.emit(input.deps.createTaskCheckpointReachedEvent(input.taskId, {
+            checkpointId: `capability-replay-ready-${input.taskId}`,
+            title: 'Prepare the live publish surface',
+            kind: 'manual_action',
+            reason: input.readiness.summary,
+            userMessage: input.readiness.summary,
+            riskTier: 'high',
+            executionPolicy: 'hard_block',
+            requiresUserConfirmation: false,
+            blocking: true,
+            activeHardness,
+            blockingReason: input.readiness.summary,
+        }));
+    }
+
+    input.deps.emit(input.deps.createTaskStatusEvent(input.taskId, {
+        status: 'idle',
+        activeHardness,
+        blockingReason: input.readiness.summary,
+    }));
 }
 
 function buildTaskResearchUpdatedPayload(frozenWorkRequest: {
@@ -986,6 +1174,14 @@ function emitBlockingCollaborationEvents(
             executionPolicy: blockingCheckpoint.executionPolicy,
             requiresUserConfirmation: blockingCheckpoint.requiresUserConfirmation,
             blocking: blockingCheckpoint.blocking,
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                checkpoint: blockingCheckpoint,
+            }),
+            blockingReason: deriveBlockingReason({
+                checkpoint: blockingCheckpoint,
+                status: blockingCheckpoint.blocking ? 'idle' : 'running',
+            }),
         }));
     }
 
@@ -1038,6 +1234,14 @@ function emitBlockingCollaborationEvents(
             questions: action.questions,
             instructions: action.instructions,
             fulfillsCheckpointId: action.fulfillsCheckpointId,
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                userAction: action,
+            }),
+            blockingReason: deriveBlockingReason({
+                userAction: action,
+                status: action.blocking ? 'idle' : 'running',
+            }),
         }));
     };
 
@@ -1060,7 +1264,20 @@ function emitBlockingCollaborationEvents(
             role: 'assistant',
             content: buildBlockingUserActionMessage(blockingUserAction),
         }));
-        deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+        deps.emit(deps.createTaskStatusEvent(taskId, {
+            status: 'idle',
+            activeHardness: deriveActiveHardness({
+                executionProfile: frozenWorkRequest.executionProfile,
+                checkpoint: blockingCheckpoint,
+                userAction: blockingUserAction,
+                status: 'idle',
+            }),
+            blockingReason: deriveBlockingReason({
+                checkpoint: blockingCheckpoint,
+                userAction: blockingUserAction,
+                status: 'idle',
+            }),
+        }));
         return {
             blocked: true,
             blockingUserAction,
@@ -1310,7 +1527,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 reason: 'user_requested',
             });
             if (cancellation.success) {
-                deps.taskEventBus.emitStatus(payload.taskId, { status: 'idle' });
+                deps.taskEventBus.emitStatus(payload.taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: deps.getActivePreparedWorkRequest?.(payload.taskId)?.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: undefined,
+                });
             }
             deps.emit(respond(command.id, 'clear_task_history_response', {
                 success: true,
@@ -1394,6 +1618,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
 
             const taskConfig = deps.getTaskConfig(taskId);
             let effectiveTaskConfig = taskConfig;
+            const currentExecutionProfile =
+                deps.getActivePreparedWorkRequest?.(taskId)?.frozenWorkRequest.executionProfile;
             const workspaceOverrideViolation = validateWorkspaceOverride(taskId, payload.config);
             if (workspaceOverrideViolation) {
                 deps.emit(respond(command.id, 'send_task_message_response', {
@@ -1405,7 +1631,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     role: 'system',
                     content: workspaceOverrideViolation,
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: currentExecutionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: undefined,
+                }));
                 return true;
             }
             deps.emit(respond(command.id, 'send_task_message_response', {
@@ -1443,7 +1676,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     content: '已清空当前任务历史，并停止当前执行。',
                 }));
                 if (cancellation.success) {
-                    deps.taskEventBus.emitStatus(taskId, { status: 'idle' });
+                    deps.taskEventBus.emitStatus(taskId, {
+                        status: 'idle',
+                        activeHardness: deriveActiveHardness({
+                            executionProfile: currentExecutionProfile,
+                            status: 'idle',
+                        }),
+                        blockingReason: undefined,
+                    });
                 }
                 return true;
             }
@@ -1493,7 +1733,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         role: 'assistant',
                         content: confirmationMessage,
                     }));
-                    deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                    deps.emit(deps.createTaskStatusEvent(taskId, {
+                        status: 'idle',
+                        activeHardness: deriveActiveHardness({
+                            executionProfile: currentExecutionProfile,
+                            status: 'idle',
+                        }),
+                        blockingReason: confirmationMessage,
+                    }));
                     return true;
                 }
             }
@@ -1504,6 +1751,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 activePreparedWorkRequest?.frozenWorkRequest
                     ? snapshotFrozenWorkRequest(activePreparedWorkRequest.frozenWorkRequest)
                     : effectiveTaskConfig?.lastFrozenWorkRequestSnapshot;
+            const followUpContext = buildFollowUpContext({
+                conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
+                previousSnapshot: previousFrozenSnapshot,
+            });
             const sourceTextForAnalysis = buildFollowUpSourceText({
                 promptText: normalizedPromptText,
                 conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
@@ -1520,6 +1771,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: sourceTextForAnalysis,
                 workspacePath,
+                followUpContext,
                 workRequestStore: deps.workRequestStore,
             });
             const { frozenWorkRequest } = preparedWorkRequest;
@@ -1547,7 +1799,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 deps.emit(deps.createTaskContractReopenedEvent(taskId, reopenSignal));
             }
             deps.emit(deps.createTaskResearchUpdatedEvent(taskId, buildTaskResearchUpdatedPayload(frozenWorkRequest)));
-            deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload(frozenWorkRequest)));
+            deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload({
+                ...frozenWorkRequest,
+                capabilityReview: toCapabilityReviewState(effectiveTaskConfig?.pendingCapabilityReview),
+            })));
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
 
             if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
@@ -1558,6 +1813,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     role: 'assistant',
                     content: disambiguationMessage,
                 }));
+                const activeHardness = deriveActiveHardness({
+                    executionProfile: frozenWorkRequest.executionProfile,
+                    status: 'idle',
+                });
                 deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
                     reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
                     questions: ['请选择：直接回答，或创建任务。'],
@@ -1576,8 +1835,26 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         },
                     ],
                     intentRouting: frozenWorkRequest.intentRouting,
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                            questions: ['请选择：直接回答，或创建任务。'],
+                        },
+                        status: 'idle',
+                    }),
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                            questions: ['请选择：直接回答，或创建任务。'],
+                        },
+                        status: 'idle',
+                    }),
+                }));
                 return true;
             }
 
@@ -1593,6 +1870,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     role: 'assistant',
                     content: draftMessage,
                 }));
+                const activeHardness = deriveActiveHardness({
+                    executionProfile: frozenWorkRequest.executionProfile,
+                    status: 'idle',
+                });
                 deps.emit(deps.createTaskClarificationRequiredEvent(taskId, {
                     reason: '任务草稿已生成，请先确认是否创建执行任务。',
                     questions: ['确认创建任务，或改成普通回答。'],
@@ -1611,8 +1892,26 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         },
                     ],
                     intentRouting: frozenWorkRequest.intentRouting,
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                            questions: ['确认创建任务，或改成普通回答。'],
+                        },
+                        status: 'idle',
+                    }),
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness,
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                            questions: ['确认创建任务，或改成普通回答。'],
+                        },
+                        status: 'idle',
+                    }),
+                }));
                 return true;
             }
 
@@ -1639,8 +1938,26 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     missingFields: frozenWorkRequest.clarification.missingFields,
                     clarificationType: 'missing_info',
                     intentRouting: frozenWorkRequest.intentRouting,
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: frozenWorkRequest.clarification,
+                        status: 'idle',
+                    }),
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: frozenWorkRequest.clarification,
+                        status: 'idle',
+                    }),
+                }));
                 if (deps.shouldUsePlanningFiles(frozenWorkRequest)) {
                     deps.appendPlanningProgressEntry(
                         workspacePath,
@@ -1677,7 +1994,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 return true;
             }
 
-            deps.taskEventBus.emitStatus(taskId, { status: 'running' });
+            deps.taskEventBus.emitStatus(taskId, {
+                status: 'running',
+                activeHardness: deriveActiveHardness({
+                    executionProfile: frozenWorkRequest.executionProfile,
+                    status: 'running',
+                }),
+                blockingReason: undefined,
+            });
             if (
                 (frozenWorkRequest.mode === 'scheduled_task' || frozenWorkRequest.mode === 'scheduled_multi_task')
                 && frozenWorkRequest.schedule?.executeAt
@@ -1763,7 +2087,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         role: 'assistant',
                         content: '没有可恢复的中断任务上下文，请先描述你要继续的任务。',
                     }));
-                    deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                    deps.emit(deps.createTaskStatusEvent(taskId, {
+                        status: 'idle',
+                        activeHardness: deriveActiveHardness({
+                            executionProfile: deps.getActivePreparedWorkRequest?.(taskId)?.frozenWorkRequest.executionProfile,
+                            status: 'idle',
+                        }),
+                        blockingReason: undefined,
+                    }));
                 } else {
                     deps.emit(respond(command.id, 'resume_interrupted_task_response', {
                         success: false,
@@ -1789,7 +2120,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     role: 'system',
                     content: workspaceOverrideViolation,
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: deps.getActivePreparedWorkRequest?.(taskId)?.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: undefined,
+                }));
                 return true;
             }
             if (payload.config) {
@@ -1809,6 +2147,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 deps.workspaceRoot;
             const latestUserMessage = getLatestMeaningfulUserMessage(existingConversation);
             const resumeQuery = latestUserMessage || 'Continue from the saved task context.';
+            const pendingCapabilityReview = effectiveTaskConfig?.pendingCapabilityReview;
+            const activePreparedWorkRequest = deps.getActivePreparedWorkRequest?.(taskId);
 
             deps.ensureTaskRuntimePersistence({
                 taskId,
@@ -1823,7 +2163,81 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     taskId,
                 }));
             }
-            deps.emit(deps.createTaskStatusEvent(taskId, { status: 'running' }));
+            if (pendingCapabilityReview && !pendingCapabilityReview.approved) {
+                const approvedConfig = {
+                    ...(effectiveTaskConfig ?? {}),
+                    pendingCapabilityReview: {
+                        ...pendingCapabilityReview,
+                        approved: true,
+                        updatedAt: new Date().toISOString(),
+                    },
+                };
+                deps.taskSessionStore.setConfig(taskId, approvedConfig);
+                effectiveTaskConfig = deps.getTaskConfig(taskId) ?? approvedConfig;
+
+                if (activePreparedWorkRequest) {
+                    deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload({
+                        ...activePreparedWorkRequest.frozenWorkRequest,
+                        capabilityReview: toCapabilityReviewState(effectiveTaskConfig?.pendingCapabilityReview),
+                    })));
+                    const readiness = deps.verifyPreparedCapabilityReplayReadiness
+                        ? await deps.verifyPreparedCapabilityReplayReadiness({
+                            taskId,
+                            preparedWorkRequest: activePreparedWorkRequest,
+                        })
+                        : { ready: true, summary: 'Capability replay readiness verification was skipped.' };
+                    if (!readiness.ready) {
+                        emitCapabilityReplayReadinessBlock({
+                            deps,
+                            taskId,
+                            preparedWorkRequest: activePreparedWorkRequest,
+                            readiness,
+                        });
+                        return true;
+                    }
+                    deps.emit(deps.createTaskStatusEvent(taskId, {
+                        status: 'running',
+                        activeHardness: deriveActiveHardness({
+                            executionProfile: activePreparedWorkRequest.frozenWorkRequest.executionProfile,
+                            status: 'running',
+                        }),
+                        blockingReason: undefined,
+                    }));
+                    deps.emit(deps.createTaskResumedEvent(taskId, {
+                        resumeReason: 'capability_review_approved',
+                        suspendDurationMs: 0,
+                    }));
+                    deps.markWorkRequestExecutionStarted(activePreparedWorkRequest);
+                    deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(activePreparedWorkRequest)));
+
+                    const conversation = deps.pushConversationMessage(taskId, {
+                        role: 'user',
+                        content:
+                            `[CAPABILITY_REVIEW_APPROVED] The generated capability was reviewed and approved. ` +
+                            `Continue the original task using the approved capability without re-planning from scratch.`,
+                    });
+
+                    await deps.continuePreparedAgentFlow({
+                        taskId,
+                        userMessage: resumeQuery,
+                        workspacePath,
+                        config: effectiveTaskConfig,
+                        preparedWorkRequest: activePreparedWorkRequest,
+                        workRequestExecutionPrompt: activePreparedWorkRequest.workRequestExecutionPrompt,
+                        conversation,
+                        artifactContract: deps.taskSessionStore.getArtifactContract(taskId),
+                    }, deps.getExecutionRuntimeDeps(taskId));
+                    return true;
+                }
+            }
+            deps.emit(deps.createTaskStatusEvent(taskId, {
+                status: 'running',
+                activeHardness: deriveActiveHardness({
+                    executionProfile: activePreparedWorkRequest?.frozenWorkRequest.executionProfile,
+                    status: 'running',
+                }),
+                blockingReason: undefined,
+            }));
             deps.emit(deps.createTaskResumedEvent(taskId, {
                 resumeReason: 'interrupted_recovery',
                 suspendDurationMs: 0,
@@ -1867,7 +2281,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             deps.emit(
                 deps.createTaskPlanReadyEvent(
                     taskId,
-                    buildTaskPlanReadyPayload(preparedWorkRequest.frozenWorkRequest)
+                    buildTaskPlanReadyPayload({
+                        ...preparedWorkRequest.frozenWorkRequest,
+                        capabilityReview: toCapabilityReviewState(effectiveTaskConfig?.pendingCapabilityReview),
+                    })
                 )
             );
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
@@ -1900,8 +2317,32 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         },
                     ],
                     intentRouting: preparedWorkRequest.frozenWorkRequest.intentRouting,
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: preparedWorkRequest.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                            questions: ['请选择：直接回答，或创建任务。'],
+                        },
+                        status: 'idle',
+                    }),
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: preparedWorkRequest.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '需要先确认你希望走“直接回答”还是“创建任务”路径。',
+                            questions: ['请选择：直接回答，或创建任务。'],
+                        },
+                        status: 'idle',
+                    }),
+                }));
                 return true;
             }
 
@@ -1937,8 +2378,32 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         },
                     ],
                     intentRouting: preparedWorkRequest.frozenWorkRequest.intentRouting,
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: preparedWorkRequest.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                            questions: ['确认创建任务，或改成普通回答。'],
+                        },
+                        status: 'idle',
+                    }),
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: preparedWorkRequest.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: {
+                            reason: '任务草稿已生成，请先确认是否创建执行任务。',
+                            questions: ['确认创建任务，或改成普通回答。'],
+                        },
+                        status: 'idle',
+                    }),
+                }));
                 return true;
             }
 
@@ -1966,8 +2431,26 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     missingFields: preparedWorkRequest.frozenWorkRequest.clarification.missingFields,
                     clarificationType: 'missing_info',
                     intentRouting: preparedWorkRequest.frozenWorkRequest.intentRouting,
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: preparedWorkRequest.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: preparedWorkRequest.frozenWorkRequest.clarification,
+                        status: 'idle',
+                    }),
                 }));
-                deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                deps.emit(deps.createTaskStatusEvent(taskId, {
+                    status: 'idle',
+                    activeHardness: deriveActiveHardness({
+                        executionProfile: preparedWorkRequest.frozenWorkRequest.executionProfile,
+                        status: 'idle',
+                    }),
+                    blockingReason: deriveBlockingReason({
+                        clarification: preparedWorkRequest.frozenWorkRequest.clarification,
+                        status: 'idle',
+                    }),
+                }));
                 return true;
             }
 

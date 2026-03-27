@@ -119,6 +119,235 @@ function parseStringArray(value: unknown): string[] {
         .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
 }
 
+function isTaskHardness(value: unknown): value is NonNullable<TaskSession['primaryHardness']> {
+    return value === 'trivial'
+        || value === 'bounded'
+        || value === 'multi_step'
+        || value === 'externally_blocked'
+        || value === 'high_risk';
+}
+
+function isBlockingRisk(value: unknown): value is NonNullable<TaskSession['executionProfile']>['blockingRisk'] {
+    return value === 'none'
+        || value === 'missing_info'
+        || value === 'auth'
+        || value === 'permission'
+        || value === 'manual_step'
+        || value === 'policy_review';
+}
+
+function isInteractionMode(value: unknown): value is NonNullable<TaskSession['executionProfile']>['interactionMode'] {
+    return value === 'passive_status'
+        || value === 'input_first'
+        || value === 'action_first'
+        || value === 'review_first';
+}
+
+function isExecutionShape(value: unknown): value is NonNullable<TaskSession['executionProfile']>['executionShape'] {
+    return value === 'single_step'
+        || value === 'staged'
+        || value === 'exploratory'
+        || value === 'deterministic_workflow';
+}
+
+function isCapabilityMissingKind(value: unknown): value is NonNullable<TaskSession['capabilityPlan']>['missingCapability'] {
+    return value === 'none'
+        || value === 'existing_skill_gap'
+        || value === 'existing_tool_gap'
+        || value === 'new_runtime_tool_needed'
+        || value === 'workflow_gap'
+        || value === 'external_blocker';
+}
+
+function isLearningScope(value: unknown): value is NonNullable<TaskSession['capabilityPlan']>['learningScope'] {
+    return value === 'none'
+        || value === 'knowledge'
+        || value === 'skill'
+        || value === 'runtime_tool';
+}
+
+function isReplayStrategy(value: unknown): value is NonNullable<TaskSession['capabilityPlan']>['replayStrategy'] {
+    return value === 'none'
+        || value === 'resume_from_checkpoint'
+        || value === 'restart_execution';
+}
+
+function isSideEffectRisk(value: unknown): value is NonNullable<TaskSession['capabilityPlan']>['sideEffectRisk'] {
+    return value === 'none' || value === 'read_only' || value === 'write_external';
+}
+
+function isUserAssistReason(value: unknown): value is NonNullable<TaskSession['capabilityPlan']>['userAssistReason'] {
+    return value === 'none'
+        || value === 'auth'
+        || value === 'captcha'
+        || value === 'permission'
+        || value === 'policy'
+        || value === 'ambiguous_goal';
+}
+
+function isComplexityTier(
+    value: unknown
+): value is NonNullable<TaskSession['capabilityPlan']>['boundedLearningBudget']['complexityTier'] {
+    return value === 'simple' || value === 'moderate' || value === 'complex';
+}
+
+function isRequiredCapability(
+    value: unknown
+): value is NonNullable<TaskSession['executionProfile']>['requiredCapabilities'][number] {
+    return value === 'browser_interaction'
+        || value === 'external_auth'
+        || value === 'workspace_write'
+        || value === 'host_access'
+        || value === 'human_review';
+}
+
+function parseExecutionProfile(value: unknown): TaskSession['executionProfile'] | undefined {
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+
+    const payload = value as Record<string, unknown>;
+    if (!isTaskHardness(payload.primaryHardness)) {
+        return undefined;
+    }
+    if (!isBlockingRisk(payload.blockingRisk) || !isInteractionMode(payload.interactionMode) || !isExecutionShape(payload.executionShape)) {
+        return undefined;
+    }
+
+    return {
+        primaryHardness: payload.primaryHardness,
+        requiredCapabilities: ((payload.requiredCapabilities as unknown[] | undefined) ?? []).filter(isRequiredCapability),
+        blockingRisk: payload.blockingRisk,
+        interactionMode: payload.interactionMode,
+        executionShape: payload.executionShape,
+        reasons: parseStringArray(payload.reasons),
+    };
+}
+
+function parseCapabilityPlan(value: unknown): TaskSession['capabilityPlan'] | undefined {
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+
+    const payload = value as Record<string, unknown>;
+    const budget = payload.boundedLearningBudget;
+    if (
+        !isCapabilityMissingKind(payload.missingCapability)
+        || typeof payload.learningRequired !== 'boolean'
+        || typeof payload.canProceedWithoutLearning !== 'boolean'
+        || !isLearningScope(payload.learningScope)
+        || !isReplayStrategy(payload.replayStrategy)
+        || !isSideEffectRisk(payload.sideEffectRisk)
+        || typeof payload.userAssistRequired !== 'boolean'
+        || !isUserAssistReason(payload.userAssistReason)
+        || !budget
+        || typeof budget !== 'object'
+    ) {
+        return undefined;
+    }
+
+    const normalizedBudget = budget as Record<string, unknown>;
+    if (
+        !isComplexityTier(normalizedBudget.complexityTier)
+        || typeof normalizedBudget.maxRounds !== 'number'
+        || typeof normalizedBudget.maxResearchTimeMs !== 'number'
+        || typeof normalizedBudget.maxValidationAttempts !== 'number'
+    ) {
+        return undefined;
+    }
+
+    return {
+        missingCapability: payload.missingCapability,
+        learningRequired: payload.learningRequired,
+        canProceedWithoutLearning: payload.canProceedWithoutLearning,
+        learningScope: payload.learningScope,
+        replayStrategy: payload.replayStrategy,
+        sideEffectRisk: payload.sideEffectRisk,
+        userAssistRequired: payload.userAssistRequired,
+        userAssistReason: payload.userAssistReason,
+        boundedLearningBudget: {
+            complexityTier: normalizedBudget.complexityTier,
+            maxRounds: normalizedBudget.maxRounds,
+            maxResearchTimeMs: normalizedBudget.maxResearchTimeMs,
+            maxValidationAttempts: normalizedBudget.maxValidationAttempts,
+        },
+        reasons: parseStringArray(payload.reasons),
+    };
+}
+
+function parseCapabilityReview(value: unknown): TaskSession['capabilityReview'] | undefined {
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+
+    const payload = value as Record<string, unknown>;
+    const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
+    if ((payload.status !== 'pending' && payload.status !== 'approved') || summary.length === 0) {
+        return undefined;
+    }
+
+    return {
+        status: payload.status,
+        summary,
+        learnedEntityId: typeof payload.learnedEntityId === 'string' ? payload.learnedEntityId : undefined,
+        updatedAt: typeof payload.updatedAt === 'string' ? payload.updatedAt : undefined,
+    };
+}
+
+function parseEventActiveHardness(payload: Record<string, unknown>): TaskSession['activeHardness'] {
+    return isTaskHardness(payload.activeHardness) ? payload.activeHardness : undefined;
+}
+
+function parseEventBlockingReason(payload: Record<string, unknown>): string | undefined {
+    if (typeof payload.blockingReason !== 'string') {
+        return undefined;
+    }
+    const normalized = payload.blockingReason.trim();
+    return normalized.length > 0 ? normalized : undefined;
+}
+
+function hasBlockingReasonField(payload: Record<string, unknown>): boolean {
+    return Object.prototype.hasOwnProperty.call(payload, 'blockingReason');
+}
+
+function deriveFallbackActiveHardness(input: {
+    session: TaskSession;
+    currentCheckpoint?: TaskSession['currentCheckpoint'];
+    currentUserAction?: TaskSession['currentUserAction'];
+    status?: TaskStatus;
+}): TaskSession['activeHardness'] {
+    const profile = input.session.executionProfile;
+    if (!profile) {
+        return undefined;
+    }
+
+    if (
+        input.currentUserAction?.kind === 'external_auth'
+        || (input.currentUserAction?.kind === 'manual_step' && input.currentUserAction.blocking)
+        || (input.currentCheckpoint?.kind === 'manual_action' && input.currentCheckpoint.blocking)
+    ) {
+        return 'externally_blocked';
+    }
+
+    if (
+        input.currentUserAction?.kind === 'confirm_plan'
+        || (input.currentCheckpoint?.kind === 'review' && input.currentCheckpoint.requiresUserConfirmation)
+        || (input.status !== 'running' && profile.interactionMode === 'review_first')
+    ) {
+        return 'high_risk';
+    }
+
+    if (
+        input.session.capabilityPlan?.learningRequired
+        && input.status === 'running'
+        && input.session.blockingReason
+    ) {
+        return 'multi_step';
+    }
+
+    return profile.primaryHardness;
+}
+
 function parseContractReopenDiff(value: unknown): TaskSession['contractReopenDiff'] | undefined {
     if (!value || typeof value !== 'object') {
         return undefined;
@@ -246,6 +475,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 contractReopenReason: undefined,
                 contractReopenCount: 0,
                 plannedTasks: undefined,
+                blockingReason: undefined,
                 workspacePath: (payload.context as Record<string, unknown>)?.workspacePath as string,
                 messages: [
                     ...session.messages,
@@ -315,13 +545,17 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 currentCheckpoint: undefined,
                 currentUserAction: undefined,
                 clarificationQuestions: undefined,
+                blockingReason: undefined,
             }, event, [
                 'Execution contract reopened.',
                 String(payload.reason ?? ''),
             ].filter(Boolean).join('\n'));
 
-        case 'TASK_PLAN_READY':
-            return {
+        case 'TASK_PLAN_READY': {
+            const executionProfile = parseExecutionProfile(payload.executionProfile);
+            const capabilityPlan = parseCapabilityPlan(payload.capabilityPlan);
+            const capabilityReview = parseCapabilityReview(payload.capabilityReview);
+            const nextSession: TaskSession = {
                 ...session,
                 taskMode:
                     payload.mode === 'chat' ||
@@ -347,10 +581,23 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 plannedUserActions: ((payload.userActionsRequired as unknown[] | undefined) ?? [])
                     .map((action) => toPlannedUserAction(action))
                     .filter((action): action is NonNullable<typeof action> => action !== null),
+                executionProfile,
+                capabilityPlan,
+                capabilityReview,
+                primaryHardness: executionProfile?.primaryHardness,
+                blockingReason: undefined,
                 missingInfo: ((payload.missingInfo as TaskSession['missingInfo']) ?? []).slice(),
                 defaultingPolicy: payload.defaultingPolicy as TaskSession['defaultingPolicy'],
                 resumeStrategy: payload.resumeStrategy as TaskSession['resumeStrategy'],
             };
+            return {
+                ...nextSession,
+                activeHardness: deriveFallbackActiveHardness({
+                    session: nextSession,
+                    status: nextSession.status,
+                }),
+            };
+        }
 
         case 'TASK_CHECKPOINT_REACHED': {
             const currentCheckpoint: NonNullable<TaskSession['currentCheckpoint']> = {
@@ -375,9 +622,22 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 requiresUserConfirmation: Boolean(payload.requiresUserConfirmation),
                 blocking: Boolean(payload.blocking),
             };
-            return appendSystemMessage({
+            const nextSession: TaskSession = {
                 ...session,
                 currentCheckpoint,
+                blockingReason:
+                    parseEventBlockingReason(payload)
+                    ?? currentCheckpoint.userMessage
+                    ?? currentCheckpoint.reason,
+            };
+            return appendSystemMessage({
+                ...nextSession,
+                activeHardness: parseEventActiveHardness(payload) ?? deriveFallbackActiveHardness({
+                    session: nextSession,
+                    currentCheckpoint,
+                    currentUserAction: nextSession.currentUserAction,
+                    status: nextSession.status,
+                }),
             }, event, currentCheckpoint.userMessage || currentCheckpoint.reason || 'Checkpoint reached');
         }
 
@@ -406,10 +666,24 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 fulfillsCheckpointId:
                     typeof payload.fulfillsCheckpointId === 'string' ? payload.fulfillsCheckpointId : undefined,
             };
-            return appendSystemMessage({
+            const nextSession: TaskSession = {
                 ...session,
                 status: currentUserAction.blocking ? 'idle' : session.status,
                 currentUserAction,
+                blockingReason:
+                    parseEventBlockingReason(payload)
+                    ?? currentUserAction.description
+                    ?? currentUserAction.questions[0]
+                    ?? currentUserAction.instructions[0],
+            };
+            return appendSystemMessage({
+                ...nextSession,
+                activeHardness: parseEventActiveHardness(payload) ?? deriveFallbackActiveHardness({
+                    session: nextSession,
+                    currentCheckpoint: nextSession.currentCheckpoint,
+                    currentUserAction,
+                    status: nextSession.status,
+                }),
             }, event, [
                 currentUserAction.description,
                 ...currentUserAction.questions,
@@ -428,6 +702,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 clarificationQuestions: undefined,
                 currentCheckpoint: undefined,
                 currentUserAction: undefined,
+                activeHardness: session.executionProfile?.primaryHardness,
+                blockingReason: undefined,
                 assistantDraft: undefined,
             };
             if (!shouldAppendFinishedAssistantMessage(nextSession, payload.summary as string | undefined)) {
@@ -462,6 +738,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 clarificationQuestions: undefined,
                 currentCheckpoint: undefined,
                 currentUserAction: undefined,
+                activeHardness: session.executionProfile?.primaryHardness,
+                blockingReason: undefined,
                 assistantDraft: undefined,
             }, event, [
                 `Task failed: ${(payload.error as string) ?? 'Unknown error'}`,
@@ -472,13 +750,28 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
 
         case 'TASK_STATUS': {
             const status = payload.status as TaskStatus;
-            return {
+            const nextSession: TaskSession = {
                 ...session,
                 status: status ?? session.status,
                 failure: status === 'running' ? undefined : session.failure,
                 currentCheckpoint: status === 'running' ? undefined : session.currentCheckpoint,
                 currentUserAction: status === 'running' ? undefined : session.currentUserAction,
+                blockingReason:
+                    status === 'finished' || status === 'failed'
+                        ? undefined
+                        : hasBlockingReasonField(payload)
+                            ? parseEventBlockingReason(payload)
+                            : session.blockingReason,
                 assistantDraft: status === 'running' ? session.assistantDraft : undefined,
+            };
+            return {
+                ...nextSession,
+                activeHardness: parseEventActiveHardness(payload) ?? deriveFallbackActiveHardness({
+                    session: nextSession,
+                    currentCheckpoint: nextSession.currentCheckpoint,
+                    currentUserAction: nextSession.currentUserAction,
+                    status: nextSession.status,
+                }),
             };
         }
 
@@ -492,6 +785,11 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 clarificationQuestions: ((payload.questions as string[] | undefined) ?? []).filter(Boolean),
                 currentCheckpoint: undefined,
                 currentUserAction: undefined,
+                activeHardness: parseEventActiveHardness(payload) ?? session.executionProfile?.primaryHardness,
+                blockingReason:
+                    parseEventBlockingReason(payload)
+                    ?? (typeof payload.reason === 'string' ? payload.reason : undefined)
+                    ?? ((payload.questions as string[] | undefined) ?? []).find(Boolean),
                 assistantDraft: undefined,
             };
 
@@ -517,6 +815,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 status: 'idle',
                 failure: undefined,
                 suspension: nextSuspension,
+                activeHardness: session.executionProfile?.primaryHardness,
+                blockingReason: nextSuspension.userMessage || session.blockingReason,
                 assistantDraft: undefined,
             };
 
@@ -539,6 +839,17 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 suspension: undefined,
                 currentCheckpoint: undefined,
                 currentUserAction: undefined,
+                activeHardness: session.executionProfile?.primaryHardness,
+                blockingReason: undefined,
+                capabilityReview:
+                    typeof (event.payload as { resumeReason?: unknown } | undefined)?.resumeReason === 'string'
+                        && (event.payload as { resumeReason?: string }).resumeReason === 'capability_review_approved'
+                        ? undefined
+                        : session.capabilityReview,
+                lastResumeReason:
+                    typeof (event.payload as { resumeReason?: unknown } | undefined)?.resumeReason === 'string'
+                        ? (event.payload as { resumeReason?: string }).resumeReason
+                        : undefined,
             }, event, 'Task resumed');
 
         case 'TASK_HISTORY_CLEARED': {
@@ -563,12 +874,16 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 plannedTasks: undefined,
                 plannedCheckpoints: undefined,
                 plannedUserActions: undefined,
+                executionProfile: undefined,
+                primaryHardness: undefined,
+                activeHardness: undefined,
                 missingInfo: undefined,
                 defaultingPolicy: undefined,
                 resumeStrategy: undefined,
                 currentCheckpoint: undefined,
                 currentUserAction: undefined,
                 planSteps: [],
+                blockingReason: undefined,
                 toolCalls: [],
                 effects: [],
                 patches: [],

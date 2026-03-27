@@ -31,6 +31,7 @@ function makeSession(overrides: Partial<TaskSession> = {}): TaskSession {
         summary: overrides.summary,
         title: overrides.title,
         workspacePath: overrides.workspacePath,
+        lastResumeReason: overrides.lastResumeReason,
     };
 }
 
@@ -602,6 +603,10 @@ describe('buildTimelineItems', () => {
                         deliverables: [],
                         checkpoints: [],
                         userActionsRequired: [],
+                        capabilityReview: {
+                            status: 'pending',
+                            summary: 'Generated capability requires review before execution can resume.',
+                        },
                         missingInfo: [],
                     },
                 }],
@@ -654,6 +659,14 @@ describe('buildTimelineItems', () => {
             title: 'Task center',
             subtitle: 'Please login to continue publishing.',
             status: 'finished',
+            sections: expect.arrayContaining([
+                {
+                    label: 'Plan',
+                    lines: expect.arrayContaining([
+                        'Generated capability requires review before execution can resume.',
+                    ]),
+                },
+            ]),
             tasks: [
                 expect.objectContaining({
                     id: 'task-login',
@@ -741,6 +754,91 @@ describe('buildTimelineItems', () => {
                     { label: '打开登录页面', value: '__auth_open_page__:https://x.com/i/flow/login' },
                     { label: '我已登录，继续执行', value: '继续执行' },
                 ],
+            },
+        });
+    });
+
+    test('projects pending capability review from canonical plan-ready data into task card summary', () => {
+        const session = makeSession({
+            status: 'idle',
+            taskMode: 'chat',
+        });
+        const canonicalMessages: CanonicalTaskMessage[] = [
+            makeCanonicalMessage({
+                id: 'canonical-plan-review',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-28T10:00:00.000Z',
+                sequence: 1,
+                sourceEventId: 'canonical-plan-review',
+                sourceEventType: 'TASK_PLAN_READY',
+                parts: [{
+                    type: 'task',
+                    event: 'plan_ready',
+                    summary: '准备执行发布流程。',
+                    data: {
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.99,
+                            reasonCodes: ['user_route_choice'],
+                            needsDisambiguation: false,
+                            forcedByUserSelection: true,
+                        },
+                        tasks: [],
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        executionProfile: {
+                            primaryHardness: 'high_risk',
+                            requiredCapabilities: ['workspace_write', 'human_review'],
+                            blockingRisk: 'policy_review',
+                            interactionMode: 'review_first',
+                            executionShape: 'staged',
+                            reasons: ['Generated capability must be reviewed before use.'],
+                        },
+                        capabilityPlan: {
+                            missingCapability: 'new_runtime_tool_needed',
+                            learningRequired: true,
+                            canProceedWithoutLearning: false,
+                            learningScope: 'runtime_tool',
+                            replayStrategy: 'resume_from_checkpoint',
+                            sideEffectRisk: 'write_external',
+                            userAssistRequired: false,
+                            userAssistReason: 'none',
+                            boundedLearningBudget: {
+                                complexityTier: 'complex',
+                                maxRounds: 4,
+                                maxResearchTimeMs: 180000,
+                                maxValidationAttempts: 3,
+                            },
+                            reasons: ['Coworkany does not have a dedicated validated publish capability for the target platform.'],
+                        },
+                        capabilityReview: {
+                            status: 'pending',
+                            summary: 'Generated capability requires review before execution can resume.',
+                            learnedEntityId: 'skill-wechat-official-post',
+                        },
+                        missingInfo: [],
+                    },
+                }],
+            }),
+        ];
+
+        const result = buildTimelineItems(session, undefined, canonicalMessages);
+        const taskCards = extractTaskCards(result.items);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]).toMatchObject({
+            subtitle: 'Generated capability requires review before execution can resume.',
+            capabilityReview: {
+                status: 'pending',
+                summary: 'Generated capability requires review before execution can resume.',
+                learnedEntityId: 'skill-wechat-official-post',
+            },
+            capabilityPlan: {
+                missingCapability: 'new_runtime_tool_needed',
+                learningRequired: true,
             },
         });
     });
@@ -1135,6 +1233,55 @@ describe('buildTimelineItems', () => {
         expect([...systemContents, ...turnSystemContents]).toEqual([]);
     });
 
+    test('shows capability-review resume notice inside task-context turns', () => {
+        const session = makeSession({
+            status: 'running',
+            taskMode: 'immediate_task',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Plan ready',
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.98,
+                            reasonCodes: ['explicit_command'],
+                            needsDisambiguation: false,
+                        },
+                        tasks: [
+                            {
+                                id: 'task-1',
+                                title: 'Publish',
+                                objective: 'Publish',
+                                dependencies: [],
+                            },
+                        ],
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_RESUMED',
+                    payload: {
+                        resumeReason: 'capability_review_approved',
+                        suspendDurationMs: 0,
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const turnSystemContents = extractAssistantTurns(result.items)
+            .flatMap((item) => item.systemEvents || []);
+
+        expect(turnSystemContents).toContain('Approved the generated capability and resumed the original task.');
+    });
+
     test('suppresses runtime control notices inside task context cards', () => {
         const session = makeSession({
             status: 'running',
@@ -1179,7 +1326,7 @@ describe('buildTimelineItems', () => {
         expect(turns[0]?.messages.some((line) => line.toLowerCase().includes('status updated:'))).toBe(false);
     });
 
-    test('renders route disambiguation clarification as choice buttons in task card', () => {
+    test('projects route disambiguation clarification into task-card collaboration state', () => {
         const session = makeSession({
             status: 'idle',
             events: [
@@ -1225,7 +1372,7 @@ describe('buildTimelineItems', () => {
         expect(taskCards[0]?.collaboration?.input).toBeUndefined();
     });
 
-    test('renders task draft confirmation as collaboration choices with optional edit input', () => {
+    test('projects task draft confirmation into collaboration state with edit input metadata', () => {
         const session = makeSession({
             status: 'idle',
             events: [
@@ -1274,5 +1421,241 @@ describe('buildTimelineItems', () => {
             placeholder: '输入修改后的任务说明（可选）',
             submitLabel: '编辑后创建',
         });
+    });
+
+    test('preserves raw user and assistant trajectory after a task follow-up adds a second user message', () => {
+        const session = makeSession({
+            status: 'idle',
+            taskMode: 'immediate_task',
+            messages: [
+                {
+                    id: 'msg-user-1',
+                    role: 'user',
+                    content: '检索今天 minimax 的股价，分析走势，并发送到 X 上',
+                    timestamp: '2026-03-27T09:28:19.635Z',
+                },
+                {
+                    id: 'msg-assistant-1',
+                    role: 'assistant',
+                    content: '我先确认标的和发帖方式，再继续执行。',
+                    timestamp: '2026-03-27T09:28:45.874Z',
+                },
+                {
+                    id: 'msg-user-2',
+                    role: 'user',
+                    content: '发送到 X',
+                    timestamp: '2026-03-27T10:30:16.725Z',
+                },
+                {
+                    id: 'msg-assistant-2',
+                    role: 'assistant',
+                    content: '需要先完成登录准备。',
+                    timestamp: '2026-03-27T10:30:21.184Z',
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'event-start',
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    timestamp: '2026-03-27T09:28:19.635Z',
+                    payload: {
+                        title: '检索今天 minimax 的股价，分析走势，并发送到 X 上',
+                        context: {
+                            userQuery: '原始任务：检索今天 minimax 的股价，分析走势，并发送到 X 上\n用户路由：task',
+                        },
+                    },
+                }),
+                makeEvent({
+                    id: 'event-plan-1',
+                    sequence: 2,
+                    type: 'TASK_PLAN_READY',
+                    timestamp: '2026-03-27T09:28:19.636Z',
+                    payload: {
+                        summary: 'Initial task plan.',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    id: 'event-assistant-1',
+                    sequence: 3,
+                    type: 'CHAT_MESSAGE',
+                    timestamp: '2026-03-27T09:28:45.874Z',
+                    payload: {
+                        role: 'assistant',
+                        content: '我先确认标的和发帖方式，再继续执行。',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-finish-1',
+                    sequence: 4,
+                    type: 'TASK_FINISHED',
+                    timestamp: '2026-03-27T09:31:49.839Z',
+                    payload: {
+                        summary: '已拿到行情结果并生成可发帖文案。',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-user-2',
+                    sequence: 5,
+                    type: 'CHAT_MESSAGE',
+                    timestamp: '2026-03-27T10:30:16.725Z',
+                    payload: {
+                        role: 'user',
+                        content: '发送到 X',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-reopen',
+                    sequence: 6,
+                    type: 'TASK_CONTRACT_REOPENED',
+                    timestamp: '2026-03-27T10:30:21.177Z',
+                    payload: {
+                        summary: 'User follow-up introduced a new task scope: deliverables changed.',
+                        reason: 'User follow-up introduced a new task scope: deliverables or output targets changed.',
+                        trigger: 'new_scope_signal',
+                        diff: {
+                            changedFields: ['deliverables'],
+                        },
+                    },
+                }),
+                makeEvent({
+                    id: 'event-plan-2',
+                    sequence: 7,
+                    type: 'TASK_PLAN_READY',
+                    timestamp: '2026-03-27T10:30:21.179Z',
+                    payload: {
+                        summary: 'Replanned task requires browser action.',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    id: 'event-action',
+                    sequence: 8,
+                    type: 'TASK_USER_ACTION_REQUIRED',
+                    timestamp: '2026-03-27T10:30:21.184Z',
+                    payload: {
+                        actionId: 'action-login',
+                        title: 'Complete required manual action',
+                        kind: 'external_auth',
+                        description: '需要先完成登录准备。',
+                        blocking: true,
+                        questions: [],
+                        instructions: ['先登录，再继续执行。'],
+                    },
+                }),
+                makeEvent({
+                    id: 'event-assistant-2',
+                    sequence: 9,
+                    type: 'CHAT_MESSAGE',
+                    timestamp: '2026-03-27T10:30:21.184Z',
+                    payload: {
+                        role: 'assistant',
+                        content: '需要先完成登录准备。',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-status',
+                    sequence: 10,
+                    type: 'TASK_STATUS',
+                    timestamp: '2026-03-27T10:30:21.184Z',
+                    payload: {
+                        status: 'idle',
+                        activeHardness: 'externally_blocked',
+                        blockingReason: '需要先完成登录准备。',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const turns = extractAssistantTurns(result.items);
+
+        expect(result.items.map((item) => item.type)).toEqual([
+            'user_message',
+            'assistant_turn',
+            'user_message',
+            'assistant_turn',
+            'assistant_turn',
+        ]);
+        expect(result.items[0]).toMatchObject({
+            type: 'user_message',
+            content: '检索今天 minimax 的股价，分析走势，并发送到 X 上',
+        });
+        expect(turns[0]?.messages).toEqual(['我先确认标的和发帖方式，再继续执行。']);
+        expect(result.items[2]).toMatchObject({
+            type: 'user_message',
+            content: '发送到 X',
+        });
+        expect(turns[1]?.messages).toEqual(['需要先完成登录准备。']);
+        expect(turns[2]?.taskCard?.collaboration?.title).toBe('Complete required manual action');
+        expect(turns[2]?.taskCard?.subtitle).toBe('需要先完成登录准备。');
+    });
+
+    test('keeps single-user task sessions on the collapsed task timeline path', () => {
+        const session = makeSession({
+            status: 'idle',
+            taskMode: 'immediate_task',
+            messages: [
+                {
+                    id: 'msg-user-1',
+                    role: 'user',
+                    content: '导出 PDF',
+                    timestamp: '2026-03-27T10:00:00.000Z',
+                },
+                {
+                    id: 'msg-assistant-1',
+                    role: 'assistant',
+                    content: '先确认导出权限。',
+                    timestamp: '2026-03-27T10:00:01.000Z',
+                },
+            ],
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    timestamp: '2026-03-27T10:00:00.000Z',
+                    payload: {
+                        summary: 'Need export permission.',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_USER_ACTION_REQUIRED',
+                    timestamp: '2026-03-27T10:00:01.000Z',
+                    payload: {
+                        actionId: 'grant-export',
+                        title: 'Grant PDF export access',
+                        kind: 'manual_step',
+                        description: 'Allow Coworkany to continue the PDF export.',
+                        blocking: true,
+                        questions: [],
+                        instructions: ['Grant filesystem access, then continue.'],
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const turns = extractAssistantTurns(result.items);
+
+        expect(result.items).toHaveLength(1);
+        expect(turns[0]?.taskCard?.collaboration?.title).toBe('Grant PDF export access');
     });
 });

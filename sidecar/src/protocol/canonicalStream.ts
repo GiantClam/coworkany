@@ -7,6 +7,8 @@ export const CanonicalStatusPartSchema = z.object({
     type: z.literal('status'),
     status: z.enum(['idle', 'running', 'finished', 'failed']),
     label: z.string().optional(),
+    activeHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']).optional(),
+    blockingReason: z.string().optional(),
 });
 
 export const CanonicalTextPartSchema = z.object({
@@ -43,6 +45,8 @@ export const CanonicalCollaborationPartSchema = z.object({
     title: z.string(),
     description: z.string().optional(),
     blocking: z.boolean().optional(),
+    activeHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']).optional(),
+    blockingReason: z.string().optional(),
     questions: z.array(z.string()).default([]),
     instructions: z.array(z.string()).default([]),
     choices: z.array(z.object({
@@ -294,9 +298,42 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
                         status: payload.status === 'running' || payload.status === 'finished' || payload.status === 'failed'
                             ? payload.status
                             : 'idle',
+                        activeHardness:
+                            payload.activeHardness === 'trivial'
+                            || payload.activeHardness === 'bounded'
+                            || payload.activeHardness === 'multi_step'
+                            || payload.activeHardness === 'externally_blocked'
+                            || payload.activeHardness === 'high_risk'
+                                ? payload.activeHardness
+                                : undefined,
+                        blockingReason: normalizeText(payload.blockingReason) || undefined,
                     }],
                 }),
             ];
+
+        case 'TASK_RESUMED': {
+            const resumeReason = normalizeText(payload.resumeReason);
+            if (resumeReason !== 'capability_review_approved') {
+                return [];
+            }
+
+            return [
+                completeMessage({
+                    id: event.id,
+                    taskId: event.taskId,
+                    role: 'runtime',
+                    timestamp: event.timestamp,
+                    sequence: event.sequence,
+                    sourceEventId: event.id,
+                    sourceEventType: event.type,
+                    parts: [{
+                        type: 'status',
+                        status: 'running',
+                        label: 'Approved the generated capability and resumed the original task.',
+                    }],
+                }),
+            ];
+        }
 
         case 'PLAN_UPDATED':
             return [
@@ -386,6 +423,9 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
                             deliverables: payload.deliverables,
                             checkpoints: payload.checkpoints,
                             userActionsRequired: payload.userActionsRequired,
+                            executionProfile: payload.executionProfile,
+                            capabilityPlan: payload.capabilityPlan,
+                            capabilityReview: payload.capabilityReview,
                             missingInfo: payload.missingInfo,
                         },
                     }],
@@ -413,6 +453,8 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
                                 kind: payload.kind,
                                 riskTier: payload.riskTier,
                                 executionPolicy: payload.executionPolicy,
+                                activeHardness: payload.activeHardness,
+                                blockingReason: payload.blockingReason,
                             },
                         },
                         {
@@ -422,6 +464,15 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
                             title: normalizeText(payload.title) || 'Checkpoint reached',
                             description: normalizeText(payload.userMessage) || normalizeText(payload.reason),
                             blocking: Boolean(payload.blocking),
+                            activeHardness:
+                                payload.activeHardness === 'trivial'
+                                || payload.activeHardness === 'bounded'
+                                || payload.activeHardness === 'multi_step'
+                                || payload.activeHardness === 'externally_blocked'
+                                || payload.activeHardness === 'high_risk'
+                                    ? payload.activeHardness
+                                    : undefined,
+                            blockingReason: normalizeText(payload.blockingReason) || undefined,
                             questions: [],
                             instructions: [],
                         },
@@ -446,6 +497,15 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
                         title: normalizeText(payload.title) || 'User action required',
                         description: normalizeText(payload.description),
                         blocking: Boolean(payload.blocking),
+                        activeHardness:
+                            payload.activeHardness === 'trivial'
+                            || payload.activeHardness === 'bounded'
+                            || payload.activeHardness === 'multi_step'
+                            || payload.activeHardness === 'externally_blocked'
+                            || payload.activeHardness === 'high_risk'
+                                ? payload.activeHardness
+                                : undefined,
+                        blockingReason: normalizeText(payload.blockingReason) || undefined,
                         questions: Array.isArray(payload.questions) ? payload.questions.filter((entry): entry is string => typeof entry === 'string') : [],
                         instructions: [
                             ...(Array.isArray(payload.instructions) ? payload.instructions.filter((entry): entry is string => typeof entry === 'string') : []),
@@ -486,6 +546,15 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
                         title: 'Clarification required',
                         description: normalizeText(payload.reason),
                         blocking: true,
+                        activeHardness:
+                            payload.activeHardness === 'trivial'
+                            || payload.activeHardness === 'bounded'
+                            || payload.activeHardness === 'multi_step'
+                            || payload.activeHardness === 'externally_blocked'
+                            || payload.activeHardness === 'high_risk'
+                                ? payload.activeHardness
+                                : undefined,
+                        blockingReason: normalizeText(payload.blockingReason) || undefined,
                         questions: Array.isArray(payload.questions) ? payload.questions.filter((entry): entry is string => typeof entry === 'string') : [],
                         instructions: [],
                         choices: Array.isArray(payload.routeChoices)

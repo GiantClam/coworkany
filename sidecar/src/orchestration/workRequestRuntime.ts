@@ -19,15 +19,18 @@ import {
     type ResearchLoopResolvers,
 } from './researchLoop';
 import {
+    type CapabilityPlan,
     type CheckpointContract,
     type FrozenWorkRequest,
     type NormalizedWorkRequest,
     type ReplanTrigger,
     type ResearchEvidence,
+    type WorkRequestFollowUpContext,
     type UserActionRequest,
 } from './workRequestSchema';
 import { type ScheduledTaskRecord } from '../scheduling/scheduledTasks';
 import { formatWorkflowForPrompt, selectLocalWorkflow } from './localWorkflowRegistry';
+export { deriveActiveHardness, deriveBlockingReason } from './workRequestPolicy';
 
 export type PreparedWorkRequestContext = {
     frozenWorkRequest: FrozenWorkRequest;
@@ -35,6 +38,13 @@ export type PreparedWorkRequestContext = {
     executionQuery: string;
     preferredSkillIds: string[];
     workRequestExecutionPrompt?: string;
+};
+
+export type CapabilityPlanClassifierInput = {
+    sourceText: string;
+    workspacePath: string;
+    followUpContext?: WorkRequestFollowUpContext;
+    analyzed: NormalizedWorkRequest;
 };
 
 export type ScheduledExecutionStagePlan = {
@@ -91,6 +101,8 @@ export function createFrozenWorkRequestFromText(input: {
     sourceText: string;
     workspacePath: string;
     workRequestStore: WorkRequestStore;
+    followUpContext?: WorkRequestFollowUpContext;
+    capabilityPlanClassifier?: (input: CapabilityPlanClassifierInput) => Promise<CapabilityPlan | undefined>;
     researchResolvers?: ResearchLoopResolvers;
     researchOptions?: ResearchLoopOptions;
 }): Promise<FrozenWorkRequest> {
@@ -164,13 +176,27 @@ async function createFrozenWorkRequestFromTextInternal(input: {
     sourceText: string;
     workspacePath: string;
     workRequestStore: WorkRequestStore;
+    followUpContext?: WorkRequestFollowUpContext;
+    capabilityPlanClassifier?: (input: CapabilityPlanClassifierInput) => Promise<CapabilityPlan | undefined>;
     researchResolvers?: ResearchLoopResolvers;
     researchOptions?: ResearchLoopOptions;
 }): Promise<FrozenWorkRequest> {
     const analyzed = analyzeWorkRequest({
         sourceText: input.sourceText,
         workspacePath: input.workspacePath,
+        followUpContext: input.followUpContext,
     });
+    const classifiedCapabilityPlan = input.capabilityPlanClassifier
+        ? await input.capabilityPlanClassifier({
+            sourceText: input.sourceText,
+            workspacePath: input.workspacePath,
+            followUpContext: input.followUpContext,
+            analyzed,
+        })
+        : undefined;
+    if (classifiedCapabilityPlan) {
+        analyzed.capabilityPlan = classifiedCapabilityPlan;
+    }
     const researched = await runPreFreezeResearchLoop({
         request: analyzed,
         workRequestStore: input.workRequestStore,
@@ -186,6 +212,8 @@ export async function prepareWorkRequestContext(input: {
     sourceText: string;
     workspacePath: string;
     workRequestStore: WorkRequestStore;
+    followUpContext?: WorkRequestFollowUpContext;
+    capabilityPlanClassifier?: (input: CapabilityPlanClassifierInput) => Promise<CapabilityPlan | undefined>;
     researchResolvers?: ResearchLoopResolvers;
     researchOptions?: ResearchLoopOptions;
 }): Promise<PreparedWorkRequestContext> {
@@ -344,7 +372,7 @@ export function buildWorkRequestPlanSummary(request: {
 }
 
 export function getBlockingCheckpoint(request: FrozenWorkRequest): CheckpointContract | undefined {
-    return request.checkpoints?.find((checkpoint) => checkpoint.blocking) ?? request.checkpoints?.[0];
+    return request.checkpoints?.find((checkpoint) => checkpoint.blocking);
 }
 
 export function getBlockingUserAction(
@@ -952,6 +980,14 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
             `- ${checkpoint.title}: ${checkpoint.reason} (blocking=${String(checkpoint.blocking)}, requiresUserConfirmation=${String(checkpoint.requiresUserConfirmation)})`
         ).join('\n')
         : '';
+    const publishIntentSection = request.publishIntent
+        ? [
+            `- Action: ${request.publishIntent.action}`,
+            `- Platform: ${request.publishIntent.platform}`,
+            `- Execution mode: ${request.publishIntent.executionMode}`,
+            `- Requires side effect: ${String(request.publishIntent.requiresSideEffect)}`,
+        ].join('\n')
+        : '';
     const userActionsSection = (request.userActionsRequired?.length ?? 0) > 0
         ? request.userActionsRequired!.map((action) => {
             const questions = action.questions.length > 0 ? ` Questions: ${action.questions.join(' | ')}` : '';
@@ -1006,6 +1042,7 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
         executionQuery === normalizedSource &&
         !workflowGuidance &&
         !deliverablesSection &&
+        !publishIntentSection &&
         !checkpointsSection &&
         !userActionsSection &&
         !executionRequirementsSection &&
@@ -1028,7 +1065,7 @@ ${executionQuery}
 
 Coworkany is the primary task owner for this run. Coworkany should decide how to execute, when to checkpoint, and when user collaboration is actually required.
 
-${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
+${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${publishIntentSection ? `### Publish Intent\n${publishIntentSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
 
 ${workflowGuidance ? `\n## Deterministic Local Workflow Guidance\n\n${workflowGuidance}\n` : ''}
 

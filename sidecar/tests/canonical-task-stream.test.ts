@@ -93,6 +93,37 @@ describe('canonical task stream protocol', () => {
                 deliverables: [],
                 checkpoints: [],
                 userActionsRequired: [],
+                executionProfile: {
+                    primaryHardness: 'multi_step',
+                    requiredCapabilities: ['workspace_write'],
+                    blockingRisk: 'none',
+                    interactionMode: 'passive_status',
+                    executionShape: 'staged',
+                    reasons: ['Execution is expected to write files or mutate workspace state.'],
+                },
+                capabilityPlan: {
+                    missingCapability: 'new_runtime_tool_needed',
+                    learningRequired: true,
+                    canProceedWithoutLearning: false,
+                    learningScope: 'runtime_tool',
+                    replayStrategy: 'resume_from_checkpoint',
+                    sideEffectRisk: 'write_external',
+                    userAssistRequired: false,
+                    userAssistReason: 'none',
+                    boundedLearningBudget: {
+                        complexityTier: 'moderate',
+                        maxRounds: 2,
+                        maxResearchTimeMs: 60000,
+                        maxValidationAttempts: 2,
+                    },
+                    reasons: ['Coworkany does not have a dedicated validated publish capability for the target platform.'],
+                },
+                capabilityReview: {
+                    status: 'pending',
+                    summary: 'Generated capability requires review before execution can resume.',
+                    learnedEntityId: 'skill-wechat-official-post',
+                    updatedAt: '2026-03-28T09:30:00.000Z',
+                },
                 missingInfo: [],
             },
         });
@@ -118,6 +149,37 @@ describe('canonical task stream protocol', () => {
                                 needsDisambiguation: false,
                                 forcedByUserSelection: true,
                             },
+                            executionProfile: {
+                                primaryHardness: 'multi_step',
+                                requiredCapabilities: ['workspace_write'],
+                                blockingRisk: 'none',
+                                interactionMode: 'passive_status',
+                                executionShape: 'staged',
+                                reasons: ['Execution is expected to write files or mutate workspace state.'],
+                            },
+                            capabilityPlan: {
+                                missingCapability: 'new_runtime_tool_needed',
+                                learningRequired: true,
+                                canProceedWithoutLearning: false,
+                                learningScope: 'runtime_tool',
+                                replayStrategy: 'resume_from_checkpoint',
+                                sideEffectRisk: 'write_external',
+                                userAssistRequired: false,
+                                userAssistReason: 'none',
+                                boundedLearningBudget: {
+                                    complexityTier: 'moderate',
+                                    maxRounds: 2,
+                                    maxResearchTimeMs: 60000,
+                                    maxValidationAttempts: 2,
+                                },
+                                reasons: ['Coworkany does not have a dedicated validated publish capability for the target platform.'],
+                            },
+                            capabilityReview: {
+                                status: 'pending',
+                                summary: 'Generated capability requires review before execution can resume.',
+                                learnedEntityId: 'skill-wechat-official-post',
+                                updatedAt: '2026-03-28T09:30:00.000Z',
+                            },
                         },
                     },
                 ],
@@ -138,6 +200,7 @@ describe('canonical task stream protocol', () => {
                 instructions: ['Complete login in browser.'],
                 authUrl: 'https://x.com/i/flow/login',
                 canAutoResume: true,
+                activeHardness: 'externally_blocked',
             },
         });
 
@@ -155,6 +218,7 @@ describe('canonical task stream protocol', () => {
                         actionId: 'auth-login',
                         title: 'Login required',
                         description: 'Please login to continue publishing.',
+                        activeHardness: 'externally_blocked',
                         instructions: [
                             'Complete login in browser.',
                             '登录完成后将自动继续执行。',
@@ -167,6 +231,76 @@ describe('canonical task stream protocol', () => {
                 ],
             },
         });
+    });
+
+    test('preserves active hardness on status parts', () => {
+        const event = makeEvent({
+            type: 'TASK_STATUS',
+            payload: {
+                status: 'idle',
+                activeHardness: 'high_risk',
+                blockingReason: 'Waiting for explicit review approval.',
+            },
+        });
+
+        const result = taskEventToCanonicalStreamEvents(event);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({
+            type: 'canonical_message',
+            payload: {
+                role: 'runtime',
+                parts: [
+                    {
+                        type: 'status',
+                        status: 'idle',
+                        activeHardness: 'high_risk',
+                        blockingReason: 'Waiting for explicit review approval.',
+                    },
+                ],
+            },
+        });
+    });
+
+    test('maps capability-review resume events into runtime status labels', () => {
+        const event = makeEvent({
+            type: 'TASK_RESUMED',
+            payload: {
+                resumeReason: 'capability_review_approved',
+                suspendDurationMs: 0,
+            },
+        });
+
+        const result = taskEventToCanonicalStreamEvents(event);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({
+            type: 'canonical_message',
+            payload: {
+                role: 'runtime',
+                parts: [
+                    {
+                        type: 'status',
+                        status: 'running',
+                        label: 'Approved the generated capability and resumed the original task.',
+                    },
+                ],
+            },
+        });
+    });
+
+    test('keeps ordinary resume events out of the canonical timeline stream', () => {
+        const event = makeEvent({
+            type: 'TASK_RESUMED',
+            payload: {
+                resumeReason: 'user_confirmed',
+                suspendDurationMs: 1200,
+            },
+        });
+
+        const result = taskEventToCanonicalStreamEvents(event);
+
+        expect(result).toEqual([]);
     });
 
     test('maps plan updates into structured task progress parts', () => {

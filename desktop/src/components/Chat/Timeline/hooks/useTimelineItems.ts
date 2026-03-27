@@ -27,16 +27,21 @@ import {
 import { materializeCanonicalMessages } from '../../../../bridges/canonicalTaskStream';
 import { buildLegacyTimelineItems } from './legacyTimelineBuilder';
 import {
+    buildPlannedTaskList,
+    buildPlanSummaryLines,
     buildAssistantTurnSteps,
     cleanTaskCardTitle,
     hasExplicitTaskIntent,
     isScheduledMode,
     mapStatusLabel,
+    mergeTaskProgressIntoTaskMap,
     normalizeComparableText,
     normalizeLines,
     normalizeText,
+    syncTaskCardExecutionProfile,
     setTaskList,
-    toTaskStatus,
+    TASK_DRAFT_CONFIRMATION_INPUT,
+    TASK_DRAFT_CONFIRMATION_INSTRUCTION,
     type AssistantThreadItem,
     type TaskCardTask,
     type TaskPhaseKey,
@@ -135,11 +140,13 @@ function upsertCanonicalTaskCardSection(
 }
 
 function ensureCanonicalTaskCard(
+    session: TaskSession,
     turn: AssistantTurnItem,
     message: CanonicalTaskMessage,
 ): TaskCardItem {
     if (turn.taskCard) {
         turn.taskCard.timestamp = message.timestamp;
+        syncTaskCardExecutionProfile(turn.taskCard, session);
         return turn.taskCard;
     }
 
@@ -153,6 +160,7 @@ function ensureCanonicalTaskCard(
         sections: [],
         timestamp: message.timestamp,
     };
+    syncTaskCardExecutionProfile(nextCard, session);
     turn.taskCard = nextCard;
     return nextCard;
 }
@@ -213,6 +221,14 @@ function appendCanonicalSystemEvent(turn: AssistantTurnItem, text: string): void
     }
 
     turn.systemEvents = [...nextSystemEvents, normalized];
+}
+
+function formatResumeReasonNotice(reason: unknown): string | null {
+    const normalized = normalizeText(reason);
+    if (normalized === 'capability_review_approved') {
+        return 'Approved the generated capability and resumed the original task.';
+    }
+    return null;
 }
 
 function upsertCanonicalToolCall(
@@ -319,6 +335,7 @@ function toCanonicalAssistantThreadItems(turn: AssistantTurnItem): AssistantThre
 }
 
 function updateCanonicalTaskCardFromTaskPart(
+    session: TaskSession,
     turn: AssistantTurnItem,
     message: CanonicalTaskMessage,
     part: CanonicalTaskPart,
@@ -326,7 +343,7 @@ function updateCanonicalTaskCardFromTaskPart(
     taskById: Map<string, TaskCardTask>,
 ): void {
     const data = (part.data as Record<string, unknown> | undefined) ?? {};
-    const card = ensureCanonicalTaskCard(turn, message);
+    const card = ensureCanonicalTaskCard(session, turn, message);
 
     switch (part.event) {
         case 'plan_ready': {
@@ -337,17 +354,25 @@ function updateCanonicalTaskCardFromTaskPart(
                 return;
             }
 
-            card.subtitle = part.summary || card.subtitle;
+            if (data.executionProfile && typeof data.executionProfile === 'object') {
+                card.executionProfile = data.executionProfile as TaskCardItem['executionProfile'];
+                card.primaryHardness = card.executionProfile?.primaryHardness;
+                card.activeHardness = card.activeHardness ?? card.primaryHardness;
+            }
+            if (data.capabilityPlan && typeof data.capabilityPlan === 'object') {
+                card.capabilityPlan = data.capabilityPlan as TaskCardItem['capabilityPlan'];
+            }
+            if (data.capabilityReview && typeof data.capabilityReview === 'object') {
+                card.capabilityReview = data.capabilityReview as TaskCardItem['capabilityReview'];
+            }
+
+            const reviewSummary = data.capabilityReview && typeof data.capabilityReview === 'object'
+                ? normalizeText((data.capabilityReview as Record<string, unknown>).summary)
+                : '';
+            card.subtitle = reviewSummary || part.summary || card.subtitle;
             card.status = 'running';
 
-            const tasks = ((Array.isArray(data.tasks) ? data.tasks : []) as Array<Record<string, unknown>>)
-                .map((task) => ({
-                    id: normalizeText(task.id),
-                    title: normalizeText(task.title) || normalizeText(task.objective) || 'Task',
-                    status: 'pending' as PlanStep['status'],
-                    dependencies: normalizeLines(Array.isArray(task.dependencies) ? task.dependencies : []),
-                }))
-                .filter((task) => task.id.length > 0);
+            const tasks = buildPlannedTaskList(data.tasks);
             if (tasks.length > 0) {
                 taskById.clear();
                 for (const task of tasks) {
@@ -356,43 +381,7 @@ function updateCanonicalTaskCardFromTaskPart(
                 setTaskList(card, Array.from(taskById.values()));
             }
 
-            const deliverableLines = ((Array.isArray(data.deliverables) ? data.deliverables : []) as Array<Record<string, unknown>>)
-                .map((deliverable) => {
-                    const title = normalizeText(deliverable.title);
-                    const path = normalizeText(deliverable.path);
-                    const description = normalizeText(deliverable.description);
-                    if (path) return `${title || 'Deliverable'}: ${path}`;
-                    if (description) return `${title || 'Deliverable'}: ${description}`;
-                    return title || '';
-                });
-            const checkpointLines = ((Array.isArray(data.checkpoints) ? data.checkpoints : []) as Array<Record<string, unknown>>)
-                .map((checkpoint) => {
-                    const title = normalizeText(checkpoint.title);
-                    const reason = normalizeText(checkpoint.reason);
-                    return reason ? `${title || 'Checkpoint'}: ${reason}` : title;
-                });
-            const userActionLines = ((Array.isArray(data.userActionsRequired) ? data.userActionsRequired : []) as Array<Record<string, unknown>>)
-                .map((action) => {
-                    const title = normalizeText(action.title);
-                    const description = normalizeText(action.description);
-                    return description ? `${title || 'Action'}: ${description}` : title;
-                });
-            const missingInfoLines = ((Array.isArray(data.missingInfo) ? data.missingInfo : []) as Array<Record<string, unknown>>)
-                .map((entry) => {
-                    const field = normalizeText(entry.field);
-                    const question = normalizeText(entry.question);
-                    const reason = normalizeText(entry.reason);
-                    return question || reason ? `${field || 'Item'}: ${question || reason}` : field;
-                });
-
-            const lines = [
-                part.summary,
-                ...tasks.map((task) => `Task: ${task.title}`),
-                ...deliverableLines,
-                ...checkpointLines,
-                ...userActionLines,
-                ...missingInfoLines,
-            ];
+            const lines = buildPlanSummaryLines(data, tasks, part.summary);
             appendCanonicalPhaseLines(phaseLines, 'plan', lines, { mode: 'replace', maxLines: 10 });
             upsertCanonicalTaskCardSection(card, 'Plan', lines, { mode: 'replace', maxLines: 10 });
             break;
@@ -400,26 +389,10 @@ function updateCanonicalTaskCardFromTaskPart(
 
         case 'plan_updated': {
             const lines = [part.summary];
-            const taskProgress = ((Array.isArray(data.taskProgress) ? data.taskProgress : []) as Array<Record<string, unknown>>)
-                .map((entry) => ({
-                    id: normalizeText(entry.taskId),
-                    title: normalizeText(entry.title),
-                    status: toTaskStatus(entry.status),
-                    dependencies: normalizeLines(Array.isArray(entry.dependencies) ? entry.dependencies : []),
-                }))
-                .filter((entry) => entry.id.length > 0);
+            const tasks = mergeTaskProgressIntoTaskMap(taskById, data.taskProgress);
 
-            if (taskProgress.length > 0) {
-                for (const entry of taskProgress) {
-                    const existing = taskById.get(entry.id);
-                    taskById.set(entry.id, {
-                        id: entry.id,
-                        title: entry.title || existing?.title || 'Task',
-                        status: entry.status,
-                        dependencies: entry.dependencies.length > 0 ? entry.dependencies : (existing?.dependencies ?? []),
-                    });
-                }
-                setTaskList(card, Array.from(taskById.values()));
+            if (tasks.length > 0) {
+                setTaskList(card, tasks);
             }
 
             appendCanonicalPhaseLines(phaseLines, 'execute', lines, { mode: 'append', maxLines: 10 });
@@ -479,12 +452,13 @@ function updateCanonicalTaskCardFromTaskPart(
 }
 
 function updateCanonicalTaskCardCollaboration(
+    session: TaskSession,
     turn: AssistantTurnItem,
     message: CanonicalTaskMessage,
     part: CanonicalCollaborationPart,
     phaseLines: Record<TaskPhaseKey, string[]>,
 ): void {
-    const card = ensureCanonicalTaskCard(turn, message);
+    const card = ensureCanonicalTaskCard(session, turn, message);
     const questions = normalizeLines(part.questions);
     const instructions = normalizeLines(part.instructions);
     const choices = (part.choices ?? [])
@@ -534,13 +508,10 @@ function updateCanonicalTaskCardCollaboration(
             blocking: part.blocking ?? true,
             questions,
             instructions: isTaskDraftConfirmation
-                ? (instructions.length > 0 ? instructions : ['可直接确认创建，或先输入修改内容后点击“编辑后创建”。'])
+                ? (instructions.length > 0 ? instructions : [TASK_DRAFT_CONFIRMATION_INSTRUCTION])
                 : instructions,
             input: isTaskDraftConfirmation
-                ? {
-                    placeholder: '输入修改后的任务说明（可选）',
-                    submitLabel: '编辑后创建',
-                }
+                ? TASK_DRAFT_CONFIRMATION_INPUT
                 : undefined,
             choices,
         };
@@ -592,7 +563,7 @@ function applyCanonicalTaskCardFinish(
         if (!scheduledSession) {
             return;
         }
-        const card = ensureCanonicalTaskCard(turn, message);
+        const card = ensureCanonicalTaskCard(session, turn, message);
         const sessionTitle = cleanTaskCardTitle(normalizeText(session.title));
         card.title = sessionTitle || 'Scheduled task';
         if (!card.subtitle) {
@@ -603,7 +574,7 @@ function applyCanonicalTaskCardFinish(
         }
     }
 
-    const card = ensureCanonicalTaskCard(turn, message);
+    const card = ensureCanonicalTaskCard(session, turn, message);
     card.status = 'finished';
     card.result = {
         summary: normalizeText(part.summary),
@@ -646,7 +617,7 @@ function applyCanonicalTaskCardError(
         if (!scheduledSession) {
             return;
         }
-        const card = ensureCanonicalTaskCard(turn, message);
+        const card = ensureCanonicalTaskCard(session, turn, message);
         const sessionTitle = cleanTaskCardTitle(normalizeText(session.title));
         card.title = sessionTitle || 'Scheduled task';
         if (!card.subtitle) {
@@ -654,7 +625,7 @@ function applyCanonicalTaskCardError(
         }
     }
 
-    const card = ensureCanonicalTaskCard(turn, message);
+    const card = ensureCanonicalTaskCard(session, turn, message);
     card.status = 'failed';
     card.result = {
         error: normalizeText(part.message) || 'Unknown error',
@@ -858,7 +829,7 @@ function buildCanonicalTimelineItems(
                         break;
                     }
                     if (!(scheduledSession && part.event === 'research_updated')) {
-                        updateCanonicalTaskCardFromTaskPart(currentAssistantTurn, message, part, phaseLines, taskById);
+                        updateCanonicalTaskCardFromTaskPart(session, currentAssistantTurn, message, part, phaseLines, taskById);
                         syncTaskTurnSteps(currentAssistantTurn);
                     }
                     break;
@@ -868,7 +839,7 @@ function buildCanonicalTimelineItems(
                         if (!taskTurn) {
                             break;
                         }
-                        updateCanonicalTaskCardCollaboration(taskTurn, message, part, phaseLines);
+                        updateCanonicalTaskCardCollaboration(session, taskTurn, message, part, phaseLines);
                         syncTaskTurnSteps(taskTurn);
                     }
                     break;
@@ -941,8 +912,121 @@ function buildCanonicalTimelineItems(
         ];
     }
 
+    const resumeNotice = formatResumeReasonNotice(session.lastResumeReason);
+    if (resumeNotice) {
+        const targetTurn = currentAssistantTurn?.taskCard
+            ? currentAssistantTurn
+            : getActiveTaskTurn();
+        if (targetTurn?.taskCard) {
+            appendCanonicalPhaseLines(phaseLines, 'execute', [resumeNotice], { mode: 'append', maxLines: 10 });
+            upsertCanonicalTaskCardSection(targetTurn.taskCard, 'Execute', [resumeNotice], { mode: 'append', maxLines: 10 });
+            appendCanonicalSystemEvent(targetTurn, resumeNotice);
+            syncTaskTurnSteps(targetTurn);
+        }
+    }
+
     flushAssistantTurn();
     return items;
+}
+
+function countMeaningfulUserMessages(messages: TaskSession['messages']): number {
+    return messages.filter((message) => (
+        message.role === 'user'
+        && normalizeText(message.content).length > 0
+    )).length;
+}
+
+function shouldPreserveTaskMessageTrajectory(session: TaskSession): boolean {
+    if (!session.taskMode || session.taskMode === 'chat' || isScheduledMode(session.taskMode)) {
+        return false;
+    }
+
+    return countMeaningfulUserMessages(session.messages) >= 2;
+}
+
+function buildRawConversationTrajectoryItems(session: TaskSession): TimelineItemType[] {
+    const items: TimelineItemType[] = [];
+
+    for (const message of session.messages) {
+        const content = message.role === 'assistant'
+            ? sanitizeNoiseText(message.content)
+            : sanitizeDisplayText(message.content);
+        if (!content) {
+            continue;
+        }
+
+        if (message.role === 'user') {
+            items.push({
+                type: 'user_message',
+                id: message.id,
+                content,
+                timestamp: message.timestamp,
+            });
+            continue;
+        }
+
+        if (message.role !== 'assistant') {
+            continue;
+        }
+
+        items.push({
+            type: 'assistant_turn',
+            id: `assistant-trajectory-${message.id}`,
+            timestamp: message.timestamp,
+            lead: sanitizeDisplayText(content),
+            steps: [],
+            messages: [content],
+        });
+    }
+
+    return items;
+}
+
+function extractLatestTaskStatusTurn(items: TimelineItemType[]): AssistantTurnItem | null {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+        const item = items[index];
+        if (item?.type !== 'assistant_turn' || !item.taskCard) {
+            continue;
+        }
+
+        const hasActiveTaskState = item.taskCard.status === 'running'
+            || item.taskCard.status === 'idle'
+            || Boolean(item.taskCard.collaboration);
+        if (!hasActiveTaskState) {
+            continue;
+        }
+
+        return {
+            ...item,
+            steps: [...item.steps],
+            messages: [...item.messages],
+            systemEvents: item.systemEvents ? [...item.systemEvents] : undefined,
+            toolCalls: item.toolCalls ? [...item.toolCalls] : undefined,
+            effectRequests: item.effectRequests ? [...item.effectRequests] : undefined,
+            patches: item.patches ? [...item.patches] : undefined,
+            taskCard: item.taskCard
+                ? {
+                    ...item.taskCard,
+                    sections: [...item.taskCard.sections],
+                    tasks: item.taskCard.tasks ? [...item.taskCard.tasks] : undefined,
+                }
+                : undefined,
+        };
+    }
+
+    return null;
+}
+
+function appendLatestTaskStatusTurn(
+    rawItems: TimelineItemType[],
+    standardItems: TimelineItemType[],
+): TimelineItemType[] {
+    const latestTaskTurn = extractLatestTaskStatusTurn(standardItems);
+    if (!latestTaskTurn) {
+        return rawItems;
+    }
+
+    return [...rawItems, latestTaskTurn];
 }
 
 function buildCanonicalMessagesFromTaskEvents(taskId: string, events: TaskSession['events']): CanonicalTaskMessage[] {
@@ -994,16 +1078,15 @@ export function buildTimelineItems(
         ?? (canUseLocalCanonicalTimeline(sourceEvents)
             ? buildCanonicalMessagesFromTaskEvents(session.taskId, sourceEvents)
             : []);
-
-    if (effectiveCanonicalMessages.length > 0) {
-        return {
-            items: buildCanonicalTimelineItems(session, effectiveCanonicalMessages),
-            hiddenEventCount: session.events.length - sourceEvents.length,
-        };
-    }
+    const standardItems = effectiveCanonicalMessages.length > 0
+        ? buildCanonicalTimelineItems(session, effectiveCanonicalMessages)
+        : buildLegacyTimelineItems(session, sourceEvents);
+    const items = shouldPreserveTaskMessageTrajectory(session)
+        ? appendLatestTaskStatusTurn(buildRawConversationTrajectoryItems(session), standardItems)
+        : standardItems;
 
     return {
-        items: buildLegacyTimelineItems(session, sourceEvents),
+        items,
         hiddenEventCount: session.events.length - sourceEvents.length,
     };
 }

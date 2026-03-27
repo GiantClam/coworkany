@@ -46,6 +46,42 @@ export interface SelfLearningControllerDependencies {
     proactiveLearner?: ProactiveLearner;
 }
 
+export type CapabilityAcquisitionResult =
+    | {
+        outcome: 'reused';
+        summary: string;
+        reusableSkillId?: string;
+    }
+    | {
+        outcome: 'learned';
+        summary: string;
+        learnedEntityId?: string;
+    }
+    | {
+        outcome: 'review_required';
+        summary: string;
+        learnedEntityId?: string;
+    }
+    | {
+        outcome: 'failed';
+        summary: string;
+        error?: string;
+    };
+
+export type CapabilityAcquisitionPhase =
+    | 'checking_existing_capabilities'
+    | 'researching_capability'
+    | 'generating_capability'
+    | 'validating_capability'
+    | 'saving_capability';
+
+export interface CapabilityAcquisitionProgress {
+    phase: CapabilityAcquisitionPhase;
+    summary: string;
+    progress: number;
+    sessionId?: string;
+}
+
 // ============================================================================
 // SelfLearningController Class
 // ============================================================================
@@ -146,6 +182,80 @@ export class SelfLearningController {
         };
     }
 
+    async acquireCapabilityForTask(input: {
+        query: string;
+        maxRounds: number;
+        maxValidationAttempts: number;
+        sideEffectRisk: 'none' | 'read_only' | 'write_external';
+        onProgress?: (progress: CapabilityAcquisitionProgress) => void;
+    }): Promise<CapabilityAcquisitionResult> {
+        input.onProgress?.({
+            phase: 'checking_existing_capabilities',
+            summary: 'Checking whether Coworkany can reuse an existing capability first.',
+            progress: 5,
+        });
+
+        const precheck = await this.shouldLearn(input.query);
+        const reusableSkill = precheck.reusable?.matchedSkills?.[0];
+        if (precheck.reusable?.shouldUseExisting && precheck.reusable.confidence >= this.config.minConfidenceToAutoUse) {
+            return {
+                outcome: 'reused',
+                summary: reusableSkill
+                    ? `Reused existing capability: ${reusableSkill.skillName}.`
+                    : 'Reused an existing learned capability.',
+                reusableSkillId: reusableSkill?.skillId,
+            };
+        }
+
+        if (!precheck.needsLearning) {
+            return {
+                outcome: 'failed',
+                summary: 'No reusable capability was found, and no learnable capability gap was detected.',
+            };
+        }
+
+        let lastFailure = 'Capability acquisition did not produce a reusable result.';
+        const rounds = Math.max(1, input.maxRounds);
+        for (let round = 0; round < rounds; round++) {
+            if (round > 0) {
+                input.onProgress?.({
+                    phase: 'checking_existing_capabilities',
+                    summary: `Retrying capability acquisition with another approach (${round + 1}/${rounds}).`,
+                    progress: 10,
+                });
+            }
+
+            const session = await this.learn(input.query, {
+                progressObserver: input.onProgress,
+                maxValidationAttempts: input.maxValidationAttempts,
+                sideEffectRisk: input.sideEffectRisk,
+            });
+            if (session.status === 'completed' && session.outcomes.length > 0) {
+                const learned = session.outcomes[0];
+                if (input.sideEffectRisk === 'write_external') {
+                    return {
+                        outcome: 'review_required',
+                        summary: 'Generated external-write capability is ready for review before live use.',
+                        learnedEntityId: learned.id,
+                    };
+                }
+                return {
+                    outcome: 'learned',
+                    summary: `Acquired capability: ${learned.id}.`,
+                    learnedEntityId: learned.id,
+                };
+            }
+
+            lastFailure = session.errors[session.errors.length - 1] || lastFailure;
+        }
+
+        return {
+            outcome: 'failed',
+            summary: 'Unable to acquire the missing capability within the learning budget.',
+            error: lastFailure,
+        };
+    }
+
     // ========================================================================
     // Main Learning Flow
     // ========================================================================
@@ -153,7 +263,11 @@ export class SelfLearningController {
     /**
      * Execute complete learning cycle
      */
-    async learn(userQuery: string): Promise<LearningSession> {
+    async learn(userQuery: string, options?: {
+        progressObserver?: (progress: CapabilityAcquisitionProgress) => void;
+        maxValidationAttempts?: number;
+        sideEffectRisk?: 'none' | 'read_only' | 'write_external';
+    }): Promise<LearningSession> {
         // Check concurrent session limit
         if (this.activeSessions.size >= this.config.maxConcurrentSessions) {
             throw new Error(`Maximum concurrent learning sessions (${this.config.maxConcurrentSessions}) reached`);
@@ -167,7 +281,7 @@ export class SelfLearningController {
 
         try {
             // Phase 1: Gap Detection
-            await this.runGapDetection(session);
+            await this.runGapDetection(session, options?.progressObserver);
 
             if (session.gaps.length === 0) {
                 session.status = 'completed';
@@ -180,7 +294,10 @@ export class SelfLearningController {
                 if (session.status === 'cancelled') break;
 
                 try {
-                    await this.processGap(session, gap);
+                    await this.processGap(session, gap, options?.progressObserver, {
+                        maxValidationAttempts: options?.maxValidationAttempts,
+                        sideEffectRisk: options?.sideEffectRisk,
+                    });
                 } catch (error) {
                     this.addLog(session, 'error', `Failed to process gap: ${gap.description}`);
                     session.errors.push(error instanceof Error ? error.message : String(error));
@@ -214,10 +331,20 @@ export class SelfLearningController {
     /**
      * Run gap detection phase
      */
-    private async runGapDetection(session: LearningSession): Promise<void> {
+    private async runGapDetection(
+        session: LearningSession,
+        progressObserver?: (progress: CapabilityAcquisitionProgress) => void
+    ): Promise<void> {
         session.status = 'detecting';
         session.currentPhase = 'Gap Detection';
         session.progress = 5;
+
+        progressObserver?.({
+            phase: 'checking_existing_capabilities',
+            summary: 'Identifying the exact capability gap that blocks this task.',
+            progress: session.progress,
+            sessionId: session.id,
+        });
 
         this.emitEvent('gap_detected', session.id, { phase: 'detecting' });
 
@@ -232,13 +359,28 @@ export class SelfLearningController {
     /**
      * Process a single capability gap
      */
-    private async processGap(session: LearningSession, gap: CapabilityGap): Promise<void> {
+    private async processGap(
+        session: LearningSession,
+        gap: CapabilityGap,
+        progressObserver?: (progress: CapabilityAcquisitionProgress) => void,
+        options?: {
+            maxValidationAttempts?: number;
+            sideEffectRisk?: 'none' | 'read_only' | 'write_external';
+        },
+    ): Promise<void> {
         gap.userQuery = session.triggerQuery;
 
         // Phase 2: Research
         session.status = 'researching';
         session.currentPhase = `Researching: ${gap.keywords[0]}`;
         session.progress = 20;
+
+        progressObserver?.({
+            phase: 'researching_capability',
+            summary: 'Researching how to acquire the missing capability.',
+            progress: session.progress,
+            sessionId: session.id,
+        });
 
         this.emitEvent('research_started', session.id, { gap: gap.id });
         this.addLog(session, 'info', `Researching: ${gap.description}`);
@@ -262,6 +404,13 @@ export class SelfLearningController {
         session.status = 'learning';
         session.currentPhase = `Processing: ${gap.keywords[0]}`;
 
+        progressObserver?.({
+            phase: 'generating_capability',
+            summary: 'Generating a candidate capability from the research findings.',
+            progress: session.progress,
+            sessionId: session.id,
+        });
+
         this.emitEvent('learning_started', session.id, { gap: gap.id });
 
         const learningOutcome = await this.deps.learningProcessor.process(researchResult);
@@ -283,6 +432,13 @@ export class SelfLearningController {
         session.status = 'experimenting';
         session.currentPhase = `Validating: ${gap.keywords[0]}`;
 
+        progressObserver?.({
+            phase: 'validating_capability',
+            summary: 'Validating the generated capability in the sandbox.',
+            progress: session.progress,
+            sessionId: session.id,
+        });
+
         this.emitEvent('experiment_started', session.id, { gap: gap.id });
 
         // Process each piece of knowledge
@@ -293,7 +449,11 @@ export class SelfLearningController {
 
             const experimentConfig = this.deps.labSandbox.createExperimentConfig(
                 knowledge,
-                testCases
+                testCases,
+                {
+                    maxValidationAttempts: options?.maxValidationAttempts,
+                    sideEffectRisk: options?.sideEffectRisk,
+                },
             );
 
             const experimentResult = await this.deps.labSandbox.runExperiment(experimentConfig);
@@ -316,6 +476,13 @@ export class SelfLearningController {
             if (experimentResult.success || knowledge.confidence >= this.config.minConfidenceToSave) {
                 session.status = 'precipitating';
                 session.currentPhase = `Saving: ${knowledge.title}`;
+
+                progressObserver?.({
+                    phase: 'saving_capability',
+                    summary: 'Saving the validated capability for future reuse.',
+                    progress: session.progress,
+                    sessionId: session.id,
+                });
 
                 this.emitEvent('precipitation_started', session.id, {
                     gap: gap.id,

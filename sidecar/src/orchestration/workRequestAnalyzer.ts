@@ -2,6 +2,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import {
     type ExecutionPlan,
+    type ExecutionProfile,
     type ClarificationDecision,
     type CheckpointContract,
     type DefaultingPolicy,
@@ -14,6 +15,7 @@ import {
     type MissingInfoItem,
     type MemoryIsolationPolicy,
     type NormalizedWorkRequest,
+    type PublishIntent,
     type PresentationPayload,
     type PresentationContract,
     type ReplanPolicy,
@@ -27,7 +29,14 @@ import {
     type TenantIsolationPolicy,
     type UncertaintyItem,
     type UserActionRequest,
+    type WorkRequestFollowUpContext,
 } from './workRequestSchema';
+import {
+    buildCapabilityPlan,
+    buildCheckpointsFromExecutionProfile,
+    buildExecutionProfile,
+    buildUserActionsRequiredFromExecutionProfile,
+} from './workRequestPolicy';
 import {
     detectScheduledIntent,
     type ChainedScheduledStageIntent,
@@ -361,9 +370,13 @@ function isCodeChangeTask(text: string): boolean {
 }
 
 const SOCIAL_PLATFORM_CUE_PATTERN =
-    /(x\.com|twitter|推特|小红书|reddit|facebook|instagram|linkedin|社交平台|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i;
+    /(x\.com|twitter|推特|小红书|xiaohongshu|rednote|xhs|微信公众号|公众号|微信公众平台|mp\.weixin|reddit|facebook|instagram|linkedin|社交平台|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i;
 const SOCIAL_PUBLISH_CUE_PATTERN =
-    /(?:发布|发帖|发文|推文|发推|发送(?:到|至)?|同步到|推送到|tweet|post|publish|share|send(?:\s+to)?)/i;
+    /(?:发布|发帖|发文|发到|推文|发推|发送(?:到|至)?|同步到|推送到|tweet|post|publish|share|send(?:\s+to)?)/i;
+const SOCIAL_PUBLISH_PREVIEW_CUE_PATTERN =
+    /(?:先给我看|先看|草稿|预览|preview|draft|review first|先确认后发|再发)/i;
+const SOCIAL_PUBLISH_DRAFT_ONLY_CUE_PATTERN =
+    /(?:只给我文案|只要文案|不要代发|不用发布|不要发布|draft only|copy only|just draft)/i;
 const EXTERNAL_SIDE_EFFECT_CUE_PATTERN =
     /(?:发布|发帖|发文|提交|发送|推送|上传|下单|预约|报名|post|publish|submit|send|upload|checkout|book|apply)/i;
 const BROWSER_UI_CUE_PATTERN =
@@ -375,16 +388,71 @@ function isLikelySocialPublishingTask(text: string): boolean {
     return SOCIAL_PLATFORM_CUE_PATTERN.test(text) && SOCIAL_PUBLISH_CUE_PATTERN.test(text);
 }
 
+function detectSocialPublishPlatform(text: string): PublishIntent['platform'] | null {
+    if (/(?:x\.com|twitter|推特|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i.test(text)) {
+        return 'x';
+    }
+    if (/(?:小红书|xiaohongshu|rednote|xhs)/i.test(text)) {
+        return 'xiaohongshu';
+    }
+    if (/(?:微信公众号|微信公众平台|公众号|mp\.weixin)/i.test(text)) {
+        return 'wechat_official';
+    }
+    if (/reddit/i.test(text)) {
+        return 'reddit';
+    }
+    if (/facebook/i.test(text)) {
+        return 'facebook';
+    }
+    if (/instagram/i.test(text)) {
+        return 'instagram';
+    }
+    if (/linkedin/i.test(text)) {
+        return 'linkedin';
+    }
+    if (/社交平台/i.test(text)) {
+        return 'generic_social';
+    }
+    return null;
+}
+
+function buildPublishIntent(text: string): PublishIntent | undefined {
+    if (!isLikelySocialPublishingTask(text)) {
+        return undefined;
+    }
+
+    const platform = detectSocialPublishPlatform(text) ?? 'generic_social';
+    const executionMode = SOCIAL_PUBLISH_DRAFT_ONLY_CUE_PATTERN.test(text)
+        ? 'draft_only'
+        : SOCIAL_PUBLISH_PREVIEW_CUE_PATTERN.test(text)
+            ? 'preview_then_publish'
+            : 'direct_publish';
+
+    return {
+        action: 'publish_social_post',
+        platform,
+        executionMode,
+        requiresSideEffect: executionMode !== 'draft_only',
+    };
+}
+
 function hasExplicitManualActionSignal(text: string): boolean {
     return EXPLICIT_MANUAL_ACTION_PATTERN.test(text);
 }
 
+function hasExplicitAuthSignal(text: string): boolean {
+    return /(登录|login|sign in|验证码|2fa|授权|oauth|auth)/i.test(text);
+}
+
 function requiresExternalAuthOrManualAction(text: string): boolean {
-    return hasExplicitManualActionSignal(text)
-        || isLikelySocialPublishingTask(text);
+    return hasExplicitManualActionSignal(text);
 }
 
 function requiresVerifiedBrowserExecution(text: string): boolean {
+    const publishIntent = buildPublishIntent(text);
+    if (publishIntent?.requiresSideEffect) {
+        return true;
+    }
     return requiresBrowserAutomationSkill(text) && EXTERNAL_SIDE_EFFECT_CUE_PATTERN.test(text);
 }
 
@@ -727,152 +795,6 @@ function buildDeliverables(input: {
     }
 
     return deliverables;
-}
-
-function buildCheckpoints(input: {
-    text: string;
-    mode: NormalizedWorkRequest['mode'];
-    deliverables: DeliverableContract[];
-    hasManualAction: boolean;
-    hasBlockingManualAction: boolean;
-    hitlPolicy: HitlPolicy;
-    clarification: ClarificationDecision;
-}): CheckpointContract[] {
-    const checkpoints: CheckpointContract[] = [];
-
-    const toBlocking = (policy: HitlExecutionPolicy): boolean =>
-        policy === 'review_required' || policy === 'hard_block';
-
-    if (input.hitlPolicy.requiresPlanConfirmation && !input.clarification.required) {
-        const executionPolicy: HitlExecutionPolicy = 'review_required';
-        checkpoints.push({
-            id: randomUUID(),
-            title: 'Review execution plan',
-            kind: 'review',
-            reason: `Execution risk tier is ${input.hitlPolicy.riskTier} and requires explicit user approval before continuing.`,
-            userMessage: 'Review the planned execution and wait for the user to confirm before starting execution.',
-            riskTier: input.hitlPolicy.riskTier,
-            executionPolicy,
-            requiresUserConfirmation: true,
-            blocking: toBlocking(executionPolicy),
-        });
-    }
-
-    if (input.hasManualAction) {
-        const executionPolicy: HitlExecutionPolicy = input.hasBlockingManualAction ? 'hard_block' : 'auto';
-        checkpoints.push({
-            id: randomUUID(),
-            title: 'User action required',
-            kind: 'manual_action',
-            reason: input.hasBlockingManualAction
-                ? 'Execution depends on a manual step the user must complete.'
-                : 'Execution likely needs user-side preparation before the downstream stage.',
-            userMessage: input.hasBlockingManualAction
-                ? 'Pause and ask the user to complete the required manual action before continuing.'
-                : 'Ask the user to prepare any required account/auth state before the downstream stage starts.',
-            riskTier: 'high',
-            executionPolicy,
-            requiresUserConfirmation: true,
-            blocking: toBlocking(executionPolicy),
-        });
-    }
-
-    if (
-        isComplexPlanningTask(input.text, input.mode) ||
-        input.deliverables.some((deliverable) => deliverable.type === 'report_file' || deliverable.type === 'artifact_file')
-    ) {
-        const executionPolicy: HitlExecutionPolicy = 'auto';
-        checkpoints.push({
-            id: randomUUID(),
-            title: 'Checkpoint before final delivery',
-            kind: 'pre_delivery',
-            reason: 'Summarize progress and verify the planned deliverables before final handoff.',
-            userMessage: 'Provide a checkpoint summary before final delivery and request input only if a blocker or decision remains.',
-            riskTier: 'low',
-            executionPolicy,
-            requiresUserConfirmation: false,
-            blocking: toBlocking(executionPolicy),
-        });
-    }
-
-    return checkpoints;
-}
-
-function buildUserActionsRequired(input: {
-    clarification: ClarificationDecision;
-    missingInfo: MissingInfoItem[];
-    checkpoints: CheckpointContract[];
-    hasManualAction: boolean;
-    hasBlockingManualAction: boolean;
-    hitlPolicy: HitlPolicy;
-    sourceText: string;
-}): UserActionRequest[] {
-    const actions: UserActionRequest[] = [];
-
-    const toBlocking = (policy: HitlExecutionPolicy): boolean =>
-        policy === 'review_required' || policy === 'hard_block';
-
-    if (input.clarification.required) {
-        const executionPolicy: HitlExecutionPolicy = 'hard_block';
-        actions.push({
-            id: randomUUID(),
-            title: 'Provide missing task details',
-            kind: 'clarify_input',
-            description: input.clarification.reason || 'Coworkany needs more information before it can safely execute the task.',
-            riskTier: 'high',
-            executionPolicy,
-            blocking: toBlocking(executionPolicy),
-            questions: input.clarification.questions,
-            instructions: input.missingInfo.map((item) => item.field),
-        });
-    }
-
-    if (input.hitlPolicy.requiresPlanConfirmation && !input.clarification.required) {
-        const reviewCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'review');
-        const executionPolicy: HitlExecutionPolicy = 'review_required';
-        actions.push({
-            id: randomUUID(),
-            title: 'Confirm the execution plan',
-            kind: 'confirm_plan',
-            description: `This ${input.hitlPolicy.riskTier}-risk task needs explicit approval before Coworkany starts execution.`,
-            riskTier: input.hitlPolicy.riskTier,
-            executionPolicy,
-            blocking: toBlocking(executionPolicy),
-            questions: [
-                'Confirm whether Coworkany should proceed with the current execution plan.',
-            ],
-            instructions: [
-                'Reply with approval to continue, or provide changes that should be applied before execution starts.',
-            ],
-            fulfillsCheckpointId: reviewCheckpoint?.id,
-        });
-    }
-
-    if (input.hasManualAction) {
-        const manualCheckpoint = input.checkpoints.find((checkpoint) => checkpoint.kind === 'manual_action');
-        const executionPolicy: HitlExecutionPolicy = input.hasBlockingManualAction ? 'hard_block' : 'auto';
-        const likelyExternalAuth =
-            hasExplicitManualActionSignal(input.sourceText) ||
-            isLikelySocialPublishingTask(input.sourceText);
-        actions.push({
-            id: randomUUID(),
-            title: 'Complete required manual action',
-            kind: likelyExternalAuth ? 'external_auth' : 'manual_step',
-            description: input.hasBlockingManualAction
-                ? 'A manual or external step is required before Coworkany can continue the task.'
-                : 'A downstream stage likely depends on external auth/account preparation. Please prepare it in advance.',
-            riskTier: 'high',
-            executionPolicy,
-            blocking: toBlocking(executionPolicy),
-            questions: [],
-            instructions: input.hasBlockingManualAction
-                ? ['Complete the manual step in the UI or external system, then resume the task.']
-                : ['Prepare the required account/auth state before the downstream stage starts.'],
-            fulfillsCheckpointId: manualCheckpoint?.id,
-        });
-    }
-
-    return actions;
 }
 
 function buildResumeStrategy(): ResumeStrategy {
@@ -1385,8 +1307,15 @@ function inferExecutionRequirements(text: string): TaskDefinition['executionRequ
     return requirements.length > 0 ? requirements : undefined;
 }
 
-function inferPreferredTools(text: string, baseTools: string[]): string[] {
+function inferPreferredTools(
+    text: string,
+    baseTools: string[],
+    publishIntent?: PublishIntent,
+): string[] {
     const merged = new Set(baseTools);
+    if (publishIntent?.platform === 'xiaohongshu' && publishIntent.requiresSideEffect) {
+        merged.add('xiaohongshu_post');
+    }
     if (requiresBrowserAutomationSkill(text)) {
         [
             'browser_connect',
@@ -1396,6 +1325,7 @@ function inferPreferredTools(text: string, baseTools: string[]): string[] {
             'browser_click',
             'browser_fill',
             'browser_screenshot',
+            'browser_ai_action',
         ].forEach((tool) => merged.add(tool));
     }
     return Array.from(merged);
@@ -1694,7 +1624,8 @@ function buildTaskDefinition(
     text: string,
     mode: NormalizedWorkRequest['mode'],
     workspacePath: string,
-    systemContext: SystemFolderResolutionOptions = {}
+    systemContext: SystemFolderResolutionOptions = {},
+    publishIntent?: PublishIntent,
 ): TaskDefinition {
     const segments = splitSegments(text);
     const objective = (segments[0] || text).trim();
@@ -1753,7 +1684,7 @@ function buildTaskDefinition(
         acceptanceCriteria,
         dependencies: [],
         preferredSkills: inferPreferredSkills(text, mode),
-        preferredTools: inferPreferredTools(text, localTaskPlan?.preferredTools ?? []),
+        preferredTools: inferPreferredTools(text, localTaskPlan?.preferredTools ?? [], publishIntent),
         preferredWorkflow: localTaskPlan?.preferredWorkflow,
         resolvedTargets: localTaskPlan?.targetFolder ? [localTaskPlan.targetFolder] : undefined,
         localPlanHint: localTaskPlan,
@@ -1767,11 +1698,13 @@ function buildScheduledTaskDefinitions(input: {
     workspacePath: string;
     systemContext?: SystemFolderResolutionOptions;
 }): TaskDefinition[] {
+    const primaryPublishIntent = buildPublishIntent(input.scheduledIntent.taskQuery);
     const primaryTask = buildTaskDefinition(
         input.scheduledIntent.taskQuery,
         input.mode,
         input.workspacePath,
         input.systemContext,
+        primaryPublishIntent,
     );
     const chainedStages = input.scheduledIntent.chainedStages ?? [];
     if (chainedStages.length === 0) {
@@ -1782,11 +1715,13 @@ function buildScheduledTaskDefinitions(input: {
     let previousTask = primaryTask;
 
     for (const stage of chainedStages) {
+        const stagePublishIntent = buildPublishIntent(stage.taskQuery);
         const stageTask = buildTaskDefinition(
             stage.taskQuery,
             input.mode,
             input.workspacePath,
             input.systemContext,
+            stagePublishIntent,
         );
         stageTask.dependencies = [previousTask.id];
         tasks.push(stageTask);
@@ -1878,30 +1813,102 @@ function hasStructuredApprovalFollowUp(text: string): boolean {
     return STRUCTURED_APPROVAL_PATTERN.test(trimmed);
 }
 
+function isContextRichFollowUp(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    return trimmed.length < 8 || isAmbiguousReferenceRequest(trimmed);
+}
+
+function buildAnalysisSourceText(input: {
+    sourceText: string;
+    followUpContext?: WorkRequestFollowUpContext;
+}): string {
+    const trimmed = input.sourceText.trim();
+    if (!trimmed || !isContextRichFollowUp(trimmed)) {
+        return input.sourceText;
+    }
+
+    const baseObjective = input.followUpContext?.baseObjective?.trim();
+    if (!baseObjective) {
+        return input.sourceText;
+    }
+
+    const latestAssistantMessage = input.followUpContext?.latestAssistantMessage?.trim() || '';
+    const recentMessages = (input.followUpContext?.recentMessages ?? [])
+        .map((message) => ({
+            role: message.role,
+            content: message.content.trim(),
+        }))
+        .filter((message) => message.content.length > 0)
+        .slice(-4);
+    const language = detectLanguage([
+        baseObjective,
+        latestAssistantMessage,
+        trimmed,
+        ...recentMessages.map((message) => message.content),
+    ].join('\n'));
+
+    const lines = [baseObjective];
+    if (latestAssistantMessage) {
+        lines.push(
+            language.startsWith('zh')
+                ? `最近进展：${latestAssistantMessage}`
+                : `Recent progress: ${latestAssistantMessage}`
+        );
+    }
+
+    for (const message of recentMessages) {
+        const prefix = language.startsWith('zh')
+            ? (message.role === 'user' ? '用户' : '助手')
+            : (message.role === 'user' ? 'User' : 'Assistant');
+        const formatted = `${prefix}：${message.content}`;
+        if (!lines.includes(formatted)) {
+            lines.push(formatted);
+        }
+    }
+
+    lines.push(
+        language.startsWith('zh')
+            ? `后续操作：${trimmed}`
+            : `Follow-up action: ${trimmed}`
+    );
+
+    return lines.join('\n');
+}
+
 export function analyzeWorkRequest(input: {
     sourceText: string;
     workspacePath: string;
+    followUpContext?: WorkRequestFollowUpContext;
     now?: Date;
     systemContext?: SystemFolderResolutionOptions;
 }): NormalizedWorkRequest {
     const sourceTextRaw = input.sourceText;
     const forcedIntentHint = extractForcedIntentHint(sourceTextRaw);
     const sourceText = unwrapStructuredFollowUpSourceText(sourceTextRaw);
+    const analysisSourceText = buildAnalysisSourceText({
+        sourceText,
+        followUpContext: input.followUpContext,
+    });
     const planAlreadyApproved =
         hasStructuredApprovalFollowUp(sourceTextRaw) || hasPlanApprovalCue(sourceTextRaw);
-    const scheduledIntent = detectScheduledIntent(sourceText, input.now);
+    const scheduledIntent = detectScheduledIntent(analysisSourceText, input.now);
     const chainedScheduledStages = scheduledIntent?.chainedStages ?? [];
-    const executableText = scheduledIntent?.taskQuery || sourceText;
+    const executableText = scheduledIntent?.taskQuery || analysisSourceText;
     const planningText = scheduledIntent
         ? [scheduledIntent.taskQuery, ...chainedScheduledStages.map((stage) => stage.taskQuery)].join('。')
         : executableText;
+    const publishIntent = buildPublishIntent(planningText);
     const mode = resolveWorkRequestMode({
         scheduledIntent,
         chainedScheduledStages,
         forcedIntentHint,
         executableText,
     });
-    const language = detectLanguage(sourceText);
+    const language = detectLanguage(analysisSourceText);
     const clarification = buildClarificationDecision({
         sourceText,
         executableText,
@@ -1915,19 +1922,26 @@ export function analyzeWorkRequest(input: {
             workspacePath: input.workspacePath,
             systemContext: input.systemContext,
         })
-        : [buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext)];
+        : [buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext, publishIntent)];
     const primaryTaskDefinition =
-        tasks[0] ?? buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext);
+        tasks[0] ?? buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext, publishIntent);
     const hasManualAction = requiresExternalAuthOrManualAction(planningText);
     const scheduledMode = mode === 'scheduled_task' || mode === 'scheduled_multi_task';
     const manualActionPreapproved = scheduledMode && planAlreadyApproved;
     const hasBlockingManualAction = hasExplicitManualActionSignal(planningText)
         || (scheduledMode && hasManualAction && !manualActionPreapproved);
+    const codeChangeTask = isCodeChangeTask(planningText);
+    const selfManagementTask = isCoworkanySelfManagementTask(planningText);
+    const requiresBrowserSkill = requiresBrowserAutomationSkill(planningText);
+    const hostAccessRequired = primaryTaskDefinition.localPlanHint?.requiresHostAccessGrant === true;
+    const explicitAuthRequired = hasExplicitAuthSignal(planningText) || isLikelySocialPublishingTask(planningText);
+    const isComplexTask = isComplexPlanningTask(planningText, mode);
     const hasExplicitTaskCue =
-        isCodeChangeTask(planningText) ||
+        codeChangeTask ||
         hasExplicitArtifactOutputIntent(planningText) ||
-        isComplexPlanningTask(planningText, mode) ||
+        isComplexTask ||
         hasManualAction ||
+        Boolean(publishIntent?.requiresSideEffect) ||
         Boolean(primaryTaskDefinition.localPlanHint);
     const intentRouting = buildIntentRouting({
         sourceText: planningText,
@@ -1966,24 +1980,52 @@ export function analyzeWorkRequest(input: {
         deliverables,
         sourceText: planningText,
     });
-    const checkpoints = buildCheckpoints({
-        text: executableText,
+    const executionProfile = buildExecutionProfile({
         mode,
+        clarification,
         deliverables,
+        hitlPolicy,
+        publishIntent,
         hasManualAction,
         hasBlockingManualAction,
+        requiresBrowserSkill,
+        explicitAuthRequired,
+        hostAccessRequired,
+        hasPreferredWorkflow: Boolean(primaryTaskDefinition.localPlanHint?.preferredWorkflow),
+        isComplexTask,
+        codeChangeTask,
+        selfManagementTask,
+    });
+    const capabilityPlan = buildCapabilityPlan({
+        clarification,
+        executionProfile,
+        publishIntent,
+        explicitAuthSignal: hasExplicitAuthSignal(planningText),
+        hasBlockingManualAction,
+        hasPreferredWorkflow: Boolean(primaryTaskDefinition.localPlanHint?.preferredWorkflow),
+    });
+    const checkpoints = buildCheckpointsFromExecutionProfile({
+        isComplexTask,
+        deliverables,
+        executionProfile,
+        capabilityPlan,
         hitlPolicy,
         clarification,
+        publishIntent,
     });
     const missingInfo = buildMissingInfo(clarification);
-    const userActionsRequired = buildUserActionsRequired({
+    const userActionsRequired = buildUserActionsRequiredFromExecutionProfile({
         clarification,
         missingInfo,
         checkpoints,
-        hasManualAction,
-        hasBlockingManualAction,
+        executionProfile,
+        capabilityPlan,
         hitlPolicy,
-        sourceText: planningText,
+        publishIntent,
+        likelyExternalAuth:
+            executionProfile.requiredCapabilities.includes('external_auth')
+            || hasExplicitManualActionSignal(planningText)
+            || isLikelySocialPublishingTask(planningText),
     });
     const goalFrame = buildGoalFrame({
         text: planningText,
@@ -2070,6 +2112,9 @@ export function analyzeWorkRequest(input: {
         },
         presentation,
         deliverables,
+        executionProfile,
+        publishIntent,
+        capabilityPlan,
         checkpoints,
         userActionsRequired,
         hitlPolicy,

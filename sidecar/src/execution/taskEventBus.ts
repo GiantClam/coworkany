@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto';
 import type { TaskEvent } from '../protocol';
 import type {
+    CapabilityReviewState,
+    CapabilityPlan,
     CheckpointContract,
     DefaultingPolicy,
     DeliverableContract,
+    ExecutionProfile,
     HitlPolicy,
     IntentRouting,
     MemoryIsolationPolicy,
@@ -120,6 +123,9 @@ export type TaskPlanReadyPayload = {
     deliverables: DeliverableContract[];
     checkpoints: CheckpointContract[];
     userActionsRequired: UserActionRequest[];
+    executionProfile?: ExecutionProfile;
+    capabilityPlan?: CapabilityPlan;
+    capabilityReview?: CapabilityReviewState;
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;
@@ -140,6 +146,8 @@ export type TaskCheckpointReachedPayload = {
     executionPolicy: CheckpointContract['executionPolicy'];
     requiresUserConfirmation: boolean;
     blocking: boolean;
+    activeHardness?: ExecutionProfile['primaryHardness'];
+    blockingReason?: string;
 };
 
 export type TaskUserActionRequiredPayload = {
@@ -156,6 +164,8 @@ export type TaskUserActionRequiredPayload = {
     authUrl?: string;
     authDomain?: string;
     canAutoResume?: boolean;
+    activeHardness?: ExecutionProfile['primaryHardness'];
+    blockingReason?: string;
 };
 
 type TaskEventMeta = {
@@ -194,7 +204,11 @@ export class TaskEventBus {
         return this.build(taskId, 'TASK_FAILED', payload, meta);
     }
 
-    status(taskId: string, payload: { status: 'running' | 'failed' | 'idle' | 'finished' }, meta?: TaskEventMeta): TaskEvent {
+    status(taskId: string, payload: {
+        status: 'running' | 'failed' | 'idle' | 'finished';
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
+    }, meta?: TaskEventMeta): TaskEvent {
         return this.build(taskId, 'TASK_STATUS', payload, meta);
     }
 
@@ -209,6 +223,8 @@ export class TaskEventBus {
             value: string;
         }>;
         intentRouting?: IntentRouting;
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
     }, meta?: TaskEventMeta): TaskEvent {
         return this.build(taskId, 'TASK_CLARIFICATION_REQUIRED', payload, meta);
     }
@@ -285,7 +301,11 @@ export class TaskEventBus {
         this.emit(this.failed(taskId, payload, meta));
     }
 
-    emitStatus(taskId: string, payload: { status: 'running' | 'failed' | 'idle' | 'finished' }, meta?: TaskEventMeta): void {
+    emitStatus(taskId: string, payload: {
+        status: 'running' | 'failed' | 'idle' | 'finished';
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
+    }, meta?: TaskEventMeta): void {
         this.emit(this.status(taskId, payload, meta));
     }
 
@@ -300,6 +320,8 @@ export class TaskEventBus {
             value: string;
         }>;
         intentRouting?: IntentRouting;
+        activeHardness?: ExecutionProfile['primaryHardness'];
+        blockingReason?: string;
     }, meta?: TaskEventMeta): void {
         this.emit(this.clarificationRequired(taskId, payload, meta));
     }

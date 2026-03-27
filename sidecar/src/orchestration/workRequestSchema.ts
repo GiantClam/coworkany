@@ -59,6 +59,117 @@ export type HitlPolicy = {
     reasons: string[];
 };
 
+export type TaskHardness =
+    | 'trivial'
+    | 'bounded'
+    | 'multi_step'
+    | 'externally_blocked'
+    | 'high_risk';
+
+export type RequiredCapability =
+    | 'browser_interaction'
+    | 'external_auth'
+    | 'workspace_write'
+    | 'host_access'
+    | 'human_review';
+
+export type BlockingRisk =
+    | 'none'
+    | 'missing_info'
+    | 'auth'
+    | 'permission'
+    | 'manual_step'
+    | 'policy_review';
+
+export type InteractionMode =
+    | 'passive_status'
+    | 'input_first'
+    | 'action_first'
+    | 'review_first';
+
+export type ExecutionShape =
+    | 'single_step'
+    | 'staged'
+    | 'exploratory'
+    | 'deterministic_workflow';
+
+export type SocialPublishPlatform =
+    | 'x'
+    | 'xiaohongshu'
+    | 'wechat_official'
+    | 'reddit'
+    | 'facebook'
+    | 'instagram'
+    | 'linkedin'
+    | 'generic_social';
+
+export type PublishExecutionMode =
+    | 'direct_publish'
+    | 'preview_then_publish'
+    | 'draft_only';
+
+export type PublishIntent = {
+    action: 'publish_social_post';
+    platform: SocialPublishPlatform;
+    executionMode: PublishExecutionMode;
+    requiresSideEffect: boolean;
+};
+
+export type ExecutionProfile = {
+    primaryHardness: TaskHardness;
+    requiredCapabilities: RequiredCapability[];
+    blockingRisk: BlockingRisk;
+    interactionMode: InteractionMode;
+    executionShape: ExecutionShape;
+    reasons: string[];
+};
+
+export type MissingCapabilityKind =
+    | 'none'
+    | 'existing_skill_gap'
+    | 'existing_tool_gap'
+    | 'new_runtime_tool_needed'
+    | 'workflow_gap'
+    | 'external_blocker';
+
+export type LearningScope =
+    | 'none'
+    | 'knowledge'
+    | 'skill'
+    | 'runtime_tool';
+
+export type CapabilityReplayStrategy =
+    | 'none'
+    | 'resume_from_checkpoint'
+    | 'restart_execution';
+
+export type CapabilityComplexityTier = 'simple' | 'moderate' | 'complex';
+
+export type CapabilityPlan = {
+    missingCapability: MissingCapabilityKind;
+    learningRequired: boolean;
+    canProceedWithoutLearning: boolean;
+    learningScope: LearningScope;
+    replayStrategy: CapabilityReplayStrategy;
+    sideEffectRisk: 'none' | 'read_only' | 'write_external';
+    userAssistRequired: boolean;
+    userAssistReason: 'none' | 'auth' | 'captcha' | 'permission' | 'policy' | 'ambiguous_goal';
+    boundedLearningBudget: {
+        complexityTier: CapabilityComplexityTier;
+        maxRounds: number;
+        maxResearchTimeMs: number;
+        maxValidationAttempts: number;
+    };
+    reasons: string[];
+};
+
+export type CapabilityReviewState = {
+    status: 'pending' | 'approved';
+    summary: string;
+    learnedEntityId?: string;
+    updatedAt?: string;
+};
+
 export type RuntimeIsolationPolicy = {
     connectorIsolationMode: 'deny_by_default';
     filesystemMode: 'workspace_only' | 'workspace_plus_resolved_targets';
@@ -236,6 +347,15 @@ export type ClarificationDecision = {
     assumptions: string[];
 };
 
+export type WorkRequestFollowUpContext = {
+    baseObjective?: string;
+    latestAssistantMessage?: string;
+    recentMessages?: Array<{
+        role: 'user' | 'assistant';
+        content: string;
+    }>;
+};
+
 export type IntentRouting = {
     intent: 'chat' | 'immediate_task' | 'scheduled_task';
     confidence: number;
@@ -268,6 +388,9 @@ export type NormalizedWorkRequest = {
     deliverables?: DeliverableContract[];
     checkpoints?: CheckpointContract[];
     userActionsRequired?: UserActionRequest[];
+    executionProfile?: ExecutionProfile;
+    publishIntent?: PublishIntent;
+    capabilityPlan?: CapabilityPlan;
     hitlPolicy?: HitlPolicy;
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;

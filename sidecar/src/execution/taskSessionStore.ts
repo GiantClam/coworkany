@@ -18,6 +18,12 @@ export type TaskSessionConfig = {
     voiceProviderMode?: 'auto' | 'system' | 'custom';
     lastFrozenWorkRequestSnapshot?: FrozenWorkRequestSnapshot;
     supersededContractTombstones?: SupersededContractTombstone[];
+    pendingCapabilityReview?: {
+        learnedEntityId?: string;
+        summary: string;
+        approved: boolean;
+        updatedAt: string;
+    };
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;
     memoryIsolationPolicy?: MemoryIsolationPolicy;
