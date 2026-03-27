@@ -789,6 +789,33 @@ describe('work request control plane', () => {
         expect(analyzed.knownRisks?.some((risk) => risk.includes('Best-practice assumptions'))).toBe(true);
     });
 
+    test('treats explicit URL artifact tasks as direct-fetch execution instead of blocking generic web research', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '生成一个 ppt，检索http://www.szlczn.cn/网站内容，生成介绍灵创智能公司和产品的 ppt',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.deliverables?.[0]).toMatchObject({
+            type: 'artifact_file',
+            format: 'pptx',
+        });
+        expect(analyzed.tasks[0]?.sourceUrls).toEqual(['http://www.szlczn.cn/']);
+        expect(analyzed.tasks[0]?.preferredTools).toEqual(expect.arrayContaining(['crawl_url', 'extract_content', 'browser_get_content']));
+        expect(analyzed.executionProfile).toMatchObject({
+            primaryHardness: 'bounded',
+            interactionMode: 'passive_status',
+            blockingRisk: 'none',
+        });
+        expect(analyzed.userActionsRequired).toEqual([]);
+        expect(analyzed.researchQueries).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                source: 'web',
+                required: false,
+                directUrls: ['http://www.szlczn.cn/'],
+            }),
+        ]));
+    });
+
     test('keeps high-risk metadata for code-change tasks but does not require plan confirmation', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '修复当前项目里的登录 bug，并直接修改代码完成实现',

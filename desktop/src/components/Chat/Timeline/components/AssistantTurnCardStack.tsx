@@ -1,13 +1,10 @@
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import styles from '../Timeline.module.css';
-import { processMessageContent } from '../../../../lib/text/messageProcessor';
-import { isExternalHref } from '../../../../lib/externalLinks';
 import { TaskCardMessage } from './TaskCardMessage';
 import { ToolCard } from './ToolCard';
 import { StructuredMessageCard } from './StructuredMessageCard';
 import type { AssistantTurnCardSchema } from './assistantTurnCardSchema';
+import { RichMessageContent } from './RichMessageContent';
 
 interface AssistantTurnCardStackProps {
     cards: AssistantTurnCardSchema[];
@@ -72,29 +69,11 @@ const AssistantTurnCardStackComponent: React.FC<AssistantTurnCardStackProps> = (
                             {card.messages.length > 0 ? (
                                 <div className={styles.assistantTurnMarkdownStack}>
                                     {card.messages.map((message, index) => (
-                                        <div key={`${card.id}-message-${index}`} className={`${styles.markdownBody} ${styles.assistantTurnMarkdown}`}>
-                                            <ReactMarkdown
-                                                remarkPlugins={[remarkGfm]}
-                                                components={{
-                                                    a(props) {
-                                                        const { href, children, ...rest } = props;
-                                                        const isExternal = isExternalHref(href);
-                                                        return (
-                                                            <a
-                                                                {...rest}
-                                                                href={href}
-                                                                target={isExternal ? '_blank' : undefined}
-                                                                rel={isExternal ? 'noopener noreferrer' : undefined}
-                                                            >
-                                                                {children}
-                                                            </a>
-                                                        );
-                                                    }
-                                                }}
-                                            >
-                                                {processMessageContent(message)}
-                                            </ReactMarkdown>
-                                        </div>
+                                        <RichMessageContent
+                                            key={`${card.id}-message-${index}`}
+                                            content={message}
+                                            className={`${styles.markdownBody} ${styles.assistantTurnMarkdown}`}
+                                        />
                                     ))}
                                 </div>
                             ) : null}

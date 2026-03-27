@@ -257,6 +257,7 @@ export type ResearchQuery = {
     kind: ResearchKind;
     source: ResearchSource;
     objective: string;
+    directUrls?: string[];
     required: boolean;
     status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 };
@@ -334,6 +335,7 @@ export type TaskDefinition = {
     preferredTools: string[];
     preferredWorkflow?: string;
     resolvedTargets?: ResolvedFolderReference[];
+    sourceUrls?: string[];
     localPlanHint?: LocalTaskPlanHint;
     executionRequirements?: TaskExecutionRequirement[];
 };

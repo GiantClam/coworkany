@@ -107,7 +107,7 @@ import { globalToolRegistry } from './tools/registry';
 import { MCPGateway, type McpSessionIsolationPolicy } from './mcp/gateway';
 import { PolicyBridge } from './bridges';
 import { getSearchConfig, performSearch, setSearchConfig, webSearchTool, type SearchConfig, type SearchProvider } from './tools/websearch';
-import { BUILTIN_TOOLS, readTaskPlanHead, countIncompletePlanSteps } from './tools/builtin';
+import { BUILTIN_TOOLS, extractContentTool, readTaskPlanHead, countIncompletePlanSteps } from './tools/builtin';
 import {
     voiceSpeakTool,
     speakText,
@@ -1013,6 +1013,52 @@ async function resolveWebResearch(query: string): Promise<{
         summary: `Web research found ${response.results.length} result(s) via ${response.provider}${topResults ? `: ${topResults}` : ''}`,
         resultCount: response.results.length,
         provider: response.provider,
+    };
+}
+
+async function resolveWebContentResearch(input: {
+    url: string;
+    objective: string;
+}): Promise<{
+    success: boolean;
+    summary: string;
+    title?: string;
+    excerpt?: string;
+    error?: string;
+}> {
+    const result = await extractContentTool.handler(
+        {
+            url: input.url,
+        } as any,
+        {
+            workspacePath: process.cwd(),
+            taskId: 'pre-freeze-web-content-research',
+        },
+    );
+
+    if (!result?.success) {
+        return {
+            success: false,
+            summary: `Direct URL fetch failed for ${input.url}: ${result?.error || 'unknown error'}`,
+            error: result?.error || 'direct_url_fetch_failed',
+        };
+    }
+
+    const excerpt = typeof result.content === 'string'
+        ? result.content.replace(/\s+/g, ' ').trim().slice(0, 400)
+        : '';
+    const title = typeof result.title === 'string' && result.title.trim().length > 0
+        ? result.title.trim()
+        : input.url;
+    const headingPreview = Array.isArray(result.headings) && result.headings.length > 0
+        ? ` Headings: ${result.headings.slice(0, 4).map((entry: any) => entry?.text).filter(Boolean).join(' | ')}`
+        : '';
+
+    return {
+        success: true,
+        title,
+        excerpt,
+        summary: `Fetched direct URL ${input.url} (${title}).${excerpt ? ` Excerpt: ${excerpt}` : ''}${headingPreview}`,
     };
 }
 
@@ -2601,6 +2647,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
             capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
                 webSearch: resolveWebResearch,
+                webContent: resolveWebContentResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
             },
         }),
@@ -3708,6 +3755,7 @@ const PERSONAL_TOOLS = createPersonalTools({
             capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
                 webSearch: resolveWebResearch,
+                webContent: resolveWebContentResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
             },
         });
@@ -4523,6 +4571,7 @@ async function executeFreshTask(args: {
             capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
                 webSearch: resolveWebResearch,
+                webContent: resolveWebContentResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
             },
         });
@@ -9406,6 +9455,7 @@ function getExecutionRuntimeDeps(taskId: string) {
             workRequestStore,
             researchResolvers: {
                 webSearch: resolveWebResearch,
+                webContent: resolveWebContentResearch,
                 connectedAppStatus: resolveConnectedAppResearch,
             },
         }),

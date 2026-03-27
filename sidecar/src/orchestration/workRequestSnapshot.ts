@@ -27,7 +27,10 @@ function sortStrings(values: Array<string | undefined>): string[] {
 
 function snapshotTaskResolvedTargets(tasks: TaskDefinition[] | undefined): string[] {
     return sortStrings(
-        (tasks ?? []).flatMap((task) => (task.resolvedTargets ?? []).map((target) => target.resolvedPath))
+        (tasks ?? []).flatMap((task) => [
+            ...(task.resolvedTargets ?? []).map((target) => target.resolvedPath),
+            ...(task.sourceUrls ?? []),
+        ])
     );
 }
 

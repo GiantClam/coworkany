@@ -226,6 +226,27 @@ pub struct PrepareServiceRuntimeInput {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadRemoteFileInput {
+    pub url: String,
+    pub suggested_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadTextFilePreviewInput {
+    pub path: String,
+    pub max_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchRemoteTextPreviewInput {
+    pub url: String,
+    pub max_bytes: Option<u64>,
+}
+
 // ============================================================================
 // Command Response Types
 // ============================================================================
@@ -398,6 +419,20 @@ pub struct SidecarStatusResult {
 pub struct GenericIpcResult {
     pub success: bool,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadRemoteFileResult {
+    pub saved_path: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPreviewResult {
+    pub content: String,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2305,6 +2340,195 @@ pub async fn get_default_workspace_path(app_handle: AppHandle) -> Result<String,
         .join("workspace");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().to_string())
+}
+
+fn open_with_system_default(path: &PathBuf) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("Unsupported platform".to_string())
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let trimmed = name.trim();
+    let fallback = "downloaded-file".to_string();
+    if trimmed.is_empty() {
+        return fallback;
+    }
+
+    let sanitized = trimmed
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => ch,
+        })
+        .collect::<String>();
+
+    let collapsed = sanitized.trim_matches('.').trim().to_string();
+    if collapsed.is_empty() {
+        fallback
+    } else {
+        collapsed
+    }
+}
+
+fn dedupe_download_path(dir: &PathBuf, file_name: &str) -> PathBuf {
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let original = PathBuf::from(file_name);
+    let stem = original
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("downloaded-file");
+    let extension = original
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{}", value))
+        .unwrap_or_default();
+
+    for index in 1..10_000 {
+        let next = dir.join(format!("{stem} ({index}){extension}"));
+        if !next.exists() {
+            return next;
+        }
+    }
+
+    dir.join(format!("{stem}-{}", Uuid::new_v4()))
+}
+
+#[tauri::command]
+pub async fn open_local_file(path: String) -> Result<(), String> {
+    let candidate = PathBuf::from(path);
+    if !candidate.exists() {
+        return Err("File does not exist".to_string());
+    }
+
+    open_with_system_default(&candidate)
+}
+
+#[tauri::command]
+pub async fn download_remote_file(
+    input: DownloadRemoteFileInput,
+) -> Result<DownloadRemoteFileResult, String> {
+    let parsed = url::Url::parse(&input.url).map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(parsed.clone())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status {}", response.status()));
+    }
+
+    let inferred_name = input
+        .suggested_name
+        .as_deref()
+        .map(sanitize_filename)
+        .or_else(|| {
+            parsed
+                .path_segments()
+                .and_then(|segments| segments.last())
+                .filter(|segment| !segment.is_empty())
+                .map(sanitize_filename)
+        })
+        .unwrap_or_else(|| format!("download-{}", Uuid::new_v4()));
+
+    let downloads_dir = dirs::download_dir()
+        .ok_or("Unable to resolve the system Downloads directory")?;
+    fs::create_dir_all(&downloads_dir).map_err(|e| e.to_string())?;
+    let target_path = dedupe_download_path(&downloads_dir, &inferred_name);
+
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    tokio::fs::write(&target_path, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(DownloadRemoteFileResult {
+        saved_path: target_path.to_string_lossy().to_string(),
+        file_name: target_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(&inferred_name)
+            .to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn read_text_file_preview(
+    input: ReadTextFilePreviewInput,
+) -> Result<TextPreviewResult, String> {
+    let max_bytes = input.max_bytes.unwrap_or(1024 * 1024) as usize;
+    let bytes = tokio::fs::read(&input.path).await.map_err(|e| e.to_string())?;
+    let truncated = bytes.len() > max_bytes;
+    let slice = if truncated { &bytes[..max_bytes] } else { &bytes[..] };
+
+    Ok(TextPreviewResult {
+        content: String::from_utf8_lossy(slice).to_string(),
+        truncated,
+    })
+}
+
+#[tauri::command]
+pub async fn fetch_remote_text_preview(
+    input: FetchRemoteTextPreviewInput,
+) -> Result<TextPreviewResult, String> {
+    let max_bytes = input.max_bytes.unwrap_or(1024 * 1024) as usize;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(&input.url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Preview request failed with status {}", response.status()));
+    }
+
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let truncated = bytes.len() > max_bytes;
+    let slice = if truncated { &bytes[..max_bytes] } else { &bytes[..] };
+
+    Ok(TextPreviewResult {
+        content: String::from_utf8_lossy(slice).to_string(),
+        truncated,
+    })
 }
 
 /// Manually spawn the sidecar (for testing)

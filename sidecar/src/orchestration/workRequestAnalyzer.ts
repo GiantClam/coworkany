@@ -119,6 +119,13 @@ function hasExplicitExecutionTargetIdentifier(text: string): boolean {
     return matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.explicitIdentifierPatterns);
 }
 
+const EXPLICIT_URL_PATTERN = /\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/ig;
+
+function extractExplicitUrls(text: string): string[] {
+    const matches = text.match(EXPLICIT_URL_PATTERN) ?? [];
+    return Array.from(new Set(matches.map((value) => value.trim().replace(/[),.;，。；]+$/g, ''))));
+}
+
 const MARKET_TARGET_SUBJECT_PATTERN =
     /(股价|股票|涨跌|尾盘|市值|成交量|price|stock(?:\s+price)?|share price|market cap|volume|intraday|closing price|price surge|rally|plunge)/i;
 
@@ -947,6 +954,8 @@ function buildResearchQueries(input: {
         });
     }
 
+    const directUrls = input.taskDefinition.sourceUrls ?? [];
+
     if (shouldRequireWebDomainResearch({
         text: normalizedText,
         mode: input.mode,
@@ -955,8 +964,11 @@ function buildResearchQueries(input: {
         appendResearchQuery(queries, seen, {
             kind: 'domain_research',
             source: 'web',
-            objective: 'Collect and verify the latest external web evidence (official sources first) before final delivery.',
-            required: true,
+            objective: directUrls.length > 0
+                ? `Read and extract the user-provided URL content before execution: ${directUrls.join(', ')}`
+                : 'Collect and verify the latest external web evidence (official sources first) before final delivery.',
+            directUrls: directUrls.length > 0 ? directUrls : undefined,
+            required: directUrls.length === 0,
             status: 'pending',
         });
     }
@@ -1054,6 +1066,17 @@ function buildResearchEvidence(input: {
             source: 'workspace',
             summary: `Resolved target folder to ${input.taskDefinition.localPlanHint.targetFolder.resolvedPath}.`,
             confidence: input.taskDefinition.localPlanHint.targetFolder.confidence ?? 0.9,
+            collectedAt,
+        });
+    }
+
+    if ((input.taskDefinition.sourceUrls?.length ?? 0) > 0) {
+        evidence.push({
+            id: randomUUID(),
+            kind: 'context_research',
+            source: 'conversation',
+            summary: `User supplied explicit web target(s): ${input.taskDefinition.sourceUrls!.join(', ')}`,
+            confidence: 0.96,
             collectedAt,
         });
     }
@@ -1311,10 +1334,16 @@ function inferPreferredTools(
     text: string,
     baseTools: string[],
     publishIntent?: PublishIntent,
+    sourceUrls?: string[],
 ): string[] {
     const merged = new Set(baseTools);
     if (publishIntent?.platform === 'xiaohongshu' && publishIntent.requiresSideEffect) {
         merged.add('xiaohongshu_post');
+    }
+    if ((sourceUrls?.length ?? 0) > 0) {
+        merged.add('crawl_url');
+        merged.add('extract_content');
+        merged.add('browser_get_content');
     }
     if (requiresBrowserAutomationSkill(text)) {
         [
@@ -1675,6 +1704,7 @@ function buildTaskDefinition(
         ...systemContext,
     });
     const executionRequirements = inferExecutionRequirements(text);
+    const sourceUrls = extractExplicitUrls(text);
 
     return {
         id: randomUUID(),
@@ -1684,9 +1714,10 @@ function buildTaskDefinition(
         acceptanceCriteria,
         dependencies: [],
         preferredSkills: inferPreferredSkills(text, mode),
-        preferredTools: inferPreferredTools(text, localTaskPlan?.preferredTools ?? [], publishIntent),
+        preferredTools: inferPreferredTools(text, localTaskPlan?.preferredTools ?? [], publishIntent, sourceUrls),
         preferredWorkflow: localTaskPlan?.preferredWorkflow,
         resolvedTargets: localTaskPlan?.targetFolder ? [localTaskPlan.targetFolder] : undefined,
+        sourceUrls: sourceUrls.length > 0 ? sourceUrls : undefined,
         localPlanHint: localTaskPlan,
         executionRequirements,
     };
@@ -2270,6 +2301,9 @@ export function buildExecutionQueryForTaskIds(
     return selectedTasks
         .map((task) => {
             const parts = [task.objective];
+            if ((task.sourceUrls?.length ?? 0) > 0) {
+                parts.push(`参考网址：${task.sourceUrls!.join('；')}`);
+            }
             if (task.constraints.length > 0) {
                 parts.push(`约束：${task.constraints.join('；')}`);
             }

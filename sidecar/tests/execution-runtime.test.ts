@@ -1259,6 +1259,70 @@ describe('execution runtime', () => {
         expect(result.summary).toContain('https://www.cnn.com/2026/03/24/business/video/openai-sora-gold-live-032404pseg2-cnni-business-fast');
     });
 
+    test('continuePreparedAgentFlow prefers canonical research evidence links over malformed conversation url fragments', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '生成一个 ppt，检索http://www.szlczn.cn/网站内容，生成介绍灵创智能公司和产品的 ppt';
+        prepared.frozenWorkRequest.sourceText = prepared.executionQuery;
+        prepared.frozenWorkRequest.tasks[0].objective = prepared.executionQuery;
+        prepared.frozenWorkRequest.researchQueries = [
+            {
+                id: 'rq-web-url',
+                kind: 'domain_research',
+                source: 'web',
+                objective: 'Read and extract the user-provided URL content before execution: http://www.szlczn.cn/',
+                directUrls: ['http://www.szlczn.cn/'],
+                required: false,
+                status: 'completed',
+            },
+        ];
+        prepared.frozenWorkRequest.researchEvidence = [
+            {
+                id: 're-url',
+                kind: 'domain_research',
+                source: 'web',
+                summary: 'Fetched direct URL http://www.szlczn.cn/',
+                confidence: 0.82,
+                uri: 'http://www.szlczn.cn/',
+                collectedAt: new Date().toISOString(),
+            },
+        ];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-source-links-canonical-url',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: ['/tmp/deck.pptx'],
+                toolsUsed: ['write_to_file'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-source-links-canonical-url',
+                conversationReader: {
+                    buildConversationText: () =>
+                        '用户请求：生成一个 ppt，检索http://www.szlczn.cn/网站内容，生成介绍灵创智能公司和产品的 ppt',
+                    getLatestAssistantResponseText: () => '已生成介绍灵创智能公司和产品的 PPT 概要。',
+                },
+            }),
+            reduceWorkResult: ({ canonicalResult, artifacts }) => ({
+                canonicalResult,
+                uiSummary: canonicalResult,
+                ttsSummary: canonicalResult,
+                artifacts: artifacts ?? [],
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(result.summary).toContain('来源链接');
+        expect(result.summary).toContain('http://www.szlczn.cn/');
+        expect(result.summary).not.toContain('http://www.szlczn.cn/网站内容');
+    });
+
     test('continuePreparedAgentFlow accepts xiaohongshu_post as browser publish evidence', async () => {
         const prepared = makePreparedWorkRequest();
         prepared.executionQuery = '把这段内容发送到 xiaohongshu 上';

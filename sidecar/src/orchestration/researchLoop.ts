@@ -17,6 +17,16 @@ export type ResearchLoopResolvers = {
         provider?: string;
         error?: string;
     }>;
+    webContent?: (input: {
+        url: string;
+        objective: string;
+    }) => Promise<{
+        success: boolean;
+        summary: string;
+        title?: string;
+        excerpt?: string;
+        error?: string;
+    }>;
     connectedAppStatus?: (input: {
         workspacePath: string;
         sourceText: string;
@@ -31,10 +41,12 @@ export type ResearchLoopResolvers = {
 
 export type ResearchLoopOptions = {
     webSearchTimeoutMs?: number;
+    webContentTimeoutMs?: number;
     connectedAppTimeoutMs?: number;
 };
 
 const DEFAULT_WEB_RESEARCH_TIMEOUT_MS = 4000;
+const DEFAULT_WEB_CONTENT_TIMEOUT_MS = 6000;
 const DEFAULT_CONNECTED_APP_TIMEOUT_MS = 2500;
 const REQUIRED_RESEARCH_BLOCKING_TOPIC_PREFIX = 'required_research:';
 
@@ -229,10 +241,64 @@ async function completeWebResearch(
     request: NormalizedWorkRequest,
     evidence: ResearchEvidence[],
     resolver?: ResearchLoopResolvers['webSearch'],
+    webContentResolver?: ResearchLoopResolvers['webContent'],
     options?: ResearchLoopOptions
 ): Promise<{ query: ResearchQuery; evidence: ResearchEvidence[]; risks: string[] }> {
+    const directUrls = query.directUrls ?? [];
+    let nextEvidence = evidence;
+    const directRisks: string[] = [];
+
+    if (directUrls.length > 0 && webContentResolver) {
+        for (const url of directUrls) {
+            try {
+                const timeoutMs = options?.webContentTimeoutMs ?? DEFAULT_WEB_CONTENT_TIMEOUT_MS;
+                const result = await withResearchTimeout(
+                    webContentResolver({
+                        url,
+                        objective: query.objective,
+                    }),
+                    timeoutMs,
+                    'web_content_research'
+                );
+                nextEvidence = appendEvidence(nextEvidence, {
+                    kind: query.kind,
+                    source: query.source,
+                    summary: result.summary,
+                    confidence: result.success ? 0.82 : 0.45,
+                    uri: url,
+                    collectedAt: new Date().toISOString(),
+                });
+                if (result.success) {
+                    return {
+                        query: { ...query, status: 'completed' },
+                        evidence: nextEvidence,
+                        risks: [],
+                    };
+                }
+                directRisks.push(result.error || `Direct URL fetch failed for ${url}.`);
+            } catch (error) {
+                nextEvidence = appendEvidence(nextEvidence, {
+                    kind: query.kind,
+                    source: query.source,
+                    summary: `Direct URL fetch failed for ${url}: ${String(error)}`,
+                    confidence: 0.45,
+                    uri: url,
+                    collectedAt: new Date().toISOString(),
+                });
+                directRisks.push(`Direct URL fetch failed for ${url}: ${String(error)}`);
+            }
+        }
+    }
+
     if (!resolver) {
-        return skipUnwiredResearchSource(query, evidence);
+        if (directRisks.length > 0) {
+            return {
+                query: { ...query, status: 'failed' },
+                evidence: nextEvidence,
+                risks: directRisks,
+            };
+        }
+        return skipUnwiredResearchSource(query, nextEvidence);
     }
 
     try {
@@ -244,26 +310,26 @@ async function completeWebResearch(
         );
         return {
             query: { ...query, status: result.success ? 'completed' : 'failed' },
-            evidence: appendEvidence(evidence, {
+            evidence: appendEvidence(nextEvidence, {
                 kind: query.kind,
                 source: query.source,
                 summary: result.summary,
                 confidence: result.success ? 0.7 : 0.45,
                 collectedAt: new Date().toISOString(),
             }),
-            risks: result.success ? [] : [result.error || 'Web research failed before contract freeze.'],
+            risks: result.success ? [] : [...directRisks, result.error || 'Web research failed before contract freeze.'],
         };
     } catch (error) {
         return {
             query: { ...query, status: 'failed' },
-            evidence: appendEvidence(evidence, {
+            evidence: appendEvidence(nextEvidence, {
                 kind: query.kind,
                 source: query.source,
                 summary: `Web research failed: ${String(error)}`,
                 confidence: 0.35,
                 collectedAt: new Date().toISOString(),
             }),
-            risks: ['Web research failed before contract freeze.'],
+            risks: [...directRisks, 'Web research failed before contract freeze.'],
         };
     }
 }
@@ -364,7 +430,14 @@ async function runPreFreezeResearchLoopInternal(input: {
                 break;
             }
             case 'web': {
-                const result = await completeWebResearch(query, request, evidence, input.resolvers?.webSearch, input.options);
+                const result = await completeWebResearch(
+                    query,
+                    request,
+                    evidence,
+                    input.resolvers?.webSearch,
+                    input.resolvers?.webContent,
+                    input.options,
+                );
                 evidence = result.evidence;
                 risks = [...risks, ...result.risks];
                 updatedQueries.push(result.query);

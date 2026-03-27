@@ -678,18 +678,32 @@ function shouldBypassAutonomousFallback(prepared: PreparedWorkRequestContext): b
 }
 
 function hasHyperlink(text: string): boolean {
-    return /https?:\/\/[^\s)\]]+/i.test(text);
+    return /\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/i.test(text);
 }
 
 function extractHyperlinks(text: string): string[] {
     if (!text.trim()) {
         return [];
     }
-    const matches = text.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
+    const matches = text.match(/\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gi) ?? [];
     const seen = new Set<string>();
     const normalized: string[] = [];
     for (const rawUrl of matches) {
         const url = rawUrl.replace(/[.,;:!?]+$/g, '');
+        if (!url || seen.has(url)) {
+            continue;
+        }
+        seen.add(url);
+        normalized.push(url);
+    }
+    return normalized;
+}
+
+function extractResearchEvidenceLinks(prepared: PreparedWorkRequestContext): string[] {
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const item of prepared.frozenWorkRequest.researchEvidence ?? []) {
+        const url = typeof item.uri === 'string' ? item.uri.trim() : '';
         if (!url || seen.has(url)) {
             continue;
         }
@@ -732,7 +746,10 @@ function ensureFinalOutputHasSourceLinks(input: {
         return base;
     }
 
-    const sourceLinks = extractHyperlinks(input.conversationText).slice(0, 6);
+    const sourceLinks = [
+        ...extractResearchEvidenceLinks(input.prepared),
+        ...extractHyperlinks(input.conversationText),
+    ].filter((url, index, values) => values.indexOf(url) === index).slice(0, 6);
     if (sourceLinks.length === 0) {
         return base;
     }

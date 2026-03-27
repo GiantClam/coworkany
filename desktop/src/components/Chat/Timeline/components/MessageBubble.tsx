@@ -1,11 +1,8 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import styles from '../Timeline.module.css';
-import { processMessageContent } from '../../../../lib/text/messageProcessor';
 import { parseInlineAttachments } from '../../../../lib/text/inlineAttachments';
-import { isExternalHref } from '../../../../lib/externalLinks';
+import { RichMessageContent } from './RichMessageContent';
 
 interface MessageBubbleItem {
     id: string;
@@ -53,7 +50,18 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
                 {isUser ? (
                     <div className={styles.userMessageBody}>
                         {userContent?.text ? (
-                            <div className={styles.userText}>{userContent.text}</div>
+                            <RichMessageContent
+                                content={userContent.text}
+                                inlineFiles={userContent.files}
+                                className={styles.userText}
+                            />
+                        ) : null}
+                        {!userContent?.text && userContent?.files?.length ? (
+                            <RichMessageContent
+                                content=""
+                                inlineFiles={userContent.files}
+                                className={styles.userText}
+                            />
                         ) : null}
                         {userContent?.images?.length ? (
                             <div className={styles.userImageList}>
@@ -69,27 +77,10 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
                         ) : null}
                     </div>
                 ) : (
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                            a(props) {
-                                const { href, children, ...rest } = props;
-                                const isExternal = isExternalHref(href);
-                                return (
-                                    <a
-                                        {...rest}
-                                        href={href}
-                                        target={isExternal ? '_blank' : undefined}
-                                        rel={isExternal ? 'noopener noreferrer' : undefined}
-                                    >
-                                        {children}
-                                    </a>
-                                );
-                            }
-                        }}
-                    >
-                        {processMessageContent(item.content)}
-                    </ReactMarkdown>
+                    <RichMessageContent
+                        content={item.content}
+                        className={`${styles.markdownBody} ${styles.assistantTurnMarkdown}`}
+                    />
                 )}
             </div>
         </div>

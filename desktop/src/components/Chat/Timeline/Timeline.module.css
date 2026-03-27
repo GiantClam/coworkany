@@ -281,6 +281,13 @@
     white-space: pre-wrap;
 }
 
+.richMessageContent {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
 .userImageList {
     display: flex;
     flex-direction: column;
@@ -318,6 +325,209 @@
 
 .assistantPendingCard {
     width: 100%;
+}
+
+.fileCard {
+    width: 100%;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.1), rgba(15, 23, 42, 0.04));
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    color: var(--text-primary);
+}
+
+.fileCardClickable {
+    cursor: pointer;
+    transition: border-color 0.16s ease, transform 0.16s ease, background-color 0.16s ease;
+}
+
+.fileCardClickable:hover {
+    border-color: rgba(96, 165, 250, 0.36);
+    transform: translateY(-1px);
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.18), rgba(15, 23, 42, 0.08));
+}
+
+.fileCard:disabled {
+    opacity: 0.86;
+}
+
+.fileCardIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: rgba(96, 165, 250, 0.14);
+    border: 1px solid rgba(96, 165, 250, 0.18);
+    color: #bfdbfe;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.fileCardBody {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.fileCardTitle {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.fileCardPath {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.fileCardAction {
+    align-self: flex-start;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.htmlPreviewCard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-radius: 18px;
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.14), rgba(15, 23, 42, 0.05));
+    padding: 12px;
+}
+
+.htmlPreviewHeader {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.htmlPreviewMeta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.htmlPreviewKicker {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #93c5fd;
+}
+
+.htmlPreviewTitle {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.4;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.htmlPreviewPath {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.htmlPreviewActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.htmlPreviewActionButton {
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.26);
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: 7px 12px;
+    cursor: pointer;
+}
+
+.htmlPreviewActionButton:hover:not(:disabled) {
+    border-color: rgba(96, 165, 250, 0.34);
+}
+
+.htmlPreviewActionButton:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.htmlPreviewViewport {
+    width: 100%;
+    min-height: 220px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.98);
+    padding: 0;
+    cursor: zoom-in;
+}
+
+.htmlPreviewViewport:disabled {
+    cursor: default;
+}
+
+.htmlPreviewPlaceholder {
+    min-height: 220px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.htmlPreviewFrame {
+    width: 100%;
+    min-height: 220px;
+    border: 0;
+    display: block;
+    background: #fff;
+}
+
+.htmlPreviewHint {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.htmlPreviewModalBody {
+    width: 100%;
+    height: 100%;
+}
+
+.htmlPreviewModalFrame {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: #fff;
 }
 
 .assistantPendingCard .structuredCardBody {

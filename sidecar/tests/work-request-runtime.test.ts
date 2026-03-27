@@ -757,6 +757,43 @@ describe('workRequestRuntime', () => {
         expect(prepared.frozenWorkRequest.frozenResearchSummary?.sourcesChecked).toContain('connected_app');
     });
 
+    test('direct-fetches explicit URL research and carries the evidence into the execution prompt', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '生成一个 ppt，检索http://www.szlczn.cn/网站内容，生成介绍灵创智能公司和产品的 ppt',
+            workspacePath,
+            workRequestStore: store,
+            researchResolvers: {
+                webSearch: async () => ({
+                    success: true,
+                    summary: 'Generic search should not be needed first for explicit URL tasks.',
+                    resultCount: 0,
+                    provider: 'stub',
+                }),
+                webContent: async ({ url }) => ({
+                    success: true,
+                    summary: `Fetched direct URL ${url} (灵创智能). Excerpt: 灵创智能专注于工业智能视觉与自动化产品。`,
+                    title: '灵创智能',
+                    excerpt: '灵创智能专注于工业智能视觉与自动化产品。',
+                }),
+            },
+        });
+
+        const webQuery = prepared.frozenWorkRequest.researchQueries?.find((query) => query.source === 'web');
+        expect(webQuery).toMatchObject({
+            status: 'completed',
+            directUrls: ['http://www.szlczn.cn/'],
+            required: false,
+        });
+        expect(prepared.frozenWorkRequest.uncertaintyRegistry?.some((item) => item.status === 'blocking_unknown')).toBe(false);
+        expect(prepared.workRequestExecutionPrompt).toContain('参考网址：http://www.szlczn.cn/');
+        expect(prepared.workRequestExecutionPrompt).toContain('Fetched direct URL http://www.szlczn.cn/');
+    });
+
     test('times out required web research and freezes with blocking unknowns', async () => {
         const dir = makeTempDir();
         const workspacePath = path.join(dir, 'workspace');
@@ -797,6 +834,35 @@ describe('workRequestRuntime', () => {
             step.kind === 'execution' && step.status === 'blocked'
         )).toBe(true);
         expect(prepared.frozenWorkRequest.frozenResearchSummary?.evidenceCount).toBeGreaterThan(0);
+    });
+
+    test('does not block explicit URL artifact tasks when optional direct research times out', async () => {
+        const dir = makeTempDir();
+        const workspacePath = path.join(dir, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        const store = new WorkRequestStore(path.join(dir, 'app-data', 'work-requests.json'));
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: '生成一个 ppt，检索http://www.szlczn.cn/网站内容，生成介绍灵创智能公司和产品的 ppt',
+            workspacePath,
+            workRequestStore: store,
+            researchResolvers: {
+                webContent: async () => await new Promise(() => {}),
+            },
+            researchOptions: {
+                webContentTimeoutMs: 20,
+            },
+        });
+
+        const webQuery = prepared.frozenWorkRequest.researchQueries?.find((query) => query.source === 'web');
+        expect(webQuery?.status).toBe('failed');
+        expect(prepared.frozenWorkRequest.uncertaintyRegistry?.some((item) => item.status === 'blocking_unknown')).toBe(false);
+        expect(prepared.executionPlan.steps.some((step) =>
+            step.kind === 'execution' && step.status === 'blocked'
+        )).toBe(false);
+        expect(prepared.frozenWorkRequest.tasks[0]?.preferredTools).toEqual(
+            expect.arrayContaining(['crawl_url', 'extract_content'])
+        );
     });
 
     test('refreezes a prepared work request after reopen while preserving the work request id', async () => {

@@ -955,6 +955,11 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
                 : null,
         ].filter(Boolean).join('\n')
         : '';
+    const evidenceHighlightsSection = (request.researchEvidence ?? [])
+        .filter((item) => item.source !== 'template')
+        .slice(0, 6)
+        .map((item) => `- [${item.source}] ${item.summary}`)
+        .join('\n');
     const selectedStrategySection = (request.strategyOptions?.length ?? 0) > 0
         ? request.strategyOptions!.map((strategy) => {
             const state = strategy.selected ? 'selected' : 'alternative';
@@ -1047,6 +1052,7 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
         !userActionsSection &&
         !executionRequirementsSection &&
         !goalFrameSection &&
+        !evidenceHighlightsSection &&
         !selectedStrategySection &&
         !risksSection
     ) {
@@ -1065,7 +1071,7 @@ ${executionQuery}
 
 Coworkany is the primary task owner for this run. Coworkany should decide how to execute, when to checkpoint, and when user collaboration is actually required.
 
-${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${publishIntentSection ? `### Publish Intent\n${publishIntentSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
+${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${evidenceHighlightsSection ? `### Key Research Evidence\n${evidenceHighlightsSection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${publishIntentSection ? `### Publish Intent\n${publishIntentSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
 
 ${workflowGuidance ? `\n## Deterministic Local Workflow Guidance\n\n${workflowGuidance}\n` : ''}
 
