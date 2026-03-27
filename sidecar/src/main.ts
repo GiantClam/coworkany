@@ -66,6 +66,7 @@ import { randomUUID } from 'crypto';
 import {
     IpcCommandSchema,
     IpcResponseSchema,
+    taskEventToCanonicalStreamEvents,
     type IpcCommand,
     type IpcResponse,
     type TaskEvent,
@@ -124,6 +125,7 @@ import { DATABASE_TOOLS } from './tools/database';
 import { createAppManagementTools } from './tools/appManagement';
 import { xiaohongshuPostTool } from './tools/xiaohongshuPost';
 import { BrowserService } from './services/browserService';
+import { browserUseServiceBootstrap } from './services/browserUseServiceBootstrap';
 import { getCalendarManager } from './integrations/calendar/calendarManager';
 import { getEmailManager } from './integrations/email/emailManager';
 import { CODE_EXECUTION_TOOLS } from './tools/codeExecution';
@@ -347,6 +349,15 @@ function emit(message: OutputMessage): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
     broadcastSingletonLine(line + '\n');
+
+    if ('type' in message && 'taskId' in message) {
+        const canonicalEvents = taskEventToCanonicalStreamEvents(message as TaskEvent);
+        for (const canonicalEvent of canonicalEvents) {
+            const canonicalLine = JSON.stringify(canonicalEvent);
+            process.stdout.write(canonicalLine + '\n');
+            broadcastSingletonLine(canonicalLine + '\n');
+        }
+    }
 
     // Forward TaskEvents to post-execution learning manager
     if ('type' in message && 'taskId' in message && typeof postLearningManager !== 'undefined') {
@@ -1957,6 +1968,14 @@ const APP_MANAGEMENT_TOOLS = createAppManagementTools({
     searchClawHubSkills: (query, limit) => openclawCompat.searchClawHub(query, limit),
     installSkillFromClawHub: (skillName, targetDir) => openclawCompat.installFromClawHub(skillName, targetDir),
     getSkillhubExecutable: () => desktopRuntimeContext?.skillhub?.path,
+    applyLlmConfig: (config) => {
+        const browserUseConfig = (config as { browserUse?: LlmConfig['browserUse'] }).browserUse;
+        if (!browserUseConfig) {
+            return;
+        }
+        const resolved = applyBrowserUseConfig(browserUseConfig);
+        void ensureBrowserUseRuntimeReady(resolved, 'config-update');
+    },
     onSkillsUpdated: () => emitAny({
         commandId: `skills-updated-${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -2023,6 +2042,93 @@ function getRuntimeSnapshot() {
     };
 }
 
+function toHttpUrl(raw: unknown): string | undefined {
+    if (typeof raw !== 'string') {
+        return undefined;
+    }
+    const candidate = raw.trim();
+    if (!candidate) {
+        return undefined;
+    }
+    try {
+        const parsed = new URL(candidate);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return undefined;
+        }
+        return parsed.toString();
+    } catch {
+        return undefined;
+    }
+}
+
+function isLoginSensitiveDomain(hostname: string): boolean {
+    const lower = hostname.toLowerCase();
+    return [
+        'x.com',
+        'twitter.com',
+        'reddit.com',
+        'xiaohongshu.com',
+        'www.xiaohongshu.com',
+        'facebook.com',
+        'instagram.com',
+        'linkedin.com',
+        'github.com',
+    ].some((domain) => lower === domain || lower.endsWith(`.${domain}`));
+}
+
+async function openAuthPageForSuspendedTask(input: {
+    taskId: string;
+    url: string;
+}): Promise<{ success: boolean; error?: string }> {
+    const browserService = BrowserService.getInstance(browserUseRuntimeConfig.serviceUrl);
+    const targetUrl = toHttpUrl(input.url);
+    if (!targetUrl) {
+        return {
+            success: false,
+            error: 'invalid_auth_url',
+        };
+    }
+
+    try {
+        const connection = browserService.getConnectionInfo();
+        const hostname = new URL(targetUrl).hostname.toLowerCase();
+        const loginSensitive = isLoginSensitiveDomain(hostname);
+
+        if (!connection.connected) {
+            let connected = false;
+            if (loginSensitive) {
+                try {
+                    await browserService.connect({
+                        headless: false,
+                        requireUserProfile: true,
+                    });
+                    connected = true;
+                } catch (error) {
+                    console.warn(`[AuthAssist] CDP user-profile connect unavailable, fallback to persistent profile: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            if (!connected) {
+                await browserService.connect({
+                    headless: false,
+                });
+            }
+        }
+
+        await browserService.navigate(targetUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+            taskId: input.taskId,
+        });
+
+        return { success: true };
+    } catch (error) {
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
 function getRuntimeCommandDeps(): RuntimeCommandDeps {
     return {
         emit: emitAny,
@@ -2079,6 +2185,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         executeFreshTask,
         ensureTaskRuntimePersistence,
         cancelTaskExecution,
+        cancelScheduledTasksForSourceTask,
         createTaskFailedEvent,
         createChatMessageEvent,
         createTaskClarificationRequiredEvent,
@@ -2094,6 +2201,7 @@ function getRuntimeCommandDeps(): RuntimeCommandDeps {
         taskSessionStore,
         taskEventBus,
         suspendResumeManager,
+        openAuthPageForSuspendedTask,
         enqueueResumeMessage,
         getTaskConfig,
         applyFrozenWorkRequestSessionPolicy,
@@ -2229,11 +2337,114 @@ type LlmConfig = {
     // Browser-use service configuration
     browserUse?: {
         enabled?: boolean;
+        autoStart?: boolean;
         serviceUrl?: string;
         defaultMode?: 'precise' | 'smart' | 'auto';
         llmModel?: string;
     };
 };
+
+type BrowserUseResolvedConfig = {
+    enabled: boolean;
+    autoStart: boolean;
+    serviceUrl: string;
+    defaultMode: 'precise' | 'smart' | 'auto';
+    llmModel?: string;
+};
+
+const DEFAULT_BROWSER_USE_SERVICE_URL = 'http://localhost:8100';
+const browserUseRuntimeConfig: BrowserUseResolvedConfig = {
+    enabled: true,
+    autoStart: true,
+    serviceUrl: DEFAULT_BROWSER_USE_SERVICE_URL,
+    defaultMode: 'auto',
+};
+
+function resolveBrowserUseConfig(
+    config: LlmConfig['browserUse'] | undefined
+): BrowserUseResolvedConfig {
+    const envAutoStartRaw = process.env.COWORKANY_BROWSER_USE_AUTOSTART?.trim().toLowerCase();
+    const envAutoStart =
+        envAutoStartRaw === undefined
+            ? undefined
+            : !(envAutoStartRaw === '0' || envAutoStartRaw === 'false' || envAutoStartRaw === 'no');
+
+    const serviceUrl = config?.serviceUrl?.trim() || DEFAULT_BROWSER_USE_SERVICE_URL;
+    return {
+        enabled: config?.enabled !== false,
+        autoStart: envAutoStart ?? (config?.autoStart !== false),
+        serviceUrl,
+        defaultMode: config?.defaultMode || 'auto',
+        llmModel: config?.llmModel,
+    };
+}
+
+function applyBrowserUseConfig(config: LlmConfig['browserUse'] | undefined): BrowserUseResolvedConfig {
+    const resolved = resolveBrowserUseConfig(config);
+    browserUseRuntimeConfig.enabled = resolved.enabled;
+    browserUseRuntimeConfig.autoStart = resolved.autoStart;
+    browserUseRuntimeConfig.serviceUrl = resolved.serviceUrl;
+    browserUseRuntimeConfig.defaultMode = resolved.defaultMode;
+    browserUseRuntimeConfig.llmModel = resolved.llmModel;
+
+    const browserService = BrowserService.getInstance(resolved.serviceUrl);
+    browserService.setMode(resolved.enabled ? resolved.defaultMode : 'precise');
+    browserService.clearBrowserUseAvailabilityCache();
+
+    return resolved;
+}
+
+async function ensureBrowserUseRuntimeReady(
+    config: BrowserUseResolvedConfig,
+    source: string
+): Promise<boolean> {
+    if (!config.enabled) {
+        console.error(`[BrowserUse] ${source}: disabled (precise mode only)`);
+        return false;
+    }
+
+    const ensured = await browserUseServiceBootstrap.ensureReady({
+        enabled: config.enabled,
+        autoStart: config.autoStart,
+        serviceUrl: config.serviceUrl,
+        llmModel: config.llmModel,
+        workspaceRoot,
+    });
+
+    const browserService = BrowserService.getInstance(config.serviceUrl);
+    const available = ensured.available || await browserService.isBrowserUseAvailable(true);
+    if (available) {
+        const startedLabel = ensured.started ? ' (auto-started)' : '';
+        console.error(`[BrowserUse] ${source}: available at ${config.serviceUrl}${startedLabel}, mode=${config.defaultMode}`);
+    } else {
+        const reason = ensured.reason ? ` (${ensured.reason})` : '';
+        console.error(`[BrowserUse] ${source}: unavailable at ${config.serviceUrl}${reason}`);
+    }
+
+    return available;
+}
+
+BrowserService.setBrowserUseAvailabilityRecoveryHook(async (serviceUrl) => {
+    const enabled = browserUseRuntimeConfig.enabled;
+    const autoStart = browserUseRuntimeConfig.autoStart;
+    if (!enabled || !autoStart) {
+        return false;
+    }
+
+    const ensured = await browserUseServiceBootstrap.ensureReady({
+        enabled,
+        autoStart,
+        serviceUrl: serviceUrl || browserUseRuntimeConfig.serviceUrl,
+        llmModel: browserUseRuntimeConfig.llmModel,
+        workspaceRoot,
+    });
+
+    if (!ensured.available && ensured.reason) {
+        console.error(`[BrowserUse] On-demand bootstrap failed: ${ensured.reason}`);
+    }
+
+    return ensured.available;
+});
 
 // LlmProviderConfig already defined earlier for AutonomousLlmAdapter
 
@@ -3328,6 +3539,58 @@ function scheduleTaskInternal(input: {
     return record;
 }
 
+async function cancelScheduledTasksForSourceTask(input: {
+    sourceTaskId: string;
+    userMessage: string;
+}): Promise<{
+    success: boolean;
+    cancelledCount: number;
+    cancelledTitles: string[];
+}> {
+    const nowIso = new Date().toISOString();
+    const reason = `Cancelled by user message: ${input.userMessage}`;
+    const cancellable = scheduledTaskStore
+        .read()
+        .filter((record) =>
+            record.sourceTaskId === input.sourceTaskId
+            && (
+                record.status === 'scheduled'
+                || record.status === 'running'
+                || record.status === 'suspended_waiting_user'
+            )
+        );
+
+    if (cancellable.length === 0) {
+        return {
+            success: false,
+            cancelledCount: 0,
+            cancelledTitles: [],
+        };
+    }
+
+    for (const record of cancellable) {
+        scheduledTaskStore.upsert({
+            ...record,
+            status: 'cancelled',
+            error: reason,
+            completedAt: nowIso,
+        });
+    }
+
+    const hasRunningRecord = cancellable.some((record) =>
+        record.status === 'running' || record.status === 'suspended_waiting_user'
+    );
+    if (hasRunningRecord) {
+        await cancelTaskExecution(input.sourceTaskId, reason);
+    }
+
+    return {
+        success: true,
+        cancelledCount: cancellable.length,
+        cancelledTitles: Array.from(new Set(cancellable.map((record) => record.title.trim()).filter((title) => title.length > 0))),
+    };
+}
+
 function buildScheduledConfirmationMessage(record: ScheduledTaskRecord): string {
     const timeText = formatScheduledTime(new Date(record.executeAt));
     const suffix = record.speakResult ? '，完成后会为你语音播报。' : '。';
@@ -3453,6 +3716,11 @@ Do not ask the user for extra input.
 Call browser_connect first, then continue with browser_navigate/browser_fill/browser_click as needed.
 If prior-stage files are available, read them directly instead of asking the user to paste content.`;
 
+const REQUIRED_BROWSER_TOOL_CALL_REPROMPT = `[SYSTEM] This task contract requires browser-interaction tool evidence before final delivery.
+Do not finish with text-only output yet.
+Call browser_connect first, then execute browser_navigate plus browser_click/browser_fill/browser_execute_script (or browser_ai_action).
+Only ask the user for help if a concrete blocker occurs (for example login/captcha/permission error), and include the exact blocker evidence.`;
+
 const SCHEDULED_TASK_NON_EXECUTION_PATTERNS: RegExp[] = [
     /^\s*(?:我会|我将|接下来|稍后).{0,24}(?:开始|进行|执行|检索|分析)/u,
     /^\s*(?:i(?:'ll| will)|let me)\s+(?:start|begin|first)\b/i,
@@ -3534,7 +3802,8 @@ function collectRequiredArtifactsFromWorkspace(input: {
 }
 
 const SOCIAL_PLATFORM_PATTERN = /(x\.com|twitter|推特|x\s*\(|在\s*x\s*上|到\s*x\s*上|社交平台|小红书|reddit|facebook|instagram|linkedin)/i;
-const SOCIAL_PUBLISH_ACTION_PATTERN = /(发布|发帖|发文|post|publish|tweet)/i;
+const SOCIAL_PUBLISH_ACTION_PATTERN =
+    /(?:发布|发帖|发文|推文|发推|发送(?:到|至)?|同步到|推送到|post|publish|tweet|share|send(?:\s+to)?)/i;
 
 function hasBrowserEvidenceFromToolNames(toolNames: Iterable<string>): boolean {
     const tools = new Set(toolNames);
@@ -3561,6 +3830,23 @@ function hasBrowserPublishIntent(input: {
     return (hasPublishSignal && hasPlatformSignal) || input.hasBrowserPreferredTool;
 }
 
+function taskRequiresBrowserInteractionEvidence(task?: {
+    executionRequirements?: Array<{
+        kind?: string;
+        capability?: string;
+        required?: boolean;
+    }>;
+}): boolean {
+    if (!task?.executionRequirements || task.executionRequirements.length === 0) {
+        return false;
+    }
+    return task.executionRequirements.some((requirement) =>
+        requirement?.kind === 'tool_evidence'
+        && requirement?.capability === 'browser_interaction'
+        && requirement?.required !== false
+    );
+}
+
 function requiresBrowserEvidenceForRequest(request?: FrozenWorkRequest): boolean {
     if (!request || !Array.isArray(request.tasks) || request.tasks.length === 0) {
         return false;
@@ -3568,6 +3854,9 @@ function requiresBrowserEvidenceForRequest(request?: FrozenWorkRequest): boolean
     const scopedTask = request.tasks[0];
     if (!scopedTask) {
         return false;
+    }
+    if (taskRequiresBrowserInteractionEvidence(scopedTask)) {
+        return true;
     }
     const taskText = [
         scopedTask.title,
@@ -3702,6 +3991,9 @@ function requiresBrowserEvidenceForScheduledTask(input: {
     const hasBrowserPreferredTool = (stageTask?.preferredTools ?? []).some((toolName) =>
         typeof toolName === 'string' && toolName.startsWith('browser_')
     );
+    if (taskRequiresBrowserInteractionEvidence(stageTask)) {
+        return true;
+    }
     const byIntent = hasBrowserPublishIntent({
         text: stageText,
         hasBrowserPreferredTool,
@@ -4278,27 +4570,38 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             result: effectiveResult,
             presentedResultText,
         });
-        const executionSuccess = validation.success;
-        const executionError = validation.error || effectiveResult.error;
+        const latestRecordSnapshot = scheduledTaskStore.read().find((item) => item.id === record.id);
+        const cancelledByUser = latestRecordSnapshot?.status === 'cancelled';
+        let executionSuccess = validation.success;
+        let executionError = validation.error || effectiveResult.error;
+        if (cancelledByUser) {
+            executionSuccess = false;
+            executionError = latestRecordSnapshot?.error || 'Scheduled task cancelled by user';
+        }
         if (executionSuccess) {
             emitScheduledTaskResultToSourceTask(record, presentedResultText);
-        } else {
+        } else if (!cancelledByUser) {
             emitScheduledTaskFailureToSourceTask(record, executionError || '未知错误');
         }
 
         const completedAt = new Date();
+        const finalStatus: ScheduledTaskRecord['status'] = cancelledByUser
+            ? 'cancelled'
+            : executionSuccess
+                ? 'completed'
+                : 'failed';
         scheduledTaskStore.upsert({
             ...runningRecord,
-            status: executionSuccess ? 'completed' : 'failed',
+            status: finalStatus,
             completedAt: completedAt.toISOString(),
-            resultSummary: executionSuccess ? presentedResultText : undefined,
-            error: executionSuccess ? undefined : executionError,
+            resultSummary: finalStatus === 'completed' ? presentedResultText : undefined,
+            error: finalStatus === 'completed' ? undefined : executionError,
         });
         console.error(
-            `[Scheduler] Scheduled task ${record.id} finished with status ${executionSuccess ? 'completed' : 'failed'}`
+            `[Scheduler] Scheduled task ${record.id} finished with status ${finalStatus}`
         );
 
-        if (executionSuccess && resolvedWorkRequest) {
+        if (finalStatus === 'completed' && resolvedWorkRequest) {
             const primaryTask = resolvedWorkRequest.tasks?.[0];
             const nextStage = planNextScheduledExecutionStage({
                 request: resolvedWorkRequest,
@@ -4350,7 +4653,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             }
         }
 
-        if (executionSuccess && resolvedWorkRequest?.schedule?.recurrence) {
+        if (finalStatus === 'completed' && resolvedWorkRequest?.schedule?.recurrence) {
             const supportsRecurringReschedule =
                 (record.totalStages ?? 1) <= 1
                 || record.stageIndex === undefined
@@ -4406,7 +4709,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             }
         }
 
-        if (record.speakResult) {
+        if (record.speakResult && finalStatus !== 'cancelled') {
             const spokenText = buildScheduledTaskSpokenText({
                 title: record.title,
                 success: executionSuccess,
@@ -4432,17 +4735,27 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
             }
         }
     } catch (error) {
-        emitScheduledTaskFailureToSourceTask(
-            record,
-            error instanceof Error ? error.message : String(error)
-        );
+        const latestRecordSnapshot = scheduledTaskStore.read().find((item) => item.id === record.id);
+        const cancelledByUser = latestRecordSnapshot?.status === 'cancelled';
+        if (!cancelledByUser) {
+            emitScheduledTaskFailureToSourceTask(
+                record,
+                error instanceof Error ? error.message : String(error)
+            );
+        }
         scheduledTaskStore.upsert({
             ...runningRecord,
-            status: 'failed',
+            status: cancelledByUser ? 'cancelled' : 'failed',
             completedAt: new Date().toISOString(),
-            error: error instanceof Error ? error.message : String(error),
+            error: cancelledByUser
+                ? (latestRecordSnapshot?.error || 'Scheduled task cancelled by user')
+                : (error instanceof Error ? error.message : String(error)),
         });
-        console.error('[Scheduler] Scheduled task execution failed:', error);
+        if (cancelledByUser) {
+            console.error(`[Scheduler] Scheduled task ${record.id} cancelled by user`);
+        } else {
+            console.error('[Scheduler] Scheduled task execution failed:', error);
+        }
     } finally {
         unbindScheduledRuntimeTask(taskId);
     }
@@ -4765,35 +5078,13 @@ globalToolRegistry.register('stub', STUB_TOOLS);          // Fallback stubs (sho
  */
 (async () => {
     try {
-        // Try to load browser-use config
-        const configPath = path.join(process.cwd(), 'llm-config.json');
-        if (fs.existsSync(configPath)) {
-            const raw = fs.readFileSync(configPath, 'utf-8');
-            const config = JSON.parse(raw) as LlmConfig;
-
-            if (config.browserUse) {
-                const serviceUrl = config.browserUse.serviceUrl || 'http://localhost:8100';
-                const defaultMode = config.browserUse.defaultMode || 'auto';
-
-                // Re-initialize BrowserService singleton with the configured URL
-                const bs = BrowserService.getInstance(serviceUrl);
-                bs.setMode(defaultMode);
-
-                if (config.browserUse.enabled !== false) {
-                    const available = await bs.isBrowserUseAvailable();
-                    if (available) {
-                        console.error(`[BrowserUse] ✓ Service available at ${serviceUrl}, default mode: ${defaultMode}`);
-                    } else {
-                        console.error(`[BrowserUse] ✗ Service not available at ${serviceUrl}. Smart mode will be unavailable. Start with: cd browser-use-service && python main.py`);
-                    }
-                } else {
-                    console.error('[BrowserUse] Service disabled in config, using precise mode only');
-                    bs.setMode('precise');
-                }
-            }
+        const llmConfig = loadLlmConfig(workspaceRoot);
+        if (llmConfig.browserUse) {
+            const browserConfig = applyBrowserUseConfig(llmConfig.browserUse);
+            await ensureBrowserUseRuntimeReady(browserConfig, 'startup');
         }
     } catch (error) {
-        console.error('[BrowserUse] Health check failed (non-critical):', error);
+        console.error('[BrowserUse] Startup bootstrap failed (non-critical):', error);
     }
 })();
 
@@ -5559,11 +5850,10 @@ function loadLlmConfig(workspaceRootPath: string): LlmConfig {
 
         // Apply browser-use configuration if present
         if (data.browserUse) {
-            const bs = BrowserService.getInstance(data.browserUse.serviceUrl);
-            if (data.browserUse.defaultMode) {
-                bs.setMode(data.browserUse.defaultMode);
-            }
-            console.error(`[LlmConfig] BrowserUse configured: enabled=${data.browserUse.enabled !== false}, mode=${data.browserUse.defaultMode || 'auto'}`);
+            const browserUse = applyBrowserUseConfig(data.browserUse);
+            console.error(
+                `[LlmConfig] BrowserUse configured: enabled=${browserUse.enabled}, autoStart=${browserUse.autoStart}, mode=${browserUse.defaultMode}, serviceUrl=${browserUse.serviceUrl}`
+            );
         }
 
         return data;
@@ -6326,7 +6616,10 @@ async function runAgentLoop(
     messages: AnthropicMessage[],
     options: AnthropicStreamOptions,
     config: LlmProviderConfig,
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
+    executionContext?: {
+        frozenWorkRequest?: FrozenWorkRequest;
+    },
 ): Promise<{ artifactsCreated: string[]; toolsUsed: string[] }> {
     const MAX_STEPS = 30;
     const TOOL_EXECUTION_TIMEOUT_MS = 90000;
@@ -6373,6 +6666,8 @@ async function runAgentLoop(
     const MAX_GATE_NO_TOOL_REPROMPTS = 2;
     let scheduledBrowserNoToolReprompts = 0;
     const MAX_SCHEDULED_BROWSER_NO_TOOL_REPROMPTS = 3;
+    let requiredBrowserNoToolReprompts = 0;
+    const MAX_REQUIRED_BROWSER_NO_TOOL_REPROMPTS = 3;
     let requiredWebNoToolReprompts = 0;
     const MAX_REQUIRED_WEB_NO_TOOL_REPROMPTS = 3;
 
@@ -6467,28 +6762,43 @@ async function runAgentLoop(
             }
 
             const preparedForNoToolStep = activePreparedWorkRequests.get(taskId);
-            const modeForNoToolStep = preparedForNoToolStep?.frozenWorkRequest?.mode;
+            const requestForNoToolStep =
+                executionContext?.frozenWorkRequest ?? preparedForNoToolStep?.frozenWorkRequest;
+            const modeForNoToolStep = requestForNoToolStep?.mode;
             const isScheduledNoToolStep =
                 modeForNoToolStep === 'scheduled_task' || modeForNoToolStep === 'scheduled_multi_task';
-            const scheduledBrowserEvidenceRequired =
-                isScheduledNoToolStep && requiresBrowserEvidenceForRequest(preparedForNoToolStep?.frozenWorkRequest);
+            const browserEvidenceRequired = requiresBrowserEvidenceForRequest(requestForNoToolStep);
             const requiredWebResearchEvidence =
-                requiresRequiredWebResearchEvidence(preparedForNoToolStep?.frozenWorkRequest);
+                requiresRequiredWebResearchEvidence(requestForNoToolStep);
 
             if (
-                scheduledBrowserEvidenceRequired &&
+                browserEvidenceRequired &&
                 !hasBrowserEvidenceFromToolNames(toolsUsed) &&
-                scheduledBrowserNoToolReprompts < MAX_SCHEDULED_BROWSER_NO_TOOL_REPROMPTS
+                requiredBrowserNoToolReprompts < MAX_REQUIRED_BROWSER_NO_TOOL_REPROMPTS
             ) {
-                scheduledBrowserNoToolReprompts++;
+                requiredBrowserNoToolReprompts++;
+                if (isScheduledNoToolStep) {
+                    scheduledBrowserNoToolReprompts++;
+                }
                 messages = pushConversationMessage(taskId, {
                     role: 'user',
                     content: [{
                         type: 'text',
-                        text: SCHEDULED_BROWSER_TOOL_CALL_REPROMPT,
+                        text: isScheduledNoToolStep
+                            ? SCHEDULED_BROWSER_TOOL_CALL_REPROMPT
+                            : REQUIRED_BROWSER_TOOL_CALL_REPROMPT,
                     }],
                 });
                 continue;
+            }
+
+            if (
+                browserEvidenceRequired &&
+                !hasBrowserEvidenceFromToolNames(toolsUsed)
+            ) {
+                throw new Error(
+                    'Execution protocol unmet: required browser interaction evidence was missing after repeated no-tool retries.'
+                );
             }
 
             if (
@@ -6538,7 +6848,8 @@ async function runAgentLoop(
                     hasBlockingUserAction: false,
                     toolResultText: recentToolResultText,
                 });
-                const activeMode = activePreparedWorkRequests.get(taskId)?.frozenWorkRequest?.mode;
+                const activeMode = requestForNoToolStep?.mode
+                    ?? activePreparedWorkRequests.get(taskId)?.frozenWorkRequest?.mode;
                 const isScheduledExecution = activeMode === 'scheduled_task' || activeMode === 'scheduled_multi_task';
                 const asksForAdditionalUserAction =
                     protocolAssessment?.asksForAdditionalUserAction === true &&
@@ -6631,7 +6942,8 @@ async function runAgentLoop(
                             hasBlockingUserAction: false,
                             toolResultText: collectRecentToolResultText(messages),
                         });
-                        const retryActiveMode = activePreparedWorkRequests.get(taskId)?.frozenWorkRequest?.mode;
+                        const retryActiveMode = requestForNoToolStep?.mode
+                            ?? activePreparedWorkRequests.get(taskId)?.frozenWorkRequest?.mode;
                         const retryIsScheduledExecution =
                             retryActiveMode === 'scheduled_task' || retryActiveMode === 'scheduled_multi_task';
                         if (
@@ -7848,12 +8160,41 @@ async function runAgentLoop(
             if (suspended) {
                 console.log(`[AgentLoop] Task ${taskId} is suspended: ${suspended.reason}`);
                 console.log(`[AgentLoop] Waiting for user action: ${suspended.userMessage}`);
+                const suspendedContext =
+                    suspended.context && typeof suspended.context === 'object'
+                        ? suspended.context as Record<string, unknown>
+                        : {};
+                const authUrl =
+                    toHttpUrl(suspendedContext.navigatedUrl)
+                    || toHttpUrl(suspendedContext.targetUrl)
+                    || toHttpUrl(suspendedContext.url);
+                const authDomain =
+                    (typeof suspendedContext.targetDomain === 'string' && suspendedContext.targetDomain.trim().length > 0
+                        ? suspendedContext.targetDomain.trim()
+                        : undefined)
+                    || (typeof suspendedContext.domain === 'string' && suspendedContext.domain.trim().length > 0
+                        ? suspendedContext.domain.trim()
+                        : undefined)
+                    || (authUrl ? new URL(authUrl).hostname : undefined);
+                const externalAuthRequired =
+                    suspended.reason.toLowerCase().includes('auth')
+                    || suspended.reason.toLowerCase().includes('login');
+                const canAutoResume = suspended.resumeCondition.type === 'auto_detect';
+                const authInstructions = externalAuthRequired
+                    ? [
+                        suspended.userMessage,
+                        authUrl ? `Open the login page in automation browser: ${authUrl}` : '',
+                        canAutoResume
+                            ? 'After you complete login, execution will auto-resume. If auto-resume does not trigger, click "I am logged in, continue".'
+                            : 'After you complete login, click "I am logged in, continue".',
+                    ].filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+                    : [suspended.userMessage];
 
                 // Emit TASK_SUSPENDED event to frontend
                 emit(createTaskSuspendedEvent(taskId, {
                     reason: suspended.reason,
                     userMessage: suspended.userMessage,
-                    canAutoResume: suspended.resumeCondition.type === 'auto_detect',
+                    canAutoResume,
                     maxWaitTimeMs: suspended.resumeCondition.maxWaitTime,
                 }));
                 emit(createTaskCheckpointReachedEvent(taskId, {
@@ -7870,13 +8211,16 @@ async function runAgentLoop(
                 emit(createTaskUserActionRequiredEvent(taskId, {
                     actionId: `runtime-suspension-${taskId}`,
                     title: 'Complete required manual action',
-                    kind: suspended.reason.toLowerCase().includes('auth') ? 'external_auth' : 'manual_step',
+                    kind: externalAuthRequired ? 'external_auth' : 'manual_step',
                     description: suspended.userMessage,
                     riskTier: 'high',
                     executionPolicy: 'hard_block',
                     blocking: true,
                     questions: [],
-                    instructions: [suspended.userMessage],
+                    instructions: authInstructions,
+                    authUrl,
+                    authDomain,
+                    canAutoResume,
                 }));
                 const preparedWorkRequest = activePreparedWorkRequests.get(taskId);
                 if (preparedWorkRequest) {
@@ -9114,6 +9458,11 @@ async function shutdownSidecar(reason: string, exitCode: number): Promise<never>
                 await BrowserService.getInstance().disconnect();
             } catch (error) {
                 console.error('[WARN] Browser disconnect during shutdown failed:', error);
+            }
+            try {
+                await browserUseServiceBootstrap.stopManagedService();
+            } catch (error) {
+                console.error('[WARN] Browser-use managed service shutdown failed:', error);
             }
             await closeLogStreamSafely();
         })();

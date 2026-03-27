@@ -36,6 +36,7 @@
     },
     "browserUse": {
         "enabled": true,
+        "autoStart": true,
         "serviceUrl": "http://localhost:8100",
         "defaultMode": "auto",
         "llmModel": "gpt-4o"

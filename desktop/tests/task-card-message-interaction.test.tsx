@@ -36,14 +36,13 @@ function getButtonByText(renderer: ReactTestRenderer, label: string) {
 }
 
 describe('TaskCardMessage interactions', () => {
-    test('emits exact route-choice tokens when clicking draft confirmation buttons', () => {
-        const actionCalls: Array<{
+    test('submits input-only draft confirmation text without rendering choice buttons', async () => {
+        const submitCalls: Array<{
             taskId?: string;
             cardId: string;
             actionId?: string;
-            value?: string;
+            value: string;
         }> = [];
-
         const item = makeTaskCard({
             id: 'card-draft-choice',
             taskId: 'task-draft-choice',
@@ -64,37 +63,40 @@ describe('TaskCardMessage interactions', () => {
         const renderer = create(
             <TaskCardMessage
                 item={item}
-                onTaskActionClick={(input) => actionCalls.push(input)}
+                onTaskCollaborationSubmit={(input) => submitCalls.push(input)}
             />
         );
+        await act(async () => {});
 
-        const confirmButton = getButtonByText(renderer, '确认创建');
-        const chatButton = getButtonByText(renderer, '改成普通回答');
+        expect(getButtonByText(renderer, '确认创建')).toBeUndefined();
+        expect(getButtonByText(renderer, '改成普通回答')).toBeUndefined();
 
-        expect(confirmButton).toBeDefined();
-        expect(chatButton).toBeDefined();
+        const input = renderer.root.findByType('input');
+        const submitButton = getButtonByText(renderer, '发送');
+        expect(submitButton).toBeDefined();
 
-        act(() => {
-            confirmButton?.props.onClick();
+        await act(async () => {
+            input.props.onChange({
+                target: { value: '确认创建' },
+                currentTarget: { value: '确认创建' },
+            });
         });
-        act(() => {
-            chatButton?.props.onClick();
+        await act(async () => {
+            submitButton?.props.onClick();
         });
 
-        expect(actionCalls).toEqual([
+        expect(submitCalls).toEqual([
             {
                 taskId: 'task-draft-choice',
                 cardId: 'card-draft-choice',
                 actionId: 'task_draft_confirm',
-                value: '__task_draft_confirm__',
-            },
-            {
-                taskId: 'task-draft-choice',
-                cardId: 'card-draft-choice',
-                actionId: 'task_draft_confirm',
-                value: '__task_draft_chat__',
+                value: '确认创建',
             },
         ]);
+        expect(encodeTaskCollaborationMessage({
+            actionId: submitCalls[0]?.actionId,
+            value: submitCalls[0]?.value ?? '',
+        })).toBe('__task_draft_confirm__');
     });
 
     test('submits edited draft input and can be encoded into edit-create token', async () => {

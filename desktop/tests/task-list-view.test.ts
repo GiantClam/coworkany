@@ -129,7 +129,7 @@ describe('buildBoardTasks', () => {
             }),
         ]);
 
-        expect(task?.taskCard?.title).toBe('Task center');
+        expect(task?.taskCard?.title).toBe(task?.title);
         expect(task?.taskCard?.tasks?.length).toBe(1);
     });
 

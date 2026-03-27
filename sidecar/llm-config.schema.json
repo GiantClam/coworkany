@@ -204,6 +204,11 @@
                     "default": true,
                     "description": "Enable browser-use service integration. When false, only precise (Playwright) mode is available."
                 },
+                "autoStart": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically start local browser-use-service when smart mode needs it and the endpoint is unavailable."
+                },
                 "serviceUrl": {
                     "type": "string",
                     "default": "http://localhost:8100",

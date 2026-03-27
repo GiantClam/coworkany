@@ -49,4 +49,60 @@ describe('directive manager', () => {
         const reloaded = new DirectiveManager(root);
         expect(reloaded.listDirectives().map((directive) => directive.id)).toContain('ts-no-any');
     });
+
+    test('injects active persona style requirements into system prompt', () => {
+        const root = makeTempDir();
+        fs.writeFileSync(path.join(root, 'directives.json'), JSON.stringify({
+            directives: [
+                {
+                    id: 'natural-reminder',
+                    name: 'Natural Reminder',
+                    content: 'Rewrite reminder confirmations naturally instead of echoing raw input.',
+                    enabled: true,
+                    priority: 2,
+                },
+            ],
+            personas: [
+                {
+                    id: 'care-coach',
+                    name: 'Care Coach',
+                    description: 'Warm and caring assistant who sounds like a thoughtful friend.',
+                    directives: ['natural-reminder'],
+                },
+            ],
+            activePersonaId: 'care-coach',
+        }, null, 2));
+
+        const manager = new DirectiveManager(root);
+        const prompt = manager.getSystemPromptAdditions('remind me to drink water every minute');
+
+        expect(prompt).toContain('## Active Persona');
+        expect(prompt).toContain('Name: Care Coach');
+        expect(prompt).toContain('Warm and caring assistant');
+        expect(prompt).toContain('For every user-facing reply');
+        expect(prompt).toContain('[Natural Reminder] Rewrite reminder confirmations naturally instead of echoing raw input.');
+    });
+
+    test('keeps persona style injection even when no directive is enabled', () => {
+        const root = makeTempDir();
+        fs.writeFileSync(path.join(root, 'directives.json'), JSON.stringify({
+            directives: [],
+            personas: [
+                {
+                    id: 'minimal',
+                    name: 'Minimal Coach',
+                    description: 'Short and direct coaching voice.',
+                    directives: [],
+                },
+            ],
+            activePersonaId: 'minimal',
+        }, null, 2));
+
+        const manager = new DirectiveManager(root);
+        const prompt = manager.getSystemPromptAdditions('set a reminder');
+
+        expect(prompt).toContain('## Active Persona');
+        expect(prompt).toContain('Name: Minimal Coach');
+        expect(prompt).not.toContain('## User Directives (Identity & Rules)');
+    });
 });

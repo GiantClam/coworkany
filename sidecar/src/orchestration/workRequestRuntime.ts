@@ -370,7 +370,7 @@ export function getBlockingUserAction(
         }
     }
 
-    return actionableUserActions.find((action) => action.blocking) ?? actionableUserActions[0];
+    return actionableUserActions.find((action) => action.blocking);
 }
 
 export function markWorkRequestExecutionStarted(prepared: PreparedWorkRequestContext): void {
@@ -459,6 +459,44 @@ export function reopenPreparedWorkRequestForResearch(input: {
     const nextStepId = prepared.executionPlan.steps.find((step) => step.kind === 'research')?.stepId
         ?? prepared.executionPlan.steps.find((step) => step.kind === 'uncertainty_resolution')?.stepId
         ?? prepared.executionPlan.steps.find((step) => step.kind === 'contract_freeze')?.stepId;
+
+    return {
+        summary,
+        reason,
+        trigger,
+        reasons: [reason],
+        nextStepId,
+    };
+}
+
+export function reopenPreparedWorkRequestForExecution(input: {
+    prepared: PreparedWorkRequestContext;
+    reason: string;
+    trigger: ReplanTrigger;
+}): ContractReopenedPayload {
+    const { prepared, reason, trigger } = input;
+    const summary = `Execution evidence requires execution-stage retry: ${reason}`;
+    const knownRisks = prepared.frozenWorkRequest.knownRisks ?? [];
+    if (!knownRisks.includes(reason)) {
+        prepared.frozenWorkRequest.knownRisks = [...knownRisks, reason];
+    }
+
+    updateExecutionPlanByKind(prepared, 'execution', 'running');
+    updateExecutionPlanByKind(prepared, 'reduction', 'pending', { preserveCompleted: true });
+    updateExecutionPlanByKind(prepared, 'presentation', 'pending', { preserveCompleted: true });
+
+    markPlanningSteps(
+        prepared,
+        'execution',
+        'in_progress',
+        `Execution-stage retry requested for work request ${prepared.frozenWorkRequest.id}: ${reason}`
+    );
+    markPlanningSteps(prepared, 'reduction', 'pending');
+    markPlanningSteps(prepared, 'presentation', 'pending');
+
+    const nextStepId = prepared.executionPlan.steps.find((step) => step.kind === 'execution')?.stepId
+        ?? prepared.executionPlan.steps.find((step) => step.kind === 'reduction')?.stepId
+        ?? prepared.executionPlan.steps.find((step) => step.kind === 'presentation')?.stepId;
 
     return {
         summary,
@@ -921,6 +959,16 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
             return `- ${action.title}: ${action.description}${questions}${instructions}`;
         }).join('\n')
         : '';
+    const executionRequirementsSection = request.tasks
+        .flatMap((task) => task.executionRequirements ?? [])
+        .filter((requirement) => requirement.required)
+        .map((requirement) => {
+            if (requirement.kind === 'tool_evidence') {
+                return `- tool_evidence/${requirement.capability}: ${requirement.reason}`;
+            }
+            return `- ${requirement.kind}: ${requirement.reason}`;
+        })
+        .join('\n');
     const assumptionsSection = request.clarification.assumptions.length > 0
         ? request.clarification.assumptions.map((assumption) => `- ${assumption}`).join('\n')
         : '';
@@ -960,6 +1008,7 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
         !deliverablesSection &&
         !checkpointsSection &&
         !userActionsSection &&
+        !executionRequirementsSection &&
         !goalFrameSection &&
         !selectedStrategySection &&
         !risksSection
@@ -979,13 +1028,14 @@ ${executionQuery}
 
 Coworkany is the primary task owner for this run. Coworkany should decide how to execute, when to checkpoint, and when user collaboration is actually required.
 
-${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
+${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
 
 ${workflowGuidance ? `\n## Deterministic Local Workflow Guidance\n\n${workflowGuidance}\n` : ''}
 
 Rules:
 - Treat the frozen work request as the source of truth for execution.
 - Coworkany leads the task; ask the user for help only when a blocking question or manual action is truly required.
+- If the contract includes required execution evidence, complete those tool-evidence steps before giving the final answer.
 - Preserve the planned deliverables and checkpoints unless new evidence forces a change.
 - Keep the user-visible reply aligned with the acceptance criteria above.
 - Do not add unnecessary meta commentary.`;

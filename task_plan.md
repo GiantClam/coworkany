@@ -3,6 +3,11 @@
 ## Goal
 Make Coworkany own task planning and collaboration by adding structured deliverables, checkpoints, user-action requests, and defaulting/clarification logic to the work-request control plane.
 
+## 2026-03-27 Canonical Timeline Status
+- Desktop timeline now renders through the canonical message/part builder by default when source events are fully covered by canonical synthesis.
+- Legacy event projection remains as a guarded fallback for non-migrated event types only.
+- Next cleanup step is to delete or isolate the remaining legacy-only timeline code after a final unsupported-event audit.
+
 ## Current Phase
 Phase 5
 
@@ -218,6 +223,36 @@ Remove false-negative release blockers while preserving strict commercial gating
 - Missing extension governance store is now treated as:
   - pass when no third-party extension is enabled
   - fail when third-party extensions are enabled
+
+## 2026-03-27 Canonical Task Stream Phase 1
+
+### Goal
+Introduce a transport-agnostic canonical task stream alongside the existing `TaskEvent` protocol so desktop can start consuming unified message parts without changing the current timeline UI.
+
+### Phases
+- Discovery and boundary selection: complete
+- Protocol and adapter definition: complete
+- Sidecar dual-write implementation: complete
+- Desktop shadow parsing and verification: complete
+- Chat-mode canonical timeline adoption: complete
+- Chat-mode canonical structured runtime parts adoption: complete
+- Chat-mode canonical task-card and collaboration adoption: complete
+- Immediate task-mode canonical adoption: complete
+- Scheduled task-mode canonical adoption: complete
+- Local TaskEvent -> canonical synthesis fallback: complete
+- Legacy event-only timeline retirement: pending
+
+### Decisions
+- Keep `TaskEvent` as the current user-facing source of truth during phase 1.
+- Add a canonical message/part protocol in parallel instead of replacing the existing Tauri `task-event` channel in one cut.
+- Use sidecar `emit(...)` and Rust sidecar message classification as the single insertion points for dual-write transport.
+- Start with a shadow desktop store for canonical messages; do not change timeline rendering until the protocol proves stable.
+- Phase 2 only switches `chat` mode to canonical message rendering when canonical messages are present; task-mode/task-card rendering stays on the legacy event projection until structured parts are migrated end-to-end.
+- Chat-mode canonical rendering now supports `tool-call` / `tool-result` / `effect` / `patch` / `task` / `collaboration` / `finish` / `error` parts directly.
+- Immediate task-mode now shares the same canonical builder as chat-mode.
+- Scheduled task-mode now also shares the canonical builder, with scheduled-specific suppressions for internal user echoes, research noise, and compact finish handling preserved.
+- Desktop now locally synthesizes canonical messages from `TaskEvent`s when store-backed canonical messages are absent, so canonical projection is the default render path even for older event-only sessions.
+- Remaining migration boundary is cleanup: the legacy event-specific builder still exists as the final fallback, but it is no longer the primary rendering path.
 
 ## 2026-03-22 Canary Checklist Evidence Gate
 

@@ -60,6 +60,7 @@ type ManagedLlmConfig = {
     };
     browserUse?: {
         enabled?: boolean;
+        autoStart?: boolean;
         serviceUrl?: string;
         defaultMode?: BrowserMode;
         llmModel?: string;
@@ -173,9 +174,12 @@ function applyManagedLlmConfig(config: ManagedLlmConfig): void {
 
     if (config.browserUse) {
         const browserService = BrowserService.getInstance(config.browserUse.serviceUrl);
-        if (config.browserUse.defaultMode) {
+        if (config.browserUse.enabled === false) {
+            browserService.setMode('precise');
+        } else if (config.browserUse.defaultMode) {
             browserService.setMode(config.browserUse.defaultMode);
         }
+        browserService.clearBrowserUseAvailabilityCache();
     }
 }
 

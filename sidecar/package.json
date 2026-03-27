@@ -19,7 +19,7 @@
     "eval:control-plane:apply-threshold-suggestion": "bun run scripts/apply-control-plane-threshold-suggestion.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
-    "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts",
+    "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts tests/browser-use-service-bootstrap.test.ts src/services/__tests__/browserService.test.ts",
     "test:ci": "npm run test:stable",
     "test:agent:core": "node scripts/run-tests-sequential.mjs tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",
     "test:agent:scenarios": "node scripts/run-tests-sequential.mjs tests/capabilities.test.ts tests/user-scenarios.test.ts tests/e2e-composite.test.ts tests/openclaw-quick.test.ts tests/openclaw-simulation.test.ts tests/openclaw-extended.test.ts tests/openclow-comparison.test.ts",
@@ -28,6 +28,7 @@
     "test:desktop": "bun test tests/desktop-full.test.ts",
     "test:all": "npm run test:stable && npm run test:agent:core && npm run test:agent:scenarios && npm run test:agent:research && npm run test:browser && npm run test:desktop",
     "test:e2e:browser-smart": "bun run tests/e2e-browser-smart.ts",
+    "test:e2e:browser-resilience": "bun test tests/browser-service-resilience.e2e.test.ts tests/browser-service-recovery-inprocess.e2e.test.ts",
     "test:e2e:x-learning": "bun test tests/x-following-ai-learning-e2e.test.ts",
     "test:x-following": "bun test tests/x-following-posts-regression.test.ts"
   },

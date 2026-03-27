@@ -44,6 +44,203 @@
     max-width: 100%;
 }
 
+.assistantThread {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+.assistantTurnBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.assistantThreadBrand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    color: var(--text-primary);
+}
+
+.assistantThreadBrandMark {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    flex-shrink: 0;
+}
+
+.assistantThreadBrandName {
+    font-size: 18px;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.assistantThreadBrandChip {
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1;
+    padding: 4px 8px;
+}
+
+.assistantTurnLead {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.7;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.assistantResponseCard {
+    width: 100%;
+}
+
+.assistantResponseSystemBlock {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.assistantResponseSystemLabel {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.assistantTurnSystemNote {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    padding-left: 12px;
+    border-left: 2px solid rgba(148, 163, 184, 0.18);
+}
+
+.assistantTurnSteps {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    max-width: min(100%, 66.666%);
+}
+
+.assistantTurnStep {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(255, 255, 255, 0.02);
+    padding: 10px 12px;
+}
+
+.assistantTurnStepNeutral {
+    border-color: rgba(148, 163, 184, 0.22);
+}
+
+.assistantTurnStepRunning {
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.assistantTurnStepSuccess {
+    border-color: rgba(34, 197, 94, 0.35);
+}
+
+.assistantTurnStepFailed {
+    border-color: rgba(248, 113, 113, 0.35);
+}
+
+.assistantTurnStepDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.85);
+    margin-top: 6px;
+    flex-shrink: 0;
+}
+
+.assistantTurnStepRunning .assistantTurnStepDot {
+    background: rgba(59, 130, 246, 0.95);
+}
+
+.assistantTurnStepSuccess .assistantTurnStepDot {
+    background: rgba(34, 197, 94, 0.95);
+}
+
+.assistantTurnStepFailed .assistantTurnStepDot {
+    background: rgba(248, 113, 113, 0.95);
+}
+
+.assistantTurnStepText {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 2px;
+}
+
+.assistantTurnStepTitle {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.assistantTurnStepDetail {
+    margin-top: 2px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.assistantTurnCardWrap {
+    min-width: 0;
+}
+
+.assistantTurnCardWrap .timelineItem.assistant {
+    display: block;
+}
+
+.assistantTurnMarkdownStack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.assistantTurnCardStack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    max-width: min(100%, 66.666%);
+}
+
+.assistantTurnMarkdown {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-primary);
+}
+
 @keyframes fadeIn {
     from {
         opacity: 0;
@@ -107,62 +304,30 @@
 .timelineItem.assistant {
     display: flex;
     justify-content: flex-start;
+    width: 100%;
 }
 
 .timelineItem.assistant .contentBubble {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border-subtle);
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-xl);
-    max-width: 85%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+    width: 100%;
+    max-width: 100%;
 }
 
-.systemContentBubble {
-    background: rgba(27, 45, 70, 0.5) !important;
-    border-color: var(--border-subtle) !important;
+.assistantPendingCard {
+    width: 100%;
 }
 
-.statusContentBubble {
-    background: rgba(12, 34, 46, 0.66) !important;
-    border-color: rgba(52, 211, 153, 0.26) !important;
+.assistantPendingCard .structuredCardBody {
+    margin-top: 10px;
 }
 
-.phasePlanBubble {
-    background: rgba(16, 36, 58, 0.64) !important;
-    border-color: rgba(96, 165, 250, 0.34) !important;
-}
-
-.phaseThinkingBubble {
-    background: rgba(20, 36, 66, 0.62) !important;
-    border-color: rgba(59, 130, 246, 0.32) !important;
-}
-
-.phaseExecuteBubble {
-    background: rgba(12, 40, 32, 0.62) !important;
-    border-color: rgba(34, 197, 94, 0.3) !important;
-}
-
-.phaseSummaryBubble {
-    background: rgba(42, 28, 12, 0.62) !important;
-    border-color: rgba(251, 191, 36, 0.32) !important;
-}
-
-.pendingStatusWrap {
+.pendingStatusCardBody {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-}
-
-.pendingStatusHeader {
-    display: inline-flex;
-    align-items: center;
     gap: 10px;
-}
-
-.pendingStatusText {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    word-break: break-word;
 }
 
 .pendingStatusDots {
@@ -229,12 +394,6 @@
     }
 }
 
-.taskCardMessage {
-    background: var(--bg-subtle) !important;
-    border-color: var(--border-subtle) !important;
-    box-shadow: none;
-}
-
 .taskCardBoardLayout {
     width: 100%;
 }
@@ -244,30 +403,112 @@
     width: 100%;
 }
 
-.taskCardHeader {
+.structuredMessageCard {
+    background: var(--bg-subtle) !important;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    padding: var(--space-3) var(--space-4);
+    box-shadow: none;
+}
+
+.structuredCardAssistant {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.7)) !important;
+}
+
+.structuredCardRuntime {
+    background: linear-gradient(180deg, rgba(12, 34, 24, 0.78), rgba(10, 26, 20, 0.72)) !important;
+    border-color: rgba(34, 197, 94, 0.2);
+}
+
+.structuredCardTask {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.74), rgba(17, 24, 39, 0.68)) !important;
+    border-color: rgba(148, 163, 184, 0.22);
+}
+
+.structuredCardTool {
+    background: linear-gradient(180deg, rgba(12, 24, 40, 0.78), rgba(11, 21, 35, 0.72)) !important;
+    border-color: rgba(59, 130, 246, 0.2);
+}
+
+.structuredCardHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.structuredCardHeaderInteractive {
+    cursor: pointer;
+}
+
+.structuredCardHeaderInteractive:hover {
+    opacity: 0.96;
+}
+
+.structuredCardHeading {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
+    flex: 1;
 }
 
-.taskCardKicker,
-.taskCardSectionLabel {
+.structuredCardMeta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.structuredCardBody {
+    margin-top: 12px;
+}
+
+.taskCardContent {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.structuredCardKicker,
+.structuredSectionLabel {
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
-.taskCardKicker {
+.structuredCardKicker {
     color: #bfdbfe;
 }
 
-.taskCardTitle {
+.structuredCardRuntime .structuredCardKicker {
+    color: #86efac;
+}
+
+.structuredCardTool .structuredCardKicker {
+    color: #93c5fd;
+}
+
+.structuredCardTask .structuredCardKicker {
+    color: #fde68a;
+}
+
+.structuredCardTitle {
     font-size: 14px;
     color: var(--text-primary);
     line-height: 1.4;
 }
 
+.structuredCardSubtitle,
+.taskCardSubtitle {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.structuredCardStatus,
 .taskStatusChip {
     align-self: flex-start;
     font-size: 11px;
@@ -278,24 +519,34 @@
     padding: 3px 8px;
 }
 
+.structuredCardStatusRunning,
 .taskStatusrunning {
     border-color: rgba(34, 197, 94, 0.35);
     color: #bbf7d0;
 }
 
+.structuredCardStatusSuccess,
 .taskStatusfinished {
     border-color: rgba(59, 130, 246, 0.4);
     color: #bfdbfe;
 }
 
+.structuredCardStatusFailed,
 .taskStatusfailed {
     border-color: rgba(248, 113, 113, 0.4);
     color: #fecaca;
 }
 
+.structuredCardStatusNeutral,
 .taskStatusidle {
     border-color: rgba(148, 163, 184, 0.35);
     color: #cbd5e1;
+}
+
+.structuredCardToggle {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 
 .taskWorkflowLabel {
@@ -303,246 +554,11 @@
     color: var(--text-muted);
 }
 
-.taskCardSubtitle {
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--text-secondary);
-}
-
 .taskCardSections {
     margin-top: 10px;
     display: flex;
     flex-direction: column;
     gap: 10px;
-}
-
-.taskCardLane {
-    display: grid;
-    grid-template-columns: 14px minmax(0, 1fr);
-    column-gap: 10px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(100, 116, 139, 0.25);
-}
-
-.taskCardThinkingLane {
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.44), rgba(15, 23, 42, 0.28));
-    border-color: rgba(59, 130, 246, 0.32);
-}
-
-.taskCardExecutionLane {
-    background: linear-gradient(180deg, rgba(9, 26, 22, 0.44), rgba(9, 26, 22, 0.3));
-    border-color: rgba(34, 197, 94, 0.32);
-}
-
-.taskCardLaneHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-}
-
-.taskCardLaneTitle {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-primary);
-}
-
-.taskTimelineNode {
-    position: relative;
-    display: flex;
-    justify-content: center;
-    padding-top: 5px;
-}
-
-.taskTimelineNodeDot {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    border: 2px solid rgba(148, 163, 184, 0.5);
-    background: rgba(30, 41, 59, 0.8);
-    z-index: 1;
-}
-
-.taskTimelineNodeDotcompleted {
-    border-color: rgba(59, 130, 246, 0.9);
-    background: #60a5fa;
-}
-
-.taskTimelineNodeDotactive {
-    border-color: rgba(16, 185, 129, 0.9);
-    background: #34d399;
-}
-
-.taskTimelineNodeDotfailed {
-    border-color: rgba(248, 113, 113, 0.9);
-    background: #f87171;
-}
-
-.taskTimelineNodeDotpending {
-    border-color: rgba(148, 163, 184, 0.5);
-    background: rgba(148, 163, 184, 0.4);
-}
-
-.taskTimelineNodeLine {
-    position: absolute;
-    top: 13px;
-    bottom: -14px;
-    width: 2px;
-    border-radius: 999px;
-    background: rgba(148, 163, 184, 0.26);
-}
-
-.taskCardLaneBody {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.taskCardLaneHeaderButton {
-    border: none;
-    background: transparent;
-    color: inherit;
-    padding: 0;
-    width: 100%;
-    text-align: left;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    cursor: pointer;
-}
-
-.taskCardLaneSummary {
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.35;
-}
-
-.taskCardLaneChevron {
-    align-self: flex-end;
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1;
-}
-
-.taskCardLaneStatusChip {
-    font-size: 10px;
-    line-height: 1.2;
-    border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    color: #cbd5e1;
-    padding: 2px 6px;
-    white-space: nowrap;
-}
-
-.taskCardLaneStatuscompleted {
-    border-color: rgba(59, 130, 246, 0.48);
-    color: #bfdbfe;
-}
-
-.taskCardLaneStatusactive {
-    border-color: rgba(34, 197, 94, 0.45);
-    color: #bbf7d0;
-}
-
-.taskCardLaneStatusfailed {
-    border-color: rgba(248, 113, 113, 0.5);
-    color: #fecaca;
-}
-
-.taskCardLaneStatuspending {
-    border-color: rgba(148, 163, 184, 0.35);
-    color: #cbd5e1;
-}
-
-.taskCardLaneSections {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.taskCardSection {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.taskCardSectionLabel {
-    color: var(--text-muted);
-}
-
-.taskCardSectionLines {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.taskCardSectionLines span {
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--text-secondary);
-    padding-left: 12px;
-    border-left: 2px solid rgba(96, 165, 250, 0.16);
-}
-
-.taskCardExecutionLane .taskCardSectionLines span {
-    border-left-color: rgba(110, 231, 183, 0.22);
-}
-
-.taskCardResultTabsSection {
-    margin-top: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.taskCardTabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.taskCardTabButton {
-    border: 1px solid rgba(100, 116, 139, 0.32);
-    background: rgba(15, 23, 42, 0.32);
-    color: var(--text-secondary);
-    border-radius: 999px;
-    padding: 5px 11px;
-    font-size: 11px;
-    cursor: pointer;
-    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-}
-
-.taskCardTabButton:hover {
-    border-color: rgba(96, 165, 250, 0.5);
-    color: var(--text-primary);
-}
-
-.activeTaskCardTabButton {
-    background: rgba(59, 130, 246, 0.22);
-    border-color: rgba(96, 165, 250, 0.56);
-    color: #dbeafe;
-}
-
-.taskCardTabPanel {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    border: 1px solid rgba(100, 116, 139, 0.24);
-    border-radius: 12px;
-    background: rgba(15, 23, 42, 0.36);
-    padding: 10px 12px;
-}
-
-.taskCardTabPanel span {
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--text-secondary);
-    padding-left: 12px;
-    border-left: 2px solid rgba(96, 165, 250, 0.2);
 }
 
 .taskListInCard {
@@ -618,12 +634,6 @@
     color: var(--text-muted);
 }
 
-.taskCardActions {
-    margin-top: 12px;
-    display: flex;
-    justify-content: flex-start;
-}
-
 .taskCardCollaboration {
     margin-top: 12px;
     display: flex;
@@ -642,13 +652,13 @@
     color: var(--text-primary);
 }
 
-.taskCardInputRow {
+.structuredInputRow {
     display: flex;
     gap: 8px;
     align-items: center;
 }
 
-.taskCardInput {
+.structuredInput {
     flex: 1;
     min-width: 0;
     border-radius: 10px;
@@ -659,7 +669,7 @@
     font-size: 12px;
 }
 
-.taskCardActionButton {
+.structuredActionButton {
     border: 1px solid rgba(59, 130, 246, 0.34);
     background: rgba(30, 64, 175, 0.2);
     color: #dbeafe;
@@ -670,11 +680,11 @@
     transition: background-color var(--transition-fast), opacity var(--transition-fast);
 }
 
-.taskCardActionButton:hover:not(:disabled) {
+.structuredActionButton:hover:not(:disabled) {
     background: rgba(37, 99, 235, 0.3);
 }
 
-.taskCardActionButton:disabled {
+.structuredActionButton:disabled {
     opacity: 0.5;
     cursor: default;
 }
@@ -693,127 +703,65 @@
  * ============================================================================ */
 
 .toolCard {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    overflow: hidden;
+    width: 100%;
+}
+
+.toolCard .structuredMessageCard {
+    background: var(--bg-panel) !important;
+    border-radius: var(--radius-lg);
     transition: box-shadow var(--transition-base);
 }
 
-.toolCard:hover {
+.toolCard .structuredMessageCard:hover {
     box-shadow: var(--shadow-md);
 }
 
-.toolCard[data-status="success"] {
-    border-left: 3px solid var(--status-success);
+.toolCard .structuredCardHeader {
+    gap: 12px;
 }
 
-.toolCard[data-status="failed"] {
-    border-left: 3px solid var(--status-error);
-}
-
-.toolCard[data-status="running"] {
-    border-left: 3px solid var(--status-info);
-}
-
-.toolHeader {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--space-3) var(--space-4);
-    cursor: pointer;
-    background: none;
-    border: none;
-    width: 100%;
-    text-align: left;
-    transition: background-color var(--transition-fast);
-}
-
-.toolHeader:hover {
-    background: var(--bg-element-hover);
-}
-
-.toolInfo {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: 1;
-    overflow: hidden;
-}
-
-.toolIcon {
-    font-size: var(--font-size-lg);
-    flex-shrink: 0;
-}
-
-.toolName {
-    font-weight: var(--font-medium);
-    color: var(--text-primary);
-    margin-right: var(--space-2);
-}
-
-.toolPreview {
+.toolCard .structuredCardSubtitle {
     font-size: var(--font-size-xs);
     color: var(--text-muted);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    overflow: hidden;
 }
 
-.toolStatus {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-medium);
-    color: var(--text-secondary);
+.toolCard .structuredCardStatusRunning {
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #bfdbfe;
 }
 
-.statusDot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-full);
-    background: var(--text-muted);
+.toolCard .structuredCardStatusSuccess {
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #bbf7d0;
 }
 
-.statusDot[data-status="running"] {
-    background: var(--status-info);
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+.toolCard .structuredCardStatusFailed {
+    border-color: rgba(248, 113, 113, 0.4);
+    color: #fecaca;
 }
 
-.statusDot[data-status="success"] {
-    background: var(--status-success);
-}
-
-.statusDot[data-status="failed"] {
-    background: var(--status-error);
-}
-
-@keyframes pulse {
-    0%, 100% {
-        opacity: 1;
-    }
-    50% {
-        opacity: 0.5;
-    }
-}
-
-.toolBody {
-    padding: var(--space-4);
+.toolCard .structuredCardBody {
+    margin-top: 10px;
+    padding-top: 10px;
     border-top: 1px solid var(--border-subtle);
 }
 
-.toolBody .inputSection,
-.toolBody .outputSection {
-    margin-bottom: var(--space-3);
+.toolBody {
+    padding: 0;
 }
 
-.toolBody .inputSection:last-child,
-.toolBody .outputSection:last-child {
-    margin-bottom: 0;
+.structuredSectionGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
-.sectionLabel {
+.structuredSection {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.structuredSectionLabel {
     font-weight: var(--font-medium);
     font-size: var(--font-size-xs);
     color: var(--text-secondary);
@@ -837,62 +785,18 @@
     line-height: 1.7;
 }
 
-.streamingText {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}
-
-/* ============================================================================
- * System Badge
- * ============================================================================ */
-
-.timelineItem.system {
+.structuredSectionLines {
     display: flex;
-    justify-content: center;
-    margin: var(--space-2) 0;
+    flex-direction: column;
+    gap: 6px;
 }
 
-.systemBadge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: var(--space-1) var(--space-3);
-    background: var(--bg-element);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-full);
-    font-size: var(--font-size-xs);
-    color: var(--text-muted);
-    font-weight: var(--font-medium);
-}
-
-.systemBadgePending {
-    background: rgba(14, 50, 47, 0.78);
-    border-color: rgba(59, 130, 246, 0.24);
-    color: #b8fff5;
-    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.08), 0 10px 24px rgba(2, 10, 12, 0.18);
-}
-
-.systemBadgePulse {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: #3b82f6;
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);
-    animation: pendingPulse 1.6s ease-out infinite;
-    flex-shrink: 0;
-}
-
-@keyframes pendingPulse {
-    0% {
-        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
-    }
-    70% {
-        box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
-    }
-    100% {
-        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
-    }
+.structuredSectionLines span {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    padding-left: 12px;
+    border-left: 2px solid rgba(96, 165, 250, 0.16);
 }
 
 /* ============================================================================
@@ -1060,6 +964,11 @@
     }
 
     .timelineItem.assistant .contentBubble {
+        max-width: 100%;
+    }
+
+    .assistantTurnSteps,
+    .assistantTurnCardStack {
         max-width: 100%;
     }
 }

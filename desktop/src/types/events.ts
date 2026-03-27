@@ -257,6 +257,7 @@ export interface TaskSession {
 export type TimelineItemType =
     | UserMessageItem
     | AssistantMessageItem
+    | AssistantTurnItem
     | ToolCallItem
     | SystemEventItem
     | TaskCardItem
@@ -279,7 +280,7 @@ export interface ToolCallItem extends BaseEvent {
     toolName: string;
     args: any;
     status: ToolCallStatus;
-    result?: string;
+    result?: unknown;
 }
 
 export type ToolCallStatus = 'running' | 'success' | 'failed';
@@ -345,6 +346,27 @@ export interface PatchItem extends BaseEvent {
     type: 'patch';
     filePath: string;
     status: 'proposed' | 'applied' | 'rejected';
+}
+
+export type AssistantTurnStepTone = 'neutral' | 'running' | 'success' | 'failed';
+
+export interface AssistantTurnStep {
+    id: string;
+    title: string;
+    detail?: string;
+    tone: AssistantTurnStepTone;
+}
+
+export interface AssistantTurnItem extends BaseEvent {
+    type: 'assistant_turn';
+    lead?: string;
+    steps: AssistantTurnStep[];
+    messages: string[];
+    taskCard?: TaskCardItem;
+    toolCalls?: ToolCallItem[];
+    effectRequests?: EffectRequestItem[];
+    patches?: PatchItem[];
+    systemEvents?: string[];
 }
 
 // ============================================================================
@@ -429,6 +451,9 @@ export interface TaskUserActionRequiredPayload {
     questions: string[];
     instructions: string[];
     fulfillsCheckpointId?: string;
+    authUrl?: string;
+    authDomain?: string;
+    canAutoResume?: boolean;
 }
 
 export interface TextDeltaPayload {
@@ -491,6 +516,10 @@ export function isUserMessage(item: TimelineItemType): item is UserMessageItem {
 
 export function isAssistantMessage(item: TimelineItemType): item is AssistantMessageItem {
     return item.type === 'assistant_message';
+}
+
+export function isAssistantTurn(item: TimelineItemType): item is AssistantTurnItem {
+    return item.type === 'assistant_turn';
 }
 
 export function isToolCall(item: TimelineItemType): item is ToolCallItem {

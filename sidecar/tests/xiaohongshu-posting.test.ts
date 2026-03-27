@@ -29,7 +29,6 @@ import { shouldRunSocialLoginTests } from './helpers/social-login';
 // ============================================================================
 
 const TASK_QUERY = '帮我在小红书上发一篇帖子，内容是hello world';
-const TASK_TITLE = '小红书发帖测试 - E2E';
 const SIDECAR_INIT_WAIT_MS = 5000;
 const TASK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const POLL_INTERVAL_MS = 1000;
@@ -118,22 +117,19 @@ interface TestReport {
 }
 
 // ============================================================================
-// IPC Command Builder
+// Natural Language Entry Command Builder
 // ============================================================================
 
-function buildStartTaskCommand(taskId: string): string {
+function buildSendTaskMessageCommand(taskId: string): string {
     return JSON.stringify({
-        type: 'start_task',
+        type: 'send_task_message',
         id: randomUUID(),
         timestamp: new Date().toISOString(),
         payload: {
             taskId,
-            title: TASK_TITLE,
-            userQuery: TASK_QUERY,
-            context: {
-                workspacePath: process.cwd(),
-            },
+            content: TASK_QUERY,
             config: {
+                workspacePath: process.cwd(),
                 enabledToolpacks: ['builtin-websearch'],
                 enabledSkills: [],
             },
@@ -480,7 +476,7 @@ describeSocialLogin('小红书发帖 - Sidecar E2E 测试', () => {
 
         // Send the task
         const taskId = randomUUID();
-        const command = buildStartTaskCommand(taskId);
+        const command = buildSendTaskMessageCommand(taskId);
 
         console.log('');
         console.log('='.repeat(70));

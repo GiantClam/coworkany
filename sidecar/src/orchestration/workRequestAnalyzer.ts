@@ -110,6 +110,77 @@ function hasExplicitExecutionTargetIdentifier(text: string): boolean {
     return matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.explicitIdentifierPatterns);
 }
 
+const MARKET_TARGET_SUBJECT_PATTERN =
+    /(股价|股票|涨跌|尾盘|市值|成交量|price|stock(?:\s+price)?|share price|market cap|volume|intraday|closing price|price surge|rally|plunge)/i;
+
+const MARKET_TARGET_ENTITY_CAPTURE_PATTERN =
+    /(?:^|[\s,，。.!?！？;；:：])([A-Za-z][A-Za-z0-9.&\-]{1,31}|[\u4e00-\u9fff]{2,16})\s*(?:\([^)]{1,24}\))?\s*(?:的)?\s*(?:股价|股票|涨跌|尾盘|市值|成交量|price|stock(?:\s+price)?|share price|market cap|volume|intraday|closing price|price surge|rally|plunge)/gi;
+
+const MARKET_ENTITY_PREFIX_PATTERN =
+    /^(?:今天|今日|本周|本月|当前|最近|最新|last|today|this\s+week|this\s+month|current|latest|检索|搜索|查询|查找|分析|查看|请)\s*/i;
+
+const MARKET_ENTITY_SUFFIX_PATTERN =
+    /(?:的|情况|走势|表现|原因|为何|为什么|最后|分析|解读|趋势)$/i;
+
+const MARKET_ENTITY_STOPWORDS = new Set([
+    '今天',
+    '今日',
+    '本周',
+    '本月',
+    '当前',
+    '最近',
+    '最新',
+    '检索',
+    '搜索',
+    '查询',
+    '查找',
+    '分析',
+    '查看',
+    '市场',
+    '股价',
+    '股票',
+    '涨跌',
+    '尾盘',
+    'price',
+    'stock',
+    'market',
+    'today',
+    'latest',
+    'current',
+    'analysis',
+]);
+
+function hasResolvableMarketEntityCandidate(text: string): boolean {
+    if (!MARKET_TARGET_SUBJECT_PATTERN.test(text)) {
+        return false;
+    }
+
+    const matcher = new RegExp(MARKET_TARGET_ENTITY_CAPTURE_PATTERN.source, MARKET_TARGET_ENTITY_CAPTURE_PATTERN.flags);
+    for (const match of text.matchAll(matcher)) {
+        const rawCandidate = (match[1] ?? '').trim();
+        if (!rawCandidate) {
+            continue;
+        }
+        const normalized = rawCandidate
+            .replace(MARKET_ENTITY_PREFIX_PATTERN, '')
+            .replace(MARKET_ENTITY_SUFFIX_PATTERN, '')
+            .trim();
+        if (normalized.length < 2) {
+            continue;
+        }
+        if (MARKET_TARGET_SUBJECT_PATTERN.test(normalized)) {
+            continue;
+        }
+        const lowered = normalized.toLowerCase();
+        if (MARKET_ENTITY_STOPWORDS.has(normalized) || MARKET_ENTITY_STOPWORDS.has(lowered)) {
+            continue;
+        }
+        return true;
+    }
+
+    return false;
+}
+
 function requiresExecutionTargetIdentifierClarification(text: string): boolean {
     const targetSensitiveTask = isPrecisionSensitiveLookupTask(text) || isPriceSensitiveInvestmentTask(text);
     if (!targetSensitiveTask) {
@@ -118,7 +189,13 @@ function requiresExecutionTargetIdentifierClarification(text: string): boolean {
     if (isBroadTopicScopeTask(text)) {
         return false;
     }
-    return !hasExplicitExecutionTargetIdentifier(text);
+    if (hasExplicitExecutionTargetIdentifier(text)) {
+        return false;
+    }
+    if (hasResolvableMarketEntityCandidate(text)) {
+        return false;
+    }
+    return true;
 }
 
 function languageAwareQuestions(language: string): string[] {
@@ -161,6 +238,11 @@ function isLocalSearchScopeText(text: string): boolean {
     return LOCAL_SEARCH_SCOPE_PATTERN.test(text);
 }
 
+function hasStrongLocalScopeSignal(text: string): boolean {
+    return /(当前项目|当前仓库|workspace|repo|repository|代码库|本地|目录|文件夹|路径|log|日志|代码|src|package\.json)/i
+        .test(text);
+}
+
 function shouldRequireWebDomainResearch(input: {
     text: string;
     mode: NormalizedWorkRequest['mode'];
@@ -169,10 +251,17 @@ function shouldRequireWebDomainResearch(input: {
     if (input.mode === 'chat') {
         return false;
     }
-    if (input.taskDefinition.localPlanHint) {
+    const precisionSensitiveTargeting = isPrecisionSensitiveLookupTask(input.text) || isPriceSensitiveInvestmentTask(input.text);
+    const strongLocalScope = hasStrongLocalScopeSignal(input.text);
+
+    if (precisionSensitiveTargeting && !strongLocalScope) {
+        return true;
+    }
+
+    if (input.taskDefinition.localPlanHint && input.taskDefinition.localPlanHint.intent !== 'unknown') {
         return false;
     }
-    if (isLocalSearchScopeText(input.text)) {
+    if (strongLocalScope || isLocalSearchScopeText(input.text)) {
         return false;
     }
     return hasExplicitWebLookupIntent(input.text);
@@ -273,7 +362,10 @@ function isCodeChangeTask(text: string): boolean {
 
 const SOCIAL_PLATFORM_CUE_PATTERN =
     /(x\.com|twitter|推特|小红书|reddit|facebook|instagram|linkedin|社交平台|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i;
-const SOCIAL_PUBLISH_CUE_PATTERN = /(发布|发帖|发文|推文|tweet|post|publish|share)/i;
+const SOCIAL_PUBLISH_CUE_PATTERN =
+    /(?:发布|发帖|发文|推文|发推|发送(?:到|至)?|同步到|推送到|tweet|post|publish|share|send(?:\s+to)?)/i;
+const EXTERNAL_SIDE_EFFECT_CUE_PATTERN =
+    /(?:发布|发帖|发文|提交|发送|推送|上传|下单|预约|报名|post|publish|submit|send|upload|checkout|book|apply)/i;
 const BROWSER_UI_CUE_PATTERN =
     /(browser|playwright|网页|网站|页面|点击|填写|登录|timeline|时间线|click|form|navigate|导航)/i;
 const EXPLICIT_MANUAL_ACTION_PATTERN =
@@ -290,6 +382,10 @@ function hasExplicitManualActionSignal(text: string): boolean {
 function requiresExternalAuthOrManualAction(text: string): boolean {
     return hasExplicitManualActionSignal(text)
         || isLikelySocialPublishingTask(text);
+}
+
+function requiresVerifiedBrowserExecution(text: string): boolean {
+    return requiresBrowserAutomationSkill(text) && EXTERNAL_SIDE_EFFECT_CUE_PATTERN.test(text);
 }
 
 function buildDefaultingPolicy(input: {
@@ -1275,6 +1371,20 @@ function requiresBrowserAutomationSkill(text: string): boolean {
     return BROWSER_UI_CUE_PATTERN.test(text) || isLikelySocialPublishingTask(text);
 }
 
+function inferExecutionRequirements(text: string): TaskDefinition['executionRequirements'] {
+    const requirements: NonNullable<TaskDefinition['executionRequirements']> = [];
+    if (requiresVerifiedBrowserExecution(text)) {
+        requirements.push({
+            id: randomUUID(),
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'This objective includes an external side-effect action and must be completed through real browser interaction evidence.',
+        });
+    }
+    return requirements.length > 0 ? requirements : undefined;
+}
+
 function inferPreferredTools(text: string, baseTools: string[]): string[] {
     const merged = new Set(baseTools);
     if (requiresBrowserAutomationSkill(text)) {
@@ -1616,11 +1726,24 @@ function buildTaskDefinition(
             );
         }
     }
+    if (requiresVerifiedBrowserExecution(text)) {
+        const hasBrowserExecutionCriterion = acceptanceCriteria.some((criterion) =>
+            /(浏览器|browser|自动化|publish|post|submit|执行动作)/i.test(criterion)
+        );
+        if (!hasBrowserExecutionCriterion) {
+            acceptanceCriteria.push(
+                language.startsWith('zh')
+                    ? '必须执行真实浏览器交互完成目标动作（如连接、导航、填写/点击），不能只返回文案或操作建议。'
+                    : 'Execute the target action via real browser interaction (connect, navigate, fill/click), not only drafted copy or instructions.'
+            );
+        }
+    }
     const localTaskPlan = analyzeLocalTaskIntent({
         text,
         workspacePath,
         ...systemContext,
     });
+    const executionRequirements = inferExecutionRequirements(text);
 
     return {
         id: randomUUID(),
@@ -1634,6 +1757,7 @@ function buildTaskDefinition(
         preferredWorkflow: localTaskPlan?.preferredWorkflow,
         resolvedTargets: localTaskPlan?.targetFolder ? [localTaskPlan.targetFolder] : undefined,
         localPlanHint: localTaskPlan,
+        executionRequirements,
     };
 }
 

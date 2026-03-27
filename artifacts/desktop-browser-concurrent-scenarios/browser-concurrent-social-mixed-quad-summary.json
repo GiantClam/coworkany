@@ -52,155 +52,9 @@
   },
   "browserUseBootstrap": {
     "available": true,
-    "startedByTest": true,
-    "reason": "browser-use-service started by test with /Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
-    "process": {
-      "_events": {},
-      "_eventsCount": 0,
-      "_closesNeeded": 3,
-      "_closesGot": 0,
-      "connected": false,
-      "signalCode": null,
-      "exitCode": null,
-      "killed": false,
-      "spawnfile": "/Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
-      "_handle": {
-        "pid": 87755
-      },
-      "spawnargs": [
-        "/Users/beihuang/Documents/github/coworkany/browser-use-service/.venv/bin/python",
-        "/Users/beihuang/Documents/github/coworkany/browser-use-service/main.py"
-      ],
-      "pid": 87755,
-      "stdin": null,
-      "stdout": {
-        "connecting": false,
-        "_hadError": false,
-        "_parent": null,
-        "_host": null,
-        "_closeAfterHandlingError": false,
-        "_events": {},
-        "_readableState": {
-          "highWaterMark": 65536,
-          "buffer": [],
-          "bufferIndex": 0,
-          "length": 0,
-          "pipes": [],
-          "awaitDrainWriters": null
-        },
-        "_writableState": {
-          "highWaterMark": 65536,
-          "length": 0,
-          "corked": 0,
-          "writelen": 0,
-          "bufferedIndex": 0,
-          "pendingcb": 0
-        },
-        "allowHalfOpen": false,
-        "_eventsCount": 3,
-        "_sockname": null,
-        "_pendingData": null,
-        "_pendingEncoding": "",
-        "server": null,
-        "_server": null
-      },
-      "stderr": {
-        "connecting": false,
-        "_hadError": false,
-        "_parent": null,
-        "_host": null,
-        "_closeAfterHandlingError": false,
-        "_events": {},
-        "_readableState": {
-          "highWaterMark": 65536,
-          "buffer": [],
-          "bufferIndex": 0,
-          "length": 0,
-          "pipes": [],
-          "awaitDrainWriters": null
-        },
-        "_writableState": {
-          "highWaterMark": 65536,
-          "length": 0,
-          "corked": 0,
-          "writelen": 0,
-          "bufferedIndex": 0,
-          "pendingcb": 0
-        },
-        "allowHalfOpen": false,
-        "_eventsCount": 3,
-        "_sockname": null,
-        "_pendingData": null,
-        "_pendingEncoding": "",
-        "server": null,
-        "_server": null
-      },
-      "stdio": [
-        null,
-        {
-          "connecting": false,
-          "_hadError": false,
-          "_parent": null,
-          "_host": null,
-          "_closeAfterHandlingError": false,
-          "_events": {},
-          "_readableState": {
-            "highWaterMark": 65536,
-            "buffer": [],
-            "bufferIndex": 0,
-            "length": 0,
-            "pipes": [],
-            "awaitDrainWriters": null
-          },
-          "_writableState": {
-            "highWaterMark": 65536,
-            "length": 0,
-            "corked": 0,
-            "writelen": 0,
-            "bufferedIndex": 0,
-            "pendingcb": 0
-          },
-          "allowHalfOpen": false,
-          "_eventsCount": 3,
-          "_sockname": null,
-          "_pendingData": null,
-          "_pendingEncoding": "",
-          "server": null,
-          "_server": null
-        },
-        {
-          "connecting": false,
-          "_hadError": false,
-          "_parent": null,
-          "_host": null,
-          "_closeAfterHandlingError": false,
-          "_events": {},
-          "_readableState": {
-            "highWaterMark": 65536,
-            "buffer": [],
-            "bufferIndex": 0,
-            "length": 0,
-            "pipes": [],
-            "awaitDrainWriters": null
-          },
-          "_writableState": {
-            "highWaterMark": 65536,
-            "length": 0,
-            "corked": 0,
-            "writelen": 0,
-            "bufferedIndex": 0,
-            "pendingcb": 0
-          },
-          "allowHalfOpen": false,
-          "_eventsCount": 3,
-          "_sockname": null,
-          "_pendingData": null,
-          "_pendingEncoding": "",
-          "server": null,
-          "_server": null
-        }
-      ]
-    },
+    "startedByTest": false,
+    "reason": "browser-use-service already healthy at http://127.0.0.1:8100/health",
+    "process": null,
     "stderrTail": ""
   },
   "result": {
@@ -218,7 +72,7 @@
     "externalFailure": false,
     "tasks": [
       {
-        "taskId": "7557f6fc-4e88-4e8e-895f-058a0ecba412",
+        "taskId": "ff37206f-307a-4c21-834c-caee0ec5a19c",
         "taskLabel": "x-agentbrowser",
         "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_QUAD_1",
         "backend": "agentbrowser",
@@ -228,7 +82,7 @@
         "finished": true,
         "failed": false,
         "failedError": "",
-        "browserToolCallCount": 3,
+        "browserToolCallCount": 4,
         "browserNavigateCallCount": 1,
         "browserAiActionCallCount": 1,
         "modeSetSmart": true,
@@ -244,14 +98,14 @@
         "browserCallsAfterResume": 0,
         "ownMarkerOnly": true,
         "foreignMarkersSeen": [],
-        "evidenceTextLength": 1501,
+        "evidenceTextLength": 2917,
         "externalFailure": false,
         "backendExpectationMet": true,
         "loginExpectationMet": true,
         "completionExpectationMet": true
       },
       {
-        "taskId": "84b78ece-78b9-4651-8c79-a2e99c12726e",
+        "taskId": "280b07ab-0124-42a4-b5f3-f6acd217cce6",
         "taskLabel": "reddit-agentbrowser",
         "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_QUAD_2",
         "backend": "agentbrowser",
@@ -261,7 +115,7 @@
         "finished": true,
         "failed": false,
         "failedError": "",
-        "browserToolCallCount": 2,
+        "browserToolCallCount": 4,
         "browserNavigateCallCount": 0,
         "browserAiActionCallCount": 1,
         "modeSetSmart": true,
@@ -277,14 +131,14 @@
         "browserCallsAfterResume": 0,
         "ownMarkerOnly": true,
         "foreignMarkersSeen": [],
-        "evidenceTextLength": 1964,
+        "evidenceTextLength": 12314,
         "externalFailure": false,
         "backendExpectationMet": true,
         "loginExpectationMet": true,
         "completionExpectationMet": true
       },
       {
-        "taskId": "b8b4a7ca-b265-4b01-9764-6d622e6f6163",
+        "taskId": "790491c2-15f6-4c49-80a1-571f780277c8",
         "taskLabel": "xiaohongshu-agentbrowser",
         "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_QUAD_3",
         "backend": "agentbrowser",
@@ -294,8 +148,8 @@
         "finished": true,
         "failed": false,
         "failedError": "",
-        "browserToolCallCount": 2,
-        "browserNavigateCallCount": 0,
+        "browserToolCallCount": 4,
+        "browserNavigateCallCount": 1,
         "browserAiActionCallCount": 1,
         "modeSetSmart": true,
         "modeSetPrecise": false,
@@ -310,14 +164,14 @@
         "browserCallsAfterResume": 0,
         "ownMarkerOnly": true,
         "foreignMarkersSeen": [],
-        "evidenceTextLength": 1710,
+        "evidenceTextLength": 4530,
         "externalFailure": false,
         "backendExpectationMet": true,
         "loginExpectationMet": true,
         "completionExpectationMet": true
       },
       {
-        "taskId": "0855104c-171d-4707-9e1a-e792a1b6314f",
+        "taskId": "4d986d91-ba87-4765-ba78-be32c8b6187d",
         "taskLabel": "reddit-playwright",
         "marker": "BROWSER_SCENARIO_SOCIAL_MIXED_QUAD_4",
         "backend": "playwright",
@@ -327,8 +181,8 @@
         "finished": true,
         "failed": false,
         "failedError": "",
-        "browserToolCallCount": 3,
-        "browserNavigateCallCount": 1,
+        "browserToolCallCount": 7,
+        "browserNavigateCallCount": 2,
         "browserAiActionCallCount": 0,
         "modeSetSmart": false,
         "modeSetPrecise": true,
@@ -343,7 +197,7 @@
         "browserCallsAfterResume": 0,
         "ownMarkerOnly": true,
         "foreignMarkersSeen": [],
-        "evidenceTextLength": 1804,
+        "evidenceTextLength": 3654,
         "externalFailure": false,
         "backendExpectationMet": true,
         "loginExpectationMet": true,

@@ -374,18 +374,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
         });
     }, [enabledSkills, enabledToolpacks, sendMessage, setActiveTask]);
 
-    const handleTaskCardActionClick = React.useCallback(async (input: {
-        taskId?: string;
-        cardId: string;
-        actionId?: string;
-        value?: string;
-    }) => {
-        await handleTaskCardCollaborationSubmit({
-            ...input,
-            value: input.value || (input.actionId ? `继续执行（${input.actionId}）` : '继续执行'),
-        });
-    }, [handleTaskCardCollaborationSubmit]);
-
     const tasks = React.useMemo<BoardTask[]>(() => {
         return buildBoardTasks(sessions.values());
     }, [sessions]);
@@ -530,7 +518,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
                                     openLabel={t('dashboard.openInChat')}
                                     deleteLabel={t('common.delete')}
                                     onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
-                                    onTaskActionClick={handleTaskCardActionClick}
                                 />
                             ))}
                         </div>
@@ -554,7 +541,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
                                     openLabel={t('dashboard.openInChat')}
                                     deleteLabel={t('common.delete')}
                                     onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
-                                    onTaskActionClick={handleTaskCardActionClick}
                                 />
                             ))}
                         </div>
@@ -595,13 +581,7 @@ const TaskBoardTaskCard: React.FC<{
         actionId?: string;
         value: string;
     }) => void;
-    onTaskActionClick: (input: {
-        taskId?: string;
-        cardId: string;
-        actionId?: string;
-        value?: string;
-    }) => void;
-}> = ({ task, onSelect, onDelete, onSwitchToChat, openLabel, deleteLabel, onTaskCollaborationSubmit, onTaskActionClick }) => {
+}> = ({ task, onSelect, onDelete, onSwitchToChat, openLabel, deleteLabel, onTaskCollaborationSubmit }) => {
     return (
         <div className="task-board-card-shell">
             <div className="task-board-card-toolbar">
@@ -637,7 +617,6 @@ const TaskBoardTaskCard: React.FC<{
                 item={task.taskCard}
                 layout="board"
                 onTaskCollaborationSubmit={onTaskCollaborationSubmit}
-                onTaskActionClick={onTaskActionClick}
             />
         </div>
     );

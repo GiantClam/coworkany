@@ -302,6 +302,9 @@ export const TaskUserActionRequiredEventSchema = BaseEventSchema.extend({
         questions: z.array(z.string()),
         instructions: z.array(z.string()),
         fulfillsCheckpointId: z.string().optional(),
+        authUrl: z.string().optional(),
+        authDomain: z.string().optional(),
+        canAutoResume: z.boolean().optional(),
     }),
 });
 

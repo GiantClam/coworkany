@@ -352,6 +352,35 @@ export {
     type GetRuntimeSnapshotResponse,
 } from './commands';
 
+// Canonical stream - transport-agnostic message model
+export {
+    CanonicalMessageRoleSchema,
+    CanonicalStatusPartSchema,
+    CanonicalTextPartSchema,
+    CanonicalReasoningPartSchema,
+    CanonicalTaskPartSchema,
+    CanonicalCollaborationPartSchema,
+    CanonicalToolCallPartSchema,
+    CanonicalToolResultPartSchema,
+    CanonicalEffectPartSchema,
+    CanonicalPatchPartSchema,
+    CanonicalFinishPartSchema,
+    CanonicalErrorPartSchema,
+    CanonicalMessagePartSchema,
+    CanonicalTaskMessageSchema,
+    CanonicalTextDeltaSchema,
+    CanonicalReasoningDeltaSchema,
+    CanonicalMessageDeltaPartSchema,
+    CanonicalMessageEventSchema,
+    CanonicalMessageDeltaEventSchema,
+    CanonicalStreamEventSchema,
+    taskEventToCanonicalStreamEvents,
+    type CanonicalTaskMessage,
+    type CanonicalMessageEvent,
+    type CanonicalMessageDeltaEvent,
+    type CanonicalStreamEvent,
+} from './canonicalStream';
+
 // ============================================================================
 // Protocol Version
 // ============================================================================

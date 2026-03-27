@@ -14,7 +14,7 @@ export * from './scheduleTask';
 
 import { checkWeatherTool } from './weather';
 import { getNewsTool } from './news';
-import { setReminderTool } from './reminder';
+import { setReminderTool, createSetReminderTool, type SetReminderToolHandlers } from './reminder';
 import { quickNoteTool } from './notes';
 import { createScheduleTaskTool, type ScheduleTaskToolHandlers } from './scheduleTask';
 
@@ -25,9 +25,14 @@ export const PERSONAL_TOOLS: ToolDefinition[] = [
     quickNoteTool,
 ];
 
-export function createPersonalTools(handlers: ScheduleTaskToolHandlers): ToolDefinition[] {
+export function createPersonalTools(
+    handlers: ScheduleTaskToolHandlers & SetReminderToolHandlers,
+): ToolDefinition[] {
     return [
-        ...PERSONAL_TOOLS,
+        checkWeatherTool,
+        getNewsTool,
+        createSetReminderTool(handlers),
+        quickNoteTool,
         createScheduleTaskTool(handlers),
     ];
 }

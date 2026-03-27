@@ -113,11 +113,14 @@ export class DirectiveManager {
     }
 
     getSystemPromptAdditions(query: string): string {
+        const sections: string[] = [];
+        const activePersona = this.activePersonaId
+            ? this.personas.get(this.activePersonaId) ?? null
+            : null;
         let activeDirectives: Directive[] = [];
 
-        if (this.activePersonaId && this.personas.has(this.activePersonaId)) {
-            const persona = this.personas.get(this.activePersonaId)!;
-            activeDirectives = persona.directives
+        if (activePersona) {
+            activeDirectives = activePersona.directives
                 .map(id => this.directives.get(id))
                 .filter((d): d is Directive => !!d && d.enabled);
         } else {
@@ -138,10 +141,25 @@ export class DirectiveManager {
         // Sort by priority
         activeDirectives.sort((a, b) => b.priority - a.priority);
 
-        if (activeDirectives.length === 0) return '';
+        if (activePersona) {
+            const personaHeader = `## Active Persona\n`
+                + `Name: ${activePersona.name}\n`
+                + `Description: ${activePersona.description || 'No description provided.'}\n`
+                + 'Reply style requirements:\n'
+                + '- For every user-facing reply, keep this persona tone, wording style, and attitude consistent.\n'
+                + '- Do not mechanically mirror user wording for reminders/tasks; rewrite naturally while preserving intent.\n'
+                + '- Keep facts and task semantics accurate while applying persona style.';
+            sections.push(personaHeader);
+        }
 
-        return `\n\n## User Directives (Identity & Rules)\n` +
-            `You must strictly follow these rules:\n\n` +
-            activeDirectives.map(d => `- [${d.name}] ${d.content}`).join('\n');
+        if (activeDirectives.length > 0) {
+            sections.push(
+                '## User Directives (Identity & Rules)\n'
+                + 'You must strictly follow these rules:\n\n'
+                + activeDirectives.map(d => `- [${d.name}] ${d.content}`).join('\n')
+            );
+        }
+
+        return sections.length > 0 ? sections.join('\n\n') : '';
     }
 }

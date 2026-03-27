@@ -1,5 +1,16 @@
 # Findings
 
+## 2026-03-27 Canonical Task Stream Phase 1
+
+- The lowest-risk insertion point for protocol unification is `sidecar/src/main.ts` `emit(...)`, because all runtime/UI task events already pass through that function before reaching stdout and singleton clients.
+- The desktop-side lowest-risk insertion point is `desktop/src-tauri/src/sidecar.rs` `classify_sidecar_message(...)` plus `stdout_reader_loop(...)`; that lets Tauri forward a second event channel without disturbing the current `task-event` path.
+- Current desktop UI is intentionally event-projected, not message-native:
+  - `desktop/src/stores/taskEvents/index.ts` persists `TaskSession.events`
+  - `desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` collapses those events into `assistant_turn` and `task_card`
+  This means phase 1 should unify transport/message protocol first and defer UI substitution.
+- The repo already tolerates cross-package protocol imports from `desktop` into `sidecar/src/protocol`, so adding canonical stream schemas under `sidecar/src/protocol/` keeps type sharing consistent with the current architecture.
+- A shadow canonical store in desktop is sufficient for phase 1. It provides end-to-end protocol validation and future UI integration surface without creating double-render or duplicate session-event risk today.
+
 ## 2026-03-20
 
 - Current `NormalizedWorkRequest` is too thin for agent-led orchestration. It has `tasks`, `clarification`, and `presentation`, but no explicit `deliverables`, `checkpoints`, `userActionsRequired`, or `resumeStrategy`.
@@ -349,3 +360,42 @@
   - 统一外部依赖失败识别
 - 首版矩阵覆盖 4 组场景，并显式纳入 `parallel-minimax-yankuang-glm-nvidia`。
 - 初版外部失败规则曾误判成功场景（过宽匹配 `401|402|403`）；已改为仅在任务失败上下文生效，并收窄为 HTTP 语义模式匹配。
+
+## 2026-03-27 Canonical Task Stream Phase 2
+
+- Desktop chat-mode fallback behavior is now split deliberately:
+  - if canonical messages exist for a chat task, timeline rendering prefers canonical messages
+  - otherwise it continues to render from legacy `TaskEvent` projection
+- This keeps migration risk low because structured task/task-card views are not yet coupled to canonical parts.
+- The first failed regression during phase 2 was not in the timeline logic itself:
+  - `desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` imported canonical types using a relative path that was one directory too shallow
+  - `desktop/tests/timeline-items.test.ts` did not copy `taskMode` from helper overrides into the returned `TaskSession`, so the new chat-mode branch was never exercised
+- After fixing those two issues, canonical chat-mode rendering passed focused desktop tests and typecheck without changing task-mode behavior.
+
+## 2026-03-27 Canonical Task Stream Phase 3
+
+- The existing `AssistantTurnBlock` renderer already had the right presentation primitives for structured runtime activity:
+  - `toolCalls`
+  - `effectRequests`
+  - `patches`
+- That let the migration stay narrow: only the canonical chat-mode timeline builder needed to learn how to project runtime parts into those existing item shapes.
+- The next compatibility gap was task-card interaction parity, not rendering primitives:
+  - canonical `task` parts needed enough structured data to rebuild task-center sections and task lists
+  - canonical `collaboration` parts needed stable `actionId` plus external-auth choices to keep current desktop interactions working
+- The fix was split across protocol and projection:
+  - sidecar canonical `TASK_PLAN_READY` now carries `intentRouting` in task-part data
+  - sidecar canonical collaboration parts now carry `actionId`, and external-auth user actions emit the same open-login / continue choices desktop already understands
+  - desktop canonical chat-mode now builds `TaskCardItem` state directly from canonical `task` / `collaboration` / `finish` / `error` parts instead of falling back to legacy events
+- `ToolCard` already handled non-string results at runtime, but `ToolCallItem.result` was still typed as `string`; widening it to `unknown` removed that latent type mismatch and matches the actual renderer behavior.
+- Scheduled mode had three behavior differences that could not be ignored during migration:
+  - suppress internal user echo messages
+  - suppress research-update noise
+  - keep compact finish/result behavior without duplicating assistant messages
+- Those behaviors now live in the canonical builder as session-aware rules instead of forcing scheduled sessions to stay on legacy projection.
+- The next leverage point was fallback strategy, not message rendering:
+  - as long as event-only sessions still bypassed canonical completely, the legacy builder remained a hidden second implementation of the same product semantics
+  - that creates drift risk even if live sidecar sessions already dual-write canonical
+- Desktop now closes that gap by locally converting legacy `TaskEvent`s into canonical stream events for rendering when store-backed canonical messages are absent.
+- To make that safe, canonical protocol coverage was extended for the remaining high-signal legacy-only cases:
+  - `PLAN_UPDATED`
+  - desktop-local `RATE_LIMITED` synthesis into runtime status labels

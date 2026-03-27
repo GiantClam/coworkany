@@ -1,13 +1,37 @@
 import { ToolDefinition, ToolContext } from '../standard';
 
 /**
- * Reminder Tool - Integrated with Task System
+ * Reminder Tool - bound to scheduled task runtime
  *
- * Creates reminders as high-priority tasks with notifications
+ * The runtime-bound version (`createSetReminderTool`) delegates to `schedule_task`
+ * so reminders survive restarts and are executed by the scheduler heartbeat.
  */
+const notImplementedHandler = async (args: Record<string, unknown>) => ({
+    success: false,
+    error: 'Scheduler not initialized. set_reminder requires runtime binding in main.ts.',
+    args,
+});
+
+type ReminderRecurring = 'none' | 'daily' | 'weekly' | 'monthly';
+
+type SetReminderArgs = {
+    message: string;
+    time: string;
+    recurring?: ReminderRecurring;
+};
+
+export interface SetReminderToolHandlers {
+    scheduleTask: (args: {
+        task_query: string;
+        time: string;
+        speak_result?: boolean;
+        title?: string;
+    }, context: ToolContext) => Promise<unknown>;
+}
+
 export const setReminderTool: ToolDefinition = {
     name: 'set_reminder',
-    description: 'Set a reminder for a specific time. Creates a task with notification. Use when user asks to remind them about something.',
+    description: 'Set a reminder for a specific time. Runtime-bound mode schedules via scheduler so reminders continue after restarts.',
     effects: ['state:remember', 'ui:notify'],
     input_schema: {
         type: 'object',
@@ -29,71 +53,171 @@ export const setReminderTool: ToolDefinition = {
         },
         required: ['message', 'time'],
     },
-    handler: async (
-        args: {
-            message: string;
-            time: string;
-            recurring?: string;
-        },
-        context: ToolContext
-    ) => {
-        const { message, time, recurring = 'none' } = args;
+    handler: notImplementedHandler,
+};
 
-        try {
-            // Parse time expression
-            const reminderTime = parseTimeExpression(time);
+function normalizeReminderQuery(message: string): string {
+    const trimmed = message.trim();
+    if (!trimmed) {
+        return '提醒你处理待办事项';
+    }
+    const chineseIntentMatch = trimmed.match(/^(?:请)?(?:叫我|提醒我|记得|让我记得)(.+)$/u);
+    if (chineseIntentMatch?.[1]) {
+        const action = chineseIntentMatch[1]
+            .trim()
+            .replace(/(?:一次|一下)$/u, '')
+            .trim();
+        if (action) {
+            return `提醒你${action}`;
+        }
+    }
+    const englishIntentMatch = trimmed.match(/^(?:please\s+)?remind\s+me(?:\s+to)?\s+(.+)$/iu);
+    if (englishIntentMatch?.[1]) {
+        const action = englishIntentMatch[1].trim();
+        if (action) {
+            return `remind you to ${action}`;
+        }
+    }
+    if (/(?:提醒|remind)/iu.test(trimmed)) {
+        return trimmed
+            .replace(/提醒我/gu, '提醒你')
+            .replace(/\bremind\s+me\b/giu, 'remind you');
+    }
+    if (/^[\x00-\x7F]+$/.test(trimmed)) {
+        return `remind you to ${trimmed}`;
+    }
+    return `提醒你${trimmed}`;
+}
 
-            console.error(`[Reminder] Setting reminder for: ${reminderTime.toISOString()}`);
-            console.error(`[Reminder] Message: ${message}`);
+function buildReminderTitle(message: string): string {
+    const normalized = normalizeReminderQuery(message)
+        .replace(/^提醒你/u, '')
+        .replace(/^remind you to\s+/iu, '')
+        .trim();
+    if (!normalized) {
+        return 'Reminder';
+    }
+    const title = `提醒：${normalized}`;
+    return title.length > 60 ? `${title.slice(0, 60)}...` : title;
+}
 
-            // Use existing task system to create reminder
-            const { taskCreateTool } = await import('../core/tasks');
+function buildRecurringScheduleQuery(input: {
+    message: string;
+    recurring: ReminderRecurring;
+    executeAtIso: string;
+    originalTimeExpression: string;
+}): { taskQuery: string; recurringNote?: string } {
+    const normalizedQuery = normalizeReminderQuery(input.message);
+    const { recurring, executeAtIso } = input;
+    const relativeInterval = parseRelativeIntervalExpression(input.originalTimeExpression);
 
-            const taskResult = await taskCreateTool.handler(
-                {
-                    title: `🔔 ${message}`,
-                    priority: 'high',
-                    due_date: reminderTime.toISOString(),
-                    metadata: {
-                        type: 'reminder',
-                        recurring,
-                        notification_enabled: true,
-                        original_time_expression: time,
-                    },
-                },
-                context
-            );
-
-            if (!taskResult.success) {
-                return {
-                    success: false,
-                    error: `Failed to create reminder task: ${taskResult.error}`,
-                };
-            }
-
-            const humanReadable = formatReminderTime(reminderTime);
-
-            console.error(`[Reminder] Successfully created reminder task: ${taskResult.task_id}`);
-
+    if (recurring === 'daily') {
+        if (relativeInterval && relativeInterval.unit !== 'day') {
+            const unitLabel = relativeInterval.amount === 1
+                ? relativeInterval.unit
+                : `${relativeInterval.unit}s`;
             return {
-                success: true,
-                reminder_id: taskResult.task_id,
-                message,
-                scheduled_at: reminderTime.toISOString(),
-                recurring,
-                human_readable: humanReadable,
-                task_details: taskResult,
-            };
-        } catch (error) {
-            console.error('[Reminder] Error:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-                suggestion: 'Try using a clearer time format like "tomorrow 3pm" or ISO 8601 timestamp',
+                taskQuery: `${executeAtIso} every ${relativeInterval.amount} ${unitLabel} ${normalizedQuery}`,
+                recurringNote: `daily recurrence was interpreted as an interval from "${input.originalTimeExpression}"`,
             };
         }
-    },
-};
+        return {
+            taskQuery: `${executeAtIso} every day ${normalizedQuery}`,
+        };
+    }
+
+    if (recurring === 'weekly') {
+        return {
+            taskQuery: `${executeAtIso} every 7 days ${normalizedQuery}`,
+            recurringNote: 'weekly reminders are approximated as every 7 days',
+        };
+    }
+
+    if (recurring === 'monthly') {
+        return {
+            taskQuery: `${executeAtIso} every 30 days ${normalizedQuery}`,
+            recurringNote: 'monthly reminders are approximated as every 30 days',
+        };
+    }
+
+    return {
+        taskQuery: normalizedQuery,
+    };
+}
+
+function parseRelativeIntervalExpression(raw: string): { amount: number; unit: 'minute' | 'hour' | 'day' } | null {
+    const match = raw.trim().toLowerCase().match(/^in\s+(\d+)\s+(minute|hour|day)s?$/);
+    if (!match) {
+        return null;
+    }
+    const amount = Number(match[1]);
+    const unit = match[2] as 'minute' | 'hour' | 'day';
+    if (!Number.isFinite(amount) || amount <= 0) {
+        return null;
+    }
+    return { amount, unit };
+}
+
+export function createSetReminderTool(handlers: SetReminderToolHandlers): ToolDefinition {
+    return {
+        ...setReminderTool,
+        handler: async (args: SetReminderArgs, context: ToolContext) => {
+            const { message, time, recurring = 'none' } = args;
+
+            try {
+                const reminderTime = parseTimeExpression(time);
+                const executeAtIso = reminderTime.toISOString();
+                const recurringPlan = buildRecurringScheduleQuery({
+                    message,
+                    recurring,
+                    executeAtIso,
+                    originalTimeExpression: time,
+                });
+
+                const scheduleResult = await handlers.scheduleTask({
+                    task_query: recurringPlan.taskQuery,
+                    time: executeAtIso,
+                    speak_result: false,
+                    title: buildReminderTitle(message),
+                }, context) as {
+                    success?: boolean;
+                    error?: string;
+                    scheduledTaskId?: string;
+                    scheduledAt?: string;
+                };
+
+                if (!scheduleResult?.success) {
+                    return {
+                        success: false,
+                        error: `Failed to schedule reminder: ${scheduleResult?.error || 'unknown scheduler error'}`,
+                    };
+                }
+
+                const scheduledAt = typeof scheduleResult.scheduledAt === 'string'
+                    ? scheduleResult.scheduledAt
+                    : executeAtIso;
+
+                return {
+                    success: true,
+                    reminder_id: scheduleResult.scheduledTaskId,
+                    message,
+                    scheduled_at: scheduledAt,
+                    recurring,
+                    recurring_note: recurringPlan.recurringNote,
+                    human_readable: formatReminderTime(new Date(scheduledAt)),
+                    schedule_details: scheduleResult,
+                };
+            } catch (error) {
+                console.error('[Reminder] Error:', error);
+                return {
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                    suggestion: 'Try using a clearer time format like "tomorrow 3pm" or ISO 8601 timestamp',
+                };
+            }
+        },
+    };
+}
 
 /**
  * Parse time expressions (natural language and ISO 8601)
@@ -137,9 +261,9 @@ function parseTimeExpression(expr: string): Date {
 
         const timeMatch = lower.match(/(\d{1,2})\s*(am|pm|:)/);
         if (timeMatch) {
-            const time = parseTimeOfDay(lower);
-            if (time) {
-                tomorrow.setHours(time.hours, time.minutes, 0, 0);
+            const parsedTime = parseTimeOfDay(lower);
+            if (parsedTime) {
+                tomorrow.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
             } else {
                 tomorrow.setHours(9, 0, 0, 0); // Default 9am
             }
@@ -151,10 +275,10 @@ function parseTimeExpression(expr: string): Date {
 
     // Today with time
     if (lower.includes('today') || lower.match(/\d{1,2}\s*(am|pm)/)) {
-        const time = parseTimeOfDay(lower);
-        if (time) {
+        const parsedTime = parseTimeOfDay(lower);
+        if (parsedTime) {
             const result = new Date(now);
-            result.setHours(time.hours, time.minutes, 0, 0);
+            result.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
 
             // If time is in the past, set for tomorrow
             if (result < now) {
@@ -188,9 +312,9 @@ function parseTimeExpression(expr: string): Date {
         const targetDate = new Date(now);
         targetDate.setDate(targetDate.getDate() + daysToAdd);
 
-        const time = parseTimeOfDay(lower);
-        if (time) {
-            targetDate.setHours(time.hours, time.minutes, 0, 0);
+        const parsedTime = parseTimeOfDay(lower);
+        if (parsedTime) {
+            targetDate.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
         } else {
             targetDate.setHours(9, 0, 0, 0);
         }

@@ -579,13 +579,20 @@ describe('execution runtime', () => {
         expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
     });
 
-    test('continuePreparedAgentFlow does not require grounded inspection for publish tasks when protocol assessment is unavailable', async () => {
+    test('continuePreparedAgentFlow accepts publish tasks when browser evidence exists and protocol assessment is unavailable', async () => {
         const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
         const prepared = makePreparedWorkRequest();
         prepared.executionQuery = '将分析结果发布到 X 上';
         prepared.frozenWorkRequest.sourceText = '将分析结果发布到 X 上';
         prepared.frozenWorkRequest.tasks[0].objective = '将分析结果发布到 X 上';
         prepared.frozenWorkRequest.tasks[0].preferredTools = ['browser_connect', 'browser_get_content', 'browser_click'];
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-browser-interaction',
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'Publish workflow must be executed through browser interaction.',
+        }];
 
         const result = await continuePreparedAgentFlow({
             taskId: 'task-protocol-fallback-publish',
@@ -598,7 +605,7 @@ describe('execution runtime', () => {
         }, makeDeps({
             runAgentLoop: async () => ({
                 artifactsCreated: [],
-                toolsUsed: [],
+                toolsUsed: ['browser_connect', 'browser_navigate', 'browser_fill', 'browser_click'],
             }),
             assessExecutionProtocol: async () => null,
             session: new ExecutionSession({
@@ -620,6 +627,254 @@ describe('execution runtime', () => {
 
         expect(result.success).toBe(true);
         expect(failures.length).toBe(0);
+    });
+
+    test('continuePreparedAgentFlow fails publish tasks without browser evidence when protocol assessment is unavailable', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '将分析结果发送到 X 上';
+        prepared.frozenWorkRequest.sourceText = '将分析结果发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].objective = '将分析结果发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['browser_connect', 'browser_navigate', 'browser_click'];
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-browser-interaction',
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'Publish workflow must be executed through browser interaction.',
+        }];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-fallback-publish-missing-browser',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['write_to_file'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-fallback-publish-missing-browser',
+                conversationReader: {
+                    buildConversationText: () => '我已经整理好文案，可以直接发在 X 上。',
+                    getLatestAssistantResponseText: () => '我已经整理好文案，可以直接发在 X 上。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('required tool-evidence capability was not satisfied');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow prioritizes required browser capability checks before source-link checks', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.sourceText = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].objective = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['browser_connect', 'browser_navigate', 'browser_click', 'search_web'];
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-browser-interaction',
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'Publish workflow must be executed through browser interaction.',
+        }];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-priority-capability-before-links',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-priority-capability-before-links',
+                conversationReader: {
+                    buildConversationText: () => '已检索到信息，但尚未执行发布动作。',
+                    getLatestAssistantResponseText: () => '已检索到信息，但尚未执行发布动作。',
+                },
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('required tool-evidence capability was not satisfied');
+        expect(result.error).not.toContain('web-research task finished without source links');
+    });
+
+    test('continuePreparedAgentFlow enforces required capability when planned user action is non-blocking', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.sourceText = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].objective = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-browser-interaction',
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'Publish workflow must be executed through browser interaction.',
+        }];
+        prepared.frozenWorkRequest.userActionsRequired = [{
+            id: 'ua-external-auth',
+            title: 'Prepare external auth',
+            kind: 'external_auth',
+            description: 'Please keep account login ready.',
+            riskTier: 'high',
+            executionPolicy: 'auto',
+            blocking: false,
+            questions: [],
+            instructions: ['Keep auth ready.'],
+        }];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-nonblocking-user-action',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['search_web'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-nonblocking-user-action',
+                conversationReader: {
+                    buildConversationText: () => '完成了检索。',
+                    getLatestAssistantResponseText: () => '完成了检索。',
+                },
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('required tool-evidence capability was not satisfied');
+        expect(result.error).not.toContain('web-research task finished without source links');
+    });
+
+    test('continuePreparedAgentFlow retries execution-stage protocol violations without research refreeze', async () => {
+        const prepared = makePreparedWorkRequest();
+        prepared.frozenWorkRequest.replanPolicy = {
+            allowReturnToResearch: false,
+            triggers: [],
+        };
+        prepared.executionPlan.steps = [
+            { stepId: 'execution', kind: 'execution', title: 'Execute', description: 'Run task', status: 'running', dependencies: [] },
+            { stepId: 'reduction', kind: 'reduction', title: 'Reduce', description: 'Reduce result', status: 'pending', dependencies: ['execution'] },
+            { stepId: 'presentation', kind: 'presentation', title: 'Present', description: 'Present result', status: 'pending', dependencies: ['reduction'] },
+        ];
+        prepared.executionQuery = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.sourceText = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].objective = '检索行情并发送到 X 上';
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-browser-interaction',
+            kind: 'tool_evidence',
+            capability: 'browser_interaction',
+            required: true,
+            reason: 'Publish workflow must be executed through browser interaction.',
+        }];
+
+        let loopCount = 0;
+        let refreezeCount = 0;
+        let refrozenEventCount = 0;
+        let preparedContractActive = false;
+        const activeSnapshotsDuringLoop: boolean[] = [];
+        const frozenRequestIdsDuringLoop: Array<string | undefined> = [];
+        const reopenedPayloads: Array<{ trigger: string; nextStepId?: string }> = [];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-execution-retry-no-refreeze',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async (_taskId, _conversation, _options, _providerConfig, _tools, executionContext) => {
+                activeSnapshotsDuringLoop.push(preparedContractActive);
+                frozenRequestIdsDuringLoop.push(executionContext?.frozenWorkRequest?.id);
+                loopCount += 1;
+                if (loopCount === 1) {
+                    return {
+                        artifactsCreated: [],
+                        toolsUsed: ['search_web'],
+                    };
+                }
+                return {
+                    artifactsCreated: [],
+                    toolsUsed: ['browser_connect', 'browser_navigate', 'browser_fill', 'browser_click'],
+                };
+            },
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-execution-retry-no-refreeze',
+                conversationReader: {
+                    buildConversationText: () => (
+                        loopCount <= 1
+                            ? '完成了检索。'
+                            : '已通过浏览器完成发布。来源：https://example.com/report'
+                    ),
+                    getLatestAssistantResponseText: () => (
+                        loopCount <= 1
+                            ? '完成了检索。'
+                            : '已通过浏览器完成发布。来源：https://example.com/report'
+                    ),
+                },
+            }),
+            refreezePreparedWorkRequestForResearch: async ({ prepared: reopenedPrepared }) => {
+                refreezeCount += 1;
+                return reopenedPrepared;
+            },
+            emitPreparedWorkRequestRefrozen: () => {
+                refrozenEventCount += 1;
+                return { blocked: false };
+            },
+            emitContractReopened: (_taskId, payload) => {
+                reopenedPayloads.push({
+                    trigger: payload.trigger,
+                    nextStepId: payload.nextStepId,
+                });
+            },
+            activatePreparedWorkRequest: () => {
+                preparedContractActive = true;
+            },
+            clearPreparedWorkRequest: () => {
+                preparedContractActive = false;
+            },
+        }));
+
+        expect(result.success).toBe(true);
+        expect(loopCount).toBe(2);
+        expect(refreezeCount).toBe(0);
+        expect(refrozenEventCount).toBe(0);
+        expect(reopenedPayloads).toHaveLength(1);
+        expect(reopenedPayloads[0]?.trigger).toBe('contradictory_evidence');
+        expect(reopenedPayloads[0]?.nextStepId).toBe('execution');
+        expect(activeSnapshotsDuringLoop).toEqual([true, true]);
+        expect(frozenRequestIdsDuringLoop).toEqual(['wr-1', 'wr-1']);
     });
 
     test('continuePreparedAgentFlow blocks user-action phrasing when protocol judge is unavailable', async () => {

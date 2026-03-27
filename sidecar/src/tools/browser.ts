@@ -615,7 +615,7 @@ export const browserSetModeTool: ToolDefinition = {
     name: 'browser_set_mode',
     description: `Set the browser automation mode.
 - "precise": Use Playwright with CSS selectors. Fast and deterministic. Best for known page structures.
-- "smart": Use AI vision (browser-use). Slower but can handle unknown/dynamic pages. Requires browser-use-service running.
+- "smart": Use AI vision (browser-use). Slower but can handle unknown/dynamic pages. Auto-starts browser-use-service when enabled.
 - "auto": Try precise mode first, automatically fall back to smart mode on failure (default).`,
     effects: ['ui:notify'],
     input_schema: {
@@ -672,7 +672,7 @@ export const browserAiActionTool: ToolDefinition = {
 Uses the browser-use service to understand the page visually and execute the action.
 Best for: unknown page structures, dynamically rendered content, complex interactions
 that are hard to express with CSS selectors.
-Requires browser-use-service to be running.
+Requires browser-use-service (auto-started when enabled).
 
 Examples:
 - "click the publish button"
@@ -708,13 +708,13 @@ Examples:
                 success: result.success,
                 result: result.result,
                 ...(result.error ? { error: result.error } : {}),
-                tip: result.success ? undefined : 'Make sure browser-use-service is running: cd browser-use-service && python main.py',
+                tip: result.success ? undefined : 'Smart mode unavailable. Check browserUse.autoStart/serviceUrl configuration and retry.',
             };
         } catch (error) {
             return {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
-                tip: 'Ensure browser-use-service is running and the browser is connected.',
+                tip: 'Ensure the browser is connected and browserUse auto-start is enabled.',
             };
         } finally {
             cleanup();

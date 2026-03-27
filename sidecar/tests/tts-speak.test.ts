@@ -32,7 +32,6 @@ import { randomUUID } from 'crypto';
 // ============================================================================
 
 const TASK_QUERY = '为coworkany增加说话的能力，将文字回复读出来。';
-const TASK_TITLE = 'TTS 语音朗读测试 - E2E';
 const SIDECAR_INIT_WAIT_MS = 5000;
 const TASK_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes (TTS is simpler than browser tasks)
 const POLL_INTERVAL_MS = 1000;
@@ -86,22 +85,19 @@ interface TTSTestReport {
 }
 
 // ============================================================================
-// IPC Command Builder
+// Natural Language Entry Command Builder
 // ============================================================================
 
-function buildStartTaskCommand(taskId: string): string {
+function buildSendTaskMessageCommand(taskId: string): string {
     return JSON.stringify({
-        type: 'start_task',
+        type: 'send_task_message',
         id: randomUUID(),
         timestamp: new Date().toISOString(),
         payload: {
             taskId,
-            title: TASK_TITLE,
-            userQuery: TASK_QUERY,
-            context: {
-                workspacePath: process.cwd(),
-            },
+            content: TASK_QUERY,
             config: {
+                workspacePath: process.cwd(),
                 enabledToolpacks: [],
                 enabledSkills: ['voice-tts'],
             },
@@ -389,7 +385,7 @@ describe('TTS 语音朗读 - Sidecar E2E 测试', () => {
 
         // Send the task
         const taskId = randomUUID();
-        const command = buildStartTaskCommand(taskId);
+        const command = buildSendTaskMessageCommand(taskId);
 
         console.log('');
         console.log('='.repeat(70));
@@ -457,8 +453,9 @@ describe('TTS 语音朗读 - Sidecar E2E 测试', () => {
     // Core Pipeline Tests
     // ========================================================================
 
-    test('1. 任务应该成功启动', () => {
-        expect(report.taskStarted).toBe(true);
+    test('1. 任务应进入执行流程', () => {
+        const enteredExecution = report.taskStarted || report.taskFinished || report.toolCalls.length > 0;
+        expect(enteredExecution).toBe(true);
     });
 
     test('2. 应该接收到 IPC 事件', () => {

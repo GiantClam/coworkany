@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { buildTimelineItems } from '../src/components/Chat/Timeline/hooks/useTimelineItems';
-import type { TaskEvent, TaskSession } from '../src/types';
+import type { AssistantTurnItem, TaskCardItem, TaskEvent, TaskSession, TimelineItemType } from '../src/types';
+import type { CanonicalTaskMessage } from '../../sidecar/src/protocol';
 
 function makeEvent(overrides: Partial<TaskEvent>): TaskEvent {
     return {
@@ -18,6 +19,7 @@ function makeSession(overrides: Partial<TaskSession> = {}): TaskSession {
     return {
         taskId: overrides.taskId ?? 'task-1',
         status: overrides.status ?? 'idle',
+        taskMode: overrides.taskMode,
         planSteps: overrides.planSteps ?? [],
         toolCalls: overrides.toolCalls ?? [],
         effects: overrides.effects ?? [],
@@ -40,6 +42,40 @@ function explicitTaskIntentRouting() {
         needsDisambiguation: false,
         forcedByUserSelection: true,
     } as const;
+}
+
+function extractAssistantTurns(items: TimelineItemType[]): AssistantTurnItem[] {
+    return items
+        .filter((item): item is AssistantTurnItem => item.type === 'assistant_turn');
+}
+
+function extractTaskCards(items: TimelineItemType[]): TaskCardItem[] {
+    const fromStandalone = items
+        .filter((item): item is TaskCardItem => item.type === 'task_card');
+    const fromTurns = extractAssistantTurns(items)
+        .map((turn) => turn.taskCard)
+        .filter((card): card is TaskCardItem => Boolean(card));
+    return [...fromStandalone, ...fromTurns];
+}
+
+function extractAssistantMessages(items: TimelineItemType[]): string[] {
+    const standalone = items
+        .filter((item): item is Extract<TimelineItemType, { type: 'assistant_message' }> => item.type === 'assistant_message')
+        .map((item) => item.content);
+    const turnMessages = extractAssistantTurns(items)
+        .flatMap((turn) => turn.messages);
+    return [...standalone, ...turnMessages];
+}
+
+function firstAssistantTurn(items: TimelineItemType[]): AssistantTurnItem | undefined {
+    return extractAssistantTurns(items)[0];
+}
+
+function makeCanonicalMessage(overrides: Partial<CanonicalTaskMessage> & Pick<CanonicalTaskMessage, 'id' | 'taskId' | 'role' | 'timestamp' | 'sequence' | 'sourceEventId' | 'sourceEventType' | 'parts'>): CanonicalTaskMessage {
+    return {
+        status: overrides.status ?? 'complete',
+        ...overrides,
+    };
 }
 
 describe('buildTimelineItems', () => {
@@ -108,17 +144,65 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items
-            .filter((item) => item.type === 'task_card')
-            .map((item) => item);
+        const turns = extractAssistantTurns(result.items);
+        const taskCards = extractTaskCards(result.items);
 
+        expect(turns).toHaveLength(1);
         expect(taskCards).toHaveLength(1);
         expect(taskCards[0]?.title).toBe('Task center');
         expect(taskCards[0]?.subtitle).toBe('Allow Coworkany to continue the PDF export.');
-        expect(taskCards[0]?.sections.some((section) => section.label === 'Contract · Changed fields')).toBe(true);
-        expect(taskCards[0]?.sections.some((section) => section.label === 'Research · Sources checked')).toBe(true);
-        expect(taskCards[0]?.sections.some((section) => section.label === 'Action · Instructions')).toBe(true);
+        expect(turns[0]?.steps.some((step) => step.title === 'Task plan')).toBe(true);
+        expect(turns[0]?.steps.some((step) => step.title === 'Execute')).toBe(true);
         expect(taskCards[0]?.collaboration?.input?.submitLabel).toBe('Submit and continue');
+    });
+
+    test('renders external auth user action with open-login and continue choices', () => {
+        const session = makeSession({
+            status: 'idle',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: 'Need user login before publishing.',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_USER_ACTION_REQUIRED',
+                    payload: {
+                        actionId: 'auth-login',
+                        title: 'Login required',
+                        kind: 'external_auth',
+                        description: 'Please login to continue publishing.',
+                        blocking: true,
+                        questions: [],
+                        instructions: ['Complete login in browser.'],
+                        authUrl: 'https://x.com/i/flow/login',
+                        authDomain: 'x.com',
+                        canAutoResume: true,
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = extractTaskCards(result.items);
+        const collaboration = taskCards[0]?.collaboration;
+
+        expect(taskCards).toHaveLength(1);
+        expect(collaboration?.input).toBeUndefined();
+        expect(collaboration?.action).toBeUndefined();
+        expect(collaboration?.choices).toEqual([
+            { label: '打开登录页面', value: '__auth_open_page__:https://x.com/i/flow/login' },
+            { label: '我已登录，继续执行', value: '继续执行' },
+        ]);
     });
 
     test('respects recent-event truncation while reporting hidden count', () => {
@@ -160,7 +244,7 @@ describe('buildTimelineItems', () => {
 
         expect(result.hiddenEventCount).toBe(1);
         expect(result.items).toHaveLength(1);
-        expect(result.items[0]?.type).toBe('task_card');
+        expect(result.items[0]?.type).toBe('assistant_turn');
     });
 
     test('stores task result in task center card when task finishes', () => {
@@ -207,13 +291,12 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items
-            .filter((item) => item.type === 'task_card')
-            .map((item) => item);
+        const turns = extractAssistantTurns(result.items);
+        const taskCards = extractTaskCards(result.items);
 
         expect(taskCards).toHaveLength(1);
         expect(taskCards[0]?.result?.summary).toBe('已从 skillhub 安装并启用技能 `skill-vetter`。');
-        expect(taskCards[0]?.sections.some((section) => section.label === 'Result · Summary')).toBe(true);
+        expect(turns[0]?.steps.some((step) => step.title === 'Summary')).toBe(true);
     });
 
     test('renders multi-task sequential workflow and task progress in task card', () => {
@@ -272,9 +355,7 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items
-            .filter((item) => item.type === 'task_card')
-            .map((item) => item);
+        const taskCards = extractTaskCards(result.items);
 
         expect(taskCards).toHaveLength(1);
         expect(taskCards[0]?.workflow).toBe('sequential');
@@ -318,13 +399,444 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items.filter((item) => item.type === 'task_card');
-        const assistantMessages = result.items
-            .filter((item) => item.type === 'assistant_message')
-            .map((item) => item.content);
+        const taskCards = extractTaskCards(result.items);
+        const assistantMessages = extractAssistantMessages(result.items);
+        const turns = extractAssistantTurns(result.items);
 
         expect(taskCards).toHaveLength(0);
+        expect(turns).toHaveLength(1);
         expect(assistantMessages).toEqual(['你好，今天需要我帮你做什么？']);
+    });
+
+    test('prefers canonical chat messages when chat-mode canonical stream is available', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'chat',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'assistant',
+                        content: 'legacy',
+                    },
+                }),
+            ],
+        });
+        const canonicalMessages: CanonicalTaskMessage[] = [
+            makeCanonicalMessage({
+                id: 'canonical-user',
+                taskId: session.taskId,
+                role: 'user',
+                timestamp: '2026-03-27T10:00:00.000Z',
+                sequence: 1,
+                sourceEventId: 'canonical-user',
+                sourceEventType: 'CHAT_MESSAGE',
+                parts: [{ type: 'text', text: '你好' }],
+            }),
+            makeCanonicalMessage({
+                id: 'canonical-assistant',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:01.000Z',
+                sequence: 2,
+                sourceEventId: 'canonical-assistant',
+                sourceEventType: 'CHAT_MESSAGE',
+                parts: [{ type: 'text', text: '这是 canonical 回复。' }],
+            }),
+        ];
+
+        const result = buildTimelineItems(session, undefined, canonicalMessages);
+        const assistantMessages = extractAssistantMessages(result.items);
+
+        expect(result.items[0]).toMatchObject({
+            type: 'user_message',
+            content: '你好',
+        });
+        expect(assistantMessages).toEqual(['这是 canonical 回复。']);
+    });
+
+    test('maps canonical tool/effect/patch parts into assistant turn UI fields', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'chat',
+        });
+        const canonicalMessages: CanonicalTaskMessage[] = [
+            makeCanonicalMessage({
+                id: 'tool-call',
+                taskId: session.taskId,
+                role: 'runtime',
+                timestamp: '2026-03-27T10:00:00.000Z',
+                sequence: 1,
+                sourceEventId: 'tool-call',
+                sourceEventType: 'TOOL_CALLED',
+                parts: [{ type: 'tool-call', toolId: 'tool-1', toolName: 'search_web', input: { q: 'coworkany' } }],
+            }),
+            makeCanonicalMessage({
+                id: 'tool-result',
+                taskId: session.taskId,
+                role: 'runtime',
+                timestamp: '2026-03-27T10:00:01.000Z',
+                sequence: 2,
+                sourceEventId: 'tool-result',
+                sourceEventType: 'TOOL_RESULT',
+                parts: [{ type: 'tool-result', toolId: 'tool-1', success: true, resultSummary: 'Found 3 docs', result: { total: 3 } }],
+            }),
+            makeCanonicalMessage({
+                id: 'effect-request',
+                taskId: session.taskId,
+                role: 'runtime',
+                timestamp: '2026-03-27T10:00:02.000Z',
+                sequence: 3,
+                sourceEventId: 'effect-request',
+                sourceEventType: 'EFFECT_REQUESTED',
+                parts: [{ type: 'effect', requestId: 'effect-1', effectType: 'open_url', status: 'requested', riskLevel: 2 }],
+            }),
+            makeCanonicalMessage({
+                id: 'effect-approved',
+                taskId: session.taskId,
+                role: 'runtime',
+                timestamp: '2026-03-27T10:00:03.000Z',
+                sequence: 4,
+                sourceEventId: 'effect-approved',
+                sourceEventType: 'EFFECT_APPROVED',
+                parts: [{ type: 'effect', requestId: 'effect-1', effectType: 'open_url', status: 'approved' }],
+            }),
+            makeCanonicalMessage({
+                id: 'patch-proposed',
+                taskId: session.taskId,
+                role: 'runtime',
+                timestamp: '2026-03-27T10:00:04.000Z',
+                sequence: 5,
+                sourceEventId: 'patch-proposed',
+                sourceEventType: 'PATCH_PROPOSED',
+                parts: [{ type: 'patch', patchId: 'patch-1', filePath: '/tmp/demo.ts', status: 'proposed' }],
+            }),
+            makeCanonicalMessage({
+                id: 'patch-applied',
+                taskId: session.taskId,
+                role: 'runtime',
+                timestamp: '2026-03-27T10:00:05.000Z',
+                sequence: 6,
+                sourceEventId: 'patch-applied',
+                sourceEventType: 'PATCH_APPLIED',
+                parts: [{ type: 'patch', patchId: 'patch-1', filePath: '/tmp/demo.ts', status: 'applied' }],
+            }),
+            makeCanonicalMessage({
+                id: 'assistant-final',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:06.000Z',
+                sequence: 7,
+                sourceEventId: 'assistant-final',
+                sourceEventType: 'CHAT_MESSAGE',
+                parts: [{ type: 'text', text: '处理完成。' }],
+            }),
+        ];
+
+        const result = buildTimelineItems(session, undefined, canonicalMessages);
+        const turn = firstAssistantTurn(result.items);
+
+        expect(turn?.messages).toEqual(['处理完成。']);
+        expect(turn?.toolCalls).toEqual([
+            expect.objectContaining({
+                id: 'tool-1',
+                toolName: 'search_web',
+                status: 'success',
+                args: { q: 'coworkany' },
+                result: { total: 3 },
+            }),
+        ]);
+        expect(turn?.effectRequests).toEqual([
+            expect.objectContaining({
+                id: 'effect-1',
+                effectType: 'open_url',
+                risk: 2,
+                approved: true,
+            }),
+        ]);
+        expect(turn?.patches).toEqual([
+            expect.objectContaining({
+                id: 'patch-1',
+                filePath: '/tmp/demo.ts',
+                status: 'applied',
+            }),
+        ]);
+    });
+
+    test('renders canonical task center content from task and finish parts', () => {
+        const session = makeSession({
+            status: 'idle',
+            taskMode: 'chat',
+        });
+        const canonicalMessages: CanonicalTaskMessage[] = [
+            makeCanonicalMessage({
+                id: 'canonical-plan',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:00.000Z',
+                sequence: 1,
+                sourceEventId: 'canonical-plan',
+                sourceEventType: 'TASK_PLAN_READY',
+                parts: [{
+                    type: 'task',
+                    event: 'plan_ready',
+                    summary: '准备执行登录和发布流程。',
+                    data: {
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.99,
+                            reasonCodes: ['user_route_choice'],
+                            needsDisambiguation: false,
+                            forcedByUserSelection: true,
+                        },
+                        tasks: [
+                            {
+                                id: 'task-login',
+                                title: '完成登录',
+                                objective: '登录目标平台',
+                                dependencies: [],
+                            },
+                        ],
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }],
+            }),
+            makeCanonicalMessage({
+                id: 'canonical-collaboration',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:01.000Z',
+                sequence: 2,
+                sourceEventId: 'canonical-task-progress',
+                sourceEventType: 'TASK_CHECKPOINT_REACHED',
+                parts: [{
+                    type: 'task',
+                    event: 'checkpoint_reached',
+                    title: 'Login required',
+                    summary: 'Please login to continue publishing.',
+                }],
+            }),
+            makeCanonicalMessage({
+                id: 'canonical-finish',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:02.000Z',
+                sequence: 3,
+                sourceEventId: 'canonical-finish',
+                sourceEventType: 'TASK_FINISHED',
+                parts: [
+                    {
+                        type: 'finish',
+                        summary: '发布完成。',
+                        artifacts: [],
+                        files: [],
+                    },
+                    {
+                        type: 'text',
+                        text: '发布完成。',
+                    },
+                ],
+            }),
+        ];
+
+        const result = buildTimelineItems(session, undefined, canonicalMessages);
+        const turn = firstAssistantTurn(result.items);
+        const taskCards = extractTaskCards(result.items);
+
+        expect(turn?.messages).toEqual(['发布完成。']);
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]).toMatchObject({
+            title: 'Task center',
+            subtitle: 'Please login to continue publishing.',
+            status: 'finished',
+            tasks: [
+                expect.objectContaining({
+                    id: 'task-login',
+                    status: 'completed',
+                }),
+            ],
+            result: {
+                summary: '发布完成。',
+            },
+        });
+    });
+
+    test('renders canonical collaboration parts as task center interaction state', () => {
+        const session = makeSession({
+            status: 'running',
+            taskMode: 'chat',
+        });
+        const canonicalMessages: CanonicalTaskMessage[] = [
+            makeCanonicalMessage({
+                id: 'canonical-plan',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:00.000Z',
+                sequence: 1,
+                sourceEventId: 'canonical-plan',
+                sourceEventType: 'TASK_PLAN_READY',
+                parts: [{
+                    type: 'task',
+                    event: 'plan_ready',
+                    summary: '准备执行登录和发布流程。',
+                    data: {
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.99,
+                            reasonCodes: ['user_route_choice'],
+                            needsDisambiguation: false,
+                            forcedByUserSelection: true,
+                        },
+                        tasks: [],
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }],
+            }),
+            makeCanonicalMessage({
+                id: 'canonical-collaboration',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:01.000Z',
+                sequence: 2,
+                sourceEventId: 'canonical-collaboration',
+                sourceEventType: 'TASK_USER_ACTION_REQUIRED',
+                parts: [{
+                    type: 'collaboration',
+                    kind: 'external_auth',
+                    actionId: 'auth-login',
+                    title: 'Login required',
+                    description: 'Please login to continue publishing.',
+                    blocking: true,
+                    questions: [],
+                    instructions: ['登录完成后将自动继续执行。'],
+                    choices: [
+                        { label: '打开登录页面', value: '__auth_open_page__:https://x.com/i/flow/login' },
+                        { label: '我已登录，继续执行', value: '继续执行' },
+                    ],
+                }],
+            }),
+        ];
+
+        const result = buildTimelineItems(session, undefined, canonicalMessages);
+        const taskCards = extractTaskCards(result.items);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]).toMatchObject({
+            title: 'Task center',
+            subtitle: 'Please login to continue publishing.',
+            status: 'running',
+            collaboration: {
+                actionId: 'auth-login',
+                title: 'Login required',
+                choices: [
+                    { label: '打开登录页面', value: '__auth_open_page__:https://x.com/i/flow/login' },
+                    { label: '我已登录，继续执行', value: '继续执行' },
+                ],
+            },
+        });
+    });
+
+    test('uses canonical task-center projection for immediate task sessions', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'immediate_task',
+        });
+        const canonicalMessages: CanonicalTaskMessage[] = [
+            makeCanonicalMessage({
+                id: 'task-started',
+                taskId: session.taskId,
+                role: 'user',
+                timestamp: '2026-03-27T10:00:00.000Z',
+                sequence: 1,
+                sourceEventId: 'task-started',
+                sourceEventType: 'TASK_STARTED',
+                parts: [{ type: 'text', text: '帮我生成发布总结' }],
+            }),
+            makeCanonicalMessage({
+                id: 'task-plan',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:01.000Z',
+                sequence: 2,
+                sourceEventId: 'task-plan',
+                sourceEventType: 'TASK_PLAN_READY',
+                parts: [{
+                    type: 'task',
+                    event: 'plan_ready',
+                    summary: '准备收集变更并生成总结。',
+                    data: {
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.99,
+                            reasonCodes: ['user_route_choice'],
+                            needsDisambiguation: false,
+                            forcedByUserSelection: true,
+                        },
+                        tasks: [
+                            {
+                                id: 'task-summary',
+                                title: '整理发布内容',
+                                objective: '生成总结',
+                                dependencies: [],
+                            },
+                        ],
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }],
+            }),
+            makeCanonicalMessage({
+                id: 'task-finished',
+                taskId: session.taskId,
+                role: 'assistant',
+                timestamp: '2026-03-27T10:00:02.000Z',
+                sequence: 3,
+                sourceEventId: 'task-finished',
+                sourceEventType: 'TASK_FINISHED',
+                parts: [
+                    {
+                        type: 'finish',
+                        summary: '发布总结已生成。',
+                        artifacts: [],
+                        files: ['/tmp/release-summary.md'],
+                    },
+                    {
+                        type: 'text',
+                        text: '发布总结已生成。',
+                    },
+                ],
+            }),
+        ];
+
+        const result = buildTimelineItems(session, undefined, canonicalMessages);
+        const taskCards = extractTaskCards(result.items);
+        const assistantMessages = extractAssistantMessages(result.items);
+
+        expect(result.items[0]).toMatchObject({
+            type: 'user_message',
+            content: '帮我生成发布总结',
+        });
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]).toMatchObject({
+            status: 'finished',
+            result: {
+                summary: '发布总结已生成。',
+                files: ['/tmp/release-summary.md'],
+            },
+        });
+        expect(assistantMessages).toContain('发布总结已生成。');
     });
 
     test('deduplicates task finished summary when it matches streamed assistant draft in chat mode', () => {
@@ -366,10 +878,10 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const assistantMessages = result.items
-            .filter((item) => item.type === 'assistant_message')
-            .map((item) => item.content);
+        const assistantMessages = extractAssistantMessages(result.items);
+        const turns = extractAssistantTurns(result.items);
 
+        expect(turns).toHaveLength(1);
         expect(assistantMessages).toEqual(['你好呀！ 今天想聊点什么？']);
     });
 
@@ -404,11 +916,38 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const assistantMessages = result.items
-            .filter((item) => item.type === 'assistant_message')
-            .map((item) => item.content);
+        const assistantMessages = extractAssistantMessages(result.items);
+        const turns = extractAssistantTurns(result.items);
 
+        expect(turns).toHaveLength(1);
         expect(assistantMessages).toEqual(['你好！很高兴见到你。']);
+    });
+
+    test('keeps a compact task card after scheduled task creation finishes', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'scheduled_task',
+            title: '[Scheduled] 喝水提醒',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_FINISHED',
+                    payload: {
+                        summary: '已创建每 5 分钟提醒喝水的定时任务。',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const taskCards = extractTaskCards(result.items);
+        const assistantMessages = extractAssistantMessages(result.items);
+
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.title).toBe('喝水提醒');
+        expect(taskCards[0]?.status).toBe('finished');
+        expect(taskCards[0]?.result?.summary).toBe('已创建每 5 分钟提醒喝水的定时任务。');
+        expect(assistantMessages).toContain('已创建每 5 分钟提醒喝水的定时任务。');
     });
 
     test('normalizes routed TASK_STARTED source text to original user query', () => {
@@ -433,6 +972,29 @@ describe('buildTimelineItems', () => {
             .map((item) => item.content);
 
         expect(userMessages).toEqual(['帮我写一段产品文案']);
+    });
+
+    test('normalizes control reply with uuid suffix in user chat messages', () => {
+        const session = makeSession({
+            status: 'running',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'user',
+                        content: '继续执行（cfae30f0-2e9a-4779-a750-7c97c19d9580）',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const userMessages = result.items
+            .filter((item) => item.type === 'user_message')
+            .map((item) => item.content);
+
+        expect(userMessages).toEqual(['继续执行']);
     });
 
     test('does not render task card for inferred task mode without explicit create intent', () => {
@@ -469,12 +1031,12 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items.filter((item) => item.type === 'task_card');
-        const assistantMessages = result.items
-            .filter((item) => item.type === 'assistant_message')
-            .map((item) => item.content);
+        const taskCards = extractTaskCards(result.items);
+        const assistantMessages = extractAssistantMessages(result.items);
+        const turns = extractAssistantTurns(result.items);
 
         expect(taskCards).toHaveLength(0);
+        expect(turns).toHaveLength(1);
         expect(assistantMessages).toContain('我先直接回答你的问题。');
     });
 
@@ -524,8 +1086,53 @@ describe('buildTimelineItems', () => {
         const systemContents = result.items
             .filter((item) => item.type === 'system_event')
             .map((item) => item.content);
+        const turnSystemContents = extractAssistantTurns(result.items)
+            .flatMap((item) => item.systemEvents || []);
 
-        expect(systemContents).toEqual(['Task failed: fetch failed']);
+        expect([...systemContents, ...turnSystemContents]).toContain('Task failed: fetch failed');
+    });
+
+    test('keeps suspension and resume events as timeline no-ops', () => {
+        const session = makeSession({
+            status: 'running',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_SUSPENDED',
+                    payload: {
+                        reason: 'waiting_for_user',
+                        userMessage: 'Need confirmation before continuing.',
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_RESUMED',
+                    payload: {
+                        resumeReason: 'user_confirmed',
+                        suspendDurationMs: 1200,
+                    },
+                }),
+                makeEvent({
+                    sequence: 3,
+                    type: 'CHAT_MESSAGE',
+                    payload: {
+                        role: 'assistant',
+                        content: '继续处理中。',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const assistantMessages = extractAssistantMessages(result.items);
+        const systemContents = result.items
+            .filter((item) => item.type === 'system_event')
+            .map((item) => item.content);
+        const turnSystemContents = extractAssistantTurns(result.items)
+            .flatMap((item) => item.systemEvents || []);
+
+        expect(assistantMessages).toEqual(['继续处理中。']);
+        expect([...systemContents, ...turnSystemContents]).toEqual([]);
     });
 
     test('suppresses runtime control notices inside task context cards', () => {
@@ -565,9 +1172,11 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCard = result.items.find((item) => item.type === 'task_card');
+        const turns = extractAssistantTurns(result.items);
+        const taskCard = extractTaskCards(result.items)[0];
         expect(taskCard?.type).toBe('task_card');
-        expect(taskCard?.sections.some((section) => section.label === 'Process · System updates')).toBe(false);
+        expect(turns[0]?.messages.some((line) => line.includes('[RESUMED]'))).toBe(false);
+        expect(turns[0]?.messages.some((line) => line.toLowerCase().includes('status updated:'))).toBe(false);
     });
 
     test('renders route disambiguation clarification as choice buttons in task card', () => {
@@ -606,9 +1215,7 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items
-            .filter((item) => item.type === 'task_card')
-            .map((item) => item);
+        const taskCards = extractTaskCards(result.items);
 
         expect(taskCards).toHaveLength(1);
         expect(taskCards[0]?.collaboration?.choices).toEqual([
@@ -655,9 +1262,7 @@ describe('buildTimelineItems', () => {
         });
 
         const result = buildTimelineItems(session);
-        const taskCards = result.items
-            .filter((item) => item.type === 'task_card')
-            .map((item) => item);
+        const taskCards = extractTaskCards(result.items);
 
         expect(taskCards).toHaveLength(1);
         expect(taskCards[0]?.collaboration?.actionId).toBe('task_draft_confirm');

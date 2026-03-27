@@ -756,6 +756,12 @@ impl SidecarManager {
                                     error!("Failed to emit task-event: {}", e);
                                 }
                             }
+                            Some(SidecarMessageKind::CanonicalStreamEvent) => {
+                                if let Err(e) = app_handle.emit("canonical-stream-event", &message)
+                                {
+                                    error!("Failed to emit canonical-stream-event: {}", e);
+                                }
+                            }
                             Some(SidecarMessageKind::VoiceState) => {
                                 let payload =
                                     message.get("payload").cloned().unwrap_or(message.clone());
@@ -1461,6 +1467,7 @@ impl SidecarManager {
 
 enum SidecarMessageKind {
     TaskEvent,
+    CanonicalStreamEvent,
     IpcResponse,
     IpcCommand,
     VoiceState,
@@ -1470,6 +1477,9 @@ fn classify_sidecar_message(message: &serde_json::Value) -> Option<SidecarMessag
     let msg_type = message.get("type")?.as_str()?;
     if msg_type == "voice_state" {
         return Some(SidecarMessageKind::VoiceState);
+    }
+    if msg_type == "canonical_message" || msg_type == "canonical_message_delta" {
+        return Some(SidecarMessageKind::CanonicalStreamEvent);
     }
     if msg_type.ends_with("_response") {
         return Some(SidecarMessageKind::IpcResponse);

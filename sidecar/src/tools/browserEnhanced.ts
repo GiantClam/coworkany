@@ -154,6 +154,8 @@ export function createEnhancedBrowserTools(
                                     ResumeConditions.manual(),
                                     {
                                         domain: args.url,
+                                        targetUrl: args.url,
+                                        navigatedUrl: args.url,
                                         connectionMode: connInfo.mode,
                                     }
                                 );
@@ -245,7 +247,11 @@ export function createEnhancedBrowserTools(
                                         5000, // Check every 5 seconds
                                         5 * 60 * 1000 // Max wait 5 minutes
                                     ),
-                                    { navigatedUrl: args.url }
+                                    {
+                                        navigatedUrl: currentUrl || args.url,
+                                        targetUrl: currentUrl || args.url,
+                                        targetDomain: domain,
+                                    }
                                 );
 
                                 return {

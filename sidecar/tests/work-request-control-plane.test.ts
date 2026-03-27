@@ -240,9 +240,19 @@ describe('work request control plane', () => {
         expect(requiredDomainResearch).toHaveLength(0);
     });
 
-    test('requires execution-target clarification for precision-sensitive lookup requests without unique identifiers', () => {
+    test('does not require execution-target clarification when a market entity can be resolved via research', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: '检索今天英伟达股价的涨跌情况，分析为什么最后股价暴涨',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+    });
+
+    test('requires execution-target clarification when market lookup omits the target entity', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索今天股价的涨跌情况，分析为什么最后暴涨',
             workspacePath: '/tmp/workspace',
         });
 
@@ -269,6 +279,39 @@ describe('work request control plane', () => {
 
         expect(analyzed.clarification.required).toBe(false);
         expect(analyzed.clarification.missingFields).toEqual([]);
+    });
+
+    test('does not hard-block named stock workflows without explicit ticker', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: '检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上',
+            workspacePath: '/tmp/workspace',
+        });
+
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.clarification.missingFields).toEqual([]);
+        expect(analyzed.userActionsRequired?.some((action) =>
+            action.kind === 'clarify_input' && action.blocking
+        )).toBe(false);
+        expect(analyzed.userActionsRequired?.some((action) =>
+            action.kind === 'external_auth'
+        )).toBe(true);
+        expect(analyzed.userActionsRequired?.some((action) =>
+            action.kind === 'external_auth' && action.blocking
+        )).toBe(false);
+        expect(analyzed.tasks[0]?.preferredTools?.some((tool) =>
+            tool.startsWith('browser_')
+        )).toBe(true);
+        expect(analyzed.tasks[0]?.executionRequirements).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                kind: 'tool_evidence',
+                capability: 'browser_interaction',
+                required: true,
+            }),
+        ]));
+        const requiredDomainResearch = analyzed.researchQueries?.filter((query) =>
+            query.kind === 'domain_research' && query.source === 'web' && query.required
+        ) ?? [];
+        expect(requiredDomainResearch.length).toBeGreaterThan(0);
     });
 
     test('does not require execution-target clarification when repository identifier is explicit', () => {

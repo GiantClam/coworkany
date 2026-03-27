@@ -8,114 +8,43 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import styles from './Timeline.module.css';
 import type {
-    EffectRequestItem,
-    PatchItem,
-    SystemEventItem,
+    AssistantTurnItem,
+    TimelineItemType,
     TaskSession,
-    TaskCardItem,
 } from '../../../types';
 import { useTimelineItems } from './hooks/useTimelineItems';
 import { MessageBubble } from './components/MessageBubble';
-import { TaskCardMessage } from './components/TaskCardMessage';
-import { ToolCard } from './components/ToolCard';
+import { AssistantTurnBlock } from './components/AssistantTurnBlock';
 import { getPendingTaskStatus } from './pendingTaskStatus';
+import { useCanonicalTaskStreamStore } from '../../../stores/useCanonicalTaskStreamStore';
 
 // ============================================================================
 // Main Timeline Component
 // ============================================================================
 
-function formatSystemBubbleContent(item: SystemEventItem): string {
-    return item.content;
-}
-
-function toEffectTaskCardItem(item: EffectRequestItem): TaskCardItem {
-    const decision = item.approved === undefined ? 'Pending' : (item.approved ? 'Approved' : 'Denied');
-    return {
-        type: 'task_card',
-        id: `${item.id}-effect-card`,
-        title: `Effect request · ${item.effectType}`,
-        subtitle: `Risk level: ${item.risk}`,
-        sections: [
-            {
-                label: 'Decision',
-                lines: [decision],
-            },
-        ],
-        timestamp: item.timestamp,
-    };
-}
-
-function toPatchTaskCardItem(item: PatchItem): TaskCardItem {
-    const statusLabel = item.status === 'applied'
-        ? 'Applied'
-        : item.status === 'rejected'
-            ? 'Rejected'
-            : 'Proposed';
-    return {
-        type: 'task_card',
-        id: `${item.id}-patch-card`,
-        title: 'Patch update',
-        subtitle: item.filePath || 'Unknown file',
-        sections: [
-            {
-                label: 'Status',
-                lines: [statusLabel],
-            },
-        ],
-        timestamp: item.timestamp,
-    };
-}
-
-function isTaskCardEmpty(item: TaskCardItem): boolean {
-    const hasSections = item.sections.some((section) => section.lines.length > 0);
-    const hasTasks = (item.tasks?.length ?? 0) > 0;
-    const hasCollaboration = Boolean(item.collaboration);
-    const hasResult = Boolean(item.result?.summary || item.result?.error);
-    const hasStatus = Boolean(item.status);
-    return !item.subtitle && !hasSections && !hasTasks && !hasCollaboration && !hasResult && !hasStatus;
-}
-
 interface TimelineProps {
     session: TaskSession;
-    showResumeCard?: boolean;
-    resumeCardTitle?: string;
-    resumeCardSuggestion?: string;
-    resumeCardActionLabel?: string;
-    resumeCardActionDisabled?: boolean;
-    onResumeCardAction?: () => void;
     onTaskCollaborationSubmit?: (input: {
         taskId?: string;
         cardId: string;
         actionId?: string;
         value: string;
     }) => void;
-    onTaskActionClick?: (input: {
-        taskId?: string;
-        cardId: string;
-        actionId?: string;
-        value?: string;
-    }) => void;
 }
 
 const TimelineComponent: React.FC<TimelineProps> = ({
     session,
-    showResumeCard = false,
-    resumeCardTitle,
-    resumeCardSuggestion,
-    resumeCardActionLabel,
-    resumeCardActionDisabled = false,
-    onResumeCardAction,
     onTaskCollaborationSubmit,
-    onTaskActionClick,
 }) => {
     const { t } = useTranslation();
+    const canonicalMessages = useCanonicalTaskStreamStore((state) => state.sessions.get(session.taskId)?.messages);
     const latestVisibleMessageCount = 10;
     const [showFullHistory, setShowFullHistory] = React.useState(false);
-    const { items } = useTimelineItems(session);
-    const hiddenMessageCount = Math.max(items.length - latestVisibleMessageCount, 0);
+    const { items: timelineItems } = useTimelineItems(session, undefined, canonicalMessages);
+    const hiddenMessageCount = Math.max(timelineItems.length - latestVisibleMessageCount, 0);
     const visibleItems = showFullHistory || hiddenMessageCount === 0
-        ? items
-        : items.slice(-latestVisibleMessageCount);
+        ? timelineItems
+        : timelineItems.slice(-latestVisibleMessageCount);
     const pendingStatus = React.useMemo(() => getPendingTaskStatus(session), [session]);
     const pendingLabel = React.useMemo(() => {
         switch (pendingStatus?.phase) {
@@ -129,6 +58,33 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 return '';
         }
     }, [pendingStatus, t]);
+    const displayItems = React.useMemo<TimelineItemType[]>(() => {
+        if (!pendingLabel) {
+            return visibleItems;
+        }
+        const hasAssistantTurn = visibleItems.some((item) => item.type === 'assistant_turn');
+        if (hasAssistantTurn) {
+            return visibleItems;
+        }
+        const pendingTurn: AssistantTurnItem = {
+            type: 'assistant_turn',
+            id: `pending-turn-${session.taskId}`,
+            timestamp: session.updatedAt,
+            lead: '',
+            steps: [],
+            messages: [],
+        };
+        return [...visibleItems, pendingTurn];
+    }, [pendingLabel, session.taskId, session.updatedAt, visibleItems]);
+    const lastAssistantTurnId = React.useMemo(() => {
+        for (let index = displayItems.length - 1; index >= 0; index -= 1) {
+            const item = displayItems[index];
+            if (item?.type === 'assistant_turn') {
+                return item.id;
+            }
+        }
+        return null;
+    }, [displayItems]);
     const endRef = React.useRef<HTMLDivElement>(null);
     const containerRef = React.useRef<HTMLDivElement>(null);
     const [userScrolled, setUserScrolled] = React.useState(false);
@@ -179,6 +135,25 @@ const TimelineComponent: React.FC<TimelineProps> = ({
         setUserScrolled(false);
     }, [visibleItems.length]);
 
+    const renderTimelineItem = React.useCallback((item: TimelineItemType, key: string): React.ReactNode => {
+        switch (item.type) {
+            case 'user_message':
+                return <MessageBubble key={key} item={item} isUser={true} />;
+            case 'assistant_turn':
+                return (
+                    <div key={key} className={styles.assistantThread}>
+                        <AssistantTurnBlock
+                            item={item}
+                            pendingLabel={item.id === lastAssistantTurnId ? pendingLabel : undefined}
+                            onTaskCollaborationSubmit={onTaskCollaborationSubmit}
+                        />
+                    </div>
+                );
+            default:
+                return null;
+        }
+    }, [lastAssistantTurnId, onTaskCollaborationSubmit, pendingLabel]);
+
     return (
         <div className={styles.timeline} ref={containerRef}>
             {hiddenMessageCount > 0 && (
@@ -192,76 +167,10 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                         : t('chat.showEarlierMessages', { count: hiddenMessageCount })}
                 </button>
             )}
-            {visibleItems.map((item) => {
-                switch (item.type) {
-                    case 'user_message':
-                        return <MessageBubble key={item.id} item={item} isUser={true} />;
-                    case 'assistant_message':
-                        return <MessageBubble key={item.id} item={item} isUser={false} />;
-                    case 'tool_call':
-                        return <ToolCard key={item.id} item={item} />;
-                    case 'system_event':
-                        return (
-                            <MessageBubble
-                                key={item.id}
-                                item={{
-                                    id: item.id,
-                                    content: formatSystemBubbleContent(item),
-                                }}
-                                isUser={false}
-                                tone="system"
-                            />
-                        );
-                    case 'effect_request':
-                        return <TaskCardMessage key={item.id} item={toEffectTaskCardItem(item)} />;
-                    case 'patch':
-                        return <TaskCardMessage key={item.id} item={toPatchTaskCardItem(item)} />;
-                    case 'task_card':
-                        if (isTaskCardEmpty(item)) {
-                            return null;
-                        }
-                        return (
-                            <TaskCardMessage
-                                key={item.id}
-                                item={item}
-                                onTaskCollaborationSubmit={onTaskCollaborationSubmit}
-                                onTaskActionClick={onTaskActionClick}
-                            />
-                        );
-                    default:
-                        return null;
-                }
-            })}
-            {showResumeCard && onResumeCardAction ? (
-                <TaskCardMessage
-                    key={`resume-${session.taskId}`}
-                    item={{
-                        type: 'task_card',
-                        id: `resume-${session.taskId}`,
-                        title: resumeCardTitle || 'Task interrupted',
-                        subtitle: resumeCardSuggestion || 'Resume the task to continue from the saved context.',
-                        sections: [],
-                        timestamp: session.updatedAt,
-                    }}
-                    action={{
-                        label: resumeCardActionLabel || 'Continue task',
-                        onClick: onResumeCardAction,
-                        disabled: resumeCardActionDisabled,
-                    }}
-                />
-            ) : null}
-            {pendingLabel && (
-                <MessageBubble
-                    key={`pending-${session.taskId}-${pendingStatus?.phase ?? 'unknown'}`}
-                    item={{
-                        id: `pending-${session.taskId}`,
-                        content: pendingLabel,
-                    }}
-                    isUser={false}
-                    tone="status"
-                    pending
-                />
-            )}
+            {displayItems.map((item, index) => renderTimelineItem(
+                item,
+                item.id || `${session.taskId}-${item.type}-${index}`,
+            ))}
             <div ref={endRef} />
         </div>
     );
@@ -269,14 +178,7 @@ const TimelineComponent: React.FC<TimelineProps> = ({
 
 export const Timeline = React.memo(TimelineComponent, (prevProps, nextProps) => (
     prevProps.session === nextProps.session
-    && prevProps.showResumeCard === nextProps.showResumeCard
-    && prevProps.resumeCardTitle === nextProps.resumeCardTitle
-    && prevProps.resumeCardSuggestion === nextProps.resumeCardSuggestion
-    && prevProps.resumeCardActionLabel === nextProps.resumeCardActionLabel
-    && prevProps.resumeCardActionDisabled === nextProps.resumeCardActionDisabled
-    && prevProps.onResumeCardAction === nextProps.onResumeCardAction
     && prevProps.onTaskCollaborationSubmit === nextProps.onTaskCollaborationSubmit
-    && prevProps.onTaskActionClick === nextProps.onTaskActionClick
 ));
 
 Timeline.displayName = 'Timeline';

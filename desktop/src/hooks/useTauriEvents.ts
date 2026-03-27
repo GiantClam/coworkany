@@ -9,12 +9,14 @@ import { useCallback, useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useTaskEventStore, type TaskEvent, type IpcResponse, type AuditEvent, hydrateSessions } from '../stores/useTaskEventStore';
+import { useCanonicalTaskStreamStore } from '../stores/useCanonicalTaskStreamStore';
 import { isTauri } from '../lib/tauri';
 import {
     useVoicePlaybackStore,
     getDefaultVoicePlaybackState,
     type VoicePlaybackState,
 } from '../stores/useVoicePlaybackStore';
+import type { CanonicalStreamEvent } from '../../../sidecar/src/protocol';
 
 // ============================================================================
 // Event Listener Hook
@@ -26,6 +28,7 @@ import {
  */
 export function useTauriEvents() {
     const addEvents = useTaskEventStore((state) => state.addEvents);
+    const addCanonicalEvents = useCanonicalTaskStreamStore((state) => state.addEvents);
     const setSidecarConnected = useTaskEventStore((state) => state.setSidecarConnected);
     const handleIpcResponse = useTaskEventStore((state) => state.handleIpcResponse);
     const addAuditEvent = useTaskEventStore((state) => state.addAuditEvent);
@@ -57,6 +60,7 @@ export function useTauriEvents() {
 
     useEffect(() => {
         let unlistenTaskEvent: UnlistenFn | undefined;
+        let unlistenCanonicalStreamEvent: UnlistenFn | undefined;
         let unlistenIpcResponse: UnlistenFn | undefined;
         let unlistenSidecarDisconnected: UnlistenFn | undefined;
         let unlistenSidecarReconnected: UnlistenFn | undefined;
@@ -84,6 +88,10 @@ export function useTauriEvents() {
             // Listen for task events from sidecar
             unlistenTaskEvent = await listen<TaskEvent>('task-event', (event) => {
                 enqueueTaskEvent(event.payload);
+            });
+
+            unlistenCanonicalStreamEvent = await listen<CanonicalStreamEvent>('canonical-stream-event', (event) => {
+                addCanonicalEvents([event.payload]);
             });
 
             // Listen for IPC responses (effect decisions, patch results)
@@ -145,6 +153,7 @@ export function useTauriEvents() {
 
         return () => {
             unlistenTaskEvent?.();
+            unlistenCanonicalStreamEvent?.();
             unlistenIpcResponse?.();
             unlistenSidecarDisconnected?.();
             unlistenSidecarReconnected?.();
@@ -157,7 +166,7 @@ export function useTauriEvents() {
             flushTaskEvents();
             console.log('[Tauri] Event listeners cleaned up');
         };
-    }, [enqueueTaskEvent, flushTaskEvents, setSidecarConnected, handleIpcResponse, addAuditEvent, setVoicePlaybackState]);
+    }, [enqueueTaskEvent, flushTaskEvents, setSidecarConnected, handleIpcResponse, addAuditEvent, addCanonicalEvents, setVoicePlaybackState]);
 }
 
 // ============================================================================

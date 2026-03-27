@@ -1,13 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-    getBlockingUserAction,
     markWorkRequestPresentationStarted,
     markWorkRequestReductionStarted,
+    reopenPreparedWorkRequestForExecution,
     reopenPreparedWorkRequestForResearch,
     type PreparedWorkRequestContext,
 } from '../orchestration/workRequestRuntime';
-import type { ReplanTrigger, RuntimeIsolationPolicy } from '../orchestration/workRequestSchema';
+import type {
+    ExecutionRequirementCapability,
+    ReplanTrigger,
+    RuntimeIsolationPolicy,
+} from '../orchestration/workRequestSchema';
 import { type ToolDefinition } from '../tools/standard';
 import { type ExecutionResultReporter } from './resultReporter';
 import { type ExecutionSession } from './session';
@@ -118,7 +122,10 @@ export type ExecutionRuntimeDeps = {
         conversation: any,
         options: ExecutionStreamOptions,
         providerConfig: any,
-        tools: ToolDefinition[]
+        tools: ToolDefinition[],
+        executionContext?: {
+            frozenWorkRequest?: PreparedWorkRequestContext['frozenWorkRequest'];
+        }
     ) => Promise<AgentLoopResult>;
     session: ExecutionSession;
     reporter: ExecutionResultReporter;
@@ -548,6 +555,47 @@ const WEB_RESEARCH_TOOLS = new Set([
     'browser_get_content',
 ]);
 
+const BROWSER_INTERACTION_EVIDENCE_TOOLS = [
+    'browser_navigate',
+    'browser_click',
+    'browser_fill',
+    'browser_execute_script',
+] as const;
+
+function collectRequiredToolEvidenceCapabilities(prepared: PreparedWorkRequestContext): ExecutionRequirementCapability[] {
+    const capabilities = new Set<ExecutionRequirementCapability>();
+    for (const task of prepared.frozenWorkRequest.tasks ?? []) {
+        for (const requirement of task.executionRequirements ?? []) {
+            if (requirement.kind === 'tool_evidence' && requirement.required) {
+                capabilities.add(requirement.capability);
+            }
+        }
+    }
+    return Array.from(capabilities);
+}
+
+function hasBrowserInteractionEvidence(toolsUsed: string[]): boolean {
+    const used = new Set(toolsUsed);
+    if (used.has('browser_ai_action')) {
+        return true;
+    }
+    const hasConnect = used.has('browser_connect');
+    const hasInteractiveAction = BROWSER_INTERACTION_EVIDENCE_TOOLS.some((tool) => used.has(tool));
+    return hasConnect && hasInteractiveAction;
+}
+
+function hasRequiredToolEvidenceCapability(
+    capability: ExecutionRequirementCapability,
+    toolsUsed: string[],
+): boolean {
+    switch (capability) {
+        case 'browser_interaction':
+            return hasBrowserInteractionEvidence(toolsUsed);
+        default:
+            return true;
+    }
+}
+
 function hasGroundedInspectionToolEvidence(toolsUsed: string[]): boolean {
     return toolsUsed.some((tool) => GROUNDED_INSPECTION_TOOLS.has(tool));
 }
@@ -725,7 +773,8 @@ function hasPlannedBlockingUserAction(prepared: PreparedWorkRequestContext): boo
     if (request.clarification.required) {
         return true;
     }
-    return Boolean(getBlockingUserAction(request));
+    const userActions = request.userActionsRequired ?? [];
+    return userActions.some((action) => action?.blocking === true);
 }
 
 function isLikelyCapabilityRefusal(outputText: string): boolean {
@@ -765,7 +814,12 @@ async function evaluateExecutionProtocolCompliance(input: {
     toolsUsed: string[];
     outputText: string;
     assessExecutionProtocol?: ExecutionRuntimeDeps['assessExecutionProtocol'];
-}): Promise<{ trigger: ReplanTrigger; error: string; suggestion: string } | null> {
+}): Promise<{
+    trigger: ReplanTrigger;
+    error: string;
+    suggestion: string;
+    recoveryStage: 'research' | 'execution';
+} | null> {
     const hasBlockingUserAction = hasPlannedBlockingUserAction(input.preparedWorkRequest);
     const assessedProtocol = await input.assessExecutionProtocol?.({
         executionQuery: input.executionQuery,
@@ -792,6 +846,7 @@ async function evaluateExecutionProtocolCompliance(input: {
             suggestion:
                 'Continue execution and provide evidence directly. Only request user action when the contract ' +
                 'explicitly blocks or a new hard blocker is surfaced.',
+            recoveryStage: 'execution',
         };
     }
 
@@ -804,6 +859,7 @@ async function evaluateExecutionProtocolCompliance(input: {
             suggestion:
                 'Continue execution toward the requested objective with explicit uncertainty and risk language. ' +
                 'Do not stop at refusal unless a concrete technical blocker is surfaced.',
+            recoveryStage: 'execution',
         };
     }
 
@@ -815,6 +871,7 @@ async function evaluateExecutionProtocolCompliance(input: {
                 `${assessedProtocol?.objectiveGap || 'Missing required objective deliverable.'}`,
             suggestion:
                 'Re-run the task against the frozen acceptance criteria and deliver the missing objective output directly.',
+            recoveryStage: 'execution',
         };
     }
 
@@ -828,8 +885,25 @@ async function evaluateExecutionProtocolCompliance(input: {
                     'but the final response did not provide complete pricing evidence.',
                 suggestion:
                     'Provide a concrete buy-price value or range, include currency units, and anchor it to a specific market timepoint.',
+                recoveryStage: 'execution',
             };
         }
+    }
+
+    const requiredCapabilities = collectRequiredToolEvidenceCapabilities(input.preparedWorkRequest);
+    const unmetCapabilities = requiredCapabilities.filter((capability) =>
+        !hasRequiredToolEvidenceCapability(capability, input.toolsUsed)
+    );
+    if (!hasBlockingUserAction && unmetCapabilities.length > 0) {
+        const capabilityLabel = unmetCapabilities.join(', ');
+        return {
+            trigger: 'contradictory_evidence',
+            error:
+                `Execution protocol unmet: required tool-evidence capability was not satisfied (${capabilityLabel}).`,
+            suggestion:
+                'Execute the contract-required capability workflow first (for example browser_interaction: browser_connect -> browser_navigate -> browser_fill/browser_click), then deliver the final result.',
+            recoveryStage: 'execution',
+        };
     }
 
     if (
@@ -846,6 +920,7 @@ async function evaluateExecutionProtocolCompliance(input: {
                 'Execution protocol unmet: web-research task finished without source links in the final response.',
             suggestion:
                 'Include a source-links section in the final output using concrete URLs gathered from web research tools.',
+            recoveryStage: 'execution',
         };
     }
 
@@ -877,6 +952,7 @@ async function evaluateExecutionProtocolCompliance(input: {
                     'but execution produced only metadata-level verification.',
                 suggestion:
                     'Run grounded inspection steps (file/command/content checks) and provide file-level or command-level evidence before finishing.',
+                recoveryStage: 'execution',
             };
         }
     }
@@ -889,11 +965,26 @@ async function reopenAndRefreezePreparedContract(input: {
     preparedWorkRequest: PreparedWorkRequestContext;
     reason: string;
     trigger: ReplanTrigger;
+    recoveryStage?: 'research' | 'execution';
 }, deps: ExecutionRuntimeDeps): Promise<{
     reopenedSummary: string;
     refrozenPrepared?: PreparedWorkRequestContext;
     blockedSummary?: string;
 }> {
+    if (input.recoveryStage === 'execution') {
+        const reopenedPayload = reopenPreparedWorkRequestForExecution({
+            prepared: input.preparedWorkRequest,
+            reason: input.reason,
+            trigger: input.trigger,
+        });
+        deps.emitContractReopened(input.taskId, reopenedPayload);
+        deps.emitPlanUpdated(input.taskId, input.preparedWorkRequest);
+        return {
+            reopenedSummary: reopenedPayload.summary,
+            refrozenPrepared: input.preparedWorkRequest,
+        };
+    }
+
     const reopenedPayload = reopenPreparedWorkRequestForResearch({
         prepared: input.preparedWorkRequest,
         reason: input.reason,
@@ -1206,7 +1297,9 @@ async function runPreparedAgentExecution(input: {
         options.tools = tools;
 
         const providerConfig = deps.buildProviderConfig(options);
-        const loopResult = await deps.runAgentLoop(taskId, conversation, options, providerConfig, tools);
+        const loopResult = await deps.runAgentLoop(taskId, conversation, options, providerConfig, tools, {
+            frozenWorkRequest: preparedWorkRequest.frozenWorkRequest,
+        });
         const mergedArtifacts = deps.session.mergeKnownArtifacts(loopResult.artifactsCreated);
         const diskDiscoveredArtifacts = collectPlannedArtifactFilesFromDisk(artifactContract, workspacePath);
         const effectiveArtifacts = diskDiscoveredArtifacts.length > 0
@@ -1234,17 +1327,20 @@ async function runPreparedAgentExecution(input: {
             assessExecutionProtocol: deps.assessExecutionProtocol,
         });
         if (protocolViolation) {
-            const canReopenContract = canReopenForTrigger(
-                preparedWorkRequest,
-                protocolViolation.trigger,
-                contractReopenAttempts
-            );
+            const canReopenContract = protocolViolation.recoveryStage === 'execution'
+                ? contractReopenAttempts < 1
+                : canReopenForTrigger(
+                    preparedWorkRequest,
+                    protocolViolation.trigger,
+                    contractReopenAttempts
+                );
             if (canReopenContract) {
                 const reopenOutcome = await reopenAndRefreezePreparedContract({
                     taskId,
                     preparedWorkRequest,
                     reason: protocolViolation.error,
                     trigger: protocolViolation.trigger,
+                    recoveryStage: protocolViolation.recoveryStage,
                 }, deps);
                 if (!reopenOutcome.refrozenPrepared) {
                     return {
@@ -1258,7 +1354,7 @@ async function runPreparedAgentExecution(input: {
                 const refrozenPrepared = reopenOutcome.refrozenPrepared;
                 deps.markWorkRequestExecutionStarted(refrozenPrepared);
                 deps.emitPlanUpdated(taskId, refrozenPrepared);
-                return runPreparedAgentExecution({
+                return await runPreparedAgentExecution({
                     ...input,
                     preparedWorkRequest: refrozenPrepared,
                     extraSystemPrompt: [
@@ -1353,7 +1449,7 @@ async function runPreparedAgentExecution(input: {
                 const refrozenPrepared = reopenOutcome.refrozenPrepared;
                 deps.markWorkRequestExecutionStarted(refrozenPrepared);
                 deps.emitPlanUpdated(taskId, refrozenPrepared);
-                return runPreparedAgentExecution({
+                return await runPreparedAgentExecution({
                     ...input,
                     preparedWorkRequest: refrozenPrepared,
                     extraSystemPrompt: [
@@ -1461,7 +1557,7 @@ async function runPreparedAgentExecution(input: {
             const refrozenPrepared = reopenOutcome.refrozenPrepared;
             deps.markWorkRequestExecutionStarted(refrozenPrepared);
             deps.emitPlanUpdated(taskId, refrozenPrepared);
-            return runPreparedAgentExecution({
+            return await runPreparedAgentExecution({
                 ...input,
                 preparedWorkRequest: refrozenPrepared,
                 extraSystemPrompt: [

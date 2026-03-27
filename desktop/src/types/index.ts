@@ -32,6 +32,9 @@ export type {
     TimelineItemType,
     UserMessageItem,
     AssistantMessageItem,
+    AssistantTurnStepTone,
+    AssistantTurnStep,
+    AssistantTurnItem,
     ToolCallItem,
     ToolCallStatus,
     SystemEventItem,
@@ -56,6 +59,7 @@ export type {
 export {
     isUserMessage,
     isAssistantMessage,
+    isAssistantTurn,
     isToolCall,
     isSystemEvent,
     isTaskCard,

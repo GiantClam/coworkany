@@ -202,6 +202,16 @@ export type ReplanPolicy = {
     triggers: ReplanTrigger[];
 };
 
+export type ExecutionRequirementCapability = 'browser_interaction';
+
+export type TaskExecutionRequirement = {
+    id: string;
+    kind: 'tool_evidence';
+    capability: ExecutionRequirementCapability;
+    required: boolean;
+    reason: string;
+};
+
 export type TaskDefinition = {
     id: string;
     title: string;
@@ -214,6 +224,7 @@ export type TaskDefinition = {
     preferredWorkflow?: string;
     resolvedTargets?: ResolvedFolderReference[];
     localPlanHint?: LocalTaskPlanHint;
+    executionRequirements?: TaskExecutionRequirement[];
 };
 
 export type ClarificationDecision = {

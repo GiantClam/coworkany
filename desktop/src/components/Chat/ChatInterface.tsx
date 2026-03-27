@@ -13,7 +13,7 @@ import { useStartTask, useCancelTask, useSpawnSidecar, useShutdownSidecar } from
 import { useActiveSession, useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
-import { useResumeInterruptedTask, useSendTaskMessage } from '../../hooks/useSendTaskMessage';
+import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useClearTaskHistory } from '../../hooks/useClearTaskHistory';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { useWorkspace } from '../../hooks/useWorkspace';
@@ -26,6 +26,7 @@ import { useFileAttachment } from '../../hooks/useFileAttachment';
 import { getPendingTaskStatus } from './Timeline/pendingTaskStatus';
 import { getVoiceSettings } from '../../lib/configStore';
 import { encodeTaskCollaborationMessage } from './collaborationMessage';
+import { isConversationTurnLocked } from './turnTaking';
 import type { TaskEvent } from '../../types';
 
 const SkillsViewLazy = lazy(async () => {
@@ -135,7 +136,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
-    const { resumeInterruptedTask, isLoading: isResuming, error: resumeError } = useResumeInterruptedTask();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
     const { spawn: spawnSidecar } = useSpawnSidecar();
     const { shutdown: shutdownSidecar } = useShutdownSidecar();
@@ -209,7 +209,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         () => activeSession ? getPendingTaskStatus(activeSession) : null,
         [activeSession]
     );
-    const canResumeInterruptedTask = activeSession?.failure?.errorCode === 'INTERRUPTED';
+    const isTurnLocked = useMemo(
+        () => isConversationTurnLocked(activeSession),
+        [activeSession],
+    );
     const showInitialEntry = !activeSession || activeSession.isDraft;
 
     useEffect(() => {
@@ -413,8 +416,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, addTaskEvent, appendLocalTaskEvent, entryMode]);
 
     const handleSubmit = useCallback(async () => {
+        if (isTurnLocked) {
+            return;
+        }
         await submitRequest(query, { includeAttachments: true });
-    }, [query, submitRequest]);
+    }, [isTurnLocked, query, submitRequest]);
 
     const handleTaskCardCollaborationSubmit = useCallback(async (input: {
         taskId?: string;
@@ -447,21 +453,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             },
         });
     }, [activeSession?.taskId, enabledSkills, enabledToolpacks, sendMessage, submitRequest]);
-
-    const handleTaskCardActionClick = useCallback(async (input: {
-        taskId?: string;
-        cardId: string;
-        actionId?: string;
-        value?: string;
-    }) => {
-        const continueMessage = input.value || (input.actionId
-            ? `继续执行（${input.actionId}）`
-            : '继续执行');
-        await handleTaskCardCollaborationSubmit({
-            ...input,
-            value: continueMessage,
-        });
-    }, [handleTaskCardCollaborationSubmit]);
 
     const processVoiceSegmentQueue = useCallback(async () => {
         if (processingVoiceSegmentsRef.current) {
@@ -506,31 +497,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
         }
     }, [activeSession?.taskId, cancelTask]);
-
-    const handleResumeInterruptedTask = useCallback(async () => {
-        if (!activeSession?.taskId || activeSession.isDraft || !canResumeInterruptedTask) {
-            return;
-        }
-
-        const voiceSettings = await getVoiceSettings();
-        const result = await resumeInterruptedTask({
-            taskId: activeSession.taskId,
-            config: {
-                enabledClaudeSkills: enabledSkills,
-                enabledToolpacks,
-                enabledSkills,
-                voiceProviderMode: voiceSettings.providerMode,
-            },
-        });
-
-        if (result?.success) {
-            setQuery('');
-            clearAttachments();
-        }
-    }, [activeSession, canResumeInterruptedTask, clearAttachments, enabledSkills, enabledToolpacks, resumeInterruptedTask]);
-    const handleResumeInterruptedTaskClick = useCallback(() => {
-        void handleResumeInterruptedTask();
-    }, [handleResumeInterruptedTask]);
 
     const handleStopVoice = useCallback(async () => {
         await stopPlayback();
@@ -587,7 +553,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [isReconnectingLlm, shutdownSidecar, spawnSidecar]);
 
-    const currentError = workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError;
+    const currentError = workspaceError || startError || cancelError || sendError || clearError || stopVoiceError;
     const showErrorBanner = Boolean(currentError);
     const isLlmError = isLlmConfigError(currentError);
     const suggestedPrompts = useMemo(() => ([
@@ -667,9 +633,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 canClearHistory={!activeSession.isDraft}
             />
 
-            {(workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError) && (
+            {(workspaceError || startError || cancelError || sendError || clearError || stopVoiceError) && (
                 <div className={`chat-error${isLlmError ? ' chat-error--llm' : ''}`}>
-                    <span className="chat-error__text">{workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError}</span>
+                    <span className="chat-error__text">{workspaceError || startError || cancelError || sendError || clearError || stopVoiceError}</span>
                     {isLlmError && (
                         <button
                             type="button"
@@ -685,24 +651,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             {/* Timeline Area */}
             <Timeline
                 session={activeSession}
-                showResumeCard={Boolean(canResumeInterruptedTask)}
-                resumeCardTitle={t('chat.resumeInterruptedTitle', {
-                    defaultValue: 'Task interrupted, but the saved context is still available.',
-                })}
-                resumeCardSuggestion={activeSession.failure?.suggestion || t('chat.resumeInterruptedSuggestion', {
-                    defaultValue: 'Resume the task to continue from the saved context.',
-                })}
-                resumeCardActionLabel={t('chat.resumeInterruptedAction', { defaultValue: 'Continue task' })}
-                resumeCardActionDisabled={isSending || isStarting || isResuming}
-                onResumeCardAction={handleResumeInterruptedTaskClick}
                 onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
-                onTaskActionClick={handleTaskCardActionClick}
             />
 
             <InputArea
                 query={query}
-                placeholder={activeSession.status === 'running' ? t('chat.newInstructions') : t('chat.newInstructions')}
-                disabled={isSending || isStarting || isResuming}
+                placeholder={isTurnLocked
+                    ? t('chat.turnLockedPlaceholder', { defaultValue: '等待 CoworkAny 完成当前回合，需补充时请使用上方输入面板。' })
+                    : t('chat.newInstructions')}
+                disabled={isTurnLocked || isSending || isStarting}
                 onQueryChange={setQuery}
                 onSubmit={handleSubmit}
                 onVoiceSegment={handleVoiceSegment}

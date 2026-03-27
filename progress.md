@@ -1,5 +1,100 @@
 # Progress Log
 
+## 2026-03-27
+
+- Made canonical timeline rendering the default desktop path for sessions whose source events are fully covered by the canonical mapper:
+  - desktop now locally synthesizes canonical messages from legacy `TaskEvent`s when the shadow canonical store is empty
+  - `buildTimelineItems(...)` preserves `maxRecentEvents` truncation and hidden-count reporting on the canonical path
+  - finish/error semantics now match legacy behavior, including task-card result carry-forward, finish-text dedupe, and concise failure system feedback
+- Added a safety gate in `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` so local canonical synthesis only runs for known timeline-safe event types.
+- Expanded that gate to cover the remaining current desktop event types as timeline no-ops:
+  - `TASK_SUSPENDED`
+  - `TASK_RESUMED`
+  - `TASK_HISTORY_CLEARED`
+  - `SKILL_RECOMMENDATION`
+  - `AGENT_IDENTITY_ESTABLISHED`
+  - `MCP_GATEWAY_DECISION`
+  - `RUNTIME_SECURITY_ALERT`
+  - `TOKEN_USAGE`
+- Split the legacy render path behind `buildLegacyTimelineItems(...)`, so `buildTimelineItems(...)` now has a clear canonical-primary / legacy-fallback structure.
+- Moved the legacy event-switch/fallback builder out of `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` into `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/legacyTimelineBuilder.ts`, leaving the main hook file focused on canonical rendering plus shared helpers.
+- Moved the remaining legacy-only state-machine helpers from `useTimelineItems.ts` into `legacyTimelineBuilder.ts`; the main hook file now mostly contains the canonical timeline builder plus a narrow set of genuinely shared timeline utilities.
+- Extracted the shared timeline helpers into `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/timelineShared.ts`, so:
+  - `useTimelineItems.ts` is now primarily the canonical-first entrypoint and canonical builder
+  - `legacyTimelineBuilder.ts` owns the legacy fallback state machine
+  - shared normalization / task-step helpers are no longer imported through the main hook file
+- Started the UI-unification slice on top of the canonical runtime model:
+  - added `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/StructuredMessageCard.tsx` as a shared structured-message shell
+  - moved `TaskCardMessage` and `ToolCard` onto the shared card header/body/status model
+  - updated `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.module.css` so task, tool, effect, and patch content now inherit a common structured-card visual language
+- Continued the UI-unification slice by moving assistant markdown/system content inside `AssistantTurnBlock` onto the shared `StructuredMessageCard` shell as a unified response card, rather than rendering assistant text as a separate bare markdown stack.
+- Folded the remaining standalone assistant pending/runtime strip into the same shared card shell:
+  - `pendingLabel` now renders inside a structured runtime card in `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/AssistantTurnBlock.tsx`
+  - the existing animated pending dots/track were preserved and moved under the unified card body in `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.module.css`
+- Started the second UI-unification slice by introducing a canonical assistant-turn card schema:
+  - added `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/assistantTurnCardSchema.ts` as the pure `AssistantTurnItem -> card schema` mapper
+  - added `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/AssistantTurnCardStack.tsx` as the `card schema -> renderer` adapter
+  - simplified `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/AssistantTurnBlock.tsx` so it no longer manually assembles response/runtime/tool/task card combinations
+- Added explicit structured-card kind variants and routed existing cards onto them:
+  - `StructuredMessageCard` now accepts `kind="assistant" | "runtime" | "task" | "tool"`
+  - `TaskCardMessage` and `ToolCard` now declare their semantic kind instead of relying only on ad hoc class overrides
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.module.css` now carries kind-specific surface/kicker variants
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/desktop/tests/assistant-turn-card-schema.test.ts` to lock the assistant-turn card ordering and mapping contract.
+- Pushed task/tool rendering behind pure view models:
+  - added `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/taskCardViewModel.ts` for `TaskCardItem -> TaskCardViewModel`
+  - added `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/toolCardViewModel.ts` for `ToolCallItem -> ToolCardViewModel`
+  - refactored `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/TaskCardMessage.tsx` and `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/ToolCard.tsx` so they render from view models instead of directly formatting raw domain items inline
+- Upgraded `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/assistantTurnCardSchema.ts` so assistant-turn card schema entries for `tool-call` and `task-card` now carry canonical view models rather than raw `ToolCallItem` / `TaskCardItem`.
+- Added focused view-model coverage in `/Users/beihuang/Documents/github/coworkany/desktop/tests/structured-card-view-models.test.ts` for compact task-center rendering and soft-error tool normalization.
+- Added shared card-body primitives in `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/StructuredCardPrimitives.tsx` for:
+  - labeled info sections
+  - task-list sections
+  - action rows
+  - input rows
+- Refactored `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/TaskCardMessage.tsx` and `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/ToolCard.tsx` to reuse those shared body/action primitives instead of hand-assembling section and button markup independently.
+- Updated `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.module.css` so the shared body/action primitives have canonical class names alongside the older task-specific aliases.
+- Adjusted the desktop chat UI away from task-center-first interaction:
+  - timeline assistant-turn task-center cards now collapse into input-first panels with no visible `Task center` header chrome for timeline sessions
+  - explicit continue/choice buttons were removed from task collaboration panels so progression now happens via user-entered text
+  - standalone interrupted-task resume cards were removed from `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.tsx`
+- Extended `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/collaborationMessage.ts` so freeform user input maps back to canonical route/task-draft tokens:
+  - `直接回答` -> `__route_chat__`
+  - `创建任务` -> `__route_task__`
+  - `确认创建` -> `__task_draft_confirm__`
+  - `改成普通回答` -> `__task_draft_chat__`
+- Tightened assistant visual width in `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.module.css` so assistant step/card stacks cap at two-thirds of the conversation width on desktop and expand back to full width on mobile.
+- Added turn-based conversation locking for the main composer:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/turnTaking.ts` now treats non-draft `running` sessions as a locked assistant turn
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/ChatInterface.tsx` now disables the main input while CoworkAny is still answering, leaving timeline collaboration input as the intended way to unblock clarification/draft steps
+  - added focused coverage in `/Users/beihuang/Documents/github/coworkany/desktop/tests/turn-taking.test.ts`
+- Performed a redundancy/dead-code cleanup pass on the new timeline/chat UI:
+  - removed the unused resume-card prop chain and resume action plumbing from `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.tsx` and `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/ChatInterface.tsx`
+  - removed the no-longer-used `onTaskActionClick` path from assistant-turn/task-card components now that collaboration is input-only
+  - removed dead `StructuredActionRow` / task-action view-model code and pruned obsolete task/tool CSS aliases from `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.module.css`
+- Verification:
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun test tests/timeline-items.test.ts tests/timeline-scheduled-rendering.test.ts tests/canonical-task-stream.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/canonical-task-stream.test.ts tests/task-event-bus.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun x tsc -p tsconfig.json --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun x tsc -p tsconfig.json --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop/src-tauri && cargo check`
+- Scoped the first protocol-unification slice to a shadow rollout:
+  - keep existing `task-event` delivery
+  - add canonical stream dual-write in sidecar
+  - add desktop canonical shadow parsing/store
+  - leave current timeline UI untouched
+- Inspected the current protocol and transport boundaries in:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/protocol/events.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src-tauri/src/sidecar.rs`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/hooks/useTauriEvents.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/stores/taskEvents/index.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts`
+- Confirmed the minimal viable foundation for phase 1:
+  - canonical protocol file under `sidecar/src/protocol/`
+  - task-event -> canonical mapper in sidecar
+  - Rust classifier + new Tauri frontend event
+  - desktop shadow canonical store + pure reducer tests
+
 ## 2026-03-20
 
 - Read current planner/runtime/UI code to confirm why user-authored execution scripts are effectively required today.
@@ -683,3 +778,56 @@
   - `cd /Users/beihuang/Documents/github/coworkany/desktop && COWORKANY_STOCK_SCENARIO_TIMEOUT_MS=180000 npx playwright test tests/stock-research-desktop-scenarios.e2e.test.ts` -> 4 passed
 - Result artifacts written to:
   - `/Users/beihuang/Documents/github/coworkany/artifacts/stock-research-desktop-scenarios`
+
+## 2026-03-27
+
+- Implemented canonical task stream phase 1 and the first UI adoption slice for chat-mode:
+  - added canonical protocol and `TaskEvent -> canonical stream` mapping in `/Users/beihuang/Documents/github/coworkany/sidecar/src/protocol/canonicalStream.ts`
+  - dual-wrote canonical stream events from `/Users/beihuang/Documents/github/coworkany/sidecar/src/main.ts`
+  - forwarded canonical stream through `/Users/beihuang/Documents/github/coworkany/desktop/src-tauri/src/sidecar.rs`
+  - added desktop canonical parser/store in `/Users/beihuang/Documents/github/coworkany/desktop/src/bridges/canonicalTaskStream.ts` and `/Users/beihuang/Documents/github/coworkany/desktop/src/stores/useCanonicalTaskStreamStore.ts`
+  - listened for canonical Tauri events in `/Users/beihuang/Documents/github/coworkany/desktop/src/hooks/useTauriEvents.ts`
+- Added the first consumer migration slice:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now builds chat-mode timeline items from canonical messages when available
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/Timeline.tsx` passes canonical shadow-store messages into the timeline hook
+  - canonical `TASK_FINISHED` / `TASK_FAILED` mappings now emit visible text parts so canonical chat rendering can surface final assistant output
+- Added and updated focused regression coverage:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/canonical-task-stream.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/canonical-task-stream.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts`
+- Verification:
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/canonical-task-stream.test.ts tests/task-event-bus.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun test tests/timeline-items.test.ts tests/canonical-task-stream.test.ts`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun x tsc -p tsconfig.json --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop && bun x tsc -p tsconfig.json --noEmit`
+  - `cd /Users/beihuang/Documents/github/coworkany/desktop/src-tauri && cargo check`
+- Extended the canonical chat-mode renderer with structured runtime parts:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now maps canonical `tool-call`, `tool-result`, `effect`, and `patch` parts into the existing `AssistantTurnItem` subtrees used by `ToolCard` and task-card wrappers
+  - canonical tool/effect/patch updates are merged by stable ids (`toolId`, `requestId`, `patchId`) so streaming runtime activity upgrades the same UI card instead of duplicating entries
+- Added focused regression coverage in `/Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts` for:
+  - canonical tool/effect/patch projection
+- Tightened desktop type fidelity:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/types/events.ts` now types `ToolCallItem.result` as `unknown`, matching the existing `ToolCard` renderer behavior for string and object payloads
+- Extended canonical protocol and chat-mode task-card adoption further:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/protocol/canonicalStream.ts` now includes `intentRouting` inside plan-ready task parts and carries `actionId` plus external-auth choices on collaboration parts
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now builds `TaskCardItem` state directly from canonical `task`, `collaboration`, `finish`, and `error` parts
+  - canonical chat-mode no longer falls back to legacy projection for task-center interactions; it now renders task lists, collaboration actions, and final result/error state from canonical messages directly
+- Added focused regression coverage for canonical task-center rendering:
+  - canonical task + finish -> task-center result state
+  - canonical collaboration -> live task-center interaction state
+  - sidecar external-auth canonical mapping
+- Extended canonical adoption beyond chat-mode:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now uses the canonical builder for `immediate_task` sessions as well as `chat`
+  - added immediate-task regression coverage in `/Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-items.test.ts`
+- Extended canonical adoption to scheduled task-mode too:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now routes `scheduled_task` and `scheduled_multi_task` sessions through the canonical builder
+  - preserved scheduled-specific behavior inside the canonical builder:
+    - suppress internal user echoes
+    - suppress research-update noise
+    - keep compact finish/result handling without duplicate assistant messages
+  - added canonical scheduled regressions in `/Users/beihuang/Documents/github/coworkany/desktop/tests/timeline-scheduled-rendering.test.ts`
+- Made canonical the default desktop render path even for event-only sessions:
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now synthesizes canonical messages locally from `TaskEvent`s when store-backed canonical messages are absent
+  - `/Users/beihuang/Documents/github/coworkany/desktop/src/bridges/canonicalTaskStream.ts` now exposes `materializeCanonicalMessages(...)` for local stream-event reduction
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/protocol/canonicalStream.ts` gained `PLAN_UPDATED` canonical task-part mapping to keep task progress fidelity during local synthesis
+  - desktop locally maps `RATE_LIMITED` into canonical runtime status labels so event-only sessions still surface retry feedback without relying on the legacy builder

@@ -21,6 +21,11 @@ function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): 
         executeFreshTask: async () => {},
         ensureTaskRuntimePersistence: () => {},
         cancelTaskExecution: async () => ({ success: true }),
+        cancelScheduledTasksForSourceTask: async () => ({
+            success: false,
+            cancelledCount: 0,
+            cancelledTitles: [],
+        }),
         createTaskFailedEvent: (taskId, payload) => ({ type: 'TASK_FAILED', taskId, payload }),
         createChatMessageEvent: (taskId, payload) => ({ type: 'CHAT_MESSAGE', taskId, payload }),
         createTaskClarificationRequiredEvent: (taskId, payload) => ({ type: 'TASK_CLARIFICATION_REQUIRED', taskId, payload }),
@@ -240,32 +245,53 @@ describe('runtime commands handler', () => {
         });
     });
 
-    test('handles cancel_task by delegating to cancelTaskExecution and emitting response', async () => {
+    test('handles natural-language cancellation request via send_task_message', async () => {
         const emitted: any[] = [];
-        const cancelled: Array<{ taskId: string; reason?: string }> = [];
+        const pushed: any[] = [];
+        const cancellationCalls: any[] = [];
         const deps = createRuntimeCommandDeps({
             emit: (message) => emitted.push(message),
-            cancelTaskExecution: async (taskId, reason) => {
-                cancelled.push({ taskId, reason });
-                return { success: true };
+            pushConversationMessage: (taskId, message) => {
+                pushed.push({ taskId, message });
+                return [];
+            },
+            cancelScheduledTasksForSourceTask: async (input) => {
+                cancellationCalls.push(input);
+                return {
+                    success: true,
+                    cancelledCount: 2,
+                    cancelledTitles: ['提醒你喝水'],
+                };
             },
         });
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-cancel',
-            type: 'cancel_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-cancel',
-                reason: 'User cancelled',
+                content: '取消上述任务',
             },
         } as any, deps);
 
         expect(handled).toBe(true);
-        expect(cancelled).toEqual([{ taskId: 'task-cancel', reason: 'User cancelled' }]);
-        expect(emitted[0]?.type).toBe('cancel_task_response');
+        expect(cancellationCalls).toHaveLength(1);
+        expect(cancellationCalls[0]).toMatchObject({
+            sourceTaskId: 'task-cancel',
+            userMessage: '取消上述任务',
+        });
+        expect(pushed).toHaveLength(2);
+        expect(pushed[0]?.message?.role).toBe('user');
+        expect(pushed[1]?.message?.role).toBe('assistant');
+        expect(String(pushed[1]?.message?.content)).toContain('后续不会再自动续排');
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'CHAT_MESSAGE',
+            'TASK_STATUS',
+        ]);
     });
 
-    test('clear_task_history cancels active execution, emits history cleared, and sets status idle', async () => {
+    test('handles natural-language clear-history request via send_task_message', async () => {
         const emitted: any[] = [];
         const cancelled: Array<{ taskId: string; reason?: string }> = [];
         const rawEvents: Array<{ taskId: string; type: string; payload: unknown }> = [];
@@ -305,10 +331,11 @@ describe('runtime commands handler', () => {
         });
 
         const handled = await handleRuntimeCommand({
-            id: 'cmd-clear-history',
-            type: 'clear_task_history',
+            id: 'cmd-clear-history-natural',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-clear-1',
+                content: '清空这个任务历史记录',
             },
         } as any, deps);
 
@@ -325,10 +352,14 @@ describe('runtime commands handler', () => {
         expect(statusEvents).toEqual([
             { taskId: 'task-clear-1', status: 'idle' },
         ]);
-        expect(emitted[0]?.type).toBe('clear_task_history_response');
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'CHAT_MESSAGE',
+        ]);
+        expect(String(emitted[1]?.payload?.content)).toContain('已清空当前任务历史');
     });
 
-    test('passes session task isolation context into autonomous task starts', async () => {
+    test('passes session task isolation context into autonomous task starts via send_task_message', async () => {
         const startCalls: any[] = [];
         const emitted: any[] = [];
         const deps = createRuntimeCommandDeps({
@@ -354,12 +385,10 @@ describe('runtime commands handler', () => {
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-autonomous',
-            type: 'start_autonomous_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-autonomous',
-                query: 'verify isolation',
-                autoSaveMemory: true,
-                runInBackground: false,
+                content: 'start autonomous: verify isolation',
             },
         } as any, deps);
 
@@ -373,39 +402,49 @@ describe('runtime commands handler', () => {
                 workspacePath: '/tmp/task-workspace',
             },
         ]);
-        expect(emitted[0]?.type).toBe('start_autonomous_task_response');
+        expect(emitted[0]?.type).toBe('send_task_message_response');
     });
 
-    test('handles start_task by emitting response and delegating to executeFreshTask', async () => {
+    test('handles natural-language task request via send_task_message and continues agent flow', async () => {
         const emitted: any[] = [];
-        const calls: any[] = [];
+        const pushed: any[] = [];
+        const executeFreshTaskCalls: any[] = [];
+        let continued = false;
         const deps = createRuntimeCommandDeps({
             emit: (message) => emitted.push(message),
+            pushConversationMessage: (taskId, message) => {
+                pushed.push({ taskId, message });
+                return [];
+            },
             executeFreshTask: async (args) => {
-                calls.push(args);
+                executeFreshTaskCalls.push(args);
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
             },
         });
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-r2',
-            type: 'start_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-1',
-                title: 'Demo',
-                userQuery: 'Do work',
-                context: {
-                    workspacePath: '/tmp/ws',
-                    activeFile: '/tmp/ws/a.ts',
-                },
+                content: '请帮我整理今天的待办并给出执行计划',
                 config: { modelId: 'gpt-4o' },
             },
         } as any, deps);
 
         expect(handled).toBe(true);
-        expect(emitted[0]?.type).toBe('start_task_response');
-        expect(calls).toHaveLength(1);
-        expect(calls[0]?.taskId).toBe('task-1');
-        expect(calls[0]?.allowAutonomousFallback).toBe(true);
+        expect(pushed).toHaveLength(1);
+        expect(continued).toBe(true);
+        expect(executeFreshTaskCalls).toHaveLength(0);
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'TASK_RESEARCH_UPDATED',
+            'TASK_PLAN_READY',
+            'PLAN_UPDATED',
+            'PLAN_UPDATED',
+        ]);
     });
 
     test('handles send_task_message suspended path without continuing agent flow', async () => {
@@ -445,6 +484,52 @@ describe('runtime commands handler', () => {
         expect(resumed).toHaveLength(1);
         expect(emitted[0]?.type).toBe('send_task_message_response');
         expect(continued).toBe(false);
+    });
+
+    test('opens auth page for suspended task without resuming execution', async () => {
+        const emitted: any[] = [];
+        const resumed: any[] = [];
+        const queued: any[] = [];
+        const opened: any[] = [];
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            suspendResumeManager: {
+                isSuspended: () => true,
+                resume: async (taskId, reason) => {
+                    resumed.push({ taskId, reason });
+                    return { success: true };
+                },
+            },
+            enqueueResumeMessage: (taskId, content, config) => {
+                queued.push({ taskId, content, config });
+            },
+            openAuthPageForSuspendedTask: async (input) => {
+                opened.push(input);
+                return { success: true };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-auth-open-page',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auth',
+                content: '__auth_open_page__:https://x.com/i/flow/login',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(opened).toEqual([{
+            taskId: 'task-auth',
+            url: 'https://x.com/i/flow/login',
+        }]);
+        expect(queued).toHaveLength(0);
+        expect(resumed).toHaveLength(0);
+        expect(emitted[0]?.type).toBe('send_task_message_response');
+        expect(emitted[0]?.payload).toMatchObject({
+            success: true,
+            taskId: 'task-auth',
+        });
     });
 
     test('continues follow-up flow when suspended task was restored from persistence', async () => {
@@ -2229,6 +2314,116 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(true);
     });
 
+    test('normalizes continue replies with opaque action ids into approval follow-up context', async () => {
+        const preparedInputs: any[] = [];
+        const emitted: any[] = [];
+        let continued = false;
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            getTaskConfig: () => ({
+                workspacePath: '/tmp/workspace',
+                lastFrozenWorkRequestSnapshot: {
+                    mode: 'immediate_task',
+                    sourceText: '检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上',
+                    primaryObjective: '检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上',
+                    preferredWorkflows: [],
+                    resolvedTargets: [],
+                    deliverables: [
+                        {
+                            type: 'report_file',
+                            path: 'reports/minimax-x.md',
+                            format: 'md',
+                        },
+                    ],
+                },
+            }),
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => undefined,
+                getConversation: () => [
+                    { role: 'user', content: '检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上' },
+                    { role: 'assistant', content: '计划已确认，回复继续执行即可。' },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                        sourceText: input.sourceText,
+                        tasks: [
+                            {
+                                id: 'task-1',
+                                title: '发布到 X',
+                                objective: '发布到 X',
+                            },
+                        ],
+                        deliverables: [
+                            {
+                                id: 'deliverable-file',
+                                title: 'Report file',
+                                type: 'report_file',
+                                description: 'Save report to file.',
+                                required: true,
+                                format: 'md',
+                                path: 'reports/minimax-x.md',
+                            },
+                        ],
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-continue-with-id',
+                        runMode: 'single',
+                        steps: [
+                            {
+                                stepId: 'step-analysis',
+                                kind: 'analysis',
+                                title: 'Analyze',
+                                description: 'Analyze approval context',
+                                status: 'completed',
+                                dependencies: [],
+                            },
+                            {
+                                stepId: 'step-exec',
+                                kind: 'execution',
+                                title: 'Execute',
+                                description: 'Execute existing plan',
+                                status: 'pending',
+                                dependencies: ['step-analysis'],
+                            },
+                        ],
+                    },
+                    executionQuery: '检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上',
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+            continuePreparedAgentFlow: async () => {
+                continued = true;
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-continue-with-id-followup',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-continue-with-id-followup',
+                content: '继续执行（cfae30f0-2e9a-4779-a750-7c97c19d9580）',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(preparedInputs[0]?.sourceText).toContain('原始任务：检索 minimax 的股价，分析本周 minimax 的涨跌，保存为文件，并发送到 X 上');
+        expect(preparedInputs[0]?.sourceText).toContain('用户确认：继续执行');
+        expect(preparedInputs[0]?.sourceText).not.toContain('cfae30f0-2e9a-4779-a750-7c97c19d9580');
+        expect(emitted.some((event) => event?.type === 'TASK_CONTRACT_REOPENED')).toBe(false);
+        expect(continued).toBe(true);
+    });
+
     test('rebuilds artifact contract on follow-up even when a stored contract exists', async () => {
         const artifactContractCalls: Array<{ query: string; deliverables: unknown[] | undefined }> = [];
         const setContracts: any[] = [];
@@ -2949,7 +3144,7 @@ describe('runtime commands handler', () => {
         expect(continued).toBe(false);
     });
 
-    test('handles resume_interrupted_task with saved context and continues agent flow', async () => {
+    test('handles natural-language resume request with saved context and continues agent flow', async () => {
         const emitted: any[] = [];
         const pushed: any[] = [];
         const ensured: any[] = [];
@@ -3035,16 +3230,17 @@ describe('runtime commands handler', () => {
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-resume',
-            type: 'resume_interrupted_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-5',
+                content: '恢复之前中断的任务',
             },
         } as any, deps);
 
         expect(handled).toBe(true);
         expect(ensured).toEqual([{ taskId: 'task-5', title: '', workspacePath: '/tmp/ws' }]);
         expect(emitted.map((message) => message.type)).toEqual([
-            'resume_interrupted_task_response',
+            'send_task_message_response',
             'TASK_STATUS',
             'TASK_RESUMED',
             'TASK_RESEARCH_UPDATED',
@@ -3067,7 +3263,7 @@ describe('runtime commands handler', () => {
         expect(continued[0]?.artifactContract).toEqual({ type: 'rebuilt-artifact-contract' });
     });
 
-    test('loads llm config before preparing work request in resume_interrupted_task', async () => {
+    test('loads llm config before preparing work request in natural-language resume flow', async () => {
         const callOrder: string[] = [];
         const deps = createRuntimeCommandDeps({
             getTaskConfig: () => ({ workspacePath: '/tmp/ws' }),
@@ -3115,9 +3311,10 @@ describe('runtime commands handler', () => {
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-resume-config-order',
-            type: 'resume_interrupted_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-resume-order',
+                content: '继续上次中断的任务',
             },
         } as any, deps);
 
@@ -3125,7 +3322,7 @@ describe('runtime commands handler', () => {
         expect(callOrder).toEqual(['load', 'prepare']);
     });
 
-    test('returns an error when resume_interrupted_task has no saved context', async () => {
+    test('returns an assistant hint when natural-language resume request has no saved context', async () => {
         const emitted: any[] = [];
         const deps = createRuntimeCommandDeps({
             emit: (message) => emitted.push(message),
@@ -3143,24 +3340,23 @@ describe('runtime commands handler', () => {
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-resume-empty',
-            type: 'resume_interrupted_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'task-6',
+                content: '恢复中断任务',
             },
         } as any, deps);
 
         expect(handled).toBe(true);
-        expect(emitted[0]).toEqual(expect.objectContaining({
-            type: 'resume_interrupted_task_response',
-            payload: {
-                success: false,
-                taskId: 'task-6',
-                error: 'no_saved_context',
-            },
-        }));
+        expect(emitted.map((message) => message.type)).toEqual([
+            'send_task_message_response',
+            'CHAT_MESSAGE',
+            'TASK_STATUS',
+        ]);
+        expect(String(emitted[1]?.payload?.content)).toContain('没有可恢复的中断任务上下文');
     });
 
-    test('handles start_autonomous_task and emits completion on success', async () => {
+    test('handles natural-language autonomous request and emits completion on success', async () => {
         const emitted: any[] = [];
         const started: any[] = [];
         const finished: any[] = [];
@@ -3194,20 +3390,19 @@ describe('runtime commands handler', () => {
 
         const handled = await handleRuntimeCommand({
             id: 'cmd-r5',
-            type: 'start_autonomous_task',
+            type: 'send_task_message',
             payload: {
                 taskId: 'auto-1',
-                query: 'research stocks',
-                runInBackground: true,
-                autoSaveMemory: false,
+                content: 'start autonomous mode: research stocks',
             },
         } as any, deps);
 
         expect(handled).toBe(true);
         expect(providerConfigs).toHaveLength(1);
         expect(started).toHaveLength(1);
-        expect(emitted[0]?.type).toBe('start_autonomous_task_response');
-        expect(startCalls[0]?.options.runInBackground).toBe(true);
+        expect(emitted[0]?.type).toBe('send_task_message_response');
+        expect(startCalls[0]?.options.runInBackground).toBe(false);
+        expect(startCalls[0]?.options.autoSaveMemory).toBe(true);
         expect(finished).toHaveLength(1);
     });
 });

@@ -158,6 +158,14 @@ export type RuntimeCommandDeps = {
         workspacePath: string;
     }) => void;
     cancelTaskExecution: (taskId: string, reason?: string) => Promise<{ success: boolean }>;
+    cancelScheduledTasksForSourceTask: (input: {
+        sourceTaskId: string;
+        userMessage: string;
+    }) => Promise<{
+        success: boolean;
+        cancelledCount: number;
+        cancelledTitles: string[];
+    }>;
     createTaskFailedEvent: (taskId: string, payload: {
         error: string;
         errorCode?: string;
@@ -300,6 +308,9 @@ export type RuntimeCommandDeps = {
         questions: string[];
         instructions: string[];
         fulfillsCheckpointId?: string;
+        authUrl?: string;
+        authDomain?: string;
+        canAutoResume?: boolean;
     }) => Record<string, unknown>;
     createTaskStatusEvent: (taskId: string, payload: {
         status: 'running' | 'failed' | 'idle' | 'finished';
@@ -337,6 +348,10 @@ export type RuntimeCommandDeps = {
         getSuspendedTask?: (taskId: string) => { context?: Record<string, unknown> } | undefined;
         resume: (taskId: string, reason: string) => Promise<{ success: boolean; context?: Record<string, unknown> }>;
     };
+    openAuthPageForSuspendedTask?: (input: {
+        taskId: string;
+        url: string;
+    }) => Promise<{ success: boolean; error?: string }>;
     enqueueResumeMessage: (taskId: string, content: string, config?: Record<string, unknown>) => void;
     getTaskConfig: (taskId: string) => any;
     applyFrozenWorkRequestSessionPolicy?: (taskId: string, frozenWorkRequest: FrozenWorkRequest, baseConfig?: any) => any;
@@ -495,6 +510,43 @@ function detectFollowUpLanguage(text: string): 'zh' | 'en' {
     return /[\u4e00-\u9fff]/.test(text) ? 'zh' : 'en';
 }
 
+const UUID_V4_TOKEN_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const GENERIC_OPAQUE_TOKEN_REGEX = /^[a-z0-9][a-z0-9._:-]{11,}$/i;
+const CONTROL_REPLY_WITH_TOKEN_REGEX = /^(确认|确认发布|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续处理|继续吧|继续|接着|往下|好的|ok|okay|yes|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|continue|go on|carry on|keep going)\s*[（(]([^()（）]+)[）)]\s*([.!?？。!]*)$/i;
+
+function isOpaqueControlToken(value: string): boolean {
+    const token = value.trim();
+    if (!token || /\s/.test(token)) {
+        return false;
+    }
+    if (UUID_V4_TOKEN_REGEX.test(token)) {
+        return true;
+    }
+    if (!GENERIC_OPAQUE_TOKEN_REGEX.test(token)) {
+        return false;
+    }
+    return /\d/.test(token) || token.includes('-') || token.includes('_');
+}
+
+function normalizeFollowUpControlText(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return '';
+    }
+
+    const match = trimmed.match(CONTROL_REPLY_WITH_TOKEN_REGEX);
+    if (!match) {
+        return trimmed;
+    }
+
+    const [, command, token, punctuation = ''] = match;
+    if (!isOpaqueControlToken(token)) {
+        return trimmed;
+    }
+
+    return `${command}${punctuation}`.trim();
+}
+
 function isPlanApprovalReply(text: string): boolean {
     return /^(?:确认|确认发布|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
         .test(text.trim());
@@ -508,6 +560,98 @@ function isCompactApprovalSelectionReply(text: string): boolean {
 function isGenericContinueReply(text: string): boolean {
     return /^(?:继续|继续处理|继续执行|接着|往下|继续吧|continue|go on|carry on|keep going)[.!?？。!]*$/i
         .test(text.trim());
+}
+
+function isScheduledCancellationRequest(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const chineseExplicitCancel = /(?:取消|停止|终止|结束|关闭|关掉|停掉).*(?:提醒|定时|任务|闹钟|计划|上述|这个|该)/u;
+    if (chineseExplicitCancel.test(trimmed)) {
+        return true;
+    }
+
+    const chineseShortCancel = /^(?:取消|停止|终止|结束)(?:上述|这个|该)?任务$/u;
+    if (chineseShortCancel.test(trimmed)) {
+        return true;
+    }
+
+    if (/\b(cancel|stop|abort|terminate)\b/i.test(trimmed) && /\b(reminder|scheduled?|task)\b/i.test(trimmed)) {
+        return true;
+    }
+
+    return false;
+}
+
+function isTaskHistoryClearRequest(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const chineseClearHistory = /(?:清空|清除|删除|重置).*(?:任务|会话|对话)?(?:历史|记录|上下文)/u;
+    if (chineseClearHistory.test(trimmed)) {
+        return true;
+    }
+
+    const chineseCompactClearHistory = /^(?:清空|清除|删除|重置)(?:当前|这个|该)?(?:任务)?(?:历史|记录|上下文)$/u;
+    if (chineseCompactClearHistory.test(trimmed)) {
+        return true;
+    }
+
+    const englishClearHistory = /\b(clear|reset|wipe|delete)\b/i.test(trimmed)
+        && /\b(task|chat|conversation|history|context)\b/i.test(trimmed);
+    if (englishClearHistory) {
+        return true;
+    }
+
+    return false;
+}
+
+function isResumeInterruptedTaskRequest(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const chineseResumeInterrupted =
+        /(?:恢复|继续|接着).*(?:中断|暂停|上次|之前|刚才).*(?:任务|执行|工作)|(?:恢复|继续)(?:中断|暂停)(?:任务|执行)?/u;
+    if (chineseResumeInterrupted.test(trimmed)) {
+        return true;
+    }
+
+    const englishResumeInterrupted =
+        /\b(resume|continue)\b/i.test(trimmed)
+        && /\b(interrupted|paused|previous|last)\b/i.test(trimmed)
+        && /\b(task|execution|work)\b/i.test(trimmed);
+    if (englishResumeInterrupted) {
+        return true;
+    }
+
+    return false;
+}
+
+function extractAutonomousStartIntent(text: string): { query: string } | null {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    const chineseMatch = trimmed.match(/^(?:请|帮我)?(?:开始|启动|进入)?(?:自主|自治)(?:模式)?(?:执行|完成)?[：:，,\s-]*(.*)$/u);
+    if (chineseMatch) {
+        const query = (chineseMatch[1] || '').trim();
+        return { query: query.length > 0 ? query : trimmed };
+    }
+
+    const englishMatch = trimmed.match(/^(?:please\s+)?(?:start|run|enter|use)\s+autonomous(?:\s+mode)?(?:\s+to)?[,:;\s-]*(.*)$/i);
+    if (englishMatch) {
+        const query = (englishMatch[1] || '').trim();
+        return { query: query.length > 0 ? query : trimmed };
+    }
+
+    return null;
 }
 
 function assistantPromptedForPlanApproval(text: string): boolean {
@@ -566,31 +710,53 @@ const ROUTE_TASK_TOKEN = '__route_task__';
 const TASK_DRAFT_CONFIRM_TOKEN = '__task_draft_confirm__';
 const TASK_DRAFT_CHAT_TOKEN = '__task_draft_chat__';
 const TASK_DRAFT_EDIT_CREATE_PREFIX = '__task_draft_edit_create__:';
+const AUTH_OPEN_PAGE_PREFIX = '__auth_open_page__:';
+
+function extractAuthOpenPageUrl(text: string): string | null {
+    const trimmed = text.trim();
+    if (!trimmed || !trimmed.startsWith(AUTH_OPEN_PAGE_PREFIX)) {
+        return null;
+    }
+    const candidate = trimmed.slice(AUTH_OPEN_PAGE_PREFIX.length).trim();
+    if (!candidate) {
+        return null;
+    }
+    try {
+        const url = new URL(candidate);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            return null;
+        }
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
 
 function buildFollowUpSourceText(input: {
     promptText: string;
     conversation: Array<{ role?: string; content?: unknown }>;
     previousSnapshot?: FrozenWorkRequestSnapshot;
 }): string {
+    const normalizedPromptText = normalizeFollowUpControlText(input.promptText);
     const previousUserMessage = getLatestMeaningfulUserMessage(input.conversation);
     const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
     const previousPrimaryObjective = input.previousSnapshot?.primaryObjective?.trim();
     const previousContextText =
         input.previousSnapshot?.sourceText?.trim() ||
         previousUserMessage;
-    if (previousContextText && input.promptText.trim() === ROUTE_CHAT_TOKEN) {
+    if (previousContextText && normalizedPromptText.trim() === ROUTE_CHAT_TOKEN) {
         return [
             `Original task: ${previousContextText}`,
             'User route: chat',
         ].join('\n');
     }
-    if (previousContextText && input.promptText.trim() === ROUTE_TASK_TOKEN) {
+    if (previousContextText && normalizedPromptText.trim() === ROUTE_TASK_TOKEN) {
         return [
             `Original task: ${previousContextText}`,
             'User route: task',
         ].join('\n');
     }
-    if (previousContextText && input.promptText.trim() === TASK_DRAFT_CHAT_TOKEN) {
+    if (previousContextText && normalizedPromptText.trim() === TASK_DRAFT_CHAT_TOKEN) {
         return [
             `Original task: ${previousContextText}`,
             'User route: chat',
@@ -606,77 +772,77 @@ function buildFollowUpSourceText(input: {
     const hasCarryForwardDeliverable = (input.previousSnapshot?.deliverables ?? [])
         .some((deliverable) => deliverable.type !== 'chat_reply');
     const shouldCarryForwardScheduledApproval =
-        preferFullSourceTextForApproval && isPlanApprovalReply(input.promptText);
+        preferFullSourceTextForApproval && isPlanApprovalReply(normalizedPromptText);
     const isApprovalReply =
-        isPlanApprovalReply(input.promptText) ||
-        (promptedForApproval && isCompactApprovalSelectionReply(input.promptText));
+        isPlanApprovalReply(normalizedPromptText) ||
+        (promptedForApproval && isCompactApprovalSelectionReply(normalizedPromptText));
     if (
         approvalBaseObjective &&
         isApprovalReply &&
         (promptedForApproval || hasCarryForwardDeliverable || shouldCarryForwardScheduledApproval)
     ) {
         return buildApprovalFollowUpSourceText({
-            promptText: input.promptText,
+            promptText: normalizedPromptText,
             baseObjective: approvalBaseObjective,
         });
     }
 
     if (
         approvalBaseObjective &&
-        isGenericContinueReply(input.promptText) &&
-        !hasCorrectionCue(input.promptText)
+        isGenericContinueReply(normalizedPromptText) &&
+        !hasCorrectionCue(normalizedPromptText)
     ) {
         return buildApprovalFollowUpSourceText({
-            promptText: input.promptText,
+            promptText: normalizedPromptText,
             baseObjective: approvalBaseObjective,
         });
     }
 
     if (
         approvalBaseObjective &&
-        input.promptText.trim() === TASK_DRAFT_CONFIRM_TOKEN
+        normalizedPromptText.trim() === TASK_DRAFT_CONFIRM_TOKEN
     ) {
         return buildApprovalFollowUpSourceText({
-            promptText: input.promptText,
+            promptText: normalizedPromptText,
             baseObjective: approvalBaseObjective,
         });
     }
 
     if (
-        input.promptText.trim().startsWith(TASK_DRAFT_EDIT_CREATE_PREFIX)
+        normalizedPromptText.trim().startsWith(TASK_DRAFT_EDIT_CREATE_PREFIX)
     ) {
-        const editedObjective = input.promptText
+        const editedObjective = normalizedPromptText
             .trim()
             .slice(TASK_DRAFT_EDIT_CREATE_PREFIX.length)
             .trim();
         const objectiveForApproval = editedObjective || approvalBaseObjective || previousContextText;
         if (objectiveForApproval) {
             return buildApprovalFollowUpSourceText({
-                promptText: input.promptText,
+                promptText: normalizedPromptText,
                 baseObjective: objectiveForApproval,
             });
         }
     }
 
-    if (hasCorrectionCue(input.promptText) && previousContextText) {
+    if (hasCorrectionCue(normalizedPromptText) && previousContextText) {
         return buildCorrectionFollowUpSourceText({
-            promptText: input.promptText,
+            promptText: normalizedPromptText,
             previousContextText,
         });
     }
 
     if (!shouldAugmentFollowUpPrompt({
-        promptText: input.promptText,
+        promptText: normalizedPromptText,
         previousUserMessage,
         latestAssistantMessage,
     })) {
-        return input.promptText;
+        return normalizedPromptText;
     }
 
     return [
         `原始任务：${previousUserMessage}`,
         `需要补充：${latestAssistantMessage}`,
-        `用户补充：${input.promptText.trim()}`,
+        `用户补充：${normalizedPromptText.trim()}`,
     ].join('\n');
 }
 
@@ -1159,9 +1325,34 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const content = payload.content as string;
             const parsedUserInput = parseInlineAttachmentContent(content);
             const promptText = parsedUserInput.promptText || content;
+            const authOpenPageUrl = extractAuthOpenPageUrl(promptText);
+            const normalizedPromptText = normalizeFollowUpControlText(promptText);
             const conversationContent = parsedUserInput.conversationContent;
 
             if (deps.suspendResumeManager.isSuspended(taskId)) {
+                if (authOpenPageUrl) {
+                    const opener = deps.openAuthPageForSuspendedTask;
+                    if (!opener) {
+                        deps.emit(respond(command.id, 'send_task_message_response', {
+                            success: false,
+                            taskId,
+                            error: 'auth_open_page_unsupported',
+                        }));
+                        return true;
+                    }
+
+                    const openResult = await opener({
+                        taskId,
+                        url: authOpenPageUrl,
+                    });
+                    deps.emit(respond(command.id, 'send_task_message_response', {
+                        success: openResult.success,
+                        taskId,
+                        ...(openResult.success ? {} : { error: openResult.error || 'auth_open_page_failed' }),
+                    }));
+                    return true;
+                }
+
                 const suspendedTask = deps.suspendResumeManager.getSuspendedTask?.(taskId);
                 const restoredFromPersistence = Boolean(suspendedTask?.context?.restoredFromPersistence);
                 if (!restoredFromPersistence) {
@@ -1190,9 +1381,15 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
             }
 
+            const chatContentForEvent =
+                parsedUserInput.imageCount === 0
+                && parsedUserInput.fileCount === 0
+                && normalizedPromptText !== promptText
+                    ? normalizedPromptText
+                    : content;
             deps.taskEventBus.emitChatMessage(taskId, {
                 role: 'user',
-                content,
+                content: chatContentForEvent,
             });
 
             const taskConfig = deps.getTaskConfig(taskId);
@@ -1230,6 +1427,77 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (effectiveTaskConfig?.workspacePath as string | undefined) ||
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
+
+            if (isTaskHistoryClearRequest(normalizedPromptText)) {
+                const cancellation = await deps.cancelTaskExecution(
+                    taskId,
+                    'Task cleared by user'
+                );
+                deps.taskSessionStore.clearConversation(taskId);
+                deps.taskSessionStore.ensureHistoryLimit(taskId);
+                deps.taskEventBus.emitRaw(taskId, 'TASK_HISTORY_CLEARED', {
+                    reason: 'user_requested',
+                });
+                deps.emit(deps.createChatMessageEvent(taskId, {
+                    role: 'assistant',
+                    content: '已清空当前任务历史，并停止当前执行。',
+                }));
+                if (cancellation.success) {
+                    deps.taskEventBus.emitStatus(taskId, { status: 'idle' });
+                }
+                return true;
+            }
+
+            if (isResumeInterruptedTaskRequest(normalizedPromptText)) {
+                await handleRuntimeCommand({
+                    ...command,
+                    type: 'resume_interrupted_task',
+                    payload: {
+                        taskId,
+                        config: payload.config,
+                        suppressResponse: true,
+                    },
+                } as IpcCommand, deps);
+                return true;
+            }
+
+            const autonomousIntent = extractAutonomousStartIntent(normalizedPromptText);
+            if (autonomousIntent) {
+                await handleRuntimeCommand({
+                    ...command,
+                    type: 'start_autonomous_task',
+                    payload: {
+                        taskId,
+                        query: autonomousIntent.query,
+                        autoSaveMemory: true,
+                        runInBackground: false,
+                        suppressResponse: true,
+                    },
+                } as IpcCommand, deps);
+                return true;
+            }
+
+            if (isScheduledCancellationRequest(normalizedPromptText)) {
+                const cancellation = await deps.cancelScheduledTasksForSourceTask({
+                    sourceTaskId: taskId,
+                    userMessage: normalizedPromptText,
+                });
+                if (cancellation.success && cancellation.cancelledCount > 0) {
+                    const scopeText = cancellation.cancelledTitles.length > 0
+                        ? `已取消：${cancellation.cancelledTitles.join('、')}`
+                        : '已取消当前会话关联的定时任务';
+                    const confirmationMessage = `${scopeText}。后续不会再自动续排。`;
+                    deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
+                    deps.pushConversationMessage(taskId, { role: 'assistant', content: confirmationMessage });
+                    deps.emit(deps.createChatMessageEvent(taskId, {
+                        role: 'assistant',
+                        content: confirmationMessage,
+                    }));
+                    deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                    return true;
+                }
+            }
+
             const existingConversation = deps.taskSessionStore.getConversation(taskId);
             const activePreparedWorkRequest = deps.getActivePreparedWorkRequest?.(taskId);
             const previousFrozenSnapshot =
@@ -1237,14 +1505,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     ? snapshotFrozenWorkRequest(activePreparedWorkRequest.frozenWorkRequest)
                     : effectiveTaskConfig?.lastFrozenWorkRequestSnapshot;
             const sourceTextForAnalysis = buildFollowUpSourceText({
-                promptText,
+                promptText: normalizedPromptText,
                 conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
                 previousSnapshot: previousFrozenSnapshot,
             });
 
             deps.ensureTaskRuntimePersistence({
                 taskId,
-                title: content.trim().slice(0, 80) || 'Follow-up task',
+                title: (normalizedPromptText || content).trim().slice(0, 80) || 'Follow-up task',
                 workspacePath,
             });
             deps.loadLlmConfig(workspacePath);
@@ -1257,7 +1525,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const { frozenWorkRequest } = preparedWorkRequest;
             const frozenSnapshot = snapshotFrozenWorkRequest(frozenWorkRequest);
             const reopenSignal = detectFollowUpContractReopen({
-                promptText,
+                promptText: normalizedPromptText,
                 previous: previousFrozenSnapshot,
                 next: frozenSnapshot,
             });
@@ -1349,7 +1617,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }
 
             const artifactContract = deps.buildArtifactContract(
-                preparedWorkRequest.executionQuery || promptText,
+                preparedWorkRequest.executionQuery || normalizedPromptText,
                 frozenWorkRequest.deliverables
             );
 
@@ -1417,8 +1685,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 const primaryTask = frozenWorkRequest.tasks?.[0];
                 const stagePlans = planScheduledExecutionStages({
                     request: frozenWorkRequest,
-                    fallbackTitle: primaryTask?.title || promptText.trim().slice(0, 60) || 'Scheduled Task',
-                    fallbackQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || promptText,
+                    fallbackTitle: primaryTask?.title || normalizedPromptText.trim().slice(0, 60) || 'Scheduled Task',
+                    fallbackQuery: buildExecutionQueryFromFrozenWorkRequest(frozenWorkRequest) || normalizedPromptText,
                 });
                 const records = stagePlans.map((stage) => deps.scheduleTaskInternal({
                     title: stage.title,
@@ -1471,7 +1739,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
 
             await deps.continuePreparedAgentFlow({
                 taskId,
-                userMessage: promptText,
+                userMessage: normalizedPromptText,
                 workspacePath,
                 config: effectiveTaskConfig,
                 preparedWorkRequest,
@@ -1487,13 +1755,22 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const payload = command.payload as any;
             const taskId = payload.taskId as string;
             const existingConversation = deps.taskSessionStore.getConversation(taskId);
+            const suppressResponse = payload.suppressResponse === true;
 
             if (existingConversation.length === 0) {
-                deps.emit(respond(command.id, 'resume_interrupted_task_response', {
-                    success: false,
-                    taskId,
-                    error: 'no_saved_context',
-                }));
+                if (suppressResponse) {
+                    deps.emit(deps.createChatMessageEvent(taskId, {
+                        role: 'assistant',
+                        content: '没有可恢复的中断任务上下文，请先描述你要继续的任务。',
+                    }));
+                    deps.emit(deps.createTaskStatusEvent(taskId, { status: 'idle' }));
+                } else {
+                    deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                        success: false,
+                        taskId,
+                        error: 'no_saved_context',
+                    }));
+                }
                 return true;
             }
 
@@ -1501,11 +1778,13 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             let effectiveTaskConfig = taskConfig;
             const workspaceOverrideViolation = validateWorkspaceOverride(taskId, payload.config);
             if (workspaceOverrideViolation) {
-                deps.emit(respond(command.id, 'resume_interrupted_task_response', {
-                    success: false,
-                    taskId,
-                    error: 'session_workspace_override_denied',
-                }));
+                if (!suppressResponse) {
+                    deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                        success: false,
+                        taskId,
+                        error: 'session_workspace_override_denied',
+                    }));
+                }
                 deps.emit(deps.createChatMessageEvent(taskId, {
                     role: 'system',
                     content: workspaceOverrideViolation,
@@ -1538,10 +1817,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             });
             deps.loadLlmConfig(workspacePath);
 
-            deps.emit(respond(command.id, 'resume_interrupted_task_response', {
-                success: true,
-                taskId,
-            }));
+            if (!suppressResponse) {
+                deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                    success: true,
+                    taskId,
+                }));
+            }
             deps.emit(deps.createTaskStatusEvent(taskId, { status: 'running' }));
             deps.emit(deps.createTaskResumedEvent(taskId, {
                 resumeReason: 'interrupted_recovery',
@@ -1766,6 +2047,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
 
         case 'start_autonomous_task': {
             const payload = command.payload as any;
+            const suppressResponse = payload.suppressResponse === true;
             deps.taskEventBus.reset(payload.taskId);
             const llmConfig = deps.loadLlmConfig(deps.workspaceRoot);
             const providerConfig = deps.resolveProviderConfig(llmConfig, {});
@@ -1785,11 +2067,13 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 },
             });
 
-            deps.emit(respond(command.id, 'start_autonomous_task_response', {
-                success: true,
-                taskId: payload.taskId,
-                message: 'Autonomous task started',
-            }));
+            if (!suppressResponse) {
+                deps.emit(respond(command.id, 'start_autonomous_task_response', {
+                    success: true,
+                    taskId: payload.taskId,
+                    message: 'Autonomous task started',
+                }));
+            }
 
             try {
                 const task = await agent.startTask(payload.query, {

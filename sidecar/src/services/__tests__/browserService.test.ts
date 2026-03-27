@@ -446,6 +446,7 @@ describe('BrowserService', () => {
     beforeEach(() => {
         // Access private static to reset singleton
         (BrowserService as any).instance = null;
+        BrowserService.setBrowserUseAvailabilityRecoveryHook(null);
     });
 
     test('default mode is auto', () => {
@@ -503,18 +504,41 @@ describe('BrowserService', () => {
         expect(available).toBe(false);
     });
 
+    test('getInstance reconfigures browser-use service URL when provided', () => {
+        const service = BrowserService.getInstance('http://localhost:8100');
+        expect(service.getBrowserUseServiceUrl()).toBe('http://localhost:8100');
+
+        const same = BrowserService.getInstance('http://127.0.0.1:9123');
+        expect(same).toBe(service);
+        expect(same.getBrowserUseServiceUrl()).toBe('http://127.0.0.1:9123');
+    });
+
+    test('isBrowserUseAvailable triggers recovery hook when unavailable', async () => {
+        const service = new BrowserService('http://localhost:19999');
+        let hookCalled = 0;
+        BrowserService.setBrowserUseAvailabilityRecoveryHook(async (url) => {
+            hookCalled += 1;
+            expect(url).toBe('http://localhost:19999');
+            return true;
+        });
+
+        const available = await service.isBrowserUseAvailable(true);
+        expect(available).toBe(true);
+        expect(hookCalled).toBe(1);
+    });
+
     test('aiAction returns error when service unavailable', async () => {
         const service = new BrowserService('http://localhost:19999');
         const result = await service.aiAction({ action: 'click something' });
         expect(result.success).toBe(false);
-        expect(result.error).toContain('not available');
+        expect(result.error).toContain('unavailable');
     });
 
     test('runAiTask returns error when service unavailable', async () => {
         const service = new BrowserService('http://localhost:19999');
         const result = await service.runAiTask('do something');
         expect(result.success).toBe(false);
-        expect(result.error).toContain('not available');
+        expect(result.error).toContain('unavailable');
     });
 
     test('executeScript always uses Playwright backend', async () => {
@@ -544,6 +568,7 @@ describe('BrowserService', () => {
 describe('BrowserService Mode Routing', () => {
     beforeEach(() => {
         (BrowserService as any).instance = null;
+        BrowserService.setBrowserUseAvailabilityRecoveryHook(null);
     });
 
     test('precise mode only calls Playwright', async () => {

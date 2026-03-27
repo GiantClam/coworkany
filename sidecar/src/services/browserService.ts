@@ -74,6 +74,7 @@ function resolvePlaywrightBrowsersPath(): string | null {
 // ============================================================================
 
 export type BrowserMode = 'precise' | 'smart' | 'auto';
+export type BrowserUseAvailabilityRecoveryHook = (serviceUrl: string) => Promise<boolean>;
 
 export interface BrowserConnection {
     browser: Browser | null;
@@ -2216,7 +2217,25 @@ export class BrowserUseBackend implements BrowserBackend {
     private connected: boolean = false;
 
     constructor(serviceUrl: string = 'http://localhost:8100') {
-        this.serviceUrl = serviceUrl;
+        this.serviceUrl = this.normalizeServiceUrl(serviceUrl);
+    }
+
+    private normalizeServiceUrl(serviceUrl?: string): string {
+        const trimmed = serviceUrl?.trim();
+        return trimmed && trimmed.length > 0 ? trimmed : 'http://localhost:8100';
+    }
+
+    getServiceUrl(): string {
+        return this.serviceUrl;
+    }
+
+    setServiceUrl(serviceUrl?: string): void {
+        const nextUrl = this.normalizeServiceUrl(serviceUrl);
+        if (this.serviceUrl === nextUrl) {
+            return;
+        }
+        this.serviceUrl = nextUrl;
+        this.connected = false;
     }
 
     /**
@@ -2529,6 +2548,7 @@ export class BrowserUseBackend implements BrowserBackend {
  */
 export class BrowserService {
     private static instance: BrowserService | null = null;
+    private static availabilityRecoveryHook: BrowserUseAvailabilityRecoveryHook | null = null;
 
     private playwrightBackend: PlaywrightBackend;
     private browserUseBackend: BrowserUseBackend;
@@ -2543,8 +2563,27 @@ export class BrowserService {
     static getInstance(browserUseServiceUrl?: string): BrowserService {
         if (!BrowserService.instance) {
             BrowserService.instance = new BrowserService(browserUseServiceUrl);
+        } else if (typeof browserUseServiceUrl === 'string' && browserUseServiceUrl.trim().length > 0) {
+            BrowserService.instance.setBrowserUseServiceUrl(browserUseServiceUrl);
         }
         return BrowserService.instance;
+    }
+
+    static setBrowserUseAvailabilityRecoveryHook(hook: BrowserUseAvailabilityRecoveryHook | null): void {
+        BrowserService.availabilityRecoveryHook = hook;
+    }
+
+    setBrowserUseServiceUrl(serviceUrl?: string): void {
+        this.browserUseBackend.setServiceUrl(serviceUrl);
+        this.clearBrowserUseAvailabilityCache();
+    }
+
+    getBrowserUseServiceUrl(): string {
+        return this.browserUseBackend.getServiceUrl();
+    }
+
+    clearBrowserUseAvailabilityCache(): void {
+        this._browserUseAvailable = null;
     }
 
     // ========================================================================
@@ -2646,12 +2685,21 @@ export class BrowserService {
     /**
      * Check if browser-use-service is available (cached for 30 seconds)
      */
-    async isBrowserUseAvailable(): Promise<boolean> {
-        if (this._browserUseAvailable !== null) {
+    async isBrowserUseAvailable(forceRefresh: boolean = false): Promise<boolean> {
+        if (!forceRefresh && this._browserUseAvailable !== null) {
             return this._browserUseAvailable;
         }
 
-        this._browserUseAvailable = await this.browserUseBackend.isServiceAvailable();
+        let available = await this.browserUseBackend.isServiceAvailable();
+        if (!available && BrowserService.availabilityRecoveryHook) {
+            try {
+                available = await BrowserService.availabilityRecoveryHook(this.browserUseBackend.getServiceUrl());
+            } catch (error) {
+                console.error('[BrowserService] Availability recovery hook failed:', error);
+            }
+        }
+
+        this._browserUseAvailable = available;
 
         // Cache for 30 seconds
         setTimeout(() => {
@@ -2672,7 +2720,7 @@ export class BrowserService {
         if (!available) {
             return {
                 available: false,
-                reason: 'browser-use-service is not available. Start it with: cd browser-use-service && python main.py',
+                reason: 'browser-use-service is unavailable and could not be auto-started.',
             };
         }
 
@@ -2869,7 +2917,7 @@ export class BrowserService {
         if (!available) {
             return {
                 success: false,
-                error: 'browser-use-service is not available. Start it with: cd browser-use-service && python main.py',
+                error: 'browser-use-service is unavailable and could not be auto-started.',
             };
         }
 
@@ -2961,7 +3009,7 @@ export class BrowserService {
         if (!available) {
             return {
                 success: false,
-                error: 'browser-use-service is not available. Start it with: cd browser-use-service && python main.py',
+                error: 'browser-use-service is unavailable and could not be auto-started.',
             };
         }
         return this.browserUseBackend.runTask(task, options);

@@ -153,6 +153,9 @@ export type TaskUserActionRequiredPayload = {
     questions: string[];
     instructions: string[];
     fulfillsCheckpointId?: string;
+    authUrl?: string;
+    authDomain?: string;
+    canAutoResume?: boolean;
 };
 
 type TaskEventMeta = {
