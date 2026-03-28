@@ -128,7 +128,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showSkillsDialog, setShowSkillsDialog] = useState(false);
     const [showMcpDialog, setShowMcpDialog] = useState(false);
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
-    const [entryMode, setEntryMode] = useState<EntryMode>('task');
+    const [entryMode, setEntryMode] = useState<EntryMode>('chat');
     const [isReconnectingLlm, setIsReconnectingLlm] = useState(false);
 
     const activeSession = useActiveSession();
@@ -217,7 +217,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     useEffect(() => {
         if (!activeSession || activeSession.isDraft) {
-            setEntryMode('task');
+            setEntryMode('chat');
         }
     }, [activeSession?.taskId, activeSession?.isDraft]);
 
