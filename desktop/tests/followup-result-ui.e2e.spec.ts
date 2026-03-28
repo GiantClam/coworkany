@@ -185,12 +185,11 @@ test.describe('Follow-up Result UI Regression', () => {
 
         await expect(page.getByText('已从 skillhub 安装并启用技能')).toBeVisible({ timeout: 30_000 });
         await expect(page.getByText('skill-vetter', { exact: true })).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText('已从 skillhub 安装并启用技能')).toHaveCount(1);
         await expect(page.getByText('Tool result: Tool failed')).toHaveCount(0);
+        await expect(page.getByText('原始任务：')).toHaveCount(0);
+        await expect(page.getByText('用户路由：')).toHaveCount(0);
 
-        await page.getByRole('button', { name: /Task Board|任务清单/ }).click();
-
-        await expect(page.locator('.task-card-title').filter({ hasText: latestFollowUp })).toBeVisible({ timeout: 30_000 });
-        await expect(page.locator('.task-card-result-text').filter({ hasText: '已从 skillhub 安装并启用技能' })).toBeVisible({ timeout: 30_000 });
-        await expect(page.locator('.task-card-result-text').filter({ hasText: 'Tool result: Tool failed' })).toHaveCount(0);
+        await expect(page.locator('.session-item').filter({ hasText: latestFollowUp })).toBeVisible({ timeout: 30_000 });
     });
 });

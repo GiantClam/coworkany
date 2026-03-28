@@ -70,6 +70,7 @@ import {
     taskEventToCanonicalStreamEvents,
     type IpcCommand,
     type IpcResponse,
+    type PlatformRuntimeContext,
     type TaskEvent,
 } from './protocol';
 import { parseInlineAttachmentContent } from './llm/attachmentContent';
@@ -351,6 +352,12 @@ function broadcastSingletonLine(line: string): void {
     }
 }
 
+function emitRawIpcResponse(message: Record<string, unknown>): void {
+    const line = JSON.stringify(message);
+    process.stdout.write(line + '\n');
+    broadcastSingletonLine(line + '\n');
+}
+
 function emit(message: OutputMessage): void {
     const line = JSON.stringify(message);
     process.stdout.write(line + '\n');
@@ -400,6 +407,42 @@ function emit(message: OutputMessage): void {
             }
         }
     }
+}
+
+function summarizeValidationIssues(error: { issues: Array<{ path: Array<string | number>; message: string }> }): string {
+    return error.issues
+        .slice(0, 5)
+        .map((issue) => {
+            const path = issue.path.length > 0 ? issue.path.join('.') : 'command';
+            return `${path}: ${issue.message}`;
+        })
+        .join('; ');
+}
+
+function buildInvalidCommandResponse(raw: unknown, details: string): Record<string, unknown> | null {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+
+    const candidate = raw as { id?: unknown; type?: unknown };
+    if (typeof candidate.id !== 'string') {
+        return null;
+    }
+
+    const responseType = typeof candidate.type === 'string' && candidate.type.length > 0
+        ? `${candidate.type}_response`
+        : 'transport_error_response';
+
+    return {
+        type: responseType,
+        commandId: candidate.id,
+        timestamp: new Date().toISOString(),
+        payload: {
+            success: false,
+            error: `invalid_command: ${details}`,
+            details,
+        },
+    };
 }
 
 // Helper for custom commands not yet in the protocol schema
@@ -1285,31 +1328,15 @@ type LlmProviderConfig = {
     allowInsecureTls?: boolean;
 };
 
-type DesktopRuntimeBinaryInfo = {
-    available: boolean;
-    path?: string;
-    source?: string;
-};
-
-type DesktopManagedServiceCapability = {
-    id: string;
-    bundled: boolean;
-    runtimeReady: boolean;
-};
-
-type DesktopRuntimeContext = {
-    platform: string;
-    arch: string;
-    appDir: string;
-    appDataDir: string;
-    shell: string;
-    sidecarLaunchMode?: string;
-    python: DesktopRuntimeBinaryInfo;
-    skillhub: DesktopRuntimeBinaryInfo;
-    managedServices: DesktopManagedServiceCapability[];
-};
-
+type DesktopRuntimeContext = PlatformRuntimeContext;
 let desktopRuntimeContext: DesktopRuntimeContext | null = null;
+
+function resolveTaskEnvironmentContext(
+    explicit?: PlatformRuntimeContext | null,
+    fallback?: PlatformRuntimeContext | null,
+): PlatformRuntimeContext | undefined {
+    return explicit ?? fallback ?? desktopRuntimeContext ?? undefined;
+}
 
 // ============================================================================
 // Autonomous Agent (OpenClaw-style) - LLM Interface Adapter
@@ -2336,15 +2363,12 @@ async function importSkillFromDirectory(
     }
 
     skillStore.install(manifest);
-    const quarantineOnFirstInstall = governanceReview.reason === 'first_install_review'
-        && approvePermissionExpansion !== true;
+    const pendingFirstInstallReview = governanceReview.reason === 'first_install_review';
     const governanceState = governanceStore.recordReview(governanceReview, {
-        decision: quarantineOnFirstInstall ? 'pending' : 'approved',
-        quarantined: quarantineOnFirstInstall,
+        // Keep first-install review metadata, but do not auto-disable the skill.
+        decision: pendingFirstInstallReview ? 'pending' : 'approved',
+        quarantined: false,
     });
-    if (governanceState.quarantined) {
-        skillStore.setEnabled(manifest.name, false);
-    }
     if (!isWorkspaceExtensionAllowed(getWorkspaceExtensionAllowlistPolicy(), {
         extensionType: 'skill',
         extensionId: manifest.name,
@@ -3878,6 +3902,7 @@ function toScheduledTaskConfig(config: unknown): ScheduledTaskConfig | undefined
         enabledToolpacks: Array.isArray(candidate.enabledToolpacks) ? candidate.enabledToolpacks as string[] : undefined,
         enabledSkills: Array.isArray(candidate.enabledSkills) ? candidate.enabledSkills as string[] : undefined,
         disabledTools: Array.isArray(candidate.disabledTools) ? candidate.disabledTools as string[] : undefined,
+        environmentContext: candidate.environmentContext as PlatformRuntimeContext | undefined,
     };
 }
 
@@ -4547,6 +4572,7 @@ async function executeFreshTask(args: {
     taskId: string;
     title: string;
     userQuery: string;
+    displayText?: string;
     workspacePath: string;
     activeFile?: string;
     config?: FreshTaskConfig;
@@ -4556,10 +4582,14 @@ async function executeFreshTask(args: {
     failOnBlockingUserAction?: boolean;
     preparedWorkRequestOverride?: PreparedWorkRequestContext;
 }): Promise<FreshTaskResult> {
-    const { taskId, title, userQuery, workspacePath, activeFile, config } = args;
+    const { taskId, title, userQuery, displayText, workspacePath, activeFile, config } = args;
+    const environmentContext = resolveTaskEnvironmentContext(config?.environmentContext);
     const parsedUserInput = parseInlineAttachmentContent(userQuery);
     const promptUserQuery = parsedUserInput.promptText || userQuery;
-    const conversationUserContent = parsedUserInput.conversationContent;
+    const conversationUserContent = typeof parsedUserInput.conversationContent === 'string'
+        ? parsedUserInput.conversationContent
+        : promptUserQuery;
+    const conversationUserDisplayText = displayText?.trim() || conversationUserContent;
     // Ensure search/browser/provider config is loaded before any pre-execution research resolves.
     loadLlmConfig(workspacePath);
     const preparedWorkRequest = args.preparedWorkRequestOverride
@@ -4567,6 +4597,7 @@ async function executeFreshTask(args: {
         : await prepareWorkRequestContext({
             sourceText: promptUserQuery,
             workspacePath,
+            environmentContext,
             workRequestStore,
             capabilityPlanClassifier: classifyCapabilityPlanWithStructuredOutput,
             researchResolvers: {
@@ -4587,6 +4618,18 @@ async function executeFreshTask(args: {
         ...(config ?? {}),
         workspacePath,
     });
+    taskSessionStore.setConfig(taskId, {
+        ...(taskSessionStore.getConfig(taskId) ?? effectiveConfig ?? {}),
+        environmentContext,
+        executionAnchor: {
+            analysisSourceText: promptUserQuery,
+            displayText: conversationUserDisplayText || undefined,
+            environmentContext,
+            updatedAt: new Date().toISOString(),
+            source: 'task_start',
+        },
+    });
+    syncTaskRuntimeRecord(taskId);
 
     const startLimit = effectiveConfig?.maxHistoryMessages;
     taskSessionStore.setHistoryLimit(
@@ -4612,6 +4655,8 @@ async function executeFreshTask(args: {
                     workspacePath,
                     activeFile,
                     userQuery,
+                    displayText: conversationUserDisplayText || undefined,
+                    environmentContext,
                     packageManager,
                     packageManagerCommands: pmCommands,
                 },
@@ -5038,6 +5083,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                 taskId,
                 title: `[Scheduled] ${record.title}`,
                 userQuery: executionQuery,
+                displayText: executionQuery,
                 workspacePath: record.workspacePath,
                 config: record.config,
                 activeFile: undefined,
@@ -5056,6 +5102,7 @@ async function runScheduledTaskRecord(record: ScheduledTaskRecord): Promise<void
                     taskId,
                     title: `[Scheduled][Retry] ${record.title}`,
                     userQuery: executionQuery,
+                    displayText: executionQuery,
                     workspacePath: record.workspacePath,
                     config: record.config,
                     activeFile: undefined,
@@ -10345,6 +10392,11 @@ async function processLine(line: string): Promise<void> {
             return;
         } else {
             console.error('[DEBUG] Command parse failed:', JSON.stringify(commandResult.error.format()).substring(0, 500));
+            const details = summarizeValidationIssues(commandResult.error);
+            const response = buildInvalidCommandResponse(raw, details);
+            if (response) {
+                emitRawIpcResponse(response);
+            }
         }
 
         const responseResult = IpcResponseSchema.safeParse(raw);

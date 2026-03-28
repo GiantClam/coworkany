@@ -67,6 +67,17 @@ function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function mapDesktopRuntimePlatform(platform: NodeJS.Platform): 'macos' | 'windows' | 'linux' {
+    switch (platform) {
+        case 'darwin':
+            return 'macos';
+        case 'win32':
+            return 'windows';
+        default:
+            return 'linux';
+    }
+}
+
 async function getFreePort(): Promise<number> {
     return new Promise((resolve, reject) => {
         const server = net.createServer();
@@ -755,6 +766,7 @@ class DarwinBrowserHarness {
                 const existingDisabled = Array.isArray(config.disabledTools) ? config.disabledTools as string[] : [];
                 const response = await this.sendSidecarCommand('send_task_message', {
                     ...input,
+                    environmentContext: input?.environmentContext ?? this.buildRuntimeContext(),
                     config: {
                         ...config,
                         disabledTools: Array.from(new Set([...existingDisabled, ...this.disabledTools])),
@@ -782,6 +794,9 @@ class DarwinBrowserHarness {
                     context: {
                         workspacePath: String(input.workspacePath ?? this.workspace.path),
                         activeFile: input.activeFile ?? undefined,
+                        displayText: typeof input.displayText === 'string' ? input.displayText : undefined,
+                        selectedText: typeof input.selectedText === 'string' ? input.selectedText : undefined,
+                        environmentContext: this.buildRuntimeContext(),
                     },
                     config: {
                         ...config,
@@ -845,6 +860,28 @@ class DarwinBrowserHarness {
 
         this.sidecarProc.stdin.write(`${JSON.stringify(command)}\n`);
         return responsePromise;
+    }
+
+    private buildRuntimeContext(): Record<string, unknown> {
+        return {
+            platform: mapDesktopRuntimePlatform(process.platform),
+            arch: process.arch,
+            appDir: this.desktopDir,
+            appDataDir: this.appDataDir,
+            shell: process.env.SHELL || '/bin/zsh',
+            sidecarLaunchMode: 'development',
+            python: {
+                available: true,
+                path: 'python3',
+                source: 'system',
+            },
+            skillhub: {
+                available: fs.existsSync(this.skillhubPath),
+                path: this.skillhubPath,
+                source: fs.existsSync(this.skillhubPath) ? 'path_lookup' : 'not_found',
+            },
+            managedServices: [],
+        };
     }
 
     private loadStore(storePath: string): number {

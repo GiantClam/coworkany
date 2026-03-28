@@ -9,6 +9,7 @@ import {
     freezeWorkRequest,
     reduceWorkResult,
 } from '../src/orchestration/workRequestAnalyzer';
+import { prepareWorkRequestContext } from '../src/orchestration/workRequestRuntime';
 import { WorkRequestStore } from '../src/orchestration/workRequestStore';
 import { ScheduledTaskStore } from '../src/scheduling/scheduledTasks';
 
@@ -30,6 +31,49 @@ afterEach(() => {
 });
 
 describe('work request control plane', () => {
+    test('projects environment context into analysis and frozen execution prompt', async () => {
+        const environmentContext = {
+            platform: 'windows',
+            arch: 'x64',
+            appDir: 'C:\\Program Files\\CoworkAny',
+            appDataDir: 'C:\\Users\\alice\\AppData\\Roaming\\CoworkAny',
+            shell: 'PowerShell',
+            python: { available: true, path: 'python', source: 'system' },
+            skillhub: { available: false },
+            managedServices: [{ id: 'rag-service', bundled: true, runtimeReady: true }],
+        };
+        const analyzed = analyzeWorkRequest({
+            sourceText: 'Save the report to downloads',
+            workspacePath: 'C:\\Users\\alice\\workspace',
+            environmentContext,
+            systemContext: {
+                homeDir: 'C:\\Users\\alice',
+            },
+        });
+
+        expect(analyzed.environmentContext).toMatchObject({
+            platform: 'windows',
+            shell: 'PowerShell',
+        });
+        expect(
+            analyzed.tasks[0]?.localPlanHint?.targetFolder?.resolvedPath?.replace(/\//g, '\\')
+        ).toBe('C:\\Users\\alice\\Downloads');
+
+        const prepared = await prepareWorkRequestContext({
+            sourceText: 'Save the report to downloads',
+            workspacePath: 'C:\\Users\\alice\\workspace',
+            environmentContext,
+            workRequestStore: new WorkRequestStore(path.join(makeTempDir(), 'work-requests.json')),
+        });
+
+        expect(prepared.frozenWorkRequest.environmentContext).toMatchObject({
+            platform: 'windows',
+            shell: 'PowerShell',
+        });
+        expect(prepared.workRequestExecutionPrompt).toContain('### Environment Context');
+        expect(prepared.workRequestExecutionPrompt).toContain('Shell: PowerShell');
+    });
+
     test('classifies simple conversational input as chat', () => {
         const analyzed = analyzeWorkRequest({
             sourceText: 'hi',
@@ -94,6 +138,48 @@ describe('work request control plane', () => {
             forcedByUserSelection: true,
             needsDisambiguation: false,
         });
+    });
+
+    test('overrides chat route wrapper for direct system shell actions', () => {
+        const analyzed = analyzeWorkRequest({
+            sourceText: [
+                '原始任务：早上3点关机',
+                '用户路由：chat',
+            ].join('\n'),
+            workspacePath: '/tmp/workspace',
+            environmentContext: {
+                platform: 'macos',
+                arch: 'aarch64',
+                appDir: '/Applications/CoworkAny.app',
+                appDataDir: '/Users/test/Library/Application Support/CoworkAny',
+                shell: '/bin/zsh',
+                python: { available: true, path: 'python3', source: 'system' },
+                skillhub: { available: true, path: '/usr/local/bin/skillhub', source: 'path_lookup' },
+                managedServices: [],
+            },
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.intentRouting).toMatchObject({
+            intent: 'immediate_task',
+            needsDisambiguation: false,
+        });
+        expect(analyzed.intentRouting.reasonCodes).toContain('system_shell_action');
+        expect(analyzed.clarification.required).toBe(false);
+        expect(analyzed.tasks[0]?.preferredTools).toContain('run_command');
+        expect(analyzed.tasks[0]?.preferredSkills).toContain('system-analysis');
+        expect(analyzed.tasks[0]?.executionRequirements).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    kind: 'tool_evidence',
+                    capability: 'shell_execution',
+                    required: true,
+                }),
+            ]),
+        );
+        expect(analyzed.tasks[0]?.acceptanceCriteria).toContain(
+            '必须通过与当前平台兼容的真实 shell 命令执行目标动作，不能只返回命令示例或文字说明。'
+        );
     });
 
     test('supports schedule route wrapper without additional hardcoded branching', () => {

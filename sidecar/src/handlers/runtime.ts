@@ -1,4 +1,4 @@
-import type { ConfirmationPolicy, IpcCommand, IpcResponse } from '../protocol';
+import type { ConfirmationPolicy, IpcCommand, IpcResponse, PlatformRuntimeContext } from '../protocol';
 import type { ArtifactContract } from '../agent/artifactContract';
 import type {
     CapabilityReviewState,
@@ -561,11 +561,16 @@ function isSyntheticObjective(text: string): boolean {
 function buildFollowUpContext(input: {
     conversation: Array<{ role?: string; content?: unknown }>;
     previousSnapshot?: FrozenWorkRequestSnapshot;
+    previousExecutionAnchor?: {
+        analysisSourceText: string;
+        displayText?: string;
+    };
 }): WorkRequestFollowUpContext | undefined {
     const snapshotObjective = input.previousSnapshot?.primaryObjective?.trim();
+    const anchoredObjective = input.previousExecutionAnchor?.analysisSourceText?.trim();
     const baseObjective = snapshotObjective && !isSyntheticObjective(snapshotObjective)
         ? snapshotObjective
-        : getLatestSubstantialUserMessage(input.conversation);
+        : anchoredObjective || getLatestSubstantialUserMessage(input.conversation);
     const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
     const recentMessages = buildRecentFollowUpMessages(input.conversation);
 
@@ -612,7 +617,7 @@ function detectFollowUpLanguage(text: string): 'zh' | 'en' {
 
 const UUID_V4_TOKEN_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const GENERIC_OPAQUE_TOKEN_REGEX = /^[a-z0-9][a-z0-9._:-]{11,}$/i;
-const CONTROL_REPLY_WITH_TOKEN_REGEX = /^(确认|确认发布|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续处理|继续吧|继续|接着|往下|好的|ok|okay|yes|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|continue|go on|carry on|keep going)\s*[（(]([^()（）]+)[）)]\s*([.!?？。!]*)$/i;
+const CONTROL_REPLY_WITH_TOKEN_REGEX = /^(确认|确认发布|同意|同意执行|批准|批准执行|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续处理|继续吧|继续|接着|往下|好的|ok|okay|yes|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|continue|go on|carry on|keep going)\s*[（(]([^()（）]+)[）)]\s*([.!?？。!]*)$/i;
 
 function isOpaqueControlToken(value: string): boolean {
     const token = value.trim();
@@ -648,7 +653,7 @@ function normalizeFollowUpControlText(text: string): string {
 }
 
 function isPlanApprovalReply(text: string): boolean {
-    return /^(?:确认|确认发布|同意|批准|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
+    return /^(?:确认|确认发布|同意|同意执行|批准|批准执行|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
         .test(text.trim());
 }
 
@@ -755,8 +760,25 @@ function extractAutonomousStartIntent(text: string): { query: string } | null {
 }
 
 function assistantPromptedForPlanApproval(text: string): boolean {
-    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|final authorization|authorization token|confirm publish|please reply.*(?:confirm|approve|go ahead)|确认是否.*(?:继续|执行|发布)|请直接回复.*(?:确认|批准|授权)|回复.*(?:确认|批准|approval|授权)|显式批准|最终授权|授权口令|确认发布|要我(?:现在(?:就)?|这就|就)?按.*(?:设置|执行|开始).*(?:吗|\?|？)|要不要我(?:现在(?:就)?|这就|就)?.*(?:设置|执行|开始))/i
+    return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|final authorization|authorization token|confirm publish|please reply.*(?:confirm|approve|go ahead)|确认是否.*(?:继续|执行|发布)|请直接回复.*(?:确认|批准|授权|同意|继续执行)|回复.*(?:确认|批准|approval|授权|同意|继续执行)|显式批准|最终授权|授权口令|确认发布|如果你要我继续代执行.*回复.*同意执行|要我(?:现在(?:就)?|这就|就)?按.*(?:设置|执行|开始).*(?:吗|\?|？)|要不要我(?:现在(?:就)?|这就|就)?.*(?:设置|执行|开始))/i
         .test(text);
+}
+
+function isExecutionMetaQuestion(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const chineseMetaQuestion =
+        /^(?:为什么|为何|怎么|凭什么|能不能|可不可以).*(?:直接|拉起|调用|执行|运行).*(?:shell|终端|命令|脚本|工具|权限|授权)/u;
+    if (chineseMetaQuestion.test(trimmed)) {
+        return true;
+    }
+
+    const englishMetaQuestion =
+        /^(?:why|how|can)\b.*\b(?:directly|just)\b.*\b(?:run|execute|launch|call)\b.*\b(?:shell|terminal|command|script|permission|approval|authorize)\b/i;
+    return englishMetaQuestion.test(trimmed);
 }
 
 function buildApprovalFollowUpSourceText(input: {
@@ -836,13 +858,19 @@ function buildFollowUpSourceText(input: {
     promptText: string;
     conversation: Array<{ role?: string; content?: unknown }>;
     previousSnapshot?: FrozenWorkRequestSnapshot;
+    previousExecutionAnchor?: {
+        analysisSourceText: string;
+        displayText?: string;
+    };
 }): string {
     const normalizedPromptText = normalizeFollowUpControlText(input.promptText);
     const previousUserMessage = getLatestMeaningfulUserMessage(input.conversation);
     const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
     const previousPrimaryObjective = input.previousSnapshot?.primaryObjective?.trim();
+    const previousAnchorObjective = input.previousExecutionAnchor?.analysisSourceText?.trim();
     const previousContextText =
         input.previousSnapshot?.sourceText?.trim() ||
+        previousAnchorObjective ||
         previousUserMessage;
     if (previousContextText && normalizedPromptText.trim() === ROUTE_CHAT_TOKEN) {
         return [
@@ -1496,9 +1524,13 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 taskId: payload.taskId,
                 title: payload.title,
                 userQuery: payload.userQuery,
+                displayText: payload.context.displayText,
                 workspacePath: payload.context.workspacePath,
                 activeFile: payload.context.activeFile,
-                config: payload.config,
+                config: {
+                    ...(payload.config ?? {}),
+                    environmentContext: payload.context.environmentContext,
+                },
                 emitStartedEvent: true,
                 allowAutonomousFallback: true,
             });
@@ -1549,6 +1581,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const content = payload.content as string;
             const parsedUserInput = parseInlineAttachmentContent(content);
             const promptText = parsedUserInput.promptText || content;
+            const environmentContext = (payload.environmentContext as PlatformRuntimeContext | undefined) ?? undefined;
             const authOpenPageUrl = extractAuthOpenPageUrl(promptText);
             const normalizedPromptText = normalizeFollowUpControlText(promptText);
             const conversationContent = parsedUserInput.conversationContent;
@@ -1751,14 +1784,51 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 activePreparedWorkRequest?.frozenWorkRequest
                     ? snapshotFrozenWorkRequest(activePreparedWorkRequest.frozenWorkRequest)
                     : effectiveTaskConfig?.lastFrozenWorkRequestSnapshot;
+            const previousExecutionAnchor = effectiveTaskConfig?.executionAnchor;
+            const effectiveEnvironmentContext =
+                environmentContext
+                ?? previousExecutionAnchor?.environmentContext
+                ?? effectiveTaskConfig?.environmentContext;
+            const latestAssistantMessage = getLatestMeaningfulAssistantMessage(
+                existingConversation as Array<{ role?: string; content?: unknown }>
+            );
+            const approvalReply = (
+                isPlanApprovalReply(normalizedPromptText) || isGenericContinueReply(normalizedPromptText)
+            ) && assistantPromptedForPlanApproval(latestAssistantMessage);
+
+            if (approvalReply && previousExecutionAnchor?.analysisSourceText) {
+                deps.ensureTaskRuntimePersistence({
+                    taskId,
+                    title: (previousExecutionAnchor.displayText || previousExecutionAnchor.analysisSourceText).trim().slice(0, 80) || 'Approved task',
+                    workspacePath,
+                });
+                await deps.executeFreshTask({
+                    taskId,
+                    title: (previousExecutionAnchor.displayText || previousExecutionAnchor.analysisSourceText).trim().slice(0, 80) || 'Approved task',
+                    userQuery: previousExecutionAnchor.analysisSourceText,
+                    displayText: previousExecutionAnchor.displayText,
+                    workspacePath,
+                    activeFile: undefined,
+                    config: {
+                        ...(effectiveTaskConfig ?? {}),
+                        environmentContext: effectiveEnvironmentContext,
+                    },
+                    emitStartedEvent: false,
+                    allowAutonomousFallback: true,
+                });
+                return true;
+            }
+
             const followUpContext = buildFollowUpContext({
                 conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
                 previousSnapshot: previousFrozenSnapshot,
+                previousExecutionAnchor,
             });
             const sourceTextForAnalysis = buildFollowUpSourceText({
                 promptText: normalizedPromptText,
                 conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
                 previousSnapshot: previousFrozenSnapshot,
+                previousExecutionAnchor,
             });
 
             deps.ensureTaskRuntimePersistence({
@@ -1771,6 +1841,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: sourceTextForAnalysis,
                 workspacePath,
+                environmentContext: effectiveEnvironmentContext,
                 followUpContext,
                 workRequestStore: deps.workRequestStore,
             });
@@ -1781,10 +1852,33 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 previous: previousFrozenSnapshot,
                 next: frozenSnapshot,
             });
+            const shouldRefreshExecutionAnchor =
+                !approvalReply
+                && !isExecutionMetaQuestion(normalizedPromptText)
+                && Boolean(
+                    !previousExecutionAnchor
+                    || reopenSignal?.diff.changedFields.some((field) =>
+                        field === 'mode'
+                        || field === 'objective'
+                        || field === 'deliverables'
+                        || field === 'execution_targets'
+                        || field === 'workflow'
+                    )
+                );
             const nextTaskConfig = appendSupersededContractTombstone(
                 {
                     ...(effectiveTaskConfig ?? {}),
+                    environmentContext: effectiveEnvironmentContext,
                     lastFrozenWorkRequestSnapshot: frozenSnapshot,
+                    executionAnchor: shouldRefreshExecutionAnchor
+                        ? {
+                            analysisSourceText: sourceTextForAnalysis,
+                            displayText: conversationContent || undefined,
+                            environmentContext: effectiveEnvironmentContext,
+                            updatedAt: new Date().toISOString(),
+                            source: 'follow_up_refreeze',
+                        }
+                        : previousExecutionAnchor,
                 },
                 previousFrozenSnapshot,
                 frozenSnapshot,
@@ -2253,6 +2347,7 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: resumeQuery,
                 workspacePath,
+                environmentContext: effectiveTaskConfig?.environmentContext,
                 workRequestStore: deps.workRequestStore,
             });
             const resumedSnapshot = snapshotFrozenWorkRequest(preparedWorkRequest.frozenWorkRequest);

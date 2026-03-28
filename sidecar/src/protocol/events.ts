@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { PlatformRuntimeContextSchema } from './commands';
 import { EffectRequestSchema, EffectResponseSchema } from './effects';
 import { FilePatchSchema } from './patches';
 import {
@@ -221,6 +222,8 @@ export const TaskStartedEventSchema = BaseEventSchema.extend({
             workspacePath: z.string().optional(),
             activeFile: z.string().optional(),
             userQuery: z.string(),
+            displayText: z.string().optional(),
+            environmentContext: PlatformRuntimeContextSchema.optional(),
             packageManager: z.string().optional(),
             packageManagerCommands: z.any().optional(),
         }),

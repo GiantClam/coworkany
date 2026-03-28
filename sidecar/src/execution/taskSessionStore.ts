@@ -1,4 +1,5 @@
 import type { FrozenWorkRequestSnapshot, SupersededContractTombstone } from '../orchestration/workRequestSnapshot';
+import type { PlatformRuntimeContext } from '../protocol';
 import type {
     MemoryIsolationPolicy,
     RuntimeIsolationPolicy,
@@ -16,6 +17,7 @@ export type TaskSessionConfig = {
     disabledTools?: string[];
     workspacePath?: string;
     voiceProviderMode?: 'auto' | 'system' | 'custom';
+    environmentContext?: PlatformRuntimeContext;
     lastFrozenWorkRequestSnapshot?: FrozenWorkRequestSnapshot;
     supersededContractTombstones?: SupersededContractTombstone[];
     pendingCapabilityReview?: {
@@ -23,6 +25,13 @@ export type TaskSessionConfig = {
         summary: string;
         approved: boolean;
         updatedAt: string;
+    };
+    executionAnchor?: {
+        analysisSourceText: string;
+        displayText?: string;
+        environmentContext?: PlatformRuntimeContext;
+        updatedAt: string;
+        source: 'task_start' | 'follow_up_refreeze';
     };
     runtimeIsolationPolicy?: RuntimeIsolationPolicy;
     sessionIsolationPolicy?: SessionIsolationPolicy;

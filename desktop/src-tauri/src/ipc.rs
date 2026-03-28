@@ -19,7 +19,11 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::platform_asr;
-use crate::platform_runtime::{build_runtime_snapshot, resolve_skillhub_executable};
+use crate::platform_runtime::{
+    build_platform_runtime_context,
+    build_runtime_snapshot,
+    resolve_skillhub_executable,
+};
 use crate::process_manager::{ProcessManagerState, ServiceInfo};
 use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
 
@@ -50,6 +54,8 @@ pub struct StartTaskInput {
     pub title: String,
     #[serde(rename = "userQuery")]
     pub user_query: String,
+    #[serde(rename = "displayText")]
+    pub display_text: Option<String>,
     #[serde(rename = "workspacePath")]
     pub workspace_path: String,
     #[serde(rename = "activeFile")]
@@ -1041,8 +1047,10 @@ pub async fn start_task(
     let context = TaskContext {
         workspace_path: input.workspace_path,
         active_file: input.active_file,
+        display_text: input.display_text,
         selected_text: None,
         open_files: None,
+        environment_context: Some(build_platform_runtime_context(&app_handle, None)),
     };
 
     let config = input.config.map(|cfg| TaskConfig {
@@ -1724,6 +1732,7 @@ pub async fn send_task_message(
     let command = serde_json::to_value(IpcCommand::send_task_message(
         task_id.clone(),
         input.content,
+        Some(build_platform_runtime_context(&app_handle, None)),
         config,
     ))
     .map_err(|e| e.to_string())?;

@@ -139,6 +139,17 @@ function createRuntimeResponseDeps(overrides: Partial<RuntimeResponseDeps> = {})
 }
 
 describe('runtime commands handler', () => {
+    const environmentContext = {
+        platform: 'macos',
+        arch: 'aarch64',
+        appDir: '/Applications/CoworkAny.app',
+        appDataDir: '/Users/test/Library/Application Support/com.coworkany.desktop',
+        shell: '/bin/zsh',
+        python: { available: true, path: 'python3', source: 'system' },
+        skillhub: { available: false },
+        managedServices: [{ id: 'rag-service', bundled: true, runtimeReady: true }],
+    };
+
     test('handles bootstrap_runtime_context and emits success response', async () => {
         const emitted: any[] = [];
         const bootstrapped: any[] = [];
@@ -166,6 +177,136 @@ describe('runtime commands handler', () => {
         expect(bootstrapped).toHaveLength(1);
         expect(restored).toBe(true);
         expect(emitted[0]?.type).toBe('bootstrap_runtime_context_response');
+    });
+
+    test('start_task forwards environment context into executeFreshTask config', async () => {
+        const started: any[] = [];
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-start',
+            type: 'start_task',
+            timestamp: new Date().toISOString(),
+            payload: {
+                taskId: 'task-start',
+                title: '检查系统',
+                userQuery: '检查系统',
+                context: {
+                    workspacePath: '/tmp/workspace',
+                    displayText: '检查系统',
+                    environmentContext,
+                },
+            },
+        } as any, createRuntimeCommandDeps({
+            executeFreshTask: async (args) => {
+                started.push(args);
+            },
+        }));
+
+        expect(handled).toBe(true);
+        expect(started[0]?.config?.environmentContext).toMatchObject({
+            platform: 'macos',
+            shell: '/bin/zsh',
+        });
+    });
+
+    test('send_task_message reuses environment context during follow-up refreeze', async () => {
+        const preparedInputs: any[] = [];
+        let storedConfig: any = {
+            workspacePath: '/tmp/workspace',
+            environmentContext,
+        };
+
+        await handleRuntimeCommand({
+            id: 'cmd-followup-env',
+            type: 'send_task_message',
+            timestamp: new Date().toISOString(),
+            payload: {
+                taskId: 'task-followup-env',
+                content: '把文件保存到下载目录',
+            },
+        } as any, createRuntimeCommandDeps({
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: (_taskId, config) => {
+                    storedConfig = config;
+                    return config;
+                },
+                getConfig: () => storedConfig,
+                getConversation: () => [{ role: 'assistant', content: '继续说明你要怎么处理。' }],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            getTaskConfig: () => storedConfig,
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        id: 'wr-followup-env',
+                        schemaVersion: 1,
+                        mode: 'immediate_task',
+                        intentRouting: {
+                            intent: 'immediate_task',
+                            confidence: 0.9,
+                            reasonCodes: ['explicit_task'],
+                            needsDisambiguation: false,
+                        },
+                        sourceText: input.sourceText,
+                        workspacePath: input.workspacePath,
+                        environmentContext: input.environmentContext,
+                        tasks: [{
+                            id: 'task-1',
+                            title: '把文件保存到下载目录',
+                            objective: '把文件保存到下载目录',
+                            constraints: [],
+                            acceptanceCriteria: [],
+                            dependencies: [],
+                            preferredSkills: [],
+                            preferredTools: [],
+                        }],
+                        clarification: {
+                            required: false,
+                            questions: [],
+                            missingFields: [],
+                            canDefault: true,
+                            assumptions: [],
+                        },
+                        presentation: {
+                            uiFormat: 'chat_message',
+                            ttsEnabled: false,
+                            ttsMode: 'summary',
+                            ttsMaxChars: 280,
+                            language: 'zh-CN',
+                        },
+                        deliverables: [{
+                            id: 'deliverable-1',
+                            title: '聊天回复',
+                            type: 'chat_reply',
+                            description: '回复用户',
+                            required: true,
+                        }],
+                        createdAt: new Date().toISOString(),
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-followup-env',
+                        runMode: 'single',
+                        steps: [],
+                    },
+                    executionQuery: '把文件保存到下载目录',
+                    preferredSkillIds: [],
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+        }));
+
+        expect(preparedInputs[0]?.environmentContext).toMatchObject({
+            platform: 'macos',
+            shell: '/bin/zsh',
+        });
+        expect(storedConfig.environmentContext).toMatchObject({
+            platform: 'macos',
+        });
     });
 
     test('resume_interrupted_task approves pending capability review and continues the active prepared task', async () => {
@@ -1472,6 +1613,110 @@ describe('runtime commands handler', () => {
         expect(emitted.some((message) => message.type === 'TASK_CLARIFICATION_REQUIRED')).toBe(false);
     });
 
+    test('resumes the execution anchor when the assistant asked the user to reply 同意执行', async () => {
+        const emitted: any[] = [];
+        const ensured: any[] = [];
+        const executeFreshTaskCalls: any[] = [];
+        const preparedInputs: any[] = [];
+        const executionAnchor = {
+            analysisSourceText: '原始任务：早上 3 点关机\n用户确认：继续执行',
+            displayText: '早上 3 点关机',
+            updatedAt: '2026-03-28T00:00:00.000Z',
+            source: 'task_start' as const,
+        };
+        const config = {
+            workspacePath: '/tmp/workspace',
+            executionAnchor,
+            lastFrozenWorkRequestSnapshot: {
+                mode: 'chat',
+                sourceText: '原始任务：早上 3 点关机\n用户路由：chat',
+                primaryObjective: '早上 3 点关机',
+                preferredWorkflows: [],
+                resolvedTargets: [],
+                deliverables: [
+                    {
+                        type: 'chat_reply',
+                        format: 'chat_message',
+                    },
+                ],
+            },
+        };
+        const deps = createRuntimeCommandDeps({
+            emit: (message) => emitted.push(message),
+            ensureTaskRuntimePersistence: (input) => {
+                ensured.push(input);
+            },
+            executeFreshTask: async (input) => {
+                executeFreshTaskCalls.push(input);
+            },
+            getTaskConfig: () => config,
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: () => {},
+                getConfig: () => config,
+                getConversation: () => [
+                    { role: 'user', content: '早上 3 点关机' },
+                    {
+                        role: 'assistant',
+                        content:
+                            '如果你要我继续代执行，就回复：同意执行。\n'
+                            + '我会继续设置并校验结果。',
+                    },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async (input) => {
+                preparedInputs.push(input);
+                return {
+                    frozenWorkRequest: {
+                        clarification: { required: false },
+                        mode: 'immediate_task',
+                    },
+                    executionPlan: {
+                        workRequestId: 'wr-should-not-run',
+                        runMode: 'single',
+                        steps: [],
+                    },
+                    executionQuery: input.sourceText,
+                    workRequestExecutionPrompt: 'prompt',
+                };
+            },
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-reply-tongyi-zhixing',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-reply-tongyi-zhixing',
+                content: '同意执行',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(ensured).toEqual([
+            {
+                taskId: 'task-reply-tongyi-zhixing',
+                title: '早上 3 点关机',
+                workspacePath: '/tmp/workspace',
+            },
+        ]);
+        expect(executeFreshTaskCalls).toEqual([
+            expect.objectContaining({
+                taskId: 'task-reply-tongyi-zhixing',
+                title: '早上 3 点关机',
+                userQuery: '原始任务：早上 3 点关机\n用户确认：继续执行',
+                displayText: '早上 3 点关机',
+                emitStartedEvent: false,
+                allowAutonomousFallback: true,
+            }),
+        ]);
+        expect(preparedInputs).toEqual([]);
+        expect(emitted.some((message) => message.type === 'TASK_CONTRACT_REOPENED')).toBe(false);
+    });
+
     test('carries approval follow-up for scheduled-task context even without explicit approval prompt pattern', async () => {
         const sourceTexts: string[] = [];
         const deps = createRuntimeCommandDeps({
@@ -2568,6 +2813,97 @@ describe('runtime commands handler', () => {
         expect(preparedInputs[0]?.sourceText).toContain('发布到 X 上');
         expect(preparedInputs[0]?.sourceText).not.toContain('用户补充：同意');
         expect(continued).toBe(true);
+    });
+
+    test('preserves the previous execution anchor when the follow-up is only a shell-permission meta question', async () => {
+        const setConfigs: any[] = [];
+        const previousExecutionAnchor = {
+            analysisSourceText: '原始任务：早上 3 点关机\n用户确认：继续执行',
+            displayText: '早上 3 点关机',
+            updatedAt: '2026-03-28T00:00:00.000Z',
+            source: 'task_start' as const,
+        };
+        const config = {
+            workspacePath: '/tmp/workspace',
+            executionAnchor: previousExecutionAnchor,
+            lastFrozenWorkRequestSnapshot: {
+                mode: 'chat',
+                sourceText: '原始任务：早上 3 点关机\n用户路由：chat',
+                primaryObjective: '早上 3 点关机',
+                preferredWorkflows: [],
+                resolvedTargets: [],
+                deliverables: [
+                    {
+                        type: 'chat_reply',
+                        format: 'chat_message',
+                    },
+                ],
+            },
+        };
+        const deps = createRuntimeCommandDeps({
+            getTaskConfig: () => config,
+            taskSessionStore: {
+                clearConversation: () => {},
+                ensureHistoryLimit: () => {},
+                setHistoryLimit: () => {},
+                setConfig: (_taskId, nextConfig) => {
+                    setConfigs.push(nextConfig);
+                },
+                getConfig: () => config,
+                getConversation: () => [
+                    { role: 'user', content: '早上 3 点关机' },
+                    { role: 'assistant', content: '原因只有一个：权限与安全边界。' },
+                ],
+                getArtifactContract: () => undefined,
+                setArtifactContract: () => {},
+            },
+            prepareWorkRequestContext: async () => ({
+                frozenWorkRequest: {
+                    id: 'wr-meta-question',
+                    mode: 'immediate_task',
+                    sourceText: '为什么你不能直接拉起 shell，执行命令',
+                    tasks: [{ objective: '为什么你不能直接拉起 shell，执行命令' }],
+                    clarification: { required: false },
+                    deliverables: [{
+                        id: 'deliverable-meta',
+                        title: 'Final response',
+                        type: 'chat_reply',
+                        description: 'Return an explanation.',
+                        required: true,
+                        format: 'chat_message',
+                    }],
+                },
+                executionPlan: {
+                    workRequestId: 'wr-meta-question',
+                    runMode: 'single',
+                    steps: [
+                        {
+                            stepId: 'step-analysis',
+                            kind: 'analysis',
+                            title: 'Analyze',
+                            description: 'Analyze meta question',
+                            status: 'completed',
+                            dependencies: [],
+                        },
+                    ],
+                },
+                executionQuery: '为什么你不能直接拉起 shell，执行命令',
+                workRequestExecutionPrompt: 'prompt',
+            }),
+            continuePreparedAgentFlow: async () => {},
+        });
+
+        const handled = await handleRuntimeCommand({
+            id: 'cmd-r4-shell-meta-question',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-shell-meta-question',
+                content: '为什么你不能直接拉起 shell，执行命令',
+            },
+        } as any, deps);
+
+        expect(handled).toBe(true);
+        expect(setConfigs.at(-1)?.executionAnchor).toEqual(previousExecutionAnchor);
     });
 
     test('treats generic continue replies as execution approval context for prior objective', async () => {

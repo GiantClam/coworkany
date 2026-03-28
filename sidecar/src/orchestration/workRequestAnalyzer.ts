@@ -44,6 +44,7 @@ import {
 } from '../scheduling/scheduledTasks';
 import { cleanScheduledTaskResultText, normalizeScheduledTaskResultText } from '../scheduling/scheduledTaskPresentation';
 import { analyzeLocalTaskIntent } from './localTaskIntent';
+import type { PlatformRuntimeContext } from '../protocol/commands';
 import type { SystemFolderResolutionOptions } from '../system/wellKnownFolders';
 import { TARGET_RESOLUTION_RULE_TABLE, matchesAnyPattern } from './targetResolutionRules';
 import {
@@ -87,6 +88,8 @@ import {
     PREFERENCE_DEEP_PATTERN,
     PRICE_SENSITIVE_INVESTMENT_PATTERN,
     RESEARCH_BEST_PRACTICE_CUE_PATTERN,
+    SYSTEM_SHELL_ACTION_EXPLANATION_PATTERN,
+    SYSTEM_SHELL_ACTION_PATTERN,
     TASK_CATEGORY_BROWSER_CUE_PATTERN,
     TASK_CATEGORY_MIXED_CUE_PATTERN,
     TASK_CATEGORY_RESEARCH_CUE_PATTERN,
@@ -1192,6 +1195,32 @@ function buildStrategyOptions(input: {
         return { strategyOptions, selectedStrategyId: selectedId };
     }
 
+    if (isDirectSystemShellActionTask(input.text)) {
+        const selectedId = randomUUID();
+        strategyOptions.push({
+            id: selectedId,
+            title: 'Platform shell execution',
+            description: 'Execute the requested system action through a platform-compatible shell command and let policy approval gate the side effect.',
+            pros: ['Keeps execution aligned with the detected operating system.', 'Uses the existing shell approval chain instead of a chat-only answer.'],
+            cons: ['High-risk commands may still pause for explicit approval before they run.'],
+            feasibility: 'high',
+            supportingEvidenceIds: evidenceIds,
+            selected: true,
+        });
+        strategyOptions.push({
+            id: randomUUID(),
+            title: 'Instruction-only reply',
+            description: 'Reply with command suggestions without executing anything.',
+            pros: ['Avoids side effects during the task.'],
+            cons: ['Does not satisfy a direct system-action request.'],
+            feasibility: 'low',
+            supportingEvidenceIds: evidenceIds,
+            selected: false,
+            rejectionReason: 'The request is a direct system action and should go through the shell approval path.',
+        });
+        return { strategyOptions, selectedStrategyId: selectedId };
+    }
+
     if (isCodeChangeTask(input.text)) {
         const selectedId = randomUUID();
         strategyOptions.push({
@@ -1316,8 +1345,28 @@ function requiresBrowserAutomationSkill(text: string): boolean {
     return BROWSER_UI_CUE_PATTERN.test(text) || isLikelySocialPublishingTask(text);
 }
 
+function isDirectSystemShellActionTask(text: string): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+    if (!SYSTEM_SHELL_ACTION_PATTERN.test(trimmed)) {
+        return false;
+    }
+    return !SYSTEM_SHELL_ACTION_EXPLANATION_PATTERN.test(trimmed);
+}
+
 function inferExecutionRequirements(text: string): TaskDefinition['executionRequirements'] {
     const requirements: NonNullable<TaskDefinition['executionRequirements']> = [];
+    if (isDirectSystemShellActionTask(text)) {
+        requirements.push({
+            id: randomUUID(),
+            kind: 'tool_evidence',
+            capability: 'shell_execution',
+            required: true,
+            reason: 'This objective is a direct system action and must be completed through a real shell command on the current platform.',
+        });
+    }
     if (requiresVerifiedBrowserExecution(text)) {
         requirements.push({
             id: randomUUID(),
@@ -1337,6 +1386,9 @@ function inferPreferredTools(
     sourceUrls?: string[],
 ): string[] {
     const merged = new Set(baseTools);
+    if (isDirectSystemShellActionTask(text)) {
+        merged.add('run_command');
+    }
     if (publishIntent?.platform === 'xiaohongshu' && publishIntent.requiresSideEffect) {
         merged.add('xiaohongshu_post');
     }
@@ -1362,6 +1414,9 @@ function inferPreferredTools(
 
 function inferPreferredSkills(text: string, mode: NormalizedWorkRequest['mode']): string[] {
     const skills = ['task-orchestrator'];
+    if (isDirectSystemShellActionTask(text)) {
+        skills.push('system-analysis');
+    }
     if (isCoworkanySelfManagementTask(text)) {
         skills.push('coworkany-self-management');
     }
@@ -1444,6 +1499,12 @@ function resolveWorkRequestMode(input: {
     if (input.forcedIntentHint?.intent === 'scheduled_task') {
         return 'scheduled_task';
     }
+    if (
+        input.forcedIntentHint?.intent === 'chat'
+        && isDirectSystemShellActionTask(input.executableText)
+    ) {
+        return 'immediate_task';
+    }
     if (input.forcedIntentHint?.intent === 'chat') {
         return 'chat';
     }
@@ -1469,6 +1530,18 @@ function buildIntentRouting(input: {
             : input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task'
                 ? 'scheduled_task'
                 : 'immediate_task';
+
+    if (
+        input.forcedIntentHint?.intent === 'chat'
+        && isDirectSystemShellActionTask(input.executableText)
+    ) {
+        return {
+            intent: 'immediate_task',
+            confidence: 0.98,
+            reasonCodes: ['system_shell_action'],
+            needsDisambiguation: false,
+        };
+    }
 
     if (input.forcedIntentHint?.reasonCode === 'explicit_command') {
         return {
@@ -1591,9 +1664,10 @@ function buildClarificationDecision(input: {
 
     const trimmed = input.executableText.trim();
     const language = detectLanguage(input.sourceText);
+    const directSystemShellAction = isDirectSystemShellActionTask(trimmed);
     const ambiguousReference =
-        isAmbiguousReferenceRequest(trimmed);
-    const tooShortToAct = trimmed.length > 0 && trimmed.length < 8;
+        !directSystemShellAction && isAmbiguousReferenceRequest(trimmed);
+    const tooShortToAct = !directSystemShellAction && trimmed.length > 0 && trimmed.length < 8;
     const missingExecutionTargetIdentifier = requiresExecutionTargetIdentifierClarification(trimmed);
 
     if (missingExecutionTargetIdentifier) {
@@ -1663,6 +1737,13 @@ function buildTaskDefinition(
         ACCEPTANCE_CRITERIA_OUTPUT_PATTERN.test(segment)
     );
     const language = detectLanguage(text);
+    if (isDirectSystemShellActionTask(text)) {
+        acceptanceCriteria.push(
+            language.startsWith('zh')
+                ? '必须通过与当前平台兼容的真实 shell 命令执行目标动作，不能只返回命令示例或文字说明。'
+                : 'Execute the objective through a real shell command compatible with the current platform, not only a suggested command snippet.'
+        );
+    }
     if (isPriceSensitiveInvestmentTask(text)) {
         const hasNumericPriceCriterion = acceptanceCriteria.some((criterion) =>
             ACCEPTANCE_CRITERIA_PRICE_PATTERN.test(criterion)
@@ -1720,6 +1801,32 @@ function buildTaskDefinition(
         sourceUrls: sourceUrls.length > 0 ? sourceUrls : undefined,
         localPlanHint: localTaskPlan,
         executionRequirements,
+    };
+}
+
+function toSystemPlatform(platform?: string): NodeJS.Platform | undefined {
+    if (platform === 'macos' || platform === 'darwin') {
+        return 'darwin';
+    }
+    if (platform === 'windows' || platform === 'win32') {
+        return 'win32';
+    }
+    if (platform === 'linux') {
+        return 'linux';
+    }
+    return undefined;
+}
+
+function buildEffectiveSystemContext(input: {
+    environmentContext?: PlatformRuntimeContext;
+    systemContext?: SystemFolderResolutionOptions;
+}): SystemFolderResolutionOptions {
+    const platform = input.systemContext?.platform ?? toSystemPlatform(input.environmentContext?.platform);
+    return {
+        ...input.systemContext,
+        homeDir: input.systemContext?.homeDir,
+        env: input.systemContext?.env,
+        ...(platform ? { platform } : {}),
     };
 }
 
@@ -1915,6 +2022,7 @@ export function analyzeWorkRequest(input: {
     workspacePath: string;
     followUpContext?: WorkRequestFollowUpContext;
     now?: Date;
+    environmentContext?: PlatformRuntimeContext;
     systemContext?: SystemFolderResolutionOptions;
 }): NormalizedWorkRequest {
     const sourceTextRaw = input.sourceText;
@@ -1932,6 +2040,10 @@ export function analyzeWorkRequest(input: {
     const planningText = scheduledIntent
         ? [scheduledIntent.taskQuery, ...chainedScheduledStages.map((stage) => stage.taskQuery)].join('。')
         : executableText;
+    const effectiveSystemContext = buildEffectiveSystemContext({
+        environmentContext: input.environmentContext,
+        systemContext: input.systemContext,
+    });
     const publishIntent = buildPublishIntent(planningText);
     const mode = resolveWorkRequestMode({
         scheduledIntent,
@@ -1951,11 +2063,11 @@ export function analyzeWorkRequest(input: {
             scheduledIntent,
             mode,
             workspacePath: input.workspacePath,
-            systemContext: input.systemContext,
+            systemContext: effectiveSystemContext,
         })
-        : [buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext, publishIntent)];
+        : [buildTaskDefinition(executableText, mode, input.workspacePath, effectiveSystemContext, publishIntent)];
     const primaryTaskDefinition =
-        tasks[0] ?? buildTaskDefinition(executableText, mode, input.workspacePath, input.systemContext, publishIntent);
+        tasks[0] ?? buildTaskDefinition(executableText, mode, input.workspacePath, effectiveSystemContext, publishIntent);
     const hasManualAction = requiresExternalAuthOrManualAction(planningText);
     const scheduledMode = mode === 'scheduled_task' || mode === 'scheduled_multi_task';
     const manualActionPreapproved = scheduledMode && planAlreadyApproved;
@@ -1969,6 +2081,7 @@ export function analyzeWorkRequest(input: {
     const isComplexTask = isComplexPlanningTask(planningText, mode);
     const hasExplicitTaskCue =
         codeChangeTask ||
+        isDirectSystemShellActionTask(planningText) ||
         hasExplicitArtifactOutputIntent(planningText) ||
         isComplexTask ||
         hasManualAction ||
@@ -2122,6 +2235,7 @@ export function analyzeWorkRequest(input: {
         taskDraftRequired,
         sourceText,
         workspacePath: input.workspacePath,
+        environmentContext: input.environmentContext,
         schedule: scheduledIntent
             ? {
                 executeAt: scheduledIntent.executeAt.toISOString(),

@@ -1,11 +1,11 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::{AppHandle, Manager};
 
 use crate::process_manager::ProcessManager;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeBinaryInfo {
     pub available: bool,
@@ -15,7 +15,7 @@ pub struct RuntimeBinaryInfo {
     pub source: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServiceCapability {
     pub id: String,
@@ -23,7 +23,7 @@ pub struct ManagedServiceCapability {
     pub runtime_ready: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformRuntimeContext {
     pub platform: String,
@@ -31,6 +31,7 @@ pub struct PlatformRuntimeContext {
     pub app_dir: String,
     pub app_data_dir: String,
     pub shell: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sidecar_launch_mode: Option<String>,
     pub python: RuntimeBinaryInfo,
     pub skillhub: RuntimeBinaryInfo,
@@ -399,7 +400,39 @@ fn running_from_app_bundle() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeBinaryInfo, RuntimeDependencyStatus};
+    use super::{
+        ManagedServiceCapability, PlatformRuntimeContext, RuntimeBinaryInfo, RuntimeDependencyStatus,
+    };
+
+    #[test]
+    fn serializing_runtime_context_omits_absent_sidecar_launch_mode() {
+        let value = serde_json::to_value(PlatformRuntimeContext {
+            platform: "macos".to_string(),
+            arch: "aarch64".to_string(),
+            app_dir: "/Applications/CoworkAny.app".to_string(),
+            app_data_dir: "/tmp/coworkany".to_string(),
+            shell: "/bin/zsh".to_string(),
+            sidecar_launch_mode: None,
+            python: RuntimeBinaryInfo {
+                available: true,
+                path: Some("python3".to_string()),
+                source: Some("system".to_string()),
+            },
+            skillhub: RuntimeBinaryInfo {
+                available: false,
+                path: None,
+                source: None,
+            },
+            managed_services: vec![ManagedServiceCapability {
+                id: "rag-service".to_string(),
+                bundled: true,
+                runtime_ready: true,
+            }],
+        })
+        .expect("runtime context should serialize");
+
+        assert!(value.get("sidecarLaunchMode").is_none());
+    }
 
     #[test]
     fn runtime_binary_info_omits_null_optional_fields() {

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { type FrozenWorkRequest, type PresentationContract } from '../orchestration/workRequestSchema';
+import type { PlatformRuntimeContext } from '../protocol/commands';
 import {
     CHAINED_SCHEDULE_PATTERN,
     INLINE_CHINESE_RELATIVE_TIME_PATTERN,
@@ -26,6 +27,7 @@ export interface ScheduledTaskConfig {
     enabledToolpacks?: string[];
     enabledSkills?: string[];
     disabledTools?: string[];
+    environmentContext?: PlatformRuntimeContext;
 }
 
 export type ScheduledTaskStatus =

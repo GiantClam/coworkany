@@ -12,6 +12,7 @@ import type {
     ReplanTrigger,
     RuntimeIsolationPolicy,
 } from '../orchestration/workRequestSchema';
+import type { PlatformRuntimeContext } from '../protocol/commands';
 import { type ToolDefinition } from '../tools/standard';
 import { type ExecutionResultReporter } from './resultReporter';
 import { type ExecutionSession } from './session';
@@ -96,6 +97,27 @@ type MarketplaceInstallIntent = {
     marketplace: 'auto' | 'skillhub' | 'github' | 'clawhub';
     source: string;
 };
+
+type SystemShellActionKind = 'shutdown' | 'restart';
+
+type ParsedAbsoluteClockTime = {
+    hour: number;
+    minute: number;
+    display: string;
+};
+
+type DeterministicSystemShellActionPlan = {
+    kind: SystemShellActionKind;
+    platform: PlatformRuntimeContext['platform'];
+    command: string;
+    summary: string;
+};
+
+const DIRECT_SYSTEM_SHUTDOWN_PATTERN = /(关机|shutdown|power[\s-]?off|poweroff|halt)/i;
+const DIRECT_SYSTEM_RESTART_PATTERN = /(重启|重新启动|restart|reboot)/i;
+const DIRECT_SYSTEM_IMMEDIATE_PATTERN = /(立刻|马上|现在|立即|now|right away|immediately)/i;
+const DIRECT_SYSTEM_TIME_OF_DAY_PATTERN =
+    /(?:(今天|明天)\s*)?(凌晨|早上|上午|中午|下午|傍晚|晚上|夜里|am|pm)?\s*([零〇一二两兩三四五六七八九十百\d]{1,3})\s*(?:点|时|:|：)\s*([零〇一二两兩三四五六七八九十百\d]{1,2})?/iu;
 
 export type ExecutionRuntimeDeps = {
     shouldRunAutonomously: (query: string) => boolean;
@@ -620,6 +642,8 @@ function hasRequiredToolEvidenceCapability(
     switch (capability) {
         case 'browser_interaction':
             return hasBrowserInteractionEvidence(toolsUsed);
+        case 'shell_execution':
+            return toolsUsed.includes('run_command');
         default:
             return true;
     }
@@ -1334,6 +1358,17 @@ async function runPreparedAgentExecution(input: {
             return marketplaceInstallResult;
         }
 
+        const deterministicSystemShellWorkflowResult = await tryExecuteDeterministicSystemShellWorkflow({
+            taskId,
+            workspacePath,
+            preparedWorkRequest,
+            startedAt,
+            emitFinishedStatus: input.emitFinishedStatus,
+        }, deps);
+        if (deterministicSystemShellWorkflowResult) {
+            return deterministicSystemShellWorkflowResult;
+        }
+
         const deterministicLocalWorkflowResult = await tryExecuteDeterministicLocalWorkflow({
             taskId,
             workspacePath,
@@ -1828,6 +1863,231 @@ function listTopLevelFilesByKind(
         }));
 }
 
+function normalizeSystemShellActionSourceText(preparedWorkRequest: PreparedWorkRequestContext): string {
+    return [
+        preparedWorkRequest.executionQuery,
+        preparedWorkRequest.frozenWorkRequest.tasks[0]?.objective,
+        preparedWorkRequest.frozenWorkRequest.sourceText,
+    ]
+        .filter((segment): segment is string => typeof segment === 'string' && segment.trim().length > 0)
+        .join('\n');
+}
+
+function normalizeRuntimePlatform(
+    platform?: string,
+): 'macos' | 'windows' | 'linux' | undefined {
+    switch (platform) {
+        case 'macos':
+        case 'darwin':
+            return 'macos';
+        case 'windows':
+        case 'win32':
+            return 'windows';
+        case 'linux':
+            return 'linux';
+        default:
+            return undefined;
+    }
+}
+
+function parseChineseNumeral(raw: string): number | null {
+    if (!raw) {
+        return null;
+    }
+    if (/^\d+$/u.test(raw)) {
+        return Number(raw);
+    }
+
+    const digits: Record<string, number> = {
+        零: 0,
+        〇: 0,
+        一: 1,
+        二: 2,
+        两: 2,
+        兩: 2,
+        三: 3,
+        四: 4,
+        五: 5,
+        六: 6,
+        七: 7,
+        八: 8,
+        九: 9,
+    };
+    const normalized = raw.trim();
+    if (!normalized) {
+        return null;
+    }
+    if (normalized === '十') {
+        return 10;
+    }
+    const tenIndex = normalized.indexOf('十');
+    if (tenIndex >= 0) {
+        const tensRaw = normalized.slice(0, tenIndex);
+        const onesRaw = normalized.slice(tenIndex + 1);
+        const tens = tensRaw ? (digits[tensRaw] ?? 0) : 1;
+        const ones = onesRaw ? (digits[onesRaw] ?? 0) : 0;
+        return tens * 10 + ones;
+    }
+
+    let value = 0;
+    for (const char of normalized) {
+        if (!(char in digits)) {
+            return null;
+        }
+        value = value * 10 + digits[char]!;
+    }
+    return value;
+}
+
+function parseAbsoluteClockTime(text: string): ParsedAbsoluteClockTime | null {
+    const match = DIRECT_SYSTEM_TIME_OF_DAY_PATTERN.exec(text);
+    if (!match) {
+        return null;
+    }
+
+    const meridiemRaw = match[2]?.toLowerCase() ?? '';
+    const rawHour = parseChineseNumeral(match[3] ?? '');
+    const rawMinute = match[4] ? parseChineseNumeral(match[4]) : 0;
+    if (rawHour === null || rawMinute === null) {
+        return null;
+    }
+
+    let hour = rawHour;
+    const minute = rawMinute;
+
+    if (/^(?:凌晨|早上|上午|am)$/iu.test(meridiemRaw)) {
+        if (hour === 12) {
+            hour = 0;
+        }
+    } else if (/^(?:中午)$/u.test(meridiemRaw)) {
+        if (hour >= 1 && hour <= 10) {
+            hour += 12;
+        }
+    } else if (/^(?:下午|傍晚|晚上|夜里|pm)$/iu.test(meridiemRaw)) {
+        if (hour < 12) {
+            hour += 12;
+        }
+    }
+
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return null;
+    }
+
+    return {
+        hour,
+        minute,
+        display: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    };
+}
+
+function buildDeterministicSystemShellActionPlan(
+    preparedWorkRequest: PreparedWorkRequestContext,
+): DeterministicSystemShellActionPlan | null {
+    const text = normalizeSystemShellActionSourceText(preparedWorkRequest);
+    if (!text.trim()) {
+        return null;
+    }
+
+    const kind: SystemShellActionKind | null =
+        DIRECT_SYSTEM_SHUTDOWN_PATTERN.test(text)
+            ? 'shutdown'
+            : DIRECT_SYSTEM_RESTART_PATTERN.test(text)
+                ? 'restart'
+                : null;
+    if (!kind) {
+        return null;
+    }
+
+    const platform = normalizeRuntimePlatform(
+        preparedWorkRequest.frozenWorkRequest.environmentContext?.platform,
+    );
+    if (!platform) {
+        return null;
+    }
+
+    const absoluteTime = parseAbsoluteClockTime(text);
+    const immediate = DIRECT_SYSTEM_IMMEDIATE_PATTERN.test(text) || !absoluteTime;
+    const actionLabel = kind === 'shutdown' ? '关机' : '重启';
+    const summarySuffix = absoluteTime && !immediate
+        ? `在 ${absoluteTime.display} ${actionLabel}`
+        : `立即${actionLabel}`;
+
+    if (platform === 'macos' || platform === 'linux') {
+        const command = absoluteTime && !immediate
+            ? `sudo shutdown ${kind === 'shutdown' ? '-h' : '-r'} ${absoluteTime.display}`
+            : `sudo shutdown ${kind === 'shutdown' ? '-h' : '-r'} now`;
+        return {
+            kind,
+            platform,
+            command,
+            summary: `已通过 ${platform} shell 命令准备${summarySuffix}。终端会请求管理员授权。`,
+        };
+    }
+
+    if (platform === 'windows') {
+        if (absoluteTime && !immediate) {
+            const taskName = `Coworkany-${kind}-${absoluteTime.display.replace(':', '')}`;
+            const command = `schtasks /Create /SC ONCE /TN "${taskName}" /TR "shutdown ${kind === 'shutdown' ? '/s' : '/r'} /t 0" /ST ${absoluteTime.display} /F`;
+            return {
+                kind,
+                platform,
+                command,
+                summary: `已通过 Windows 计划任务准备在 ${absoluteTime.display} ${actionLabel}。终端会请求必要授权。`,
+            };
+        }
+        return {
+            kind,
+            platform,
+            command: `shutdown ${kind === 'shutdown' ? '/s' : '/r'} /t 0`,
+            summary: `已通过 Windows shell 命令准备立即${actionLabel}。终端会请求必要授权。`,
+        };
+    }
+
+    return null;
+}
+
+async function tryExecuteDeterministicSystemShellWorkflow(input: {
+    taskId: string;
+    workspacePath: string;
+    preparedWorkRequest: PreparedWorkRequestContext;
+    startedAt: number;
+    emitFinishedStatus: boolean;
+}, deps: ExecutionRuntimeDeps): Promise<ExecutionRuntimeResult | null> {
+    const plan = buildDeterministicSystemShellActionPlan(input.preparedWorkRequest);
+    if (!plan) {
+        return null;
+    }
+
+    const executionResult = await deps.executeTool(
+        input.taskId,
+        'run_command',
+        {
+            command: plan.command,
+            cwd: input.workspacePath,
+            timeout_ms: 30_000,
+        },
+        { workspacePath: input.workspacePath }
+    );
+
+    if (
+        executionResult?.error
+        || executionResult?.success === false
+        || (typeof executionResult?.exit_code === 'number' && executionResult.exit_code !== 0)
+    ) {
+        const errorMessage =
+            executionResult?.error
+            || executionResult?.stderr
+            || `Failed to execute deterministic ${plan.kind} workflow command.`;
+        return failDeterministicWorkflow(input, deps, String(errorMessage));
+    }
+
+    const summary = executionResult?.status === 'opened_in_terminal'
+        ? `${plan.summary} 已打开终端窗口，请在终端中完成授权或输入密码。`
+        : plan.summary;
+
+    return completeDeterministicWorkflow(input, deps, summary, ['run_command']);
+}
+
 function buildListDirArgs(targetPath: string, traversalScope: LocalTaskPlanHint['traversalScope']): Record<string, unknown> {
     return traversalScope === 'recursive'
         ? { path: targetPath, recursive: true, max_depth: 16 }
@@ -2195,7 +2455,7 @@ function completeDeterministicWorkflow(input: {
     preparedWorkRequest: PreparedWorkRequestContext;
     startedAt: number;
     emitFinishedStatus: boolean;
-}, deps: ExecutionRuntimeDeps, summary: string): ExecutionRuntimeResult {
+}, deps: ExecutionRuntimeDeps, summary: string, toolsUsed: string[] = []): ExecutionRuntimeResult {
     deps.markWorkRequestExecutionCompleted(input.preparedWorkRequest, summary);
     if (input.emitFinishedStatus) {
         deps.reporter.status('finished');
@@ -2208,6 +2468,7 @@ function completeDeterministicWorkflow(input: {
         success: true,
         summary,
         artifactsCreated: [],
+        toolsUsed,
     };
 }
 

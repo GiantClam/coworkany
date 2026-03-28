@@ -1,4 +1,5 @@
 import type { LocalTaskPlanHint } from './localTaskIntent';
+import type { PlatformRuntimeContext } from '../protocol/commands';
 import type { ResolvedFolderReference } from '../system/wellKnownFolders';
 
 export type WorkMode =
@@ -314,7 +315,7 @@ export type ReplanPolicy = {
     triggers: ReplanTrigger[];
 };
 
-export type ExecutionRequirementCapability = 'browser_interaction';
+export type ExecutionRequirementCapability = 'browser_interaction' | 'shell_execution';
 
 export type TaskExecutionRequirement = {
     id: string;
@@ -373,6 +374,7 @@ export type NormalizedWorkRequest = {
     taskDraftRequired?: boolean;
     sourceText: string;
     workspacePath: string;
+    environmentContext?: PlatformRuntimeContext;
     schedule?: {
         executeAt?: string;
         timezone: string;

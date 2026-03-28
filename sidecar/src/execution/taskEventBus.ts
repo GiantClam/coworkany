@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { TaskEvent } from '../protocol';
+import type { PlatformRuntimeContext, TaskEvent } from '../protocol';
 import type {
     CapabilityReviewState,
     CapabilityPlan,
@@ -32,6 +32,8 @@ export type TaskStartedPayload = {
         workspacePath?: string;
         activeFile?: string;
         userQuery: string;
+        displayText?: string;
+        environmentContext?: PlatformRuntimeContext;
         packageManager?: string;
         packageManagerCommands?: any;
     };

@@ -10,13 +10,13 @@ const TEST_TIMEOUT_MS = 12 * 60 * 1000;
 const INPUT_SELECTORS = [
     '.chat-input',
     'textarea.chat-input',
-    'input[placeholder="New instructions..."]',
-    'input[placeholder*="instructions"]',
-    'input[placeholder*="指令"]',
-    '.chat-input input',
     '.chat-input textarea',
-    'textarea',
-    'input[type="text"]',
+    '.chat-input input',
+    'input[placeholder="New instructions..."]',
+    'textarea[placeholder*="instructions"]',
+    'input[placeholder*="instructions"]',
+    'textarea[placeholder*="指令"]',
+    'input[placeholder*="指令"]',
 ];
 
 type SidecarResponse = {
@@ -66,6 +66,19 @@ type StartTaskResult = {
     success: boolean;
     taskId: string;
     error?: string;
+};
+
+type TaskRunResult = {
+    taskId: string;
+    terminalEvent: SidecarEvent;
+    events: SidecarEvent[];
+};
+
+type WebAccessScenario = {
+    id: 'websearch' | 'webfetch' | 'curl' | 'jina' | 'cdp';
+    marker: string;
+    buildQuery: (input: { skillId: string; marker: string }) => string;
+    verify: (events: SidecarEvent[]) => void;
 };
 
 function ensureDir(dirPath: string): void {
@@ -294,6 +307,127 @@ async function waitForValue<T>(
 
 function isTaskTerminalEventType(type: string): boolean {
     return type === 'TASK_FINISHED' || type === 'TASK_FAILED' || type === 'TASK_CANCELLED';
+}
+
+function hasProviderConfigForSkillE2E(): boolean {
+    if (
+        process.env.E2E_AIBERM_API_KEY?.trim()
+        || process.env.OPENAI_API_KEY?.trim()
+        || process.env.OPENROUTER_API_KEY?.trim()
+        || process.env.ANTHROPIC_API_KEY?.trim()
+    ) {
+        return true;
+    }
+
+    const defaultAppDataDir = path.join(os.homedir(), 'Library', 'Application Support', 'com.coworkany.desktop');
+    const defaultConfigPath = path.join(defaultAppDataDir, 'llm-config.json');
+    const fallbackConfig = readJsonIfExists<Record<string, unknown> | null>(defaultConfigPath, null);
+    return isValidLlmConfig(fallbackConfig);
+}
+
+function getToolName(event: SidecarEvent): string {
+    return String(event.payload?.name ?? '');
+}
+
+function getToolInputJson(event: SidecarEvent): string {
+    return JSON.stringify(event.payload?.input ?? {});
+}
+
+function getTaskErrorMessage(event: SidecarEvent): string {
+    const payload = event.payload ?? {};
+    const code = typeof payload.errorCode === 'string' ? payload.errorCode : '';
+    const message = typeof payload.error === 'string' ? payload.error : '';
+    return `${code} ${message}`.trim();
+}
+
+async function waitForTaskRunFromEventCursor(
+    harness: BrowserDesktopHarness,
+    eventCursor: number,
+    timeoutMs: number,
+    label: string,
+): Promise<TaskRunResult> {
+    const startedEvent = await waitForValue(
+        () => {
+            const events = harness.getTaskEvents().slice(eventCursor);
+            return events.find((event) => event.type === 'TASK_STARTED' && typeof event.taskId === 'string');
+        },
+        timeoutMs,
+        `${label}: task should start`,
+    );
+
+    const terminalEvent = await waitForValue(
+        () => harness.getTaskEvents().find((event) => event.taskId === startedEvent.taskId && isTaskTerminalEventType(event.type)),
+        timeoutMs,
+        `${label}: task should reach terminal state`,
+    );
+
+    const events = harness.getTaskEvents().filter((event) => event.taskId === startedEvent.taskId);
+    return {
+        taskId: startedEvent.taskId,
+        terminalEvent,
+        events,
+    };
+}
+
+async function waitForTaskRunByTaskId(
+    harness: BrowserDesktopHarness,
+    taskId: string,
+    timeoutMs: number,
+    label: string,
+): Promise<TaskRunResult> {
+    const terminalEvent = await waitForValue(
+        () => harness.getTaskEvents().find((event) => event.taskId === taskId && isTaskTerminalEventType(event.type)),
+        timeoutMs,
+        `${label}: task should reach terminal state`,
+    );
+
+    return {
+        taskId,
+        terminalEvent,
+        events: harness.getTaskEvents().filter((event) => event.taskId === taskId),
+    };
+}
+
+async function waitForTaskRunByTaskIdAfterSequence(
+    harness: BrowserDesktopHarness,
+    taskId: string,
+    minSequence: number,
+    timeoutMs: number,
+    label: string,
+): Promise<TaskRunResult> {
+    const terminalEvent = await waitForValue(
+        () => harness.getTaskEvents().find((event) => (
+            event.taskId === taskId
+            && event.sequence >= minSequence
+            && isTaskTerminalEventType(event.type)
+        )),
+        timeoutMs,
+        `${label}: task should reach terminal state after sequence ${minSequence}`,
+    );
+
+    return {
+        taskId,
+        terminalEvent,
+        events: harness.getTaskEvents().filter((event) => (
+            event.taskId === taskId && event.sequence >= minSequence
+        )),
+    };
+}
+
+async function waitForTaskStartedFromEventCursor(
+    harness: BrowserDesktopHarness,
+    eventCursor: number,
+    timeoutMs: number,
+    label: string,
+): Promise<SidecarEvent> {
+    return waitForValue(
+        () => {
+            const events = harness.getTaskEvents().slice(eventCursor);
+            return events.find((event) => event.type === 'TASK_STARTED' && typeof event.taskId === 'string');
+        },
+        timeoutMs,
+        `${label}: task should start`,
+    );
 }
 
 async function findChatInput(page: Page): Promise<Locator | null> {
@@ -723,6 +857,7 @@ class BrowserDesktopHarness {
             case 'scan_mcp_servers':
                 return { success: true, payload: { servers: [] } };
             case 'get_workspace_root':
+            case 'get_default_workspace_path':
                 return this.desktopDir;
             case 'list_claude_skills':
             case 'set_claude_skill_enabled':
@@ -1207,6 +1342,156 @@ const SKILL_LIFECYCLE_SCENARIOS: SkillLifecycleScenario[] = [
     },
 ];
 
+const WEB_ACCESS_GITHUB_SOURCE = 'https://github.com/eze-is/web-access';
+const WEB_ACCESS_INSTALL_QUERY = `安装${WEB_ACCESS_GITHUB_SOURCE}`;
+const WEB_ACCESS_SCENARIOS: WebAccessScenario[] = [
+    {
+        id: 'websearch',
+        marker: 'WEB_ACCESS_WEBSEARCH_OK',
+        buildQuery: ({ skillId, marker }) => [
+            `当前仅启用技能：${skillId}（web-access）。`,
+            '联网验证场景：websearch。',
+            '硬性要求：',
+            '1) 必须执行一次 websearch（对应 search_web）。',
+            '2) 查询词必须包含：OpenAI latest news。',
+            '3) 禁止安装、搜索、卸载或管理任何技能。',
+            `4) 最后回复标记：${marker}`,
+        ].join('\n'),
+        verify: (events) => {
+            const toolCalls = events.filter((event) => event.type === 'TOOL_CALL');
+            const toolResults = events.filter((event) => event.type === 'TOOL_RESULT');
+            const hasSearchCall = toolCalls.some((event) => {
+                if (getToolName(event) !== 'search_web') return false;
+                return getToolInputJson(event).toLowerCase().includes('openai');
+            });
+            const hasSuccessfulSearch = toolResults.some((event) => {
+                if (getToolName(event) !== 'search_web') return false;
+                return event.payload?.isError === false;
+            });
+            expect(hasSearchCall, 'websearch scenario should call search_web').toBe(true);
+            expect(hasSuccessfulSearch, 'websearch scenario should have successful search_web result').toBe(true);
+        },
+    },
+    {
+        id: 'webfetch',
+        marker: 'WEB_ACCESS_WEBFETCH_OK',
+        buildQuery: ({ skillId, marker }) => [
+            `当前仅启用技能：${skillId}（web-access）。`,
+            '联网验证场景：webfetch。',
+            '硬性要求：',
+            '1) 必须执行一次 webfetch（对应 crawl_url）。',
+            '2) 目标 URL 必须是 https://example.com 。',
+            '3) 从抓取结果中提取标题 Example Domain。',
+            '4) 禁止安装、搜索、卸载或管理任何技能。',
+            `5) 最后回复标记：${marker}`,
+        ].join('\n'),
+        verify: (events) => {
+            const toolCalls = events.filter((event) => event.type === 'TOOL_CALL');
+            const toolResults = events.filter((event) => event.type === 'TOOL_RESULT');
+            const hasCrawlCall = toolCalls.some((event) => {
+                if (getToolName(event) !== 'crawl_url') return false;
+                return getToolInputJson(event).toLowerCase().includes('example.com');
+            });
+            const hasSuccessfulCrawl = toolResults.some((event) => {
+                if (getToolName(event) !== 'crawl_url') return false;
+                return event.payload?.isError === false;
+            });
+            expect(hasCrawlCall, 'webfetch scenario should call crawl_url').toBe(true);
+            expect(hasSuccessfulCrawl, 'webfetch scenario should have successful crawl_url result').toBe(true);
+        },
+    },
+    {
+        id: 'curl',
+        marker: 'WEB_ACCESS_CURL_OK',
+        buildQuery: ({ skillId, marker }) => [
+            `当前仅启用技能：${skillId}（web-access）。`,
+            '联网验证场景：curl。',
+            '硬性要求：',
+            '1) 必须调用 run_command。',
+            '2) 命令必须包含：curl -sL https://example.com',
+            '3) 禁止安装、搜索、卸载或管理任何技能。',
+            `4) 最后回复标记：${marker}`,
+        ].join('\n'),
+        verify: (events) => {
+            const toolCalls = events.filter((event) => event.type === 'TOOL_CALL');
+            const toolResults = events.filter((event) => event.type === 'TOOL_RESULT');
+            const hasCurlCall = toolCalls.some((event) => {
+                if (getToolName(event) !== 'run_command') return false;
+                const input = getToolInputJson(event).toLowerCase();
+                return input.includes('curl') && input.includes('example.com');
+            });
+            const hasSuccessfulCurl = toolResults.some((event) => {
+                if (getToolName(event) !== 'run_command') return false;
+                return event.payload?.isError === false;
+            });
+            expect(hasCurlCall, 'curl scenario should call run_command with curl').toBe(true);
+            expect(hasSuccessfulCurl, 'curl scenario should have successful run_command result').toBe(true);
+        },
+    },
+    {
+        id: 'jina',
+        marker: 'WEB_ACCESS_JINA_OK',
+        buildQuery: ({ skillId, marker }) => [
+            `当前仅启用技能：${skillId}（web-access）。`,
+            '联网验证场景：jina。',
+            '硬性要求：',
+            '1) 必须调用 run_command。',
+            '2) 命令必须包含：https://r.jina.ai/http://example.com',
+            '3) 禁止安装、搜索、卸载或管理任何技能。',
+            `4) 最后回复标记：${marker}`,
+        ].join('\n'),
+        verify: (events) => {
+            const toolCalls = events.filter((event) => event.type === 'TOOL_CALL');
+            const toolResults = events.filter((event) => event.type === 'TOOL_RESULT');
+            const hasJinaCall = toolCalls.some((event) => {
+                if (getToolName(event) !== 'run_command') return false;
+                const input = getToolInputJson(event).toLowerCase();
+                return input.includes('r.jina.ai') && input.includes('example.com');
+            });
+            const hasSuccessfulJina = toolResults.some((event) => {
+                if (getToolName(event) !== 'run_command') return false;
+                return event.payload?.isError === false;
+            });
+            expect(hasJinaCall, 'jina scenario should call run_command with r.jina.ai').toBe(true);
+            expect(hasSuccessfulJina, 'jina scenario should have successful run_command result').toBe(true);
+        },
+    },
+    {
+        id: 'cdp',
+        marker: 'WEB_ACCESS_CDP_OK',
+        buildQuery: ({ skillId, marker }) => [
+            `当前仅启用技能：${skillId}（web-access）。`,
+            '联网验证场景：cdp。',
+            '硬性要求：',
+            '1) 必须先调用 browser_connect，且 require_user_profile=false。',
+            '2) 必须再调用 browser_navigate 访问 https://example.com 。',
+            '3) 必须再调用 browser_get_content 读取标题。',
+            '4) 禁止安装、搜索、卸载或管理任何技能。',
+            `5) 最后回复标记：${marker}`,
+        ].join('\n'),
+        verify: (events) => {
+            const toolCalls = events.filter((event) => event.type === 'TOOL_CALL');
+            const toolResults = events.filter((event) => event.type === 'TOOL_RESULT');
+            const hasConnectCall = toolCalls.some((event) => getToolName(event) === 'browser_connect');
+            const hasNavigateCall = toolCalls.some((event) => {
+                if (getToolName(event) !== 'browser_navigate') return false;
+                return getToolInputJson(event).toLowerCase().includes('example.com');
+            });
+            const hasGetContentCall = toolCalls.some((event) => getToolName(event) === 'browser_get_content');
+            const hasSuccessfulNavigation = toolResults.some((event) => {
+                const name = getToolName(event);
+                if (name !== 'browser_navigate' && name !== 'browser_get_content') return false;
+                return event.payload?.isError === false;
+            });
+
+            expect(hasConnectCall, 'cdp scenario should call browser_connect').toBe(true);
+            expect(hasNavigateCall, 'cdp scenario should call browser_navigate for example.com').toBe(true);
+            expect(hasGetContentCall, 'cdp scenario should call browser_get_content').toBe(true);
+            expect(hasSuccessfulNavigation, 'cdp scenario should have successful browser navigation/content result').toBe(true);
+        },
+    },
+];
+
 async function openSkillManagerDialog(page: Page): Promise<Locator> {
     const manageSkillsButton = page
         .locator('button[aria-label="管理技能"], button[aria-label="Manage Skills"]')
@@ -1431,4 +1716,195 @@ test.describe('Desktop E2E - Skillhub skill lifecycle matrix', () => {
             }
         });
     }
+});
+
+test.describe('Desktop E2E - web-access GitHub install + network validation', () => {
+    test.skip(
+        !hasProviderConfigForSkillE2E(),
+        'Requires one of E2E_AIBERM_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or a valid local llm-config.json.',
+    );
+    test.setTimeout(22 * 60 * 1000);
+
+    test('chat installs web-access from GitHub and validates websearch/webfetch/curl/jina/cdp', async ({ page }, testInfo) => {
+        testInfo.setTimeout(22 * 60 * 1000);
+
+        const appDataDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'coworkany-web-access-e2e-'));
+        const harness = new BrowserDesktopHarness(await getFreePort(), appDataDir);
+        const artifactDir = path.join(harness.desktopDir, 'test-results', 'skillhub-lifecycle', 'web-access-github-chat');
+        const summaryPath = path.join(artifactDir, 'web-access-summary.json');
+        const logsPath = path.join(artifactDir, 'web-access-sidecar-logs.txt');
+        ensureDir(artifactDir);
+
+        let installedSkillId = '';
+        let installedSkillDir = '';
+        const scenarioSummaries: Array<{
+            id: string;
+            taskId: string;
+            terminalType: string;
+            terminalError: string;
+            toleratedProtocolFailure: boolean;
+            toolCalls: string[];
+            successfulToolResults: string[];
+        }> = [];
+
+        page.on('dialog', async (dialog) => {
+            await dialog.accept();
+        });
+
+        try {
+            await harness.start(page);
+            await harness.gotoApp();
+            await page.waitForLoadState('domcontentloaded');
+            await page.waitForTimeout(3000);
+            await ensureComposerVisible(page);
+
+            // Warm up chat pipeline once and assert desktop chat can actually start a task.
+            const warmupCursor = harness.getTaskEvents().length;
+            await submitQuery(page, '你好');
+            await waitForTaskStartedFromEventCursor(
+                harness,
+                warmupCursor,
+                60_000,
+                'chat warmup',
+            );
+
+            const installCursor = harness.getTaskEvents().length;
+            await submitQuery(page, WEB_ACCESS_INSTALL_QUERY);
+            const installToolCall = await waitForValue(
+                () => {
+                    const events = harness.getTaskEvents().slice(installCursor);
+                    return events.find((event) => {
+                        if (event.type !== 'TOOL_CALL') return false;
+                        if (getToolName(event) !== 'install_coworkany_skill_from_marketplace') return false;
+                        const input = getToolInputJson(event).toLowerCase();
+                        return input.includes('github.com/eze-is/web-access') || input.includes('github:eze-is/web-access');
+                    });
+                },
+                TEST_TIMEOUT_MS,
+                'web-access install by chat query: should call install_coworkany_skill_from_marketplace',
+            );
+
+            const installRun = await waitForTaskRunByTaskIdAfterSequence(
+                harness,
+                installToolCall.taskId,
+                installToolCall.sequence,
+                TEST_TIMEOUT_MS,
+                'web-access install by chat query',
+            );
+
+            const installToolCalls = installRun.events.filter((event) => event.type === 'TOOL_CALL');
+            const usedMarketplaceInstallTool = installToolCalls.some((event) => {
+                if (getToolName(event) !== 'install_coworkany_skill_from_marketplace') return false;
+                const input = getToolInputJson(event).toLowerCase();
+                return input.includes('github.com/eze-is/web-access') || input.includes('github:eze-is/web-access');
+            });
+
+            expect(
+                usedMarketplaceInstallTool,
+                'install flow should call install_coworkany_skill_from_marketplace with web-access github source',
+            ).toBe(true);
+            expect(
+                installRun.terminalEvent.type,
+                `install task should finish successfully, got: ${getTaskErrorMessage(installRun.terminalEvent)}`,
+            ).toBe('TASK_FINISHED');
+
+            const skillsAfterInstall = await harness.listSkills(true);
+            const installedSkill = skillsAfterInstall.find((skill) => {
+                const id = String(skill.manifest.id ?? '').toLowerCase();
+                const name = String(skill.manifest.name ?? '').toLowerCase();
+                const rootPath = String(skill.rootPath ?? '').toLowerCase();
+                return id.includes('web-access') || name.includes('web-access') || rootPath.includes('web-access');
+            });
+
+            expect(installedSkill, 'web-access should exist in list_claude_skills after install').toBeDefined();
+            installedSkillId = String(installedSkill?.manifest.id ?? '');
+            installedSkillDir = String(installedSkill?.rootPath ?? '');
+            expect(installedSkillId, 'installed web-access skill id should be non-empty').toBeTruthy();
+            expect(installedSkill?.enabled, 'web-access should be enabled after install').toBe(true);
+            expect(
+                fs.existsSync(path.join(installedSkillDir, 'SKILL.md')),
+                'installed web-access directory should contain SKILL.md',
+            ).toBe(true);
+
+            for (const scenario of WEB_ACCESS_SCENARIOS) {
+                const startedTask = await harness.startTask({
+                    title: `web-access scenario ${scenario.id}`,
+                    userQuery: scenario.buildQuery({
+                        skillId: installedSkillId,
+                        marker: scenario.marker,
+                    }),
+                    workspacePath: harness.desktopDir,
+                    config: {
+                        enabledClaudeSkills: [installedSkillId],
+                        disabledTools: [
+                            'install_coworkany_skill_from_marketplace',
+                            'search_coworkany_skill_marketplace',
+                        ],
+                    },
+                });
+                expect(startedTask.success, `scenario ${scenario.id} should start successfully`).toBe(true);
+
+                const scenarioRun = await waitForTaskRunByTaskId(
+                    harness,
+                    startedTask.taskId,
+                    TEST_TIMEOUT_MS,
+                    `web-access scenario ${scenario.id}`,
+                );
+                const terminalError = getTaskErrorMessage(scenarioRun.terminalEvent);
+                scenario.verify(scenarioRun.events);
+                const toleratedProtocolFailure = scenarioRun.terminalEvent.type === 'TASK_FAILED'
+                    && /execution protocol unmet|required web research evidence|no-tool retries/i.test(terminalError);
+                if (scenarioRun.terminalEvent.type !== 'TASK_FINISHED') {
+                    expect(
+                        toleratedProtocolFailure,
+                        `scenario ${scenario.id} should finish or fail only with tolerated protocol error after evidence is captured, got: ${terminalError}`,
+                    ).toBe(true);
+                }
+
+                scenarioSummaries.push({
+                    id: scenario.id,
+                    taskId: scenarioRun.taskId,
+                    terminalType: scenarioRun.terminalEvent.type,
+                    terminalError,
+                    toleratedProtocolFailure,
+                    toolCalls: scenarioRun.events
+                        .filter((event) => event.type === 'TOOL_CALL')
+                        .map((event) => getToolName(event)),
+                    successfulToolResults: scenarioRun.events
+                        .filter((event) => event.type === 'TOOL_RESULT' && event.payload?.isError === false)
+                        .map((event) => getToolName(event)),
+                });
+            }
+
+            const sidecarLogs = harness.getRawSidecarLogs();
+            expect(
+                sidecarLogs.toLowerCase().includes('web-access') || sidecarLogs.toLowerCase().includes(installedSkillId.toLowerCase()),
+                'sidecar logs should contain web-access identifiers',
+            ).toBe(true);
+
+            writeJson(summaryPath, {
+                installQuery: WEB_ACCESS_INSTALL_QUERY,
+                skillSource: WEB_ACCESS_GITHUB_SOURCE,
+                installedSkillId,
+                installedSkillDir,
+                installTaskId: installRun.taskId,
+                installToolCalls: installToolCalls.map((event) => getToolName(event)),
+                scenarioSummaries,
+            });
+            fs.writeFileSync(logsPath, sidecarLogs, 'utf-8');
+
+            await page.screenshot({
+                path: path.join(artifactDir, 'web-access-final.png'),
+            }).catch(() => {});
+        } finally {
+            if (installedSkillId) {
+                await harness.removeSkill(installedSkillId, true).catch(() => {});
+            }
+            if (installedSkillDir) {
+                fs.rmSync(installedSkillDir, { recursive: true, force: true });
+            }
+            await harness.stop();
+            fs.rmSync(appDataDir, { recursive: true, force: true });
+        }
+    });
 });

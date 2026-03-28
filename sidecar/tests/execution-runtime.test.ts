@@ -835,6 +835,169 @@ describe('execution runtime', () => {
         expect(failures.length).toBe(0);
     });
 
+    test('continuePreparedAgentFlow accepts direct system shell actions when run_command evidence exists', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '早上3点关机';
+        prepared.frozenWorkRequest.sourceText = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].objective = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['run_command'];
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-shell-execution',
+            kind: 'tool_evidence',
+            capability: 'shell_execution',
+            required: true,
+            reason: 'Direct system actions must be executed through a real shell command.',
+        }];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-shell-evidence',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['run_command'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-shell-evidence',
+                conversationReader: {
+                    buildConversationText: () => '已通过 shell 配置关机任务。',
+                    getLatestAssistantResponseText: () => '已通过 shell 配置关机任务。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(true);
+        expect(failures.length).toBe(0);
+    });
+
+    test('continuePreparedAgentFlow routes direct system shell actions through deterministic run_command execution', async () => {
+        const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        let agentLoopCalled = false;
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '早上3点关机';
+        prepared.frozenWorkRequest.sourceText = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].objective = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['run_command'];
+        prepared.frozenWorkRequest.environmentContext = {
+            platform: 'macos',
+            arch: 'aarch64',
+            appDir: '/tmp/app',
+            appDataDir: '/tmp/app-data',
+            shell: '/bin/zsh',
+            python: { available: true, path: 'python3', source: 'system' },
+            skillhub: { available: false, path: undefined, source: 'unknown' },
+            managedServices: [],
+        };
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-deterministic-shell-action',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            executeTool: async (_taskId, name, args) => {
+                toolCalls.push({ name, args });
+                return {
+                    status: 'opened_in_terminal',
+                    exit_code: 0,
+                };
+            },
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return {
+                    artifactsCreated: [],
+                    toolsUsed: ['think'],
+                };
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]).toMatchObject({
+            name: 'run_command',
+            args: {
+                command: 'sudo shutdown -h 03:00',
+            },
+        });
+        expect(result.success).toBe(true);
+        expect(result.summary).toContain('03:00');
+        expect(result.toolsUsed).toEqual(['run_command']);
+    });
+
+    test('continuePreparedAgentFlow accepts darwin platform aliases for deterministic shell execution', async () => {
+        const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        let agentLoopCalled = false;
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '早上3点关机';
+        prepared.frozenWorkRequest.sourceText = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].objective = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['run_command'];
+        prepared.frozenWorkRequest.environmentContext = {
+            platform: 'darwin',
+            arch: 'aarch64',
+            appDir: '/tmp/app',
+            appDataDir: '/tmp/app-data',
+            shell: '/bin/zsh',
+            python: { available: true, path: 'python3', source: 'system' },
+            skillhub: { available: false, path: undefined, source: 'unknown' },
+            managedServices: [],
+        };
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-deterministic-shell-action-darwin',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            executeTool: async (_taskId, name, args) => {
+                toolCalls.push({ name, args });
+                return {
+                    status: 'opened_in_terminal',
+                    exit_code: 0,
+                };
+            },
+            runAgentLoop: async () => {
+                agentLoopCalled = true;
+                return {
+                    artifactsCreated: [],
+                    toolsUsed: ['think'],
+                };
+            },
+        }));
+
+        expect(agentLoopCalled).toBe(false);
+        expect(toolCalls).toHaveLength(1);
+        expect(toolCalls[0]).toMatchObject({
+            name: 'run_command',
+            args: {
+                command: 'sudo shutdown -h 03:00',
+            },
+        });
+        expect(result.success).toBe(true);
+        expect(result.toolsUsed).toEqual(['run_command']);
+    });
+
     test('continuePreparedAgentFlow fails publish tasks without browser evidence when protocol assessment is unavailable', async () => {
         const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
         const prepared = makePreparedWorkRequest();
@@ -869,6 +1032,57 @@ describe('execution runtime', () => {
                 conversationReader: {
                     buildConversationText: () => '我已经整理好文案，可以直接发在 X 上。',
                     getLatestAssistantResponseText: () => '我已经整理好文案，可以直接发在 X 上。',
+                },
+            }),
+            reporter: new ExecutionResultReporter({
+                onFinished: () => undefined,
+                onFailed: (payload) => {
+                    failures.push(payload);
+                },
+                onStatus: () => undefined,
+                onArtifactTelemetry: () => undefined,
+            }),
+        }));
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('required tool-evidence capability was not satisfied');
+        expect(failures[0]?.errorCode).toBe('EXECUTION_PROTOCOL_UNMET');
+    });
+
+    test('continuePreparedAgentFlow fails direct system shell actions without run_command evidence', async () => {
+        const failures: Array<{ error: string; errorCode: string; recoverable: boolean; suggestion?: string }> = [];
+        const prepared = makePreparedWorkRequest();
+        prepared.executionQuery = '早上3点关机';
+        prepared.frozenWorkRequest.sourceText = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].objective = '早上3点关机';
+        prepared.frozenWorkRequest.tasks[0].preferredTools = ['run_command'];
+        prepared.frozenWorkRequest.tasks[0].executionRequirements = [{
+            id: 'req-shell-execution',
+            kind: 'tool_evidence',
+            capability: 'shell_execution',
+            required: true,
+            reason: 'Direct system actions must be executed through a real shell command.',
+        }];
+
+        const result = await continuePreparedAgentFlow({
+            taskId: 'task-protocol-shell-evidence-missing',
+            userMessage: '继续',
+            workspacePath: '/tmp/workspace',
+            preparedWorkRequest: prepared,
+            workRequestExecutionPrompt: 'Frozen Work Request',
+            conversation: [],
+            artifactContract: {},
+        }, makeDeps({
+            runAgentLoop: async () => ({
+                artifactsCreated: [],
+                toolsUsed: ['think'],
+            }),
+            assessExecutionProtocol: async () => null,
+            session: new ExecutionSession({
+                taskId: 'task-protocol-shell-evidence-missing',
+                conversationReader: {
+                    buildConversationText: () => '可以使用 shutdown 命令。',
+                    getLatestAssistantResponseText: () => '可以使用 shutdown 命令。',
                 },
             }),
             reporter: new ExecutionResultReporter({

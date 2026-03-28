@@ -941,7 +941,12 @@ function shouldPreserveTaskMessageTrajectory(session: TaskSession): boolean {
         return false;
     }
 
-    return countMeaningfulUserMessages(session.messages) >= 2;
+    const userMessageCount = countMeaningfulUserMessages(session.messages);
+    if (userMessageCount >= 2) {
+        return true;
+    }
+
+    return userMessageCount >= 1 && session.status === 'running';
 }
 
 function buildRawConversationTrajectoryItems(session: TaskSession): TimelineItemType[] {

@@ -32,6 +32,7 @@ use uuid::Uuid;
 use crate::diff::{apply_patch as apply_patch_diff, DiffHunk, FilePatch, PatchOperation};
 use crate::platform_runtime::{
     build_platform_runtime_context, resolve_app_data_dir, resolve_app_dir,
+    PlatformRuntimeContext,
     resolve_sidecar_entry_path,
 };
 use crate::policy::commands as policy_commands;
@@ -116,10 +117,14 @@ pub struct TaskContext {
     pub workspace_path: String,
     #[serde(rename = "activeFile", skip_serializing_if = "Option::is_none")]
     pub active_file: Option<String>,
+    #[serde(rename = "displayText", skip_serializing_if = "Option::is_none")]
+    pub display_text: Option<String>,
     #[serde(rename = "selectedText", skip_serializing_if = "Option::is_none")]
     pub selected_text: Option<String>,
     #[serde(rename = "openFiles", skip_serializing_if = "Option::is_none")]
     pub open_files: Option<Vec<String>>,
+    #[serde(rename = "environmentContext", skip_serializing_if = "Option::is_none")]
+    pub environment_context: Option<PlatformRuntimeContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +154,8 @@ pub struct SendTaskMessagePayload {
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub content: String,
+    #[serde(rename = "environmentContext", skip_serializing_if = "Option::is_none")]
+    pub environment_context: Option<PlatformRuntimeContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<TaskConfig>,
 }
@@ -250,13 +257,19 @@ impl IpcCommand {
         }
     }
 
-    pub fn send_task_message(task_id: String, content: String, config: Option<TaskConfig>) -> Self {
+    pub fn send_task_message(
+        task_id: String,
+        content: String,
+        environment_context: Option<PlatformRuntimeContext>,
+        config: Option<TaskConfig>,
+    ) -> Self {
         IpcCommand::SendTaskMessage {
             id: Uuid::new_v4().to_string(),
             timestamp: chrono_now(),
             payload: SendTaskMessagePayload {
                 task_id,
                 content,
+                environment_context,
                 config,
             },
         }

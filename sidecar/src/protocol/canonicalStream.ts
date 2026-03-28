@@ -222,7 +222,8 @@ export function taskEventToCanonicalStreamEvents(event: TaskEvent): CanonicalStr
     switch (event.type) {
         case 'TASK_STARTED': {
             const context = (payload.context as Record<string, unknown> | undefined) ?? {};
-            const userQuery = normalizeTaskStartedUserQuery(context.userQuery);
+            const displayText = normalizeText(context.displayText);
+            const userQuery = displayText || normalizeTaskStartedUserQuery(context.userQuery);
             if (!userQuery) {
                 return [];
             }

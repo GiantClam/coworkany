@@ -17,6 +17,7 @@ import type { VoiceProviderMode } from '../types';
 export interface StartTaskInput {
     title: string;
     userQuery: string;
+    displayText?: string;
     workspacePath: string;
     activeFile?: string;
     config?: StartTaskConfig;
@@ -65,6 +66,25 @@ export function useStartTask() {
     const promoteDraftSession = useTaskEventStore((state) => state.promoteDraftSession);
     const syncWorkspace = useWorkspaceStore((state) => state.syncWorkspace);
 
+    const markDraftStartFailure = useCallback((draftTaskId: string | undefined, input: StartTaskInput, errorMessage: string) => {
+        if (!draftTaskId) {
+            return;
+        }
+
+        ensureSession(draftTaskId, {
+            title: input.title,
+            workspacePath: input.workspacePath,
+            status: 'failed',
+            isDraft: true,
+            failure: {
+                error: errorMessage,
+                errorCode: 'START_TASK_FAILED',
+                recoverable: true,
+                suggestion: 'Fix the issue and retry from this draft.',
+            },
+        }, true);
+    }, [ensureSession]);
+
     const startTask = useCallback(
         async (input: StartTaskInput, options?: StartTaskLocalOptions): Promise<StartTaskResult | null> => {
             setIsLoading(true);
@@ -93,19 +113,21 @@ export function useStartTask() {
                     }
                 } else if (result.error) {
                     setError(result.error);
+                    markDraftStartFailure(options?.draftTaskId, input, result.error);
                 }
 
                 return result;
             } catch (e) {
                 const errorMessage = e instanceof Error ? e.message : String(e);
                 setError(errorMessage);
+                markDraftStartFailure(options?.draftTaskId, input, errorMessage);
                 console.error('[useStartTask] Error:', e);
                 return null;
             } finally {
                 setIsLoading(false);
             }
         },
-        [ensureSession, promoteDraftSession, syncWorkspace]
+        [ensureSession, markDraftStartFailure, promoteDraftSession, syncWorkspace]
     );
 
     return {

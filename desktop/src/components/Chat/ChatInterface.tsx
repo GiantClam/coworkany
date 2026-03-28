@@ -133,6 +133,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const activeSession = useActiveSession();
     const addTaskEvent = useTaskEventStore((state) => state.addEvent);
+    const createDraftSession = useTaskEventStore((state) => state.createDraftSession);
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
@@ -213,7 +214,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         () => isConversationTurnLocked(activeSession),
         [activeSession],
     );
-    const showInitialEntry = !activeSession || activeSession.isDraft;
+    const showInitialEntry = !activeSession || (activeSession.isDraft && activeSession.messages.length === 0);
 
     useEffect(() => {
         if (!activeSession || activeSession.isDraft) {
@@ -297,6 +298,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return event;
     }, [addTaskEvent]);
 
+    const appendLocalUserEcho = useCallback((taskId: string, content: string) => {
+        const normalized = content.trim();
+        if (!normalized) {
+            return null;
+        }
+        return appendLocalTaskEvent(taskId, 'CHAT_MESSAGE', {
+            role: 'user',
+            content,
+            __localEcho: true,
+        });
+    }, [appendLocalTaskEvent]);
+
     const submitRequest = useCallback(async (
         text: string,
         options?: { includeAttachments?: boolean }
@@ -324,8 +337,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             const voiceSettings = await getVoiceSettings();
             const taskId = activeSession.taskId;
             const sentContent = requestContent;
-            const sendStartedAt = new Date().toISOString();
             appendLocalTaskEvent(taskId, 'TASK_STATUS', { status: 'running' });
+            appendLocalUserEcho(taskId, sentContent);
             const result = await sendMessage({
                 taskId,
                 content: sentContent,
@@ -337,32 +350,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 },
             });
             if (result?.success) {
-                window.setTimeout(() => {
-                    const currentSession = useTaskEventStore.getState().getSession(taskId);
-                    const hasUserEvent = currentSession?.events.some((event) => (
-                        event.type === 'CHAT_MESSAGE'
-                        && event.timestamp >= sendStartedAt
-                        && event.payload?.role === 'user'
-                        && event.payload?.content === sentContent
-                    )) ?? false;
-
-                    if (hasUserEvent) {
-                        return;
-                    }
-
-                    const fallbackEvent: TaskEvent = {
-                        id: `local-user-${crypto.randomUUID()}`,
-                        taskId,
-                        sequence: (currentSession?.events.at(-1)?.sequence ?? 0) + 1,
-                        type: 'CHAT_MESSAGE',
-                        timestamp: new Date().toISOString(),
-                        payload: {
-                            role: 'user',
-                            content: sentContent,
-                        },
-                    };
-                    addTaskEvent(fallbackEvent);
-                }, 250);
                 setQuery('');
                 if (includeAttachments) {
                     clearAttachments();
@@ -394,10 +381,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
 
         setWorkspaceError(null);
+        const optimisticDraftTaskId = createTaskIntent
+            ? undefined
+            : (
+                draftTaskId
+                ?? (!activeSession
+                    ? createDraftSession({
+                        title: titleSource.slice(0, 60),
+                        workspacePath: currentPath,
+                    })
+                    : undefined)
+            );
+        if (optimisticDraftTaskId) {
+            appendLocalUserEcho(optimisticDraftTaskId, requestContent);
+        }
         const voiceSettings = await getVoiceSettings();
         const result = await startTask({
             title: titleSource.slice(0, 60),
             userQuery: routedRequestContent,
+            displayText: requestContent,
             workspacePath: currentPath,
             config: {
                 enabledClaudeSkills: enabledSkillsForRequest,
@@ -405,7 +407,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 enabledSkills: enabledSkillsForRequest,
                 voiceProviderMode: voiceSettings.providerMode,
             },
-        }, draftTaskId ? { draftTaskId } : undefined);
+        }, optimisticDraftTaskId ? { draftTaskId: optimisticDraftTaskId } : undefined);
         if (result?.success) {
             setQuery('');
             if (includeAttachments) {
@@ -413,7 +415,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         return result?.success === true;
-    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, addTaskEvent, appendLocalTaskEvent, entryMode]);
+    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, appendLocalTaskEvent, appendLocalUserEcho, createDraftSession, entryMode]);
 
     const handleSubmit = useCallback(async () => {
         if (isTurnLocked) {

@@ -28,6 +28,7 @@ import {
     type WorkRequestFollowUpContext,
     type UserActionRequest,
 } from './workRequestSchema';
+import type { PlatformRuntimeContext } from '../protocol/commands';
 import { type ScheduledTaskRecord } from '../scheduling/scheduledTasks';
 import { formatWorkflowForPrompt, selectLocalWorkflow } from './localWorkflowRegistry';
 export { deriveActiveHardness, deriveBlockingReason } from './workRequestPolicy';
@@ -100,6 +101,7 @@ export { buildResearchUpdatedPayload };
 export function createFrozenWorkRequestFromText(input: {
     sourceText: string;
     workspacePath: string;
+    environmentContext?: PlatformRuntimeContext;
     workRequestStore: WorkRequestStore;
     followUpContext?: WorkRequestFollowUpContext;
     capabilityPlanClassifier?: (input: CapabilityPlanClassifierInput) => Promise<CapabilityPlan | undefined>;
@@ -175,6 +177,7 @@ export async function refreezePreparedWorkRequestForResearch(input: {
 async function createFrozenWorkRequestFromTextInternal(input: {
     sourceText: string;
     workspacePath: string;
+    environmentContext?: PlatformRuntimeContext;
     workRequestStore: WorkRequestStore;
     followUpContext?: WorkRequestFollowUpContext;
     capabilityPlanClassifier?: (input: CapabilityPlanClassifierInput) => Promise<CapabilityPlan | undefined>;
@@ -185,6 +188,7 @@ async function createFrozenWorkRequestFromTextInternal(input: {
         sourceText: input.sourceText,
         workspacePath: input.workspacePath,
         followUpContext: input.followUpContext,
+        environmentContext: input.environmentContext,
     });
     const classifiedCapabilityPlan = input.capabilityPlanClassifier
         ? await input.capabilityPlanClassifier({
@@ -211,6 +215,7 @@ async function createFrozenWorkRequestFromTextInternal(input: {
 export async function prepareWorkRequestContext(input: {
     sourceText: string;
     workspacePath: string;
+    environmentContext?: PlatformRuntimeContext;
     workRequestStore: WorkRequestStore;
     followUpContext?: WorkRequestFollowUpContext;
     capabilityPlanClassifier?: (input: CapabilityPlanClassifierInput) => Promise<CapabilityPlan | undefined>;
@@ -993,6 +998,25 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
             `- Requires side effect: ${String(request.publishIntent.requiresSideEffect)}`,
         ].join('\n')
         : '';
+    const environmentSection = request.environmentContext
+        ? [
+            `- Platform: ${request.environmentContext.platform}`,
+            `- Architecture: ${request.environmentContext.arch}`,
+            `- Shell: ${request.environmentContext.shell}`,
+            `- App data dir: ${request.environmentContext.appDataDir}`,
+            request.environmentContext.python.available
+                ? `- Python: available (${request.environmentContext.python.path || 'system'})`
+                : '- Python: unavailable',
+            request.environmentContext.skillhub.available
+                ? `- Skillhub: available (${request.environmentContext.skillhub.path || 'system'})`
+                : '- Skillhub: unavailable',
+            request.environmentContext.managedServices.length > 0
+                ? `- Managed services: ${request.environmentContext.managedServices
+                    .map((service) => `${service.id}:${service.runtimeReady ? 'ready' : 'not_ready'}`)
+                    .join(', ')}`
+                : null,
+        ].filter(Boolean).join('\n')
+        : '';
     const userActionsSection = (request.userActionsRequired?.length ?? 0) > 0
         ? request.userActionsRequired!.map((action) => {
             const questions = action.questions.length > 0 ? ` Questions: ${action.questions.join(' | ')}` : '';
@@ -1047,6 +1071,7 @@ function buildWorkRequestExecutionPrompt(request: FrozenWorkRequest): string | u
         executionQuery === normalizedSource &&
         !workflowGuidance &&
         !deliverablesSection &&
+        !environmentSection &&
         !publishIntentSection &&
         !checkpointsSection &&
         !userActionsSection &&
@@ -1071,7 +1096,7 @@ ${executionQuery}
 
 Coworkany is the primary task owner for this run. Coworkany should decide how to execute, when to checkpoint, and when user collaboration is actually required.
 
-${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${evidenceHighlightsSection ? `### Key Research Evidence\n${evidenceHighlightsSection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${publishIntentSection ? `### Publish Intent\n${publishIntentSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
+${goalFrameSection ? `### Goal Frame\n${goalFrameSection}\n` : ''}${researchSummarySection ? `### Research Summary\n${researchSummarySection}\n` : ''}${evidenceHighlightsSection ? `### Key Research Evidence\n${evidenceHighlightsSection}\n` : ''}${deliverablesSection ? `### Planned Deliverables\n${deliverablesSection}\n` : ''}${environmentSection ? `### Environment Context\n${environmentSection}\n` : ''}${publishIntentSection ? `### Publish Intent\n${publishIntentSection}\n` : ''}${checkpointsSection ? `### Planned Checkpoints\n${checkpointsSection}\n` : ''}${userActionsSection ? `### User Actions Required\n${userActionsSection}\n` : ''}${executionRequirementsSection ? `### Required Execution Evidence\n${executionRequirementsSection}\n` : ''}${assumptionsSection ? `### Assumptions And Defaults\n${assumptionsSection}\n` : ''}${selectedStrategySection ? `### Strategy Options\n${selectedStrategySection}\n` : ''}${risksSection ? `### Known Risks\n${risksSection}\n` : ''}${replanSection ? `### Re-Planning Rules\n${replanSection}\n` : ''}
 
 ${workflowGuidance ? `\n## Deterministic Local Workflow Guidance\n\n${workflowGuidance}\n` : ''}
 

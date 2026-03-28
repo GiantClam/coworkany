@@ -1602,6 +1602,64 @@ describe('buildTimelineItems', () => {
         expect(turns[2]?.taskCard?.subtitle).toBe('需要先完成登录准备。');
     });
 
+    test('preserves the first user message trajectory while a task-mode session is still running', () => {
+        const session = makeSession({
+            status: 'running',
+            taskMode: 'immediate_task',
+            messages: [
+                {
+                    id: 'msg-user-1',
+                    role: 'user',
+                    content: '早上3点关机',
+                    timestamp: '2026-03-28T13:39:25.571Z',
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'event-start',
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    timestamp: '2026-03-28T13:39:25.571Z',
+                    payload: {
+                        title: '早上3点关机',
+                        context: {
+                            userQuery: '原始任务：早上3点关机\n用户路由：chat',
+                            displayText: '早上3点关机',
+                        },
+                    },
+                }),
+                makeEvent({
+                    id: 'event-plan',
+                    sequence: 2,
+                    type: 'TASK_PLAN_READY',
+                    timestamp: '2026-03-28T13:39:25.880Z',
+                    payload: {
+                        summary: '通过平台 shell 执行关机命令。',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const userMessages = result.items.filter((item) => item.type === 'user_message');
+        const taskCards = extractTaskCards(result.items);
+
+        expect(userMessages).toEqual([
+            expect.objectContaining({
+                type: 'user_message',
+                content: '早上3点关机',
+            }),
+        ]);
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.status).toBe('running');
+    });
+
     test('keeps single-user task sessions on the collapsed task timeline path', () => {
         const session = makeSession({
             status: 'idle',

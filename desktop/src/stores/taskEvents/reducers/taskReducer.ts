@@ -427,35 +427,6 @@ function appendSystemMessage(session: TaskSession, event: TaskEvent, content: st
     };
 }
 
-function shouldAppendFinishedAssistantMessage(session: TaskSession, summary: string | undefined): boolean {
-    const normalizedSummary = summary?.trim();
-    if (!normalizedSummary) {
-        return false;
-    }
-
-    const latestAssistantMessage = [...session.messages]
-        .reverse()
-        .find((message) => message.role === 'assistant' && message.content.trim().length > 0);
-
-    if (!latestAssistantMessage) {
-        return true;
-    }
-
-    if (latestAssistantMessage.content.trim() === normalizedSummary) {
-        return false;
-    }
-
-    const latestUserMessage = [...session.messages]
-        .reverse()
-        .find((message) => message.role === 'user' && message.content.trim().length > 0);
-
-    if (!latestUserMessage) {
-        return false;
-    }
-
-    return latestAssistantMessage.timestamp < latestUserMessage.timestamp;
-}
-
 export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSession {
     const payload = event.payload as Record<string, unknown>;
 
@@ -483,6 +454,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                         id: event.id,
                         role: 'user',
                         content:
+                            ((payload.context as Record<string, unknown>)?.displayText as string) ??
                             ((payload.context as Record<string, unknown>)?.userQuery as string) ??
                             (payload.description as string) ??
                             '',
@@ -693,7 +665,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
 
         case 'TASK_FINISHED':
         {
-            const nextSession: TaskSession = {
+            return {
                 ...session,
                 status: 'finished',
                 summary: payload.summary as string,
@@ -705,21 +677,6 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 activeHardness: session.executionProfile?.primaryHardness,
                 blockingReason: undefined,
                 assistantDraft: undefined,
-            };
-            if (!shouldAppendFinishedAssistantMessage(nextSession, payload.summary as string | undefined)) {
-                return nextSession;
-            }
-            return {
-                ...nextSession,
-                messages: [
-                    ...nextSession.messages,
-                    {
-                        id: `${event.id}-assistant`,
-                        role: 'assistant',
-                        content: String(payload.summary ?? ''),
-                        timestamp: event.timestamp,
-                    },
-                ],
             };
         }
 

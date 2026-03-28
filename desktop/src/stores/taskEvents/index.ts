@@ -76,6 +76,7 @@ interface TaskEventStoreState {
 }
 
 const sessionEventIds = new Map<string, Set<string>>();
+const LOCAL_ECHO_PAYLOAD_KEY = '__localEcho';
 
 // ============================================================================
 // Create Empty Session
@@ -189,6 +190,12 @@ const HIGH_PRIORITY_PERSIST_EVENT_TYPES = new Set<TaskEvent['type']>([
 ]);
 
 function shouldPersistEvent(event: TaskEvent): boolean {
+    if (
+        event.type === 'CHAT_MESSAGE'
+        && (event.payload as Record<string, unknown> | undefined)?.[LOCAL_ECHO_PAYLOAD_KEY] === true
+    ) {
+        return false;
+    }
     return !TRANSIENT_EVENT_TYPES.has(event.type);
 }
 
@@ -228,10 +235,11 @@ function persistStateSnapshot(
 // ============================================================================
 
 function applyEvent(session: TaskSession, event: TaskEvent): TaskSession {
+    const reconciledSession = reconcileOptimisticUserEcho(session, event);
     // Add event to session and update timestamp
     let updated: TaskSession = {
-        ...session,
-        events: [...session.events, event],
+        ...reconciledSession,
+        events: [...reconciledSession.events, event],
         updatedAt: new Date().toISOString(),
     };
 
@@ -265,6 +273,61 @@ function applyEvent(session: TaskSession, event: TaskEvent): TaskSession {
     }
 
     return updated;
+}
+
+function normalizeEchoContent(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function getConfirmedUserEchoContent(event: TaskEvent): string | null {
+    const payload = event.payload as Record<string, unknown>;
+    if (event.type === 'CHAT_MESSAGE') {
+        if (payload.role !== 'user' || payload[LOCAL_ECHO_PAYLOAD_KEY] === true) {
+            return null;
+        }
+        return normalizeEchoContent(payload.content);
+    }
+
+    if (event.type === 'TASK_STARTED') {
+        const context = (payload.context as Record<string, unknown> | undefined) ?? {};
+        return normalizeEchoContent(context.displayText ?? context.userQuery ?? payload.description);
+    }
+
+    return null;
+}
+
+function reconcileOptimisticUserEcho(session: TaskSession, event: TaskEvent): TaskSession {
+    const confirmedContent = getConfirmedUserEchoContent(event);
+    if (!confirmedContent) {
+        return session;
+    }
+
+    let optimisticEventId: string | null = null;
+    for (let index = session.events.length - 1; index >= 0; index -= 1) {
+        const candidate = session.events[index];
+        if (candidate.type !== 'CHAT_MESSAGE') {
+            continue;
+        }
+        const payload = candidate.payload as Record<string, unknown>;
+        if (payload.role !== 'user' || payload[LOCAL_ECHO_PAYLOAD_KEY] !== true) {
+            continue;
+        }
+        if (normalizeEchoContent(payload.content) !== confirmedContent) {
+            continue;
+        }
+        optimisticEventId = candidate.id;
+        break;
+    }
+
+    if (!optimisticEventId) {
+        return session;
+    }
+
+    return {
+        ...session,
+        events: session.events.filter((entry) => entry.id !== optimisticEventId),
+        messages: session.messages.filter((entry) => entry.id !== optimisticEventId),
+    };
 }
 
 function applyEventsBatch(

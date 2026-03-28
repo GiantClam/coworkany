@@ -216,7 +216,7 @@ describe('app management tools', () => {
         expect(reloaded.policy.mode).toBe('enforce');
     });
 
-    test('skill tools install, disable, inspect, and remove local skills', async () => {
+    test('skill tools keep skills enabled after install until user disables or uninstalls', async () => {
         const fixture = buildTools();
         const skillDir = makeTempDir('coworkany-app-tool-skill-');
         fs.writeFileSync(
@@ -234,20 +234,35 @@ description: Demo managed skill
         const installTool = getTool(fixture.tools, 'install_coworkany_skill');
         const setEnabledTool = getTool(fixture.tools, 'set_coworkany_skill_enabled');
         const getToolById = getTool(fixture.tools, 'get_coworkany_skill');
+        const listTool = getTool(fixture.tools, 'list_coworkany_skills');
         const removeTool = getTool(fixture.tools, 'remove_coworkany_skill');
 
         const installed = await installTool.handler({ path: skillDir }, TOOL_CONTEXT);
+        const inspectedAfterInstall = await getToolById.handler({ skill_id: 'Demo Managed Skill' }, TOOL_CONTEXT);
+        const listedAfterInstall = await listTool.handler({}, TOOL_CONTEXT);
         const disabled = await setEnabledTool.handler({ skill_id: 'Demo Managed Skill', enabled: false }, TOOL_CONTEXT);
-        const inspected = await getToolById.handler({ skill_id: 'Demo Managed Skill' }, TOOL_CONTEXT);
+        const inspectedAfterDisable = await getToolById.handler({ skill_id: 'Demo Managed Skill' }, TOOL_CONTEXT);
+        const reEnabled = await setEnabledTool.handler({ skill_id: 'Demo Managed Skill', enabled: true }, TOOL_CONTEXT);
+        const inspectedAfterReEnable = await getToolById.handler({ skill_id: 'Demo Managed Skill' }, TOOL_CONTEXT);
         const removed = await removeTool.handler({ skill_id: 'Demo Managed Skill' }, TOOL_CONTEXT);
+        const inspectedAfterRemove = await getToolById.handler({ skill_id: 'Demo Managed Skill' }, TOOL_CONTEXT);
 
         expect(installed.success).toBe(true);
         expect(installed.skillId).toBe('Demo Managed Skill');
+        expect(inspectedAfterInstall.found).toBe(true);
+        expect(inspectedAfterInstall.skill.enabled).toBe(true);
+        expect(
+            listedAfterInstall.skills.some((skill: any) => skill.id === 'Demo Managed Skill' && skill.enabled === true),
+        ).toBe(true);
         expect(disabled.success).toBe(true);
-        expect(inspected.found).toBe(true);
-        expect(inspected.skill.enabled).toBe(false);
+        expect(inspectedAfterDisable.found).toBe(true);
+        expect(inspectedAfterDisable.skill.enabled).toBe(false);
+        expect(reEnabled.success).toBe(true);
+        expect(inspectedAfterReEnable.found).toBe(true);
+        expect(inspectedAfterReEnable.skill.enabled).toBe(true);
         expect(removed.success).toBe(true);
         expect(removed.filesDeleted).toBe(true);
+        expect(inspectedAfterRemove.found).toBe(false);
         expect(fs.existsSync(skillDir)).toBe(false);
     });
 

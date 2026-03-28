@@ -31,6 +31,34 @@ const BaseResponseSchema = z.object({
 });
 
 const VoiceProviderModeSchema = z.enum(['auto', 'system', 'custom']);
+const OptionalStringFromNullishSchema = z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.string().optional(),
+);
+
+export const RuntimeBinaryInfoSchema = z.object({
+    available: z.boolean(),
+    path: z.string().optional(),
+    source: z.string().optional(),
+});
+
+export const ManagedServiceCapabilitySchema = z.object({
+    id: z.string(),
+    bundled: z.boolean(),
+    runtimeReady: z.boolean(),
+});
+
+export const PlatformRuntimeContextSchema = z.object({
+    platform: z.string(),
+    arch: z.string(),
+    appDir: z.string(),
+    appDataDir: z.string(),
+    shell: z.string(),
+    sidecarLaunchMode: OptionalStringFromNullishSchema,
+    python: RuntimeBinaryInfoSchema,
+    skillhub: RuntimeBinaryInfoSchema,
+    managedServices: z.array(ManagedServiceCapabilitySchema),
+});
 
 // ============================================================================
 // Task Commands
@@ -48,8 +76,10 @@ export const StartTaskCommandSchema = BaseCommandSchema.extend({
         context: z.object({
             workspacePath: z.string(),
             activeFile: z.string().optional(),
+            displayText: z.string().optional(),
             selectedText: z.string().optional(),
             openFiles: z.array(z.string()).optional(),
+            environmentContext: PlatformRuntimeContextSchema.optional(),
         }),
         config: z.object({
             modelId: z.string().optional(),
@@ -127,6 +157,7 @@ export const SendTaskMessageCommandSchema = BaseCommandSchema.extend({
     payload: z.object({
         taskId: z.string().uuid(),
         content: z.string(),
+        environmentContext: PlatformRuntimeContextSchema.optional(),
         config: z.object({
             modelId: z.string().optional(),
             maxTokens: z.number().optional(),
@@ -176,30 +207,6 @@ export const ResumeInterruptedTaskResponseSchema = BaseResponseSchema.extend({
         taskId: z.string().uuid(),
         error: z.string().optional(),
     }),
-});
-
-export const RuntimeBinaryInfoSchema = z.object({
-    available: z.boolean(),
-    path: z.string().optional(),
-    source: z.string().optional(),
-});
-
-export const ManagedServiceCapabilitySchema = z.object({
-    id: z.string(),
-    bundled: z.boolean(),
-    runtimeReady: z.boolean(),
-});
-
-export const PlatformRuntimeContextSchema = z.object({
-    platform: z.string(),
-    arch: z.string(),
-    appDir: z.string(),
-    appDataDir: z.string(),
-    shell: z.string(),
-    sidecarLaunchMode: z.string().optional(),
-    python: RuntimeBinaryInfoSchema,
-    skillhub: RuntimeBinaryInfoSchema,
-    managedServices: z.array(ManagedServiceCapabilitySchema),
 });
 
 export const BootstrapRuntimeContextCommandSchema = BaseCommandSchema.extend({
