@@ -328,6 +328,15 @@ export const RejectPatchCommandSchema = BaseCommandSchema.extend({
     }),
 });
 
+export const RejectPatchResponseSchema = BaseResponseSchema.extend({
+    type: z.literal('reject_patch_response'),
+    payload: z.object({
+        patchId: z.string().uuid(),
+        success: z.boolean().optional(),
+        error: z.string().optional(),
+    }),
+});
+
 // ============================================================================
 // Filesystem Commands (via Policy Gate)
 // ============================================================================
@@ -1416,6 +1425,7 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     ResumeInterruptedTaskResponseSchema,
     RequestEffectResponseSchema,
     ProposePatchResponseSchema,
+    RejectPatchResponseSchema,
     ApplyPatchResponseSchema,
     ReadFileResponseSchema,
     ListDirResponseSchema,

@@ -206,18 +206,14 @@ describe('MCP-05: Toolpack 动态启停', () => {
     });
 
     test('任务配置支持启用/禁用 toolpacks', () => {
-        // Check that task creation supports enabledToolpacks config
-        const mainPath = path.join(SRC_ROOT, 'main.ts');
-        const exists = fs.existsSync(mainPath);
+        const schedulerPath = path.join(SRC_ROOT, 'mastra', 'schedulerRuntime.ts');
+        const exists = fs.existsSync(schedulerPath);
+        expect(exists).toBe(true);
 
-        if (exists) {
-            const content = fs.readFileSync(mainPath, 'utf-8');
-            const hasToolpackConfig = content.includes('enabledToolpacks') || content.includes('toolpacks');
-            console.log(`[Test] enabledToolpacks in task config: ${hasToolpackConfig}`);
-            expect(hasToolpackConfig).toBe(true);
-        } else {
-            console.log('[SKIP] main.ts not found.');
-        }
+        const content = fs.readFileSync(schedulerPath, 'utf-8');
+        const hasToolpackConfig = content.includes('enabledToolpacks') || content.includes('toolpacks');
+        console.log(`[Test] enabledToolpacks in task config: ${hasToolpackConfig}`);
+        expect(hasToolpackConfig).toBe(true);
     });
 
     test('各 toolpack 包含预期的工具', () => {

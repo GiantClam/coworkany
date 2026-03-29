@@ -149,7 +149,7 @@ async function runDbCommand(
                           ? line.split('\t').reduce((acc, val, idx) => {
                                 acc[`col${idx}`] = val;
                                 return acc;
-                            }, {} as any)
+                            }, {} as Record<string, string>)
                           : JSON.parse(line);
                   } catch {
                       return { result: line };

@@ -62,7 +62,7 @@ export function createLanguageModel(
             baseURL: normalizedGatewayUrl,
             apiKey: gateway.virtualKey,
             ...(tlsAwareFetch ? { fetch: tlsAwareFetch } : {}),
-        } as any);
+        });
         return provider.chat(config.modelId);
     }
 
@@ -73,7 +73,7 @@ export function createLanguageModel(
                 ? config.baseUrl.replace(/\/messages$/, '')
                 : config.baseUrl,
             ...(tlsAwareFetch ? { fetch: tlsAwareFetch } : {}),
-        } as any);
+        });
         return provider(config.modelId);
     }
 
@@ -83,7 +83,7 @@ export function createLanguageModel(
         apiKey: config.apiKey,
         baseURL: normalizedBaseUrl,
         ...(tlsAwareFetch ? { fetch: tlsAwareFetch } : {}),
-    } as any);
+    });
     return provider.chat(config.modelId);
 }
 
@@ -181,7 +181,7 @@ export function convertToolDefinitionsToAiTools(
             toolDef.name,
             {
                 description: toolDef.description,
-                inputSchema: jsonSchema(toolDef.input_schema as any),
+                inputSchema: jsonSchema(toolDef.input_schema as Parameters<typeof jsonSchema>[0]),
             },
         ])
     );

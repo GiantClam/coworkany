@@ -6,6 +6,28 @@
 
 import type { ToolChain } from './types';
 
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object'
+        ? value as Record<string, unknown>
+        : undefined;
+}
+
+function toObjectArray(value: unknown): Record<string, unknown>[] {
+    return Array.isArray(value)
+        ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        : [];
+}
+
+function toStringArray(value: unknown): string[] {
+    return Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string')
+        : [];
+}
+
+function toNumber(value: unknown, fallback: number): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 /**
  * Fix bug and test workflow
  *
@@ -134,8 +156,8 @@ export const CREATE_FEATURE_SAFE: ToolChain = {
             saveResult: 'quality_result',
             condition: (ctx) => {
                 // Only check quality if tests passed
-                const testResult = ctx.results.test_result as any;
-                return testResult && testResult.success !== false;
+                const testResult = toRecord(ctx.results.test_result);
+                return testResult !== undefined && testResult.success !== false;
             }
         },
         {
@@ -148,8 +170,8 @@ export const CREATE_FEATURE_SAFE: ToolChain = {
             onError: 'continue',
             condition: (ctx) => {
                 // Only commit if quality is good enough (>= 70)
-                const qualityResult = ctx.results.quality_result as any;
-                return qualityResult && qualityResult.score >= 70;
+                const qualityResult = toRecord(ctx.results.quality_result);
+                return qualityResult !== undefined && toNumber(qualityResult.score, 0) >= 70;
             }
         }
     ]
@@ -223,8 +245,8 @@ export const REFACTOR_SAFE: ToolChain = {
             saveResult: 'quality_after',
             condition: (ctx) => {
                 // Only if tests passed
-                const testResult = ctx.results.test_result as any;
-                return testResult && testResult.success !== false;
+                const testResult = toRecord(ctx.results.test_result);
+                return testResult !== undefined && testResult.success !== false;
             }
         }
     ]
@@ -268,8 +290,8 @@ export const DEPLOY_SAFE: ToolChain = {
             onError: 'stop',
             saveResult: 'build_result',
             condition: (ctx) => {
-                const testResult = ctx.results.test_result as any;
-                return testResult && testResult.success !== false;
+                const testResult = toRecord(ctx.results.test_result);
+                return testResult !== undefined && testResult.success !== false;
             }
         },
         {
@@ -289,8 +311,8 @@ export const DEPLOY_SAFE: ToolChain = {
             }),
             onError: 'stop',
             condition: (ctx) => {
-                const buildResult = ctx.results.build_result as any;
-                return buildResult && buildResult.success !== false;
+                const buildResult = toRecord(ctx.results.build_result);
+                return buildResult !== undefined && buildResult.success !== false;
             }
         }
     ]
@@ -449,15 +471,16 @@ export const RESEARCH_TOPIC: ToolChain = {
             name: 'Crawl Top Sources',
             tool: 'web_crawl',
             args: (ctx) => {
-                const results = ctx.results.search_results as any;
-                const urls = results?.urls || [];
-                return { urls: urls.slice(0, ctx.variables.max_sources as number) };
+                const results = toRecord(ctx.results.search_results);
+                const urls = toStringArray(results?.urls);
+                return { urls: urls.slice(0, toNumber(ctx.variables.max_sources, 5)) };
             },
             onError: 'continue',
             saveResult: 'crawled_content',
             condition: (ctx) => {
-                const results = ctx.results.search_results as any;
-                return results && results.urls && results.urls.length > 0;
+                const results = toRecord(ctx.results.search_results);
+                const urls = toStringArray(results?.urls);
+                return urls.length > 0;
             }
         },
         {
@@ -521,10 +544,11 @@ export const MEETING_PREP: ToolChain = {
             name: 'Search Meeting Context',
             tool: 'vault_search',
             args: (ctx) => {
-                const events = ctx.results.calendar_events as any;
-                const meeting = events?.[0] || {};
+                const events = toObjectArray(ctx.results.calendar_events);
+                const meeting = events[0];
+                const meetingTitle = typeof meeting?.title === 'string' ? meeting.title : '';
                 return {
-                    query: meeting.title || ctx.variables.meeting_id || '',
+                    query: meetingTitle || String(ctx.variables.meeting_id || ''),
                     max_results: 5
                 };
             },
@@ -536,13 +560,17 @@ export const MEETING_PREP: ToolChain = {
             name: 'Create Meeting Notes',
             tool: 'quick_note',
             args: (ctx) => {
-                const events = ctx.results.calendar_events as any;
-                const meeting = events?.[0] || {};
-                const context = ctx.results.context_results as any;
+                const events = toObjectArray(ctx.results.calendar_events);
+                const meeting = events[0];
+                const context = toRecord(ctx.results.context_results);
+                const title = typeof meeting?.title === 'string' ? meeting.title : 'Untitled Meeting';
+                const startTime = typeof meeting?.start_time === 'string' ? meeting.start_time : 'TBD';
+                const attendees = toStringArray(meeting?.attendees).join(', ') || 'N/A';
+                const summary = typeof context?.summary === 'string' ? context.summary : 'No prior context found';
 
                 return {
-                    title: `Meeting Notes: ${meeting.title || 'Untitled Meeting'}`,
-                    content: `# ${meeting.title || 'Meeting Notes'}\n\n**Date**: ${meeting.start_time || 'TBD'}\n**Attendees**: ${meeting.attendees?.join(', ') || 'N/A'}\n\n## Agenda\n\n- \n\n## Context\n\n${context?.summary || 'No prior context found'}\n\n## Notes\n\n\n\n## Action Items\n\n- `,
+                    title: `Meeting Notes: ${title}`,
+                    content: `# ${title || 'Meeting Notes'}\n\n**Date**: ${startTime}\n**Attendees**: ${attendees}\n\n## Agenda\n\n- \n\n## Context\n\n${summary}\n\n## Notes\n\n\n\n## Action Items\n\n- `,
                     tags: ['meeting', 'notes'],
                     category: 'projects'
                 };
@@ -554,15 +582,20 @@ export const MEETING_PREP: ToolChain = {
             name: 'Set Pre-Meeting Reminder',
             tool: 'set_reminder',
             args: (ctx) => {
-                const events = ctx.results.calendar_events as any;
-                const meeting = events?.[0] || {};
-                const startTime = meeting.start_time || new Date().toISOString();
+                const events = toObjectArray(ctx.results.calendar_events);
+                const meeting = events[0];
+                const startTime = typeof meeting?.start_time === 'string'
+                    ? meeting.start_time
+                    : new Date().toISOString();
+                const meetingTitle = typeof meeting?.title === 'string'
+                    ? meeting.title
+                    : 'Untitled';
 
                 // Set reminder 15 minutes before
                 const reminderTime = new Date(new Date(startTime).getTime() - 15 * 60 * 1000).toISOString();
 
                 return {
-                    message: `Meeting in 15 minutes: ${meeting.title || 'Untitled'}`,
+                    message: `Meeting in 15 minutes: ${meetingTitle}`,
                     time: reminderTime
                 };
             },
@@ -616,17 +649,29 @@ export const WEEKLY_REVIEW: ToolChain = {
             name: 'Generate Weekly Summary',
             tool: 'quick_note',
             args: (ctx) => {
-                const events = ctx.results.week_events as any;
-                const completed = ctx.results.completed_tasks as any;
-                const pending = ctx.results.pending_tasks as any;
+                const events = toObjectArray(ctx.results.week_events);
+                const completed = toObjectArray(ctx.results.completed_tasks);
+                const pending = toObjectArray(ctx.results.pending_tasks);
 
-                const eventCount = events?.length || 0;
-                const completedCount = completed?.length || 0;
-                const pendingCount = pending?.length || 0;
+                const eventCount = events.length;
+                const completedCount = completed.length;
+                const pendingCount = pending.length;
+                const keyEvents = events
+                    .slice(0, 5)
+                    .map((eventItem) => `- ${String(eventItem.title || 'Untitled')} (${String(eventItem.start_time || 'TBD')})`)
+                    .join('\n') || 'No events';
+                const completedTasks = completed
+                    .slice(0, 10)
+                    .map((task) => `- ✅ ${String(task.title || 'Untitled')}`)
+                    .join('\n') || 'No completed tasks';
+                const nextFocus = pending
+                    .slice(0, 5)
+                    .map((task) => `- ${String(task.title || 'Untitled')}`)
+                    .join('\n') || 'No pending high-priority tasks';
 
                 return {
                     title: `Weekly Review - ${new Date().toISOString().split('T')[0]}`,
-                    content: `# Weekly Review\n\n## This Week's Highlights\n\n**Meetings**: ${eventCount} meetings attended\n**Tasks Completed**: ${completedCount}\n**Tasks Pending**: ${pendingCount}\n\n## Key Events\n\n${events?.slice(0, 5).map((e: any) => `- ${e.title} (${e.start_time})`).join('\n') || 'No events'}\n\n## Completed Tasks\n\n${completed?.slice(0, 10).map((t: any) => `- ✅ ${t.title}`).join('\n') || 'No completed tasks'}\n\n## Next Week's Focus\n\n${pending?.slice(0, 5).map((t: any) => `- ${t.title}`).join('\n') || 'No pending high-priority tasks'}\n\n## Reflections\n\n\n\n## Action Items for Next Week\n\n- `,
+                    content: `# Weekly Review\n\n## This Week's Highlights\n\n**Meetings**: ${eventCount} meetings attended\n**Tasks Completed**: ${completedCount}\n**Tasks Pending**: ${pendingCount}\n\n## Key Events\n\n${keyEvents}\n\n## Completed Tasks\n\n${completedTasks}\n\n## Next Week's Focus\n\n${nextFocus}\n\n## Reflections\n\n\n\n## Action Items for Next Week\n\n- `,
                     tags: ['weekly-review', 'planning'],
                     category: 'projects'
                 };

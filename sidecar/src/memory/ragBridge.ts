@@ -61,6 +61,39 @@ export interface HealthStatus {
     indexedDocuments: number;
 }
 
+type JsonObject = Record<string, unknown>;
+
+function asObject(value: unknown): JsonObject {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as JsonObject
+        : {};
+}
+
+function asString(value: unknown, fallback: string = ''): string {
+    return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback: number = 0): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asBoolean(value: unknown, fallback: boolean = false): boolean {
+    return typeof value === 'boolean' ? value : fallback;
+}
+
+function asArray(value: unknown): unknown[] {
+    return Array.isArray(value) ? value : [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+    return asObject(value);
+}
+
+async function readJsonObject(response: Response): Promise<JsonObject> {
+    const value = await response.json();
+    return asObject(value);
+}
+
 // ============================================================================
 // RAG Bridge Class
 // ============================================================================
@@ -79,14 +112,15 @@ export class RagBridge {
      */
     async healthCheck(): Promise<HealthStatus> {
         const response = await this.fetch('/health', { method: 'GET' });
-        const data = await response.json() as any;
+        const data = await readJsonObject(response);
+        const statusRaw = asString(data.status, 'unhealthy');
 
         return {
-            status: data.status,
-            chromadbStatus: data.chromadb_status,
-            embeddingModel: data.embedding_model,
-            vaultPath: data.vault_path,
-            indexedDocuments: data.indexed_documents,
+            status: statusRaw === 'healthy' ? 'healthy' : 'unhealthy',
+            chromadbStatus: asString(data.chromadb_status),
+            embeddingModel: asString(data.embedding_model),
+            vaultPath: asString(data.vault_path),
+            indexedDocuments: asNumber(data.indexed_documents),
         };
     }
 
@@ -116,12 +150,12 @@ export class RagBridge {
             body: JSON.stringify(request),
         });
 
-        const data = await response.json() as any;
+        const data = await readJsonObject(response);
         return {
-            success: data.success,
-            path: data.path,
-            docId: data.doc_id,
-            title: data.title,
+            success: asBoolean(data.success, true),
+            path: asString(data.path),
+            docId: asString(data.doc_id),
+            title: asString(data.title),
         };
     }
 
@@ -140,18 +174,23 @@ export class RagBridge {
             }),
         });
 
-        const data = await response.json() as any;
+        const data = await readJsonObject(response);
         return {
-            results: data.results.map((r: any) => ({
-                path: r.path,
-                title: r.title,
-                content: r.content,
-                category: r.category,
-                score: r.score,
-                metadata: r.metadata,
-            })),
-            query: data.query,
-            totalIndexed: data.total_indexed,
+            results: asArray(data.results).map((result) => {
+                const item = asObject(result);
+                const content = item.content;
+                const category = item.category;
+                return {
+                    path: asString(item.path),
+                    title: asString(item.title),
+                    content: typeof content === 'string' ? content : undefined,
+                    category: typeof category === 'string' ? category : undefined,
+                    score: asNumber(item.score),
+                    metadata: asRecord(item.metadata),
+                };
+            }),
+            query: asString(data.query),
+            totalIndexed: asNumber(data.total_indexed),
         };
     }
 
@@ -213,12 +252,21 @@ export class RagBridge {
             method: 'POST',
         });
 
-        const data = await response.json() as any;
+        const data = await readJsonObject(response);
+        const errors = asArray(data.errors)
+            .map((error) => {
+                const item = asObject(error);
+                return {
+                    file: asString(item.file),
+                    error: asString(item.error),
+                };
+            })
+            .filter((error) => error.file.length > 0 || error.error.length > 0);
         return {
-            success: data.success,
-            indexed: data.indexed,
-            totalFiles: data.total_files,
-            errors: data.errors,
+            success: asBoolean(data.success, true),
+            indexed: asNumber(data.indexed),
+            totalFiles: asNumber(data.total_files),
+            errors,
         };
     }
 
@@ -230,8 +278,8 @@ export class RagBridge {
             method: 'DELETE',
         });
 
-        const data = await response.json() as any;
-        return { success: data.success };
+        const data = await readJsonObject(response);
+        return { success: asBoolean(data.success, true) };
     }
 
     /**
@@ -239,14 +287,19 @@ export class RagBridge {
      */
     async getStats(): Promise<IndexStats> {
         const response = await this.fetch('/stats', { method: 'GET' });
-        const data = await response.json() as any;
+        const data = await readJsonObject(response);
+
+        const categoriesRaw = asObject(data.categories);
+        const categories = Object.fromEntries(
+            Object.entries(categoriesRaw).map(([key, value]) => [key, asNumber(value)])
+        );
 
         return {
-            totalDocuments: data.total_documents,
-            totalChunks: data.total_chunks,
-            categories: data.categories,
-            lastIndexed: data.last_indexed,
-            vaultPath: data.vault_path,
+            totalDocuments: asNumber(data.total_documents),
+            totalChunks: asNumber(data.total_chunks),
+            categories,
+            lastIndexed: asString(data.last_indexed) || undefined,
+            vaultPath: asString(data.vault_path),
         };
     }
 
@@ -255,8 +308,11 @@ export class RagBridge {
      */
     async resetIndex(): Promise<{ success: boolean; message: string }> {
         const response = await this.fetch('/reset', { method: 'POST' });
-        const data = await response.json() as any;
-        return { success: data.success, message: data.message };
+        const data = await readJsonObject(response);
+        return {
+            success: asBoolean(data.success, true),
+            message: asString(data.message),
+        };
     }
 
     /**
@@ -271,8 +327,11 @@ export class RagBridge {
             body: JSON.stringify({ days_threshold: daysThreshold }),
         });
 
-        const data = await response.json() as any;
-        return { success: data.success, message: data.message };
+        const data = await readJsonObject(response);
+        return {
+            success: asBoolean(data.success, true),
+            message: asString(data.message),
+        };
     }
 
     /**

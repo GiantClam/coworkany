@@ -1,4 +1,6 @@
+import { randomUUID } from 'crypto';
 import type { ConfirmationPolicy, IpcCommand, IpcResponse, PlatformRuntimeContext } from '../protocol';
+import { DEFAULT_EFFECT_POLICIES } from '../protocol';
 import type { ArtifactContract } from '../agent/artifactContract';
 import type {
     CapabilityReviewState,
@@ -432,7 +434,416 @@ export type RuntimeCommandDeps = {
         providerName?: string;
         error?: string;
     }>;
+    sendIpcCommandAndWait?: (
+        type: string,
+        payload: Record<string, unknown>,
+        timeoutMs?: number,
+    ) => Promise<IpcResponse>;
+    createTextDeltaEvent?: (taskId: string, payload: {
+        delta: string;
+        role: 'assistant' | 'thinking';
+    }) => Record<string, unknown>;
+    createToolCallEvent?: (taskId: string, payload: {
+        id: string;
+        name: string;
+        input: unknown;
+    }) => Record<string, unknown>;
+    createToolResultEvent?: (taskId: string, payload: {
+        toolUseId: string;
+        name: string;
+        result: unknown;
+        isError: boolean;
+    }) => Record<string, unknown>;
+    mastraRuntime?: {
+        enabled: boolean;
+        sendMessage: (input: {
+            message: string;
+            threadId: string;
+            resourceId: string;
+            requireToolApproval?: boolean;
+            maxSteps?: number;
+            onEvent: (event: MastraRuntimeEvent) => void;
+        }) => Promise<{ runId: string }>;
+        approveToolCall: (input: {
+            runId: string;
+            toolCallId: string;
+            approved: boolean;
+            onEvent: (event: MastraRuntimeEvent) => void;
+        }) => Promise<void>;
+        cancelTask?: (input: {
+            taskId: string;
+            reason?: string;
+        }) => Promise<{ success: boolean }>;
+    };
 };
+
+type MastraRuntimeEvent =
+    | { type: 'text_delta'; content: string; runId?: string }
+    | { type: 'tool_call'; runId?: string; toolName: string; args: unknown }
+    | { type: 'approval_required'; runId?: string; toolCallId: string; toolName: string; args: unknown; resumeSchema: string }
+    | { type: 'suspended'; runId?: string; toolCallId: string; toolName: string; payload: unknown }
+    | { type: 'tool_result'; runId?: string; toolCallId: string; toolName: string; result: unknown; isError?: boolean }
+    | {
+        type: 'token_usage';
+        runId?: string;
+        modelId?: string;
+        provider?: string;
+        usage: {
+            inputTokens: number;
+            outputTokens: number;
+            totalTokens: number;
+            cacheCreationInputTokens?: number;
+            cacheReadInputTokens?: number;
+        };
+    }
+    | { type: 'complete'; runId?: string; finishReason?: string }
+    | { type: 'error'; runId?: string; message: string };
+
+type MastraApprovalContext = {
+    taskId: string;
+    runId?: string;
+    toolCallId: string;
+    toolName: string;
+};
+
+type MastraTaskState = {
+    workspacePath: string;
+    resourceId: string;
+    lastRunId?: string;
+    lastUserMessage?: string;
+};
+
+const mastraPendingApprovals = new Map<string, MastraApprovalContext>();
+const mastraTaskStateByTaskId = new Map<string, MastraTaskState>();
+
+function clearMastraTaskState(taskId: string): void {
+    mastraTaskStateByTaskId.delete(taskId);
+    for (const [requestId, context] of mastraPendingApprovals.entries()) {
+        if (context.taskId === taskId) {
+            mastraPendingApprovals.delete(requestId);
+        }
+    }
+}
+
+function getMastraResourceId(taskId: string): string {
+    const configured = process.env.COWORKANY_MASTRA_RESOURCE_ID;
+    if (typeof configured === 'string' && configured.trim().length > 0) {
+        return configured.trim();
+    }
+    return `employee-${taskId}`;
+}
+
+function isMastraRuntimeEnabled(deps: RuntimeCommandDeps): boolean {
+    return deps.mastraRuntime?.enabled === true;
+}
+
+function coerceRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+const POLICY_GATE_FORWARD_TIMEOUT_RETRY_COUNT = 1;
+
+function isIpcTimeoutError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('IPC response timeout');
+}
+
+async function forwardPolicyGateCommand(
+    deps: RuntimeCommandDeps,
+    type: string,
+    payload: Record<string, unknown>,
+): Promise<IpcResponse> {
+    if (!deps.sendIpcCommandAndWait) {
+        throw new Error('policy_gate_required');
+    }
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= POLICY_GATE_FORWARD_TIMEOUT_RETRY_COUNT; attempt += 1) {
+        try {
+            return await deps.sendIpcCommandAndWait(type, payload);
+        } catch (error) {
+            lastError = error;
+            const shouldRetry =
+                attempt < POLICY_GATE_FORWARD_TIMEOUT_RETRY_COUNT
+                && isIpcTimeoutError(error);
+            if (!shouldRetry) {
+                throw error;
+            }
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function forwardMastraEventToTaskTimeline(
+    taskId: string,
+    deps: RuntimeCommandDeps,
+    event: MastraRuntimeEvent,
+    assistantChunks: string[],
+    runtimeState: { hasError: boolean; errorMessage?: string; suspended?: boolean; suspendReason?: string },
+): void {
+    if (event.type === 'text_delta') {
+        if (typeof event.content === 'string' && event.content.length > 0) {
+            assistantChunks.push(event.content);
+            if (deps.createTextDeltaEvent) {
+                deps.emit(
+                    deps.createTextDeltaEvent(taskId, {
+                        delta: event.content,
+                        role: 'assistant',
+                    }),
+                );
+            }
+        }
+        return;
+    }
+
+    if (event.type === 'tool_call') {
+        if (deps.createToolCallEvent) {
+            deps.emit(
+                deps.createToolCallEvent(taskId, {
+                    id: `${event.runId || 'run'}:${event.toolName}:${Date.now()}`,
+                    name: event.toolName,
+                    input: event.args,
+                }),
+            );
+        }
+        return;
+    }
+
+    if (event.type === 'tool_result') {
+        if (deps.createToolResultEvent) {
+            deps.emit(
+                deps.createToolResultEvent(taskId, {
+                    toolUseId: event.toolCallId,
+                    name: event.toolName,
+                    result: event.result,
+                    isError: event.isError === true,
+                }),
+            );
+        }
+        return;
+    }
+
+    if (event.type === 'approval_required') {
+        const requestId = randomUUID();
+        const knownRunId =
+            (typeof event.runId === 'string' && event.runId.trim().length > 0)
+                ? event.runId
+                : mastraTaskStateByTaskId.get(taskId)?.lastRunId;
+        mastraPendingApprovals.set(requestId, {
+            taskId,
+            runId: knownRunId,
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+        });
+        const blockingReason = `Waiting for approval: ${event.toolName}`;
+        runtimeState.suspended = true;
+        runtimeState.suspendReason = blockingReason;
+
+        deps.taskEventBus.emitRaw(taskId, 'EFFECT_REQUESTED', {
+            request: {
+                id: requestId,
+                timestamp: new Date().toISOString(),
+                effectType: 'shell:write',
+                source: 'agent',
+                payload: {
+                    description: `Mastra tool approval required: ${event.toolName}`,
+                    command: JSON.stringify(event.args ?? {}),
+                },
+                context: {
+                    taskId,
+                    toolName: event.toolName,
+                    reasoning: 'Tool requires explicit approval in Mastra runtime.',
+                },
+            },
+            requiresUserConfirmation: true,
+            riskLevel: 7,
+        });
+        deps.taskEventBus.emitStatus(taskId, {
+            status: 'idle',
+            activeHardness: 'trivial',
+            blockingReason,
+        });
+        return;
+    }
+
+    if (event.type === 'suspended') {
+        const suspendReason = (() => {
+            const payload = event.payload;
+            if (payload && typeof payload === 'object') {
+                const candidate = payload as Record<string, unknown>;
+                if (typeof candidate.reason === 'string' && candidate.reason.trim().length > 0) {
+                    return candidate.reason;
+                }
+                if (typeof candidate.message === 'string' && candidate.message.trim().length > 0) {
+                    return candidate.message;
+                }
+            }
+            return 'Waiting for user input to resume Mastra task.';
+        })();
+        runtimeState.suspended = true;
+        runtimeState.suspendReason = suspendReason;
+        deps.taskEventBus.emitStatus(taskId, {
+            status: 'idle',
+            activeHardness: 'trivial',
+            blockingReason: suspendReason,
+        });
+        return;
+    }
+
+    if (event.type === 'token_usage') {
+        deps.taskEventBus.emitRaw(taskId, 'TOKEN_USAGE', {
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+            modelId: event.modelId ?? null,
+            provider: event.provider ?? null,
+        });
+        return;
+    }
+
+    if (event.type === 'error') {
+        runtimeState.hasError = true;
+        runtimeState.errorMessage = event.message || 'Mastra runtime error';
+        deps.emit(
+            deps.createTaskFailedEvent(taskId, {
+                error: event.message || 'Mastra runtime error',
+                errorCode: 'MASTRA_RUNTIME_ERROR',
+                recoverable: true,
+            }),
+        );
+    }
+}
+
+function finalizeMastraTurn(
+    taskId: string,
+    deps: RuntimeCommandDeps,
+    assistantChunks: string[],
+    fallbackSummary: string,
+): void {
+    const assistantText = assistantChunks.join('').trim();
+    if (assistantText.length > 0) {
+        deps.pushConversationMessage(taskId, {
+            role: 'assistant',
+            content: assistantText,
+        });
+        deps.emit(
+            deps.createChatMessageEvent(taskId, {
+                role: 'assistant',
+                content: assistantText,
+            }),
+        );
+    }
+
+    deps.emit(
+        deps.createTaskFinishedEvent(taskId, {
+            summary: assistantText || fallbackSummary,
+            duration: 0,
+        }),
+    );
+}
+
+async function executeMastraTurn(input: {
+    deps: RuntimeCommandDeps;
+    taskId: string;
+    message: string;
+    workspacePath: string;
+    titleForPersistence: string;
+    emitStartedEvent: boolean;
+    requireToolApproval: boolean;
+}): Promise<{ success: boolean; error?: string }> {
+    const { deps, taskId, message, workspacePath } = input;
+    const runtime = deps.mastraRuntime;
+    if (!runtime || !runtime.enabled) {
+        return { success: false, error: 'mastra_runtime_disabled' };
+    }
+
+    const state = mastraTaskStateByTaskId.get(taskId);
+    const resourceId = state?.resourceId || getMastraResourceId(taskId);
+    const assistantChunks: string[] = [];
+    const runtimeState: { hasError: boolean; errorMessage?: string; suspended?: boolean; suspendReason?: string } = {
+        hasError: false,
+    };
+
+    deps.taskSessionStore.setHistoryLimit(taskId, 20);
+    deps.ensureTaskRuntimePersistence({
+        taskId,
+        title: input.titleForPersistence || taskId,
+        workspacePath,
+    });
+
+    if (input.emitStartedEvent) {
+        deps.taskEventBus.emitStarted(taskId, {
+            title: input.titleForPersistence || taskId,
+            description: message,
+            context: {
+                workspacePath,
+                userQuery: message,
+            },
+        });
+    }
+
+    deps.taskEventBus.emitStatus(taskId, {
+        status: 'running',
+        activeHardness: 'trivial',
+        blockingReason: undefined,
+    });
+
+    deps.pushConversationMessage(taskId, { role: 'user', content: message });
+
+    try {
+        const result = await runtime.sendMessage({
+            message,
+            threadId: taskId,
+            resourceId,
+            requireToolApproval: input.requireToolApproval,
+            maxSteps: 16,
+            onEvent: (event) => {
+                forwardMastraEventToTaskTimeline(
+                    taskId,
+                    deps,
+                    event,
+                    assistantChunks,
+                    runtimeState,
+                );
+            },
+        });
+
+        if (runtimeState.hasError) {
+            return {
+                success: false,
+                error: runtimeState.errorMessage || 'mastra_runtime_error',
+            };
+        }
+
+        mastraTaskStateByTaskId.set(taskId, {
+            workspacePath,
+            resourceId,
+            lastRunId: result.runId,
+            lastUserMessage: message,
+        });
+
+        if (runtimeState.suspended) {
+            return { success: true };
+        }
+
+        finalizeMastraTurn(taskId, deps, assistantChunks, 'Mastra execution finished.');
+
+        return { success: true };
+    } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        deps.emit(
+            deps.createTaskFailedEvent(taskId, {
+                error: messageText,
+                errorCode: 'MASTRA_RUNTIME_EXECUTION_FAILED',
+                recoverable: true,
+            }),
+        );
+        return { success: false, error: messageText };
+    }
+}
 
 function extractMessageText(content: unknown): string {
     if (typeof content === 'string') {
@@ -1514,22 +1925,49 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'start_task': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+                title?: string;
+                userQuery?: string;
+                context?: {
+                    displayText?: string;
+                    workspacePath?: string;
+                    activeFile?: string;
+                    environmentContext?: PlatformRuntimeContext;
+                };
+                config?: Record<string, unknown>;
+            } | undefined) ?? { taskId: '' };
+            const taskId = payload.taskId;
             deps.emit(respond(command.id, 'start_task_response', {
                 success: true,
-                taskId: payload.taskId,
+                taskId,
             }));
 
+            if (isMastraRuntimeEnabled(deps)) {
+                const workspacePath = payload.context?.workspacePath || deps.workspaceRoot;
+                const result = await executeMastraTurn({
+                    deps,
+                    taskId,
+                    message: payload.userQuery || '',
+                    workspacePath,
+                    titleForPersistence: payload.title || 'Mastra Task',
+                    emitStartedEvent: true,
+                    requireToolApproval: true,
+                });
+                void result;
+                return true;
+            }
+
             await deps.executeFreshTask({
-                taskId: payload.taskId,
+                taskId,
                 title: payload.title,
-                userQuery: payload.userQuery,
-                displayText: payload.context.displayText,
-                workspacePath: payload.context.workspacePath,
-                activeFile: payload.context.activeFile,
+                userQuery: payload.userQuery || '',
+                displayText: payload.context?.displayText,
+                workspacePath: payload.context?.workspacePath || deps.workspaceRoot,
+                activeFile: payload.context?.activeFile,
                 config: {
                     ...(payload.config ?? {}),
-                    environmentContext: payload.context.environmentContext,
+                    environmentContext: payload.context?.environmentContext,
                 },
                 emitStartedEvent: true,
                 allowAutonomousFallback: true,
@@ -1538,7 +1976,31 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'cancel_task': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+                reason?: string;
+            } | undefined) ?? { taskId: '' };
+            if (isMastraRuntimeEnabled(deps)) {
+                const runtime = deps.mastraRuntime;
+                if (runtime?.cancelTask) {
+                    await runtime.cancelTask({
+                        taskId: payload.taskId,
+                        reason: payload.reason,
+                    });
+                }
+                clearMastraTaskState(payload.taskId);
+                deps.taskEventBus.emitStatus(payload.taskId, {
+                    status: 'idle',
+                    activeHardness: 'trivial',
+                    blockingReason: undefined,
+                });
+                deps.emit(respond(command.id, 'cancel_task_response', {
+                    success: true,
+                    taskId: payload.taskId,
+                }));
+                return true;
+            }
+
             await deps.cancelTaskExecution(payload.taskId, payload.reason);
             deps.emit(respond(command.id, 'cancel_task_response', {
                 success: true,
@@ -1548,7 +2010,35 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'clear_task_history': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+            } | undefined) ?? { taskId: '' };
+            if (isMastraRuntimeEnabled(deps)) {
+                const runtime = deps.mastraRuntime;
+                if (runtime?.cancelTask) {
+                    await runtime.cancelTask({
+                        taskId: payload.taskId,
+                        reason: 'Task cleared by user',
+                    });
+                }
+                clearMastraTaskState(payload.taskId);
+                deps.taskSessionStore.clearConversation(payload.taskId);
+                deps.taskSessionStore.ensureHistoryLimit(payload.taskId);
+                deps.taskEventBus.emitRaw(payload.taskId, 'TASK_HISTORY_CLEARED', {
+                    reason: 'user_requested',
+                });
+                deps.taskEventBus.emitStatus(payload.taskId, {
+                    status: 'idle',
+                    activeHardness: 'trivial',
+                    blockingReason: undefined,
+                });
+                deps.emit(respond(command.id, 'clear_task_history_response', {
+                    success: true,
+                    taskId: payload.taskId,
+                }));
+                return true;
+            }
+
             const cancellation = await deps.cancelTaskExecution(
                 payload.taskId,
                 'Task cleared by user'
@@ -1576,12 +2066,44 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'send_task_message': {
-            const payload = command.payload as any;
-            const taskId = payload.taskId as string;
-            const content = payload.content as string;
+            const payload = (command.payload as {
+                taskId: string;
+                content: string;
+                environmentContext?: PlatformRuntimeContext;
+                config?: {
+                    maxHistoryMessages?: number;
+                    workspacePath?: string;
+                    [key: string]: unknown;
+                };
+            } | undefined) ?? { taskId: '', content: '' };
+            const taskId = payload.taskId;
+            const content = payload.content;
+
+            if (isMastraRuntimeEnabled(deps)) {
+                deps.emit(respond(command.id, 'send_task_message_response', {
+                    success: true,
+                    taskId,
+                }));
+                const taskConfig = deps.getTaskConfig(taskId);
+                const workspacePath =
+                    (taskConfig?.workspacePath as string | undefined) ||
+                    deps.workspaceRoot;
+                const result = await executeMastraTurn({
+                    deps,
+                    taskId,
+                    message: content,
+                    workspacePath,
+                    titleForPersistence: content.trim().slice(0, 80) || 'Mastra Follow-up',
+                    emitStartedEvent: false,
+                    requireToolApproval: true,
+                });
+                void result;
+                return true;
+            }
+
             const parsedUserInput = parseInlineAttachmentContent(content);
             const promptText = parsedUserInput.promptText || content;
-            const environmentContext = (payload.environmentContext as PlatformRuntimeContext | undefined) ?? undefined;
+            const environmentContext = payload.environmentContext;
             const authOpenPageUrl = extractAuthOpenPageUrl(promptText);
             const normalizedPromptText = normalizeFollowUpControlText(promptText);
             const conversationContent = parsedUserInput.conversationContent;
@@ -2170,8 +2692,44 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'resume_interrupted_task': {
-            const payload = command.payload as any;
-            const taskId = payload.taskId as string;
+            const payload = (command.payload as {
+                taskId: string;
+                suppressResponse?: boolean;
+                config?: {
+                    maxHistoryMessages?: number;
+                    workspacePath?: string;
+                    enabledClaudeSkills?: string[];
+                    enabledSkills?: string[];
+                    [key: string]: unknown;
+                };
+            } | undefined) ?? { taskId: '' };
+            const taskId = payload.taskId;
+            if (isMastraRuntimeEnabled(deps)) {
+                const taskConfig = deps.getTaskConfig(taskId);
+                const workspacePath =
+                    (taskConfig?.workspacePath as string | undefined) ||
+                    deps.workspaceRoot;
+                const state = mastraTaskStateByTaskId.get(taskId);
+                const resumeQuery = state?.lastUserMessage || 'Continue from the saved task context.';
+
+                deps.emit(respond(command.id, 'resume_interrupted_task_response', {
+                    success: true,
+                    taskId,
+                }));
+
+                const result = await executeMastraTurn({
+                    deps,
+                    taskId,
+                    message: resumeQuery,
+                    workspacePath,
+                    titleForPersistence: 'Mastra Resume',
+                    emitStartedEvent: false,
+                    requireToolApproval: true,
+                });
+                void result;
+                return true;
+            }
+
             const existingConversation = deps.taskSessionStore.getConversation(taskId);
             const suppressResponse = payload.suppressResponse === true;
 
@@ -2589,13 +3147,120 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             return true;
         }
 
+        case 'report_effect_result': {
+            const payload = command.payload as {
+                requestId: string;
+                success: boolean;
+                error?: string;
+            };
+
+            if (!isMastraRuntimeEnabled(deps)) {
+                return true;
+            }
+
+            const approval = mastraPendingApprovals.get(payload.requestId);
+            if (!approval) {
+                return true;
+            }
+
+            mastraPendingApprovals.delete(payload.requestId);
+
+            if (payload.success) {
+                deps.taskEventBus.emitRaw(approval.taskId, 'EFFECT_APPROVED', {
+                    response: {
+                        requestId: payload.requestId,
+                        timestamp: new Date().toISOString(),
+                        approved: true,
+                        approvalType: 'once',
+                    },
+                    approvedBy: 'user',
+                });
+            } else {
+                deps.taskEventBus.emitRaw(approval.taskId, 'EFFECT_DENIED', {
+                    response: {
+                        requestId: payload.requestId,
+                        timestamp: new Date().toISOString(),
+                        approved: false,
+                        denialReason: payload.error || 'user_denied',
+                        denialCode: 'user_denied',
+                    },
+                    deniedBy: 'user',
+                });
+            }
+
+            try {
+                if (!approval.runId || approval.runId.trim().length === 0) {
+                    deps.emit(
+                        deps.createTaskFailedEvent(approval.taskId, {
+                            error: `Mastra approval context is missing runId for ${approval.toolName}.`,
+                            errorCode: 'MASTRA_APPROVAL_CONTEXT_INVALID',
+                            recoverable: true,
+                        }),
+                    );
+                    return true;
+                }
+                const approvalChunks: string[] = [];
+                const runtimeState = { hasError: false } as {
+                    hasError: boolean;
+                    errorMessage?: string;
+                    suspended?: boolean;
+                    suspendReason?: string;
+                };
+                await deps.mastraRuntime?.approveToolCall({
+                    runId: approval.runId,
+                    toolCallId: approval.toolCallId,
+                    approved: payload.success,
+                    onEvent: (event) => {
+                        forwardMastraEventToTaskTimeline(
+                            approval.taskId,
+                            deps,
+                            event,
+                            approvalChunks,
+                            runtimeState,
+                        );
+                    },
+                });
+                if (!runtimeState.hasError && !runtimeState.suspended) {
+                    finalizeMastraTurn(
+                        approval.taskId,
+                        deps,
+                        approvalChunks,
+                        payload.success
+                            ? `Approved ${approval.toolName} and resumed execution.`
+                            : `Declined ${approval.toolName}; execution continued safely.`,
+                    );
+                }
+            } catch (error) {
+                deps.emit(
+                    deps.createTaskFailedEvent(approval.taskId, {
+                        error: error instanceof Error ? error.message : String(error),
+                        errorCode: 'MASTRA_APPROVAL_RESUME_FAILED',
+                        recoverable: true,
+                    }),
+                );
+            }
+
+            return true;
+        }
+
         case 'request_effect': {
-            const effectPayload = command.payload as any;
+            const effectPayload = (command.payload as {
+                taskId?: string;
+                tool?: string;
+                parameters?: {
+                    file_path?: string;
+                    path?: string;
+                    new_string?: string;
+                    content?: string;
+                };
+            } | undefined) ?? {};
             if (effectPayload.tool === 'Edit' || effectPayload.tool === 'Write') {
                 const filePath = effectPayload.parameters?.file_path || effectPayload.parameters?.path;
                 const content = effectPayload.parameters?.new_string || effectPayload.parameters?.content;
                 if (filePath) {
-                    const taskId: string = (command as any).taskId || ((command.payload as any).taskId) || '';
+                    const taskId = typeof effectPayload.taskId === 'string'
+                        ? effectPayload.taskId
+                        : '';
                     const taskContext = deps.taskSessionStore.getConfig(taskId);
                     const workspacePath = (taskContext?.workspacePath as string | undefined) || process.cwd();
                     const hookResults = deps.runPostEditHooks(workspacePath, filePath, content);
@@ -2609,7 +3274,145 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 response: {
                     approved: false,
                     requestId: command.id,
-                } as any,
+                },
+            }));
+            return true;
+        }
+
+        case 'propose_patch': {
+            const payload = (command.payload as {
+                patch?: {
+                    id?: string;
+                    filePath?: string;
+                    operation?: string;
+                    hunks?: unknown[];
+                    additions?: number;
+                    deletions?: number;
+                    description?: string;
+                };
+                taskId?: string;
+            } | undefined) ?? {};
+            const patch = payload.patch;
+            const taskId = typeof payload.taskId === 'string' ? payload.taskId : 'global';
+            if (deps.sendIpcCommandAndWait) {
+                try {
+                    const forwarded = await forwardPolicyGateCommand(
+                        deps,
+                        command.type,
+                        coerceRecord(command.payload),
+                    );
+                    if (forwarded.type === 'propose_patch_response') {
+                        const forwardedPayload = coerceRecord(forwarded.payload);
+                        const forwardedPatchId = typeof forwardedPayload.patchId === 'string'
+                            ? forwardedPayload.patchId
+                            : (typeof patch?.id === 'string' && patch.id.length > 0 ? patch.id : randomUUID());
+                        deps.taskEventBus.emitRaw(taskId, 'PATCH_PROPOSED', {
+                            patch: {
+                                id: forwardedPatchId,
+                                filePath: typeof patch?.filePath === 'string' ? patch.filePath : '',
+                                operation: typeof patch?.operation === 'string' ? patch.operation : 'modify',
+                                hunks: Array.isArray(patch?.hunks) ? patch.hunks : [],
+                                additions: typeof patch?.additions === 'number' ? patch.additions : 0,
+                                deletions: typeof patch?.deletions === 'number' ? patch.deletions : 0,
+                                description: typeof patch?.description === 'string' ? patch.description : undefined,
+                            },
+                        });
+                        const forwardedShadowPath = typeof forwardedPayload.shadowPath === 'string'
+                            ? forwardedPayload.shadowPath
+                            : `${deps.workspaceRoot}/.coworkany/shadow/${forwardedPatchId}`;
+                        deps.emit(respond(command.id, 'propose_patch_response', {
+                            ...forwardedPayload,
+                            patchId: forwardedPatchId,
+                            shadowPath: forwardedShadowPath,
+                        }));
+                        return true;
+                    }
+                    const patchId = typeof patch?.id === 'string' && patch.id.length > 0
+                        ? patch.id
+                        : randomUUID();
+                    deps.emit(respond(command.id, 'propose_patch_response', {
+                        patchId,
+                        shadowPath: `${deps.workspaceRoot}/.coworkany/shadow/${patchId}`,
+                        error: `policy_gate_invalid_response:${forwarded.type}`,
+                    }));
+                    return true;
+                } catch (error) {
+                    const patchId = typeof patch?.id === 'string' && patch.id.length > 0
+                        ? patch.id
+                        : randomUUID();
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    deps.emit(respond(command.id, 'propose_patch_response', {
+                        patchId,
+                        shadowPath: `${deps.workspaceRoot}/.coworkany/shadow/${patchId}`,
+                        error: `policy_gate_unavailable:${errorMessage}`,
+                    }));
+                    return true;
+                }
+            }
+
+            const patchId = typeof patch?.id === 'string' && patch.id.length > 0
+                ? patch.id
+                : randomUUID();
+            const shadowPath = `${deps.workspaceRoot}/.coworkany/shadow/${patchId}`;
+
+            deps.taskEventBus.emitRaw(taskId, 'PATCH_PROPOSED', {
+                patch: {
+                    id: patchId,
+                    filePath: typeof patch?.filePath === 'string' ? patch.filePath : '',
+                    operation: typeof patch?.operation === 'string' ? patch.operation : 'modify',
+                    hunks: Array.isArray(patch?.hunks) ? patch.hunks : [],
+                    additions: typeof patch?.additions === 'number' ? patch.additions : 0,
+                    deletions: typeof patch?.deletions === 'number' ? patch.deletions : 0,
+                    description: typeof patch?.description === 'string' ? patch.description : undefined,
+                },
+            });
+
+            deps.emit(respond(command.id, 'propose_patch_response', {
+                patchId,
+                shadowPath,
+            }));
+            return true;
+        }
+
+        case 'reject_patch': {
+            const payload = (command.payload as {
+                patchId?: string;
+                reason?: string;
+            } | undefined) ?? {};
+            deps.taskEventBus.emitRaw('global', 'PATCH_REJECTED', {
+                patchId: typeof payload.patchId === 'string' ? payload.patchId : '',
+                reason: typeof payload.reason === 'string' ? payload.reason : 'rejected_by_user',
+            });
+            if (deps.sendIpcCommandAndWait) {
+                try {
+                    const forwarded = await forwardPolicyGateCommand(
+                        deps,
+                        command.type,
+                        coerceRecord(command.payload),
+                    );
+                    if (forwarded.type === 'reject_patch_response') {
+                        deps.emit(respond(command.id, 'reject_patch_response', coerceRecord(forwarded.payload)));
+                        return true;
+                    }
+                    deps.emit(respond(command.id, 'reject_patch_response', {
+                        success: false,
+                        patchId: typeof payload.patchId === 'string' ? payload.patchId : '',
+                        error: `policy_gate_invalid_response:${forwarded.type}`,
+                    }));
+                    return true;
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    deps.emit(respond(command.id, 'reject_patch_response', {
+                        success: false,
+                        patchId: typeof payload.patchId === 'string' ? payload.patchId : '',
+                        error: `policy_gate_unavailable:${errorMessage}`,
+                    }));
+                    return true;
+                }
+            }
+            deps.emit(respond(command.id, 'reject_patch_response', {
+                success: true,
+                patchId: typeof payload.patchId === 'string' ? payload.patchId : '',
             }));
             return true;
         }
@@ -2619,13 +3422,137 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         case 'list_dir':
         case 'exec_shell':
         case 'capture_screen':
-        case 'get_policy_config':
+            if (deps.sendIpcCommandAndWait) {
+                try {
+                    const forwarded = await forwardPolicyGateCommand(
+                        deps,
+                        command.type,
+                        coerceRecord(command.payload),
+                    );
+                    const expectedResponseType = `${command.type}_response`;
+                    if (forwarded.type === expectedResponseType) {
+                        deps.emit(respond(command.id, expectedResponseType, coerceRecord(forwarded.payload)));
+                        return true;
+                    }
+
+                    deps.emit(respond(command.id, expectedResponseType, {
+                        success: false,
+                        error: `policy_gate_invalid_response:${forwarded.type}`,
+                    }));
+                    return true;
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    if (command.type === 'apply_patch') {
+                        const payload = (command.payload as { patchId?: string } | undefined) ?? {};
+                        deps.emit(respond(command.id, 'apply_patch_response', {
+                            patchId: typeof payload.patchId === 'string' ? payload.patchId : randomUUID(),
+                            success: false,
+                            error: `policy_gate_unavailable:${errorMessage}`,
+                            errorCode: 'io_error',
+                        }));
+                        return true;
+                    }
+                    deps.emit(respond(command.id, `${command.type}_response`, {
+                        success: false,
+                        error: `policy_gate_unavailable:${errorMessage}`,
+                    }));
+                    return true;
+                }
+            }
+
             console.error(`[STUB] Command type "${command.type}" should be forwarded to Rust Policy Gate`);
+            if (command.type === 'apply_patch') {
+                const payload = (command.payload as { patchId?: string } | undefined) ?? {};
+                deps.emit(respond(command.id, 'apply_patch_response', {
+                    patchId: typeof payload.patchId === 'string' ? payload.patchId : randomUUID(),
+                    success: false,
+                    error: 'policy_gate_required',
+                    errorCode: 'io_error',
+                }));
+                return true;
+            }
+
+            if (command.type === 'read_file') {
+                deps.emit(respond(command.id, 'read_file_response', {
+                    success: false,
+                    error: 'policy_gate_required',
+                }));
+                return true;
+            }
+
+            if (command.type === 'list_dir') {
+                deps.emit(respond(command.id, 'list_dir_response', {
+                    success: false,
+                    error: 'policy_gate_required',
+                }));
+                return true;
+            }
+
+            if (command.type === 'exec_shell') {
+                deps.emit(respond(command.id, 'exec_shell_response', {
+                    success: false,
+                    error: 'policy_gate_required',
+                }));
+                return true;
+            }
+
+            deps.emit(respond(command.id, 'capture_screen_response', {
+                success: false,
+                error: 'policy_gate_required',
+            }));
+            return true;
+
+        case 'get_policy_config':
+            if (deps.sendIpcCommandAndWait) {
+                try {
+                    const forwarded = await forwardPolicyGateCommand(
+                        deps,
+                        command.type,
+                        coerceRecord(command.payload),
+                    );
+                    if (forwarded.type === 'get_policy_config_response') {
+                        deps.emit(respond(command.id, 'get_policy_config_response', coerceRecord(forwarded.payload)));
+                        return true;
+                    }
+                } catch {
+                    // fall through to compatibility defaults when policy gate is unavailable
+                }
+            }
+
+            deps.emit(respond(command.id, 'get_policy_config_response', {
+                defaultPolicies: DEFAULT_EFFECT_POLICIES,
+                allowlists: {
+                    commands: [],
+                    domains: [],
+                    paths: [],
+                },
+                blocklists: {
+                    commands: [],
+                    domains: [],
+                    paths: [],
+                },
+            }));
             return true;
 
         case 'start_autonomous_task': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+                query: string;
+                autoSaveMemory?: boolean;
+                runInBackground?: boolean;
+                suppressResponse?: boolean;
+            } | undefined) ?? { taskId: '', query: '' };
             const suppressResponse = payload.suppressResponse === true;
+            if (isMastraRuntimeEnabled(deps)) {
+                if (!suppressResponse) {
+                    deps.emit(respond(command.id, 'start_autonomous_task_response', {
+                        success: false,
+                        taskId: payload.taskId,
+                        error: 'unsupported_in_mastra_runtime',
+                    }));
+                }
+                return true;
+            }
             deps.taskEventBus.reset(payload.taskId);
             const llmConfig = deps.loadLlmConfig(deps.workspaceRoot);
             const providerConfig = deps.resolveProviderConfig(llmConfig, {});
@@ -2676,7 +3603,17 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'get_autonomous_task_status': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+            } | undefined) ?? { taskId: '' };
+            if (isMastraRuntimeEnabled(deps)) {
+                deps.emit(respond(command.id, 'get_autonomous_task_status_response', {
+                    success: false,
+                    task: null,
+                    error: 'unsupported_in_mastra_runtime',
+                }));
+                return true;
+            }
             const agent = deps.getAutonomousAgent(payload.taskId);
             const task = agent.getTask(payload.taskId);
             deps.emit(respond(command.id, 'get_autonomous_task_status_response', {
@@ -2685,7 +3622,9 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     id: task.id,
                     status: task.status,
                     subtaskCount: task.decomposedTasks.length,
-                    completedSubtasks: task.decomposedTasks.filter((s: any) => s.status === 'completed').length,
+                    completedSubtasks: task.decomposedTasks.filter(
+                        (subtask: { status?: string }) => subtask.status === 'completed'
+                    ).length,
                     summary: task.summary,
                     memoryExtracted: task.memoryExtracted,
                 } : null,
@@ -2733,7 +3672,17 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'pause_autonomous_task': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+            } | undefined) ?? { taskId: '' };
+            if (isMastraRuntimeEnabled(deps)) {
+                deps.emit(respond(command.id, 'pause_autonomous_task_response', {
+                    success: false,
+                    taskId: payload.taskId,
+                    error: 'unsupported_in_mastra_runtime',
+                }));
+                return true;
+            }
             const agent = deps.getAutonomousAgent(payload.taskId);
             const success = agent.pauseTask(payload.taskId);
             deps.emit(respond(command.id, 'pause_autonomous_task_response', {
@@ -2744,7 +3693,18 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'resume_autonomous_task': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+                userInput?: Record<string, string>;
+            } | undefined) ?? { taskId: '' };
+            if (isMastraRuntimeEnabled(deps)) {
+                deps.emit(respond(command.id, 'resume_autonomous_task_response', {
+                    success: false,
+                    taskId: payload.taskId,
+                    error: 'unsupported_in_mastra_runtime',
+                }));
+                return true;
+            }
             const agent = deps.getAutonomousAgent(payload.taskId);
             deps.emit(respond(command.id, 'resume_autonomous_task_response', {
                 success: true,
@@ -2761,7 +3721,17 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'cancel_autonomous_task': {
-            const payload = command.payload as any;
+            const payload = (command.payload as {
+                taskId: string;
+            } | undefined) ?? { taskId: '' };
+            if (isMastraRuntimeEnabled(deps)) {
+                deps.emit(respond(command.id, 'cancel_autonomous_task_response', {
+                    success: false,
+                    taskId: payload.taskId,
+                    error: 'unsupported_in_mastra_runtime',
+                }));
+                return true;
+            }
             const agent = deps.getAutonomousAgent(payload.taskId);
             const success = agent.cancelTask(payload.taskId);
             deps.emit(respond(command.id, 'cancel_autonomous_task_response', {
@@ -2779,6 +3749,14 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
         }
 
         case 'list_autonomous_tasks': {
+            if (isMastraRuntimeEnabled(deps)) {
+                deps.emit(respond(command.id, 'list_autonomous_tasks_response', {
+                    success: false,
+                    tasks: [],
+                    error: 'unsupported_in_mastra_runtime',
+                }));
+                return true;
+            }
             const agent = deps.getAutonomousAgent('global');
             const tasks = agent.getAllTasks();
             deps.emit(respond(command.id, 'list_autonomous_tasks_response', {
@@ -2787,7 +3765,9 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     query: task.originalQuery,
                     status: task.status,
                     subtaskCount: task.decomposedTasks.length,
-                    completedSubtasks: task.decomposedTasks.filter((s: any) => s.status === 'completed').length,
+                    completedSubtasks: task.decomposedTasks.filter(
+                        (subtask: { status?: string }) => subtask.status === 'completed'
+                    ).length,
                     createdAt: task.createdAt,
                     completedAt: task.completedAt,
                 })),
@@ -2817,11 +3797,20 @@ export type RuntimeResponseDeps = {
 export async function handleRuntimeResponse(response: IpcResponse, deps: RuntimeResponseDeps): Promise<boolean> {
     switch (response.type) {
         case 'request_effect_response': {
-            const effectResponse = (response.payload as any).response;
-            const approved = effectResponse.approved;
-            const requestId = effectResponse.requestId as string | undefined;
-            const denialReason = effectResponse.denialReason as string | undefined;
-            const approvalType = effectResponse.approvalType as ConfirmationPolicy | undefined;
+            const payload = (response.payload as { response?: unknown } | undefined) ?? {};
+            const effectResponse = payload.response && typeof payload.response === 'object'
+                ? payload.response as Record<string, unknown>
+                : {};
+            const approved = effectResponse.approved === true;
+            const requestId = typeof effectResponse.requestId === 'string'
+                ? effectResponse.requestId
+                : undefined;
+            const denialReason = typeof effectResponse.denialReason === 'string'
+                ? effectResponse.denialReason
+                : undefined;
+            const approvalType = typeof effectResponse.approvalType === 'string'
+                ? effectResponse.approvalType as ConfirmationPolicy
+                : undefined;
 
             if (requestId) {
                 if (approved) {
@@ -2849,8 +3838,14 @@ export async function handleRuntimeResponse(response: IpcResponse, deps: Runtime
             return true;
         }
         case 'apply_patch_response': {
-            const payload = response.payload as any;
-            const success = payload.success;
+            const payload = (response.payload as {
+                success?: boolean;
+                patchId?: string;
+                filePath?: string;
+                backupPath?: string;
+                error?: string;
+            } | undefined) ?? {};
+            const success = payload.success === true;
             const eventType = success ? 'PATCH_APPLIED' : 'PATCH_REJECTED';
             const eventPayload = success
                 ? {

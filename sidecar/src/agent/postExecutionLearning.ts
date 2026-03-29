@@ -53,6 +53,24 @@ export interface TaskSession {
     }>;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function asString(value: unknown, fallback = ''): string {
+    return typeof value === 'string' ? value : fallback;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 export interface LearningDecision {
     shouldLearn: boolean;
     reason: string;
@@ -93,14 +111,16 @@ export class PostExecutionLearningManager {
      */
     handleEvent(event: TaskEvent): void {
         const { taskId } = event;
+        const rawEvent = event as { type: string; payload?: unknown };
+        const payload = asRecord(rawEvent.payload);
 
         // Get or create session
         let session = this.sessionBuffer.get(taskId);
-        if (!session && event.type === 'TASK_STARTED') {
-            const payload = event.payload as any;
+        if (!session && rawEvent.type === 'TASK_STARTED') {
+            const context = asRecord(payload.context);
             session = {
                 taskId,
-                userQuery: payload.context?.userQuery || payload.description || '',
+                userQuery: asString(context.userQuery) || asString(payload.description),
                 events: [],
                 status: 'finished',
                 duration: 0,
@@ -115,37 +135,34 @@ export class PostExecutionLearningManager {
         session.events.push(event);
 
         // Extract tool calls
-        const eventType = (event as any).type;
+        const eventType = rawEvent.type;
 
         if (eventType === 'TOOL_CALLED' || eventType === 'TOOL_CALL') {
-            const payload = event.payload as any;
             session.toolCalls.push({
-                toolName: payload.toolName || payload.name || 'unknown_tool',
-                args: payload.args || payload.input || {},
+                toolName: asString(payload.toolName) || asString(payload.name) || 'unknown_tool',
+                args: asRecord(payload.args || payload.input),
                 success: true, // Will be updated on TOOL_RESULT
             });
         }
 
-        if (event.type === 'TOOL_RESULT') {
-            const payload = event.payload as any;
+        if (eventType === 'TOOL_RESULT') {
             const lastCall = session.toolCalls[session.toolCalls.length - 1];
             if (lastCall) {
                 lastCall.result = payload.result;
-                if (typeof payload.success === 'boolean') {
-                    lastCall.success = payload.success;
-                } else if (typeof payload.isError === 'boolean') {
-                    lastCall.success = !payload.isError;
+                const success = asBoolean(payload.success);
+                if (typeof success === 'boolean') {
+                    lastCall.success = success;
                 } else {
-                    lastCall.success = true;
+                    const isError = asBoolean(payload.isError);
+                    lastCall.success = typeof isError === 'boolean' ? !isError : true;
                 }
             }
         }
 
             // Task failed - analyze failure and learn what went wrong
-        if (event.type === 'TASK_FAILED') {
+        if (eventType === 'TASK_FAILED') {
             session.status = 'failed';
-            const payload = event.payload as any;
-            session.duration = payload.duration || 0;
+            session.duration = asNumber(payload.duration) ?? 0;
             
             // Trigger failure analysis asynchronously
             void this.analyzeFailure(session);

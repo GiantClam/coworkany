@@ -18,7 +18,7 @@ function makeEvent(type: string, payload: Record<string, unknown>, taskId: strin
         sequence: 1,
         type,
         payload,
-    } as any;
+    };
 }
 
 describe('E2E Database Failure Recovery Flow', () => {

@@ -1,5 +1,23 @@
 import { ToolDefinition } from '../standard';
 
+type NewsApiArticle = {
+    title?: string;
+    description?: string;
+    source?: { name?: string };
+    author?: string;
+    url?: string;
+    publishedAt?: string;
+    urlToImage?: string;
+};
+
+type NewsApiResponse = {
+    status?: string;
+    message?: string;
+    code?: string;
+    totalResults?: number;
+    articles?: NewsApiArticle[];
+};
+
 function isNewsRssFallbackEnabled(): boolean {
     const value = process.env.ENABLE_NEWS_RSS_FALLBACK?.trim().toLowerCase();
     return value === '1' || value === 'true' || value === 'yes';
@@ -101,7 +119,8 @@ export const getNewsTool: ToolDefinition = {
             );
 
             const response = await fetch(`${endpoint}?${params}`);
-            const data = await response.json() as any;
+            const json = await response.json();
+            const data = (json && typeof json === 'object' ? json : {}) as NewsApiResponse;
 
             if (data.status !== 'ok') {
                 console.error('[News] API error:', data.message);
@@ -132,16 +151,17 @@ export const getNewsTool: ToolDefinition = {
                 };
             }
 
-            console.error(`[News] Found ${data.totalResults} articles, returning ${data.articles.length}`);
+            const articles = Array.isArray(data.articles) ? data.articles : [];
+            console.error(`[News] Found ${data.totalResults ?? 0} articles, returning ${articles.length}`);
 
             return {
                 success: true,
-                total_results: data.totalResults,
+                total_results: data.totalResults ?? 0,
                 query: query || `${category || 'top'} headlines`,
-                articles: data.articles.slice(0, max_results).map((article: any) => ({
+                articles: articles.slice(0, max_results).map((article) => ({
                     title: article.title,
                     description: article.description,
-                    source: article.source.name,
+                    source: article.source?.name,
                     author: article.author,
                     url: article.url,
                     published_at: article.publishedAt,

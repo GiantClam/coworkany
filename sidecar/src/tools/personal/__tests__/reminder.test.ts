@@ -7,9 +7,21 @@ const context: ToolContext = {
     taskId: 'task-1',
 };
 
+type ReminderResult = Record<string, unknown>;
+type ReminderScheduleArgs = {
+    task_query: string;
+    time: string;
+    speak_result?: boolean;
+    title?: string;
+};
+
+function asReminderResult(value: unknown): ReminderResult {
+    return value && typeof value === 'object' ? value as ReminderResult : {};
+}
+
 describe('createSetReminderTool', () => {
     test('maps one-time reminder to schedule_task', async () => {
-        const scheduleTask = mock(async (args: any) => ({
+        const scheduleTask = mock(async (args: ReminderScheduleArgs) => ({
             success: true,
             scheduledTaskId: 'scheduled-1',
             scheduledAt: args.time,
@@ -28,12 +40,13 @@ describe('createSetReminderTool', () => {
         expect(scheduleArgs.time).toBe('2026-03-25T10:00:00.000Z');
         expect(scheduleArgs.speak_result).toBe(false);
 
-        expect((result as any).success).toBe(true);
-        expect((result as any).reminder_id).toBe('scheduled-1');
+        const parsedResult = asReminderResult(result);
+        expect(parsedResult.success).toBe(true);
+        expect(parsedResult.reminder_id).toBe('scheduled-1');
     });
 
     test('normalizes imperative reminder phrasing before scheduling', async () => {
-        const scheduleTask = mock(async (args: any) => ({
+        const scheduleTask = mock(async (args: ReminderScheduleArgs) => ({
             success: true,
             scheduledTaskId: 'scheduled-normalized',
             scheduledAt: args.time,
@@ -51,7 +64,7 @@ describe('createSetReminderTool', () => {
     });
 
     test('converts english first-person reminder intent to assistant perspective', async () => {
-        const scheduleTask = mock(async (args: any) => ({
+        const scheduleTask = mock(async (args: ReminderScheduleArgs) => ({
             success: true,
             scheduledTaskId: 'scheduled-en',
             scheduledAt: args.time,
@@ -69,7 +82,7 @@ describe('createSetReminderTool', () => {
     });
 
     test('maps daily reminder to recurring schedule query', async () => {
-        const scheduleTask = mock(async (args: any) => ({
+        const scheduleTask = mock(async (args: ReminderScheduleArgs) => ({
             success: true,
             scheduledTaskId: 'scheduled-2',
             scheduledAt: args.time,
@@ -87,7 +100,7 @@ describe('createSetReminderTool', () => {
     });
 
     test('interprets relative-minute daily reminders as minute intervals', async () => {
-        const scheduleTask = mock(async (args: any) => ({
+        const scheduleTask = mock(async (args: ReminderScheduleArgs) => ({
             success: true,
             scheduledTaskId: 'scheduled-interval',
             scheduledAt: args.time,
@@ -102,11 +115,11 @@ describe('createSetReminderTool', () => {
 
         const scheduleArgs = scheduleTask.mock.calls[0]?.[0] as Record<string, unknown>;
         expect(String(scheduleArgs.task_query)).toContain('every 1 minute 提醒你喝水');
-        expect((result as any).recurring_note).toContain('interpreted as an interval');
+        expect(String(asReminderResult(result).recurring_note)).toContain('interpreted as an interval');
     });
 
     test('maps weekly and monthly reminders to day-based approximation', async () => {
-        const scheduleTask = mock(async (args: any) => ({
+        const scheduleTask = mock(async (args: ReminderScheduleArgs) => ({
             success: true,
             scheduledTaskId: 'scheduled-3',
             scheduledAt: args.time,
@@ -120,7 +133,7 @@ describe('createSetReminderTool', () => {
         }, context);
         const weeklyArgs = scheduleTask.mock.calls[0]?.[0] as Record<string, unknown>;
         expect(weeklyArgs.task_query).toBe('2026-03-25T10:00:00.000Z every 7 days 提醒你喝水');
-        expect((weeklyResult as any).recurring_note).toContain('every 7 days');
+        expect(String(asReminderResult(weeklyResult).recurring_note)).toContain('every 7 days');
 
         const monthlyResult = await tool.handler({
             message: '喝水',
@@ -129,6 +142,6 @@ describe('createSetReminderTool', () => {
         }, context);
         const monthlyArgs = scheduleTask.mock.calls[1]?.[0] as Record<string, unknown>;
         expect(monthlyArgs.task_query).toBe('2026-03-25T10:00:00.000Z every 30 days 提醒你喝水');
-        expect((monthlyResult as any).recurring_note).toContain('every 30 days');
+        expect(String(asReminderResult(monthlyResult).recurring_note)).toContain('every 30 days');
     });
 });

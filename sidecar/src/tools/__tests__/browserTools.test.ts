@@ -25,6 +25,22 @@ import {
     browserGetSessionsTool,
 } from '../browser';
 import { browserService, BrowserService } from '../../services/browserService';
+import type { ToolContext } from '../standard';
+
+const TEST_CONTEXT: ToolContext = {
+    workspacePath: '/tmp',
+    taskId: 'test-task',
+};
+
+type MutableBrowserService = {
+    getConnectionInfo: typeof browserService.getConnectionInfo;
+    connect: typeof browserService.connect;
+    uploadFile: typeof browserService.uploadFile;
+    aiAction: typeof browserService.aiAction;
+};
+
+const mutableBrowserService = browserService as unknown as MutableBrowserService;
+const browserServiceCtor = BrowserService as unknown as { instance: BrowserService | null };
 
 // ============================================================================
 // 1. BROWSER_TOOLS Array Completeness
@@ -105,19 +121,19 @@ describe('browser_upload_file tool', () => {
         const originalConnect = browserService.connect;
         const originalUploadFile = browserService.uploadFile;
 
-        (browserService as any).getConnectionInfo = () => ({
+        mutableBrowserService.getConnectionInfo = () => ({
             connected: true,
             isUserProfile: true,
             mode: 'cdp_user_profile',
         });
-        (browserService as any).connect = async () => ({
+        mutableBrowserService.connect = async () => ({
             browser: null,
             context: null,
             page: null,
             isUserProfile: true,
             profilePath: '/tmp/profile',
         });
-        (browserService as any).uploadFile = async () => ({
+        mutableBrowserService.uploadFile = async () => ({
             success: false,
             message: 'File not found',
             error: 'mock upload failure',
@@ -126,13 +142,13 @@ describe('browser_upload_file tool', () => {
         try {
             const result = await browserUploadFileTool.handler(
                 { file_path: 'C:\\test\\image.png' },
-                undefined as any
+                TEST_CONTEXT
             );
             expect(result.success).toBe(false);
         } finally {
-            (browserService as any).getConnectionInfo = originalGetConnectionInfo;
-            (browserService as any).connect = originalConnect;
-            (browserService as any).uploadFile = originalUploadFile;
+            mutableBrowserService.getConnectionInfo = originalGetConnectionInfo;
+            mutableBrowserService.connect = originalConnect;
+            mutableBrowserService.uploadFile = originalUploadFile;
         }
     });
 });
@@ -144,7 +160,7 @@ describe('browser_upload_file tool', () => {
 describe('browser_set_mode tool', () => {
     beforeEach(() => {
         // Reset BrowserService singleton
-        (BrowserService as any).instance = null;
+        browserServiceCtor.instance = null;
     });
 
     test('has correct name', () => {
@@ -164,7 +180,7 @@ describe('browser_set_mode tool', () => {
     test('handler sets mode to precise', async () => {
         const result = await browserSetModeTool.handler(
             { mode: 'precise' },
-            undefined as any
+            TEST_CONTEXT
         );
         expect(result.success).toBe(true);
         expect(result.currentMode).toBe('precise');
@@ -173,7 +189,7 @@ describe('browser_set_mode tool', () => {
     test('handler sets mode to smart and reports availability', async () => {
         const result = await browserSetModeTool.handler(
             { mode: 'smart' },
-            undefined as any
+            TEST_CONTEXT
         );
         expect(result.success).toBe(true);
         expect(result.currentMode).toBe('smart');
@@ -183,7 +199,7 @@ describe('browser_set_mode tool', () => {
     test('handler sets mode to auto', async () => {
         const result = await browserSetModeTool.handler(
             { mode: 'auto' },
-            undefined as any
+            TEST_CONTEXT
         );
         expect(result.success).toBe(true);
         expect(result.currentMode).toBe('auto');
@@ -191,11 +207,11 @@ describe('browser_set_mode tool', () => {
 
     test('handler reports previousMode', async () => {
         // First set to precise
-        await browserSetModeTool.handler({ mode: 'precise' }, undefined as any);
+        await browserSetModeTool.handler({ mode: 'precise' }, TEST_CONTEXT);
         // Then change to smart
         const result = await browserSetModeTool.handler(
             { mode: 'smart' },
-            undefined as any
+            TEST_CONTEXT
         );
         expect(result.previousMode).toBe('precise');
         expect(result.currentMode).toBe('smart');
@@ -232,19 +248,19 @@ describe('browser_ai_action tool', () => {
         const originalConnect = browserService.connect;
         const originalAiAction = browserService.aiAction;
 
-        (browserService as any).getConnectionInfo = () => ({
+        mutableBrowserService.getConnectionInfo = () => ({
             connected: true,
             isUserProfile: true,
             mode: 'cdp_user_profile',
         });
-        (browserService as any).connect = async () => ({
+        mutableBrowserService.connect = async () => ({
             browser: null,
             context: null,
             page: null,
             isUserProfile: true,
             profilePath: '/tmp/profile',
         });
-        (browserService as any).aiAction = async () => ({
+        mutableBrowserService.aiAction = async () => ({
             success: false,
             error: 'browser-use-service is not available',
         });
@@ -252,13 +268,13 @@ describe('browser_ai_action tool', () => {
         try {
             const result = await browserAiActionTool.handler(
                 { action: 'click the publish button' },
-                undefined as any
+                TEST_CONTEXT
             );
             expect(result.success).toBe(false);
         } finally {
-            (browserService as any).getConnectionInfo = originalGetConnectionInfo;
-            (browserService as any).connect = originalConnect;
-            (browserService as any).aiAction = originalAiAction;
+            mutableBrowserService.getConnectionInfo = originalGetConnectionInfo;
+            mutableBrowserService.connect = originalConnect;
+            mutableBrowserService.aiAction = originalAiAction;
         }
     });
 });

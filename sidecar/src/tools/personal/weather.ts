@@ -1,5 +1,34 @@
 import { ToolDefinition, ToolContext } from '../standard';
 
+type WeatherApiError = {
+    message?: string;
+};
+
+type CurrentWeatherResponse = {
+    name: string;
+    sys: { country: string; sunrise: number; sunset: number };
+    weather: Array<{ description: string; main: string; icon: string }>;
+    main: { temp: number; feels_like: number; humidity: number; pressure: number };
+    wind: { speed: number; deg: number };
+    clouds: { all: number };
+    visibility: number;
+    dt: number;
+};
+
+type ForecastItem = {
+    dt: number;
+    main: { temp_max: number; temp_min: number; temp: number; humidity: number };
+    weather: Array<{ description: string; main: string }>;
+    wind: { speed: number };
+    clouds: { all: number };
+    rain?: { '3h'?: number };
+};
+
+type ForecastResponse = {
+    city: { name: string; country: string };
+    list: ForecastItem[];
+};
+
 /**
  * Weather Query Tool - Uses OpenWeatherMap API
  *
@@ -74,7 +103,8 @@ export const checkWeatherTool: ToolDefinition = {
             const response = await fetch(`${endpoint}?${params}`);
 
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({})) as any;
+                const errorValue = await response.json().catch(() => ({}));
+                const errorData = (errorValue && typeof errorValue === 'object' ? errorValue : {}) as WeatherApiError;
                 return {
                     success: false,
                     error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -85,40 +115,42 @@ export const checkWeatherTool: ToolDefinition = {
                 };
             }
 
-            const data = await response.json() as any;
+            const data = await response.json() as CurrentWeatherResponse | ForecastResponse;
 
             if (forecast_days === 0) {
+                const current = data as CurrentWeatherResponse;
                 // Current weather
-                console.error(`[Weather] Current weather for ${data.name}: ${data.weather[0].description}, ${Math.round(data.main.temp)}°${units === 'metric' ? 'C' : 'F'}`);
+                console.error(`[Weather] Current weather for ${current.name}: ${current.weather[0].description}, ${Math.round(current.main.temp)}°${units === 'metric' ? 'C' : 'F'}`);
 
                 return {
                     success: true,
-                    location: data.name,
-                    country: data.sys.country,
+                    location: current.name,
+                    country: current.sys.country,
                     current: {
-                        temperature: Math.round(data.main.temp),
-                        feels_like: Math.round(data.main.feels_like),
-                        humidity: data.main.humidity,
-                        pressure: data.main.pressure,
-                        description: data.weather[0].description,
-                        main: data.weather[0].main,
-                        icon: data.weather[0].icon,
-                        wind_speed: Math.round(data.wind.speed * 10) / 10,
-                        wind_direction: data.wind.deg,
-                        clouds: data.clouds.all,
-                        visibility: data.visibility,
-                        sunrise: new Date(data.sys.sunrise * 1000).toLocaleTimeString(),
-                        sunset: new Date(data.sys.sunset * 1000).toLocaleTimeString(),
+                        temperature: Math.round(current.main.temp),
+                        feels_like: Math.round(current.main.feels_like),
+                        humidity: current.main.humidity,
+                        pressure: current.main.pressure,
+                        description: current.weather[0].description,
+                        main: current.weather[0].main,
+                        icon: current.weather[0].icon,
+                        wind_speed: Math.round(current.wind.speed * 10) / 10,
+                        wind_direction: current.wind.deg,
+                        clouds: current.clouds.all,
+                        visibility: current.visibility,
+                        sunrise: new Date(current.sys.sunrise * 1000).toLocaleTimeString(),
+                        sunset: new Date(current.sys.sunset * 1000).toLocaleTimeString(),
                     },
                     units: units === 'metric' ? '°C' : '°F',
-                    timestamp: new Date(data.dt * 1000).toISOString(),
+                    timestamp: new Date(current.dt * 1000).toISOString(),
                 };
             } else {
+                const forecast = data as ForecastResponse;
                 // Weather forecast
-                const dailyForecast = data.list
-                    .filter((_: any, i: number) => i % 8 === 0) // Take first data point of each day
+                const dailyForecast = forecast.list
+                    .filter((_, i: number) => i % 8 === 0) // Take first data point of each day
                     .slice(0, forecast_days)
-                    .map((item: any) => ({
+                    .map((item) => ({
                         date: new Date(item.dt * 1000).toLocaleDateString(),
                         temperature: {
                             high: Math.round(item.main.temp_max),
@@ -133,12 +165,12 @@ export const checkWeatherTool: ToolDefinition = {
                         rain: item.rain ? item.rain['3h'] : 0,
                     }));
 
-                console.error(`[Weather] ${forecast_days}-day forecast for ${data.city.name}`);
+                console.error(`[Weather] ${forecast_days}-day forecast for ${forecast.city.name}`);
 
                 return {
                     success: true,
-                    location: data.city.name,
-                    country: data.city.country,
+                    location: forecast.city.name,
+                    country: forecast.city.country,
                     forecast: dailyForecast,
                     units: units === 'metric' ? '°C' : '°F',
                 };

@@ -20,6 +20,31 @@ import {
     type UploadFileOptions,
 } from '../browserService';
 
+type PlaywrightBackendForTest = PlaywrightBackend & {
+    _bridgeProcess?: {
+        stdin?: {
+            write: (chunk: string) => boolean;
+        };
+    };
+    _bridgeSend: (
+        method: string,
+        params: Record<string, unknown>,
+        timeoutMs: number,
+        signal?: AbortSignal
+    ) => Promise<unknown>;
+    _bridgeWaitForReady: (
+        proc: EventEmitter & { stdout: EventEmitter; kill: () => boolean },
+        signal?: AbortSignal
+    ) => Promise<boolean>;
+};
+
+type BrowserServiceForTest = BrowserService & {
+    playwrightBackend: PlaywrightBackend;
+    browserUseBackend: BrowserUseBackend;
+};
+
+const BrowserServiceClass = BrowserService as unknown as { instance: BrowserService | null };
+
 // ============================================================================
 // Helper: Mock fetch for BrowserUseBackend tests
 // ============================================================================
@@ -124,7 +149,7 @@ describe('PlaywrightBackend', () => {
     });
 
     test('bridge send emits cancel command when aborted', async () => {
-        const backend = new PlaywrightBackend() as any;
+        const backend = new PlaywrightBackend() as unknown as PlaywrightBackendForTest;
         const writes: string[] = [];
 
         backend._bridgeProcess = {
@@ -155,9 +180,9 @@ describe('PlaywrightBackend', () => {
     });
 
     test('bridge wait for ready exits early when cancelled', async () => {
-        const backend = new PlaywrightBackend() as any;
+        const backend = new PlaywrightBackend() as unknown as PlaywrightBackendForTest;
         const stdout = new EventEmitter();
-        const proc = new EventEmitter() as any;
+        const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; kill: () => boolean };
         proc.stdout = stdout;
         let killed = false;
         proc.kill = () => {
@@ -445,7 +470,7 @@ describe('BrowserService', () => {
     // Reset singleton between tests
     beforeEach(() => {
         // Access private static to reset singleton
-        (BrowserService as any).instance = null;
+        BrowserServiceClass.instance = null;
         BrowserService.setBrowserUseAvailabilityRecoveryHook(null);
     });
 
@@ -562,8 +587,9 @@ describe('BrowserService', () => {
 
     test('connect synchronously attaches browser-use to a shared CDP session', async () => {
         const service = new BrowserService();
-        const playwrightBackend = (service as any).playwrightBackend;
-        const browserUseBackend = (service as any).browserUseBackend;
+        const internals = service as unknown as BrowserServiceForTest;
+        const playwrightBackend = internals.playwrightBackend;
+        const browserUseBackend = internals.browserUseBackend;
 
         const connectCalls: string[] = [];
         let attachedCdpUrl: string | null = null;
@@ -598,8 +624,9 @@ describe('BrowserService', () => {
 
     test('getSmartModeStatus only reports available after browser-use attaches to shared CDP', async () => {
         const service = new BrowserService();
-        const playwrightBackend = (service as any).playwrightBackend;
-        const browserUseBackend = (service as any).browserUseBackend;
+        const internals = service as unknown as BrowserServiceForTest;
+        const playwrightBackend = internals.playwrightBackend;
+        const browserUseBackend = internals.browserUseBackend;
 
         let attachedCdpUrl: string | null = null;
 
@@ -633,7 +660,7 @@ describe('BrowserService', () => {
 
 describe('BrowserService Mode Routing', () => {
     beforeEach(() => {
-        (BrowserService as any).instance = null;
+        BrowserServiceClass.instance = null;
         BrowserService.setBrowserUseAvailabilityRecoveryHook(null);
     });
 

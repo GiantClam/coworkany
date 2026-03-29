@@ -926,7 +926,7 @@ async function fillContent(content: string, control?: FlowControl): Promise<stri
  *  3. Prefer elements lower on the page (submit buttons sit at the bottom).
  *  4. Fallback: use Playwright click via bridge for more realistic event.
  */
-async function clickPublish(control?: FlowControl): Promise<{ clicked: boolean; message: string }> {
+async function clickPublish(control?: FlowControl): Promise<{ clicked: boolean; message: string; disabled?: boolean }> {
     // Scroll the page down first to ensure the submit button is visible
     await execScript(`(() => {
         // Try to scroll the main editor container
@@ -1416,7 +1416,7 @@ async function executePostingFlow(
     });
 
     if (!publishResult.clicked) {
-        if ((publishResult as any).disabled) {
+        if (publishResult.disabled) {
             return {
                 success: false,
                 message: `Publish button is disabled. ${publishResult.message}`,

@@ -16,6 +16,32 @@ import type {
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
+type TextBlock = Extract<ContentBlock, { type: 'text' }>;
+type ToolUseBlock = Extract<ContentBlock, { type: 'tool_use' }>;
+
+function isTextBlock(block: ContentBlock): block is TextBlock {
+    return block.type === 'text';
+}
+
+function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {
+    return block.type === 'tool_use';
+}
+
+function mapFinishReasonToStopReason(reason: unknown): ChatResponse['stopReason'] {
+    switch (reason) {
+        case 'tool_calls':
+            return 'tool_use';
+        case 'length':
+            return 'max_tokens';
+        case 'stop':
+            return 'end_turn';
+        case 'content_filter':
+            return 'stop_sequence';
+        default:
+            return 'end_turn';
+    }
+}
+
 /**
  * Convert unified messages to OpenAI format
  */
@@ -65,18 +91,18 @@ function toOpenAIMessages(messages: Message[], systemPrompt?: string): any[] {
         if (hasToolUse) {
             // Assistant messages with tool calls
             const textContent = m.content
-                .filter((b) => b.type === 'text')
-                .map((b) => (b as any).text)
+                .filter(isTextBlock)
+                .map((b) => b.text)
                 .join('');
 
             const toolCalls = m.content
-                .filter((b) => b.type === 'tool_use')
+                .filter(isToolUseBlock)
                 .map((b) => ({
-                    id: (b as any).id,
+                    id: b.id,
                     type: 'function',
                     function: {
-                        name: (b as any).name,
-                        arguments: JSON.stringify((b as any).input),
+                        name: b.name,
+                        arguments: JSON.stringify(b.input),
                     },
                 }));
 
@@ -138,13 +164,11 @@ function fromOpenAIResponse(response: any): ChatResponse {
         }
     }
 
-    const stopReason = choice.finish_reason === 'tool_calls' ? 'tool_use' : choice.finish_reason;
-
     return {
         id: response.id,
         model: response.model,
         content,
-        stopReason: stopReason as any,
+        stopReason: mapFinishReasonToStopReason(choice.finish_reason),
         usage: {
             inputTokens: response.usage?.prompt_tokens || 0,
             outputTokens: response.usage?.completion_tokens || 0,

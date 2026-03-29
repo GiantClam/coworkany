@@ -7,6 +7,7 @@
 
 import type {
     LlmProviderConfig,
+    LlmProvider,
     RouterConfig,
     ChatRequest,
     ChatResponse,
@@ -15,6 +16,7 @@ import type {
     RouterEvent,
     RouterEventCallback,
 } from './types';
+import { LlmProviderSchema } from './types';
 
 // Import providers (will be implemented separately)
 import { AnthropicProvider } from './providers/anthropic';
@@ -331,6 +333,12 @@ export function createRouter(
  * Create a router from environment variables and config file
  */
 export function createRouterFromEnv(configPath?: string): LlmRouter {
+    const toRecord = (value: unknown): Record<string, unknown> | undefined => (
+        value && typeof value === 'object'
+            ? value as Record<string, unknown>
+            : undefined
+    );
+
     // Try to load from config file
     let fileConfig: Record<string, unknown> = {};
     if (configPath) {
@@ -343,48 +351,67 @@ export function createRouterFromEnv(configPath?: string): LlmRouter {
             console.warn(`[LlmRouter] Failed to load config from ${configPath}`);
         }
     }
+    const routerConfig = toRecord(fileConfig.router);
+    const primaryConfig = toRecord(routerConfig?.primary);
 
     // Determine primary provider from env or config
-    const provider =
+    const providerCandidate =
         process.env.LLM_PROVIDER ||
-        (fileConfig.provider as string) ||
-        (fileConfig.router as any)?.primary?.provider ||
+        (typeof fileConfig.provider === 'string' ? fileConfig.provider : undefined) ||
+        (typeof primaryConfig?.provider === 'string' ? primaryConfig.provider : undefined) ||
         'anthropic';
+    const providerParse = LlmProviderSchema.safeParse(providerCandidate);
+    const provider: LlmProvider = providerParse.success ? providerParse.data : 'anthropic';
+    const providerConfig = toRecord(fileConfig[provider]);
 
     // Build primary config
     const primary: LlmProviderConfig = {
-        provider: provider as any,
+        provider,
         modelId:
             process.env.LLM_MODEL ||
-            (fileConfig[provider] as any)?.model ||
-            (fileConfig.router as any)?.primary?.modelId ||
+            (typeof providerConfig?.model === 'string' ? providerConfig.model : undefined) ||
+            (typeof primaryConfig?.modelId === 'string' ? primaryConfig.modelId : undefined) ||
             'claude-sonnet-4-5',
         apiKey:
             process.env[`${provider.toUpperCase()}_API_KEY`] ||
-            (fileConfig[provider] as any)?.apiKey,
+            (typeof providerConfig?.apiKey === 'string' ? providerConfig.apiKey : undefined),
         baseUrl:
             process.env[`${provider.toUpperCase()}_BASE_URL`] ||
-            (fileConfig[provider] as any)?.baseUrl,
+            (typeof providerConfig?.baseUrl === 'string' ? providerConfig.baseUrl : undefined),
     };
 
     // Build fallbacks from config
     const fallbacks: LlmProviderConfig[] = [];
-    const configFallbacks = (fileConfig.router as any)?.fallbacks;
+    const configFallbacks = Array.isArray(routerConfig?.fallbacks)
+        ? routerConfig.fallbacks
+        : [];
     if (Array.isArray(configFallbacks)) {
-        for (const fb of configFallbacks) {
+        for (const fallbackValue of configFallbacks) {
+            const fb = toRecord(fallbackValue);
+            if (!fb) {
+                continue;
+            }
+            const fallbackProviderCandidate = typeof fb.provider === 'string' ? fb.provider : undefined;
+            const fallbackProviderParse = LlmProviderSchema.safeParse(fallbackProviderCandidate);
+            if (!fallbackProviderParse.success) {
+                continue;
+            }
+            const fallbackProvider = fallbackProviderParse.data;
             fallbacks.push({
-                provider: fb.provider,
-                modelId: fb.modelId,
-                apiKey: fb.apiKey || process.env[`${fb.provider.toUpperCase()}_API_KEY`],
-                baseUrl: fb.baseUrl,
+                provider: fallbackProvider,
+                modelId: typeof fb.modelId === 'string' ? fb.modelId : primary.modelId,
+                apiKey:
+                    (typeof fb.apiKey === 'string' ? fb.apiKey : undefined)
+                    || process.env[`${fallbackProvider.toUpperCase()}_API_KEY`],
+                baseUrl: typeof fb.baseUrl === 'string' ? fb.baseUrl : undefined,
             });
         }
     }
 
     return createRouter(primary, {
         fallbacks: fallbacks.length > 0 ? fallbacks : undefined,
-        retryCount: (fileConfig.router as any)?.retryCount ?? 2,
-        timeout: (fileConfig.router as any)?.timeout ?? 30000,
-        maxTokens: (fileConfig as any)?.maxTokens,
+        retryCount: typeof routerConfig?.retryCount === 'number' ? routerConfig.retryCount : 2,
+        timeout: typeof routerConfig?.timeout === 'number' ? routerConfig.timeout : 30000,
+        maxTokens: typeof fileConfig.maxTokens === 'number' ? fileConfig.maxTokens : undefined,
     });
 }

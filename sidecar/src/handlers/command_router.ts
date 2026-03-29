@@ -50,7 +50,7 @@ export function dispatchCommand(command: IpcCommand, deps: CommandRouterDeps): C
                 generatedRuntimeTools: deps.generatedRuntimeTools,
             });
         case 'get_tasks':
-            return handleGetTasks(command as any, ctx);
+            return handleGetTasks(command, ctx);
         default:
             return null;
     }

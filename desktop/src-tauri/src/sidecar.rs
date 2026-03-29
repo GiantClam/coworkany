@@ -26,6 +26,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command as TokioCommand;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -1501,6 +1503,11 @@ fn classify_sidecar_message(message: &serde_json::Value) -> Option<SidecarMessag
         || msg_type == "propose_patch"
         || msg_type == "apply_patch"
         || msg_type == "reject_patch"
+        || msg_type == "read_file"
+        || msg_type == "list_dir"
+        || msg_type == "exec_shell"
+        || msg_type == "capture_screen"
+        || msg_type == "get_policy_config"
         || msg_type == "register_agent_identity"
         || msg_type == "record_agent_delegation"
         || msg_type == "report_mcp_gateway_decision"
@@ -1630,6 +1637,60 @@ fn operation_as_str(operation: &PatchOperation) -> &'static str {
         PatchOperation::Delete => "delete",
         PatchOperation::Rename => "rename",
     }
+}
+
+fn collect_list_dir_entries(
+    root: &Path,
+    recursive: bool,
+    max_depth: usize,
+    include_hidden: bool,
+    depth: usize,
+    out: &mut Vec<serde_json::Value>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(root).map_err(|e| e.to_string())?;
+    for entry_result in entries {
+        let entry = entry_result.map_err(|e| e.to_string())?;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !include_hidden && file_name.starts_with('.') {
+            continue;
+        }
+
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        let is_directory = metadata.is_dir();
+        let modified = metadata.modified().ok().map(|timestamp| {
+            let dt: chrono::DateTime<chrono::Utc> = timestamp.into();
+            dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        });
+        out.push(json!({
+            "name": file_name,
+            "path": path.to_string_lossy().to_string(),
+            "isDirectory": is_directory,
+            "size": metadata.is_file().then_some(metadata.len()),
+            "modified": modified,
+        }));
+
+        if recursive && is_directory && depth < max_depth {
+            collect_list_dir_entries(&path, recursive, max_depth, include_hidden, depth + 1, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn capture_primary_screen_base64() -> Result<String, String> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine as _;
+    use screenshots::Screen;
+    use std::io::Cursor;
+
+    let screens = Screen::all().map_err(|e| e.to_string())?;
+    let screen = screens.first().ok_or("No screen found")?;
+    let image = screen.capture().map_err(|e| e.to_string())?;
+    let mut buffer = Cursor::new(Vec::new());
+    image
+        .write_to(&mut buffer, image::ImageOutputFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(BASE64.encode(buffer.get_ref()))
 }
 
 fn handle_sidecar_command(
@@ -1938,6 +1999,319 @@ fn handle_sidecar_command(
                     }
                 });
 
+                send_raw(&command_writer, response_msg);
+            });
+        }
+        "read_file" => {
+            tauri::async_runtime::spawn(async move {
+                let command_id = message
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let payload = message.get("payload").cloned().unwrap_or_default();
+                let path = payload
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let encoding = payload
+                    .get("encoding")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("utf-8")
+                    .to_lowercase();
+                let max_bytes = payload.get("maxBytes").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+
+                if path.is_empty() {
+                    send_raw(
+                        &command_writer,
+                        build_error_response(&command_id, "read_file_response", "missing_path"),
+                    );
+                    return;
+                }
+                if encoding != "utf-8" && encoding != "utf8" {
+                    send_raw(
+                        &command_writer,
+                        build_error_response(
+                            &command_id,
+                            "read_file_response",
+                            "unsupported_encoding",
+                        ),
+                    );
+                    return;
+                }
+
+                let response_msg = match fs::read(&path) {
+                    Ok(content_bytes) => {
+                        let truncated = content_bytes.len() as u64 > max_bytes;
+                        let visible = if truncated {
+                            &content_bytes[..max_bytes as usize]
+                        } else {
+                            &content_bytes[..]
+                        };
+                        let content = String::from_utf8_lossy(visible).to_string();
+                        json!({
+                            "type": "read_file_response",
+                            "commandId": command_id,
+                            "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                            "payload": {
+                                "success": true,
+                                "content": content,
+                                "truncated": truncated,
+                            }
+                        })
+                    }
+                    Err(err) => build_error_response(&command_id, "read_file_response", &err.to_string()),
+                };
+                send_raw(&command_writer, response_msg);
+            });
+        }
+        "list_dir" => {
+            tauri::async_runtime::spawn(async move {
+                let command_id = message
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let payload = message.get("payload").cloned().unwrap_or_default();
+                let path = payload
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let recursive = payload
+                    .get("recursive")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let max_depth = payload
+                    .get("maxDepth")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(3) as usize;
+                let include_hidden = payload
+                    .get("includeHidden")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if path.is_empty() {
+                    send_raw(
+                        &command_writer,
+                        build_error_response(&command_id, "list_dir_response", "missing_path"),
+                    );
+                    return;
+                }
+
+                let mut entries = Vec::new();
+                let response_msg = match collect_list_dir_entries(
+                    Path::new(&path),
+                    recursive,
+                    max_depth,
+                    include_hidden,
+                    0,
+                    &mut entries,
+                ) {
+                    Ok(()) => json!({
+                        "type": "list_dir_response",
+                        "commandId": command_id,
+                        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        "payload": {
+                            "success": true,
+                            "entries": entries,
+                        }
+                    }),
+                    Err(err) => build_error_response(&command_id, "list_dir_response", &err),
+                };
+                send_raw(&command_writer, response_msg);
+            });
+        }
+        "exec_shell" => {
+            tauri::async_runtime::spawn(async move {
+                let command_id = message
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let payload = message.get("payload").cloned().unwrap_or_default();
+                let command = payload
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let args = payload
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default();
+                let cwd = payload
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let timeout_ms = payload
+                    .get("timeout")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(30_000);
+                let stdin = payload
+                    .get("stdin")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string());
+                let env_vars = payload
+                    .get("env")
+                    .and_then(|v| v.as_object())
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter_map(|(key, value)| {
+                                value.as_str().map(|s| (key.clone(), s.to_string()))
+                            })
+                            .collect::<Vec<(String, String)>>()
+                    })
+                    .unwrap_or_default();
+
+                if command.is_empty() {
+                    send_raw(
+                        &command_writer,
+                        build_error_response(&command_id, "exec_shell_response", "missing_command"),
+                    );
+                    return;
+                }
+
+                let mut process = TokioCommand::new(&command);
+                process.args(args);
+                process.stdin(Stdio::piped());
+                process.stdout(Stdio::piped());
+                process.stderr(Stdio::piped());
+                process.kill_on_drop(true);
+                if let Some(workdir) = cwd {
+                    process.current_dir(workdir);
+                }
+                for (key, value) in env_vars {
+                    process.env(key, value);
+                }
+
+                let mut child = match process.spawn() {
+                    Ok(child) => child,
+                    Err(err) => {
+                        send_raw(
+                            &command_writer,
+                            build_error_response(
+                                &command_id,
+                                "exec_shell_response",
+                                &err.to_string(),
+                            ),
+                        );
+                        return;
+                    }
+                };
+
+                if let Some(input) = stdin {
+                    if let Some(mut stdin_pipe) = child.stdin.take() {
+                        if let Err(err) = stdin_pipe.write_all(input.as_bytes()).await {
+                            send_raw(
+                                &command_writer,
+                                build_error_response(
+                                    &command_id,
+                                    "exec_shell_response",
+                                    &err.to_string(),
+                                ),
+                            );
+                            return;
+                        }
+                    }
+                }
+
+                let output = tokio::time::timeout(
+                    Duration::from_millis(timeout_ms),
+                    child.wait_with_output(),
+                )
+                .await;
+
+                let response_msg = match output {
+                    Ok(Ok(output)) => json!({
+                        "type": "exec_shell_response",
+                        "commandId": command_id,
+                        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        "payload": {
+                            "success": output.status.success(),
+                            "exitCode": output.status.code(),
+                            "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
+                            "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+                            "timedOut": false,
+                        }
+                    }),
+                    Ok(Err(err)) => build_error_response(&command_id, "exec_shell_response", &err.to_string()),
+                    Err(_) => json!({
+                        "type": "exec_shell_response",
+                        "commandId": command_id,
+                        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        "payload": {
+                            "success": false,
+                            "error": "command_timeout",
+                            "timedOut": true,
+                        }
+                    }),
+                };
+                send_raw(&command_writer, response_msg);
+            });
+        }
+        "capture_screen" => {
+            tauri::async_runtime::spawn(async move {
+                let command_id = message
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let response_msg = match capture_primary_screen_base64() {
+                    Ok(image_base64) => json!({
+                        "type": "capture_screen_response",
+                        "commandId": command_id,
+                        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        "payload": {
+                            "success": true,
+                            "imageBase64": image_base64,
+                        }
+                    }),
+                    Err(err) => build_error_response(&command_id, "capture_screen_response", &err),
+                };
+                send_raw(&command_writer, response_msg);
+            });
+        }
+        "get_policy_config" => {
+            tauri::async_runtime::spawn(async move {
+                let command_id = message
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let state = app_handle.state::<PolicyEngineState>();
+                let config = {
+                    let engine = state.engine.lock().await;
+                    engine.config.clone()
+                };
+                let default_policies = config
+                    .default_policies
+                    .iter()
+                    .map(|(effect, policy)| {
+                        (
+                            effect.as_str().to_string(),
+                            format!("{:?}", policy).to_lowercase(),
+                        )
+                    })
+                    .collect::<HashMap<String, String>>();
+
+                let response_msg = json!({
+                    "type": "get_policy_config_response",
+                    "commandId": command_id,
+                    "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "payload": {
+                        "defaultPolicies": default_policies,
+                        "allowlists": config.allowlists,
+                        "blocklists": config.blocklists,
+                    }
+                });
                 send_raw(&command_writer, response_msg);
             });
         }
@@ -2250,7 +2624,8 @@ impl Default for SidecarState {
 
 #[cfg(test)]
 mod tests {
-    use super::SidecarManager;
+    use super::{classify_sidecar_message, SidecarManager, SidecarMessageKind};
+    use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
     use std::io::{BufRead, BufReader};
@@ -2387,5 +2762,42 @@ mod tests {
 
         let _ = fs::remove_file(&socket_path_buf);
         let _ = fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[test]
+    fn classify_sidecar_message_recognizes_policy_gate_forwarded_commands() {
+        let command_types = [
+            "read_file",
+            "list_dir",
+            "exec_shell",
+            "capture_screen",
+            "get_policy_config",
+        ];
+
+        for msg_type in command_types {
+            let message = json!({ "type": msg_type });
+            let kind = classify_sidecar_message(&message);
+            assert!(matches!(kind, Some(SidecarMessageKind::IpcCommand)));
+        }
+    }
+
+    #[test]
+    fn classify_sidecar_message_recognizes_policy_gate_forwarded_responses() {
+        let response_types = [
+            "read_file_response",
+            "list_dir_response",
+            "exec_shell_response",
+            "capture_screen_response",
+            "get_policy_config_response",
+        ];
+
+        for msg_type in response_types {
+            let message = json!({
+                "type": msg_type,
+                "commandId": "cmd-1",
+            });
+            let kind = classify_sidecar_message(&message);
+            assert!(matches!(kind, Some(SidecarMessageKind::IpcResponse)));
+        }
     }
 }

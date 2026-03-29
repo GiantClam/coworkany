@@ -29,8 +29,9 @@ describe('vercelAdapter', () => {
         expect(result).toHaveLength(2);
         expect(result[0]).toMatchObject({ role: 'assistant' });
         expect(result[1]).toMatchObject({ role: 'tool' });
-        expect((result[1] as any).content[0].toolCallId).toBe('tool-1');
-        expect((result[1] as any).content[0].type).toBe('tool-result');
+        const toolContent = (result[1]?.content as Array<Record<string, unknown>> | undefined) ?? [];
+        expect(toolContent[0]?.toolCallId).toBe('tool-1');
+        expect(toolContent[0]?.type).toBe('tool-result');
     });
 
     test('converts tool definitions to AI SDK tools object', () => {
@@ -50,8 +51,8 @@ describe('vercelAdapter', () => {
 
         const result = convertToolDefinitionsToAiTools(tools);
         expect(Object.keys(result)).toEqual(['list_dir']);
-        expect((result as any).list_dir.description).toBe('List directory entries');
-        expect((result as any).list_dir.inputSchema).toBeDefined();
+        expect(result.list_dir?.description).toBe('List directory entries');
+        expect(result.list_dir?.inputSchema).toBeDefined();
     });
 
     test('extracts anthropic-style assistant content from AI SDK result', () => {
@@ -101,9 +102,10 @@ describe('vercelAdapter', () => {
         ];
 
         const converted = convertMessagesToAi(messages);
-        const assistant = converted[0] as any;
+        const assistant = converted[0] as { role?: string; content?: Array<{ type?: string }> };
 
         expect(assistant.role).toBe('assistant');
-        expect(assistant.content.some((part: any) => part.type === 'tool-call')).toBe(false);
+        const content = Array.isArray(assistant.content) ? assistant.content : [];
+        expect(content.some((part) => part.type === 'tool-call')).toBe(false);
     });
 });

@@ -2,7 +2,7 @@
  * Token Usage Parsing Unit Tests
  *
  * Verifies that token usage data is correctly extracted from
- * Anthropic and OpenAI streaming response formats.
+ * Mastra streaming response formats and forwarded to desktop timeline events.
  *
  * Run: cd sidecar && bun test tests/token-usage.test.ts
  */
@@ -11,77 +11,58 @@ import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const SIDECAR_MAIN = path.resolve(__dirname, '../src/main.ts');
+const BRIDGE_FILE = path.resolve(__dirname, '../src/ipc/bridge.ts');
+const STREAMING_FILE = path.resolve(__dirname, '../src/ipc/streaming.ts');
+const ENTRYPOINT_FILE = path.resolve(__dirname, '../src/mastra/entrypoint.ts');
+const RUNTIME_FILE = path.resolve(__dirname, '../src/handlers/runtime.ts');
 
 // ============================================================================
 // Helper: Read and check source patterns
 // ============================================================================
 
-function readMainTs(): string {
-    return fs.readFileSync(SIDECAR_MAIN, 'utf-8');
+function read(filePath: string): string {
+    return fs.readFileSync(filePath, 'utf-8');
 }
 
 // ============================================================================
 // Structural Tests: Verify token tracking code is in place
 // ============================================================================
 
-describe('Token Usage: Anthropic stream parser', () => {
-    const source = readMainTs();
+describe('Token Usage: Mastra stream extraction', () => {
+    const bridgeSource = read(BRIDGE_FILE);
+    const streamingSource = read(STREAMING_FILE);
 
-    test('streamAnthropicResponse tracks totalInputTokens', () => {
-        expect(source).toContain('totalInputTokens');
-        expect(source).toContain('totalOutputTokens');
+    test('bridge exports extractMastraTokenUsageEvent for finish/step-finish chunks', () => {
+        expect(bridgeSource).toContain('export function extractMastraTokenUsageEvent');
+        expect(bridgeSource).toContain("chunk.type !== 'step-finish' && chunk.type !== 'finish'");
     });
 
-    test('streamAnthropicResponse parses message_start for input tokens', () => {
-        expect(source).toContain("type === 'message_start'");
-        expect(source).toContain('payload.message.usage.input_tokens');
+    test('bridge normalizes usage fields across provider shapes', () => {
+        expect(bridgeSource).toContain('promptTokens');
+        expect(bridgeSource).toContain('completionTokens');
+        expect(bridgeSource).toContain('inputTokens');
+        expect(bridgeSource).toContain('outputTokens');
     });
 
-    test('streamAnthropicResponse parses message_delta for output tokens', () => {
-        expect(source).toContain("type === 'message_delta'");
-    });
-
-    test('streamAnthropicResponse tracks cache token counts', () => {
-        expect(source).toContain('cacheCreationInputTokens');
-        expect(source).toContain('cacheReadInputTokens');
-        expect(source).toContain('cache_creation_input_tokens');
-        expect(source).toContain('cache_read_input_tokens');
-    });
-
-    test('streamAnthropicResponse emits TOKEN_USAGE event', () => {
-        // The refactored runtime emits via TaskEventBus.emitRaw(taskId, 'TOKEN_USAGE', ...)
-        const tokenUsageEmitPattern = /emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/;
-        expect(tokenUsageEmitPattern.test(source)).toBe(true);
-    });
-
-    test('TOKEN_USAGE payload includes inputTokens, outputTokens, modelId, provider', () => {
-        expect(source).toContain('inputTokens:');
-        expect(source).toContain('outputTokens:');
-        expect(source).toContain('modelId:');
-        expect(source).toContain('provider:');
+    test('streaming forwards token usage events before normal chunk mapping', () => {
+        expect(streamingSource).toContain('extractMastraTokenUsageEvent');
+        expect(streamingSource).toContain('sendToDesktop(tokenUsageEvent)');
     });
 });
 
-describe('Token Usage: OpenAI stream parser', () => {
-    const source = readMainTs();
+describe('Token Usage: Runtime event emission', () => {
+    const entrypointSource = read(ENTRYPOINT_FILE);
+    const runtimeSource = read(RUNTIME_FILE);
 
-    test('streamOpenAIResponse tracks openaiInputTokens', () => {
-        expect(source).toContain('openaiInputTokens');
-        expect(source).toContain('openaiOutputTokens');
+    test('main-mastra entrypoint emits TOKEN_USAGE timeline event', () => {
+        expect(entrypointSource).toContain("if (event.type === 'token_usage')");
+        expect(entrypointSource).toContain("type: 'TOKEN_USAGE'");
     });
 
-    test('streamOpenAIResponse parses payload.usage for token counts', () => {
-        expect(source).toContain('payload.usage');
-        expect(source).toContain('prompt_tokens');
-        expect(source).toContain('completion_tokens');
-    });
-
-    test('streamOpenAIResponse emits TOKEN_USAGE event', () => {
-        // There should be at least two TOKEN_USAGE emissions (Anthropic + OpenAI)
-        const matches = source.match(/emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/g);
-        expect(matches).toBeTruthy();
-        expect(matches!.length).toBeGreaterThanOrEqual(2);
+    test('runtime bridge emits TOKEN_USAGE through TaskEventBus', () => {
+        const tokenUsageEmitPattern = /emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/;
+        expect(runtimeSource).toContain("if (event.type === 'token_usage')");
+        expect(tokenUsageEmitPattern.test(runtimeSource)).toBe(true);
     });
 });
 

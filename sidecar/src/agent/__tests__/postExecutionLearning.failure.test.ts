@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { randomUUID } from 'crypto';
 import { createPostExecutionLearningManager } from '../postExecutionLearning';
+import type { TaskEvent } from '../../protocol/events';
+import type { Precipitator } from '../selfLearning/precipitator';
+import type { ConfidenceTracker } from '../selfLearning/confidenceTracker';
+import type { SelfLearningController } from '../selfLearning/controller';
 
 function makeEvent(type: string, payload: Record<string, unknown>, taskId: string) {
     return {
@@ -10,7 +14,7 @@ function makeEvent(type: string, payload: Record<string, unknown>, taskId: strin
         sequence: 1,
         type,
         payload,
-    } as any;
+    } as unknown as TaskEvent;
 }
 
 describe('PostExecutionLearningManager failure recovery', () => {
@@ -29,10 +33,10 @@ describe('PostExecutionLearningManager failure recovery', () => {
                         entityId: 'failed-test',
                     };
                 },
-            } as any,
+            } as unknown as Precipitator,
             {
                 recordUsage: () => undefined,
-            } as any,
+            } as unknown as ConfidenceTracker,
             {
                 minToolCallsForSkill: 1,
                 minDurationForLearning: 0,
@@ -48,7 +52,7 @@ describe('PostExecutionLearningManager failure recovery', () => {
                     suggestion: 'Use sqlite3 --json and validate DB path before query.',
                 };
             },
-        } as any);
+        } as unknown as SelfLearningController);
 
         const taskId = randomUUID();
 
@@ -96,10 +100,10 @@ describe('PostExecutionLearningManager failure recovery', () => {
                     path: '/tmp/failure.md',
                     entityId: 'failed-test',
                 }),
-            } as any,
+            } as unknown as Precipitator,
             {
                 recordUsage: () => undefined,
-            } as any,
+            } as unknown as ConfidenceTracker,
             {
                 minToolCallsForSkill: 1,
                 minDurationForLearning: 0,
@@ -115,7 +119,7 @@ describe('PostExecutionLearningManager failure recovery', () => {
                     suggestion: 'Use a pptx generation tool and verify output file exists.',
                 };
             },
-        } as any);
+        } as unknown as SelfLearningController);
 
         const taskId = randomUUID();
 

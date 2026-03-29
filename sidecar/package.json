@@ -7,7 +7,9 @@
   "main": "src/main.ts",
   "scripts": {
     "start": "bun run src/main.ts",
+    "start:mastra": "bun run src/main-mastra.ts",
     "dev": "bun run --watch src/main.ts",
+    "dev:mastra": "bun run --watch src/main-mastra.ts",
     "build:release": "node scripts/build-release.mjs",
     "release:readiness": "bun run scripts/release-readiness.ts",
     "release:readiness:full": "bun run scripts/release-readiness.ts --build-desktop --real-e2e",
@@ -30,11 +32,18 @@
     "test:e2e:browser-smart": "bun run tests/e2e-browser-smart.ts",
     "test:e2e:browser-resilience": "bun test tests/browser-service-resilience.e2e.test.ts tests/browser-service-recovery-inprocess.e2e.test.ts",
     "test:e2e:x-learning": "bun test tests/x-following-ai-learning-e2e.test.ts",
-    "test:x-following": "bun test tests/x-following-posts-regression.test.ts"
+    "test:x-following": "bun test tests/x-following-posts-regression.test.ts",
+    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-mastra-protocol-compat.test.ts tests/phase6-final-validation.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",
     "@ai-sdk/openai": "^3.0.36",
+    "@mastra/core": "^1.17.0",
+    "@mastra/fastembed": "^1.0.1",
+    "@mastra/libsql": "^1.7.2",
+    "@mastra/loggers": "^1.0.3",
+    "@mastra/mcp": "^1.3.1",
+    "@mastra/memory": "^1.10.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",

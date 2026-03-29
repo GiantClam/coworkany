@@ -11,6 +11,7 @@ import type {
     Intent,
     Context,
     Message,
+    Action,
     MultimodalResponse,
     CalendarSummary,
     EmailSummary,
@@ -51,6 +52,20 @@ export class JarvisController extends EventEmitter {
     private taskManager: ProactiveTaskManager;
     private context: Context;
     private isInitialized: boolean;
+
+    private toResponseActions(
+        actions: Array<{ label: string; command: string }> | undefined
+    ): Action[] | undefined {
+        if (!Array.isArray(actions) || actions.length === 0) {
+            return undefined;
+        }
+
+        return actions.map((action, index) => ({
+            id: `action-${index + 1}`,
+            label: action.label,
+            command: action.command,
+        }));
+    }
 
     constructor(config?: Partial<JarvisConfig>) {
         super();
@@ -306,7 +321,7 @@ export class JarvisController extends EventEmitter {
                 const suggestion = this.taskManager.suggestNextAction();
                 if (suggestion) {
                     response.text = `${suggestion.title}. ${suggestion.description}`;
-                    response.actions = suggestion.actions as any;
+                    response.actions = this.toResponseActions(suggestion.actions);
                 }
                 break;
 
@@ -494,7 +509,7 @@ export class JarvisController extends EventEmitter {
                 message: nextAction.description,
                 reasoning: nextAction.reasoning,
                 timestamp: new Date().toISOString(),
-                actions: nextAction.actions as any,
+                actions: this.toResponseActions(nextAction.actions),
                 dismissed: false,
             });
         }

@@ -22,14 +22,7 @@
             "../../sidecar/dist/playwright-bridge.cjs": "sidecar/playwright-bridge.cjs",
             "../../sidecar/dist/node_modules/playwright": "sidecar/node_modules/playwright",
             "../../sidecar/dist/node_modules/playwright-core": "sidecar/node_modules/playwright-core",
-            "../../sidecar/dist/node/bin/node*": "sidecar/node/bin/",
-            "../../rag-service/main.py": "rag-service/main.py",
-            "../../rag-service/indexer.py": "rag-service/indexer.py",
-            "../../rag-service/embeddings.py": "rag-service/embeddings.py",
-            "../../rag-service/requirements.txt": "rag-service/requirements.txt",
-            "../../browser-use-service/main.py": "browser-use-service/main.py",
-            "../../browser-use-service/requirements.txt": "browser-use-service/requirements.txt",
-            "../../browser-use-service/README.md": "browser-use-service/README.md"
+            "../../sidecar/dist/node/bin/node*": "sidecar/node/bin/"
         },
         "targets": [
             "nsis",

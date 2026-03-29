@@ -345,7 +345,7 @@ async function tryFetchViaDohFallback(
 ): Promise<{ response: Response; ip: string } | null> {
     let fallbackIps: string[] = [];
     try {
-        fallbackIps = await resolvePublicARecordsViaDoh(requestUrl.hostname, nodeFetch as any, agent);
+        fallbackIps = await resolvePublicARecordsViaDoh(requestUrl.hostname, nodeFetch, agent);
     } catch {
         fallbackIps = [];
     }
@@ -363,14 +363,14 @@ async function tryFetchViaDohFallback(
             const fallbackUrl = new URL(requestUrl.toString());
             fallbackUrl.hostname = ip;
 
-            const headers = new Headers(init.headers as any);
+            const headers = new Headers(init.headers);
             headers.set('host', requestUrl.hostname);
 
             const fallbackResponse = await nodeFetch(fallbackUrl.toString(), {
                 ...(init as Record<string, unknown>),
                 headers,
                 servername: requestUrl.hostname,
-            } as any);
+            });
 
             return {
                 response: await ensureWebReadableResponse(fallbackResponse),
@@ -427,7 +427,8 @@ async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
         body = await rawResponse.arrayBuffer();
     }
 
-    return new Response(body as any, {
+    const responseBody = body as unknown as ReadableStream<Uint8Array> | ArrayBuffer | string | null;
+    return new Response(responseBody, {
         status: Number(rawResponse.status) || 200,
         statusText: rawResponse.statusText || '',
         headers,
@@ -457,16 +458,16 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
             input: string | URL | Request,
             init?: RequestInit
         ): Promise<Response> => {
-            const requestInit = {
+            const requestInit: RequestInit & Record<string, unknown> = {
                 ...(init as Record<string, unknown>),
                 agent,
-            } as any;
+            };
             const requestUrl = toUrl(input);
             const supportsDohFallback = Boolean(
                 requestUrl
                 && requestUrl.protocol === 'https:'
                 && !isIpv4Address(requestUrl.hostname)
-                && isLikelyReplayableBody((init as any)?.body)
+                && isLikelyReplayableBody(init?.body)
             );
             const routeState = supportsDohFallback && requestUrl
                 ? getProxyRouteState(requestUrl.hostname, Date.now())
@@ -477,7 +478,7 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                 const dohRouteResult = await tryFetchViaDohFallback(
                     requestUrl,
                     requestInit,
-                    nodeFetch as any,
+                    nodeFetch,
                     agent,
                     routeState.preferredDohIp
                 );
@@ -491,7 +492,9 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
             }
 
             try {
-                const response = await nodeFetch(input as any, requestInit);
+                const nodeFetchInput: string | URL =
+                    input instanceof Request ? input.url : input;
+                const response = await nodeFetch(nodeFetchInput, requestInit as never);
                 if (routeState && requestUrl) {
                     markHostProxyPreferred(requestUrl.hostname, Date.now());
                 }
@@ -511,7 +514,7 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                 const fallbackResult = await tryFetchViaDohFallback(
                     requestUrl,
                     requestInit,
-                    nodeFetch as any,
+                    nodeFetch,
                     agent,
                     routeState?.preferredDohIp
                 );
@@ -567,7 +570,9 @@ async function createNodeDirectFetchBridge(): Promise<typeof fetch | null> {
             input: string | URL | Request,
             init?: RequestInit
         ): Promise<Response> => {
-            const response = await nodeFetch(input as any, init as any);
+            const nodeFetchInput: string | URL =
+                input instanceof Request ? input.url : input;
+            const response = await nodeFetch(nodeFetchInput, init as never);
             return ensureWebReadableResponse(response);
         }) as typeof fetch;
         directFetchBridge = bridgeFetch;
@@ -614,7 +619,7 @@ async function tryFetchWithDirectDohFallback(
     const fallbackResult = await tryFetchViaDohFallback(
         requestUrl,
         init,
-        directFetch as any,
+        directFetch,
         undefined
     );
 

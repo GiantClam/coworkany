@@ -62,8 +62,8 @@ export function createTlsAwareFetch(
         return undefined;
     }
 
-    return ((input: unknown, init?: RequestInit) => {
+    return ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
         const nextInit = applyInsecureTlsToRequestInit(init ?? {}, explicitAllow);
-        return fetch(input as any, nextInit);
+        return fetch(input, nextInit);
     }) as typeof fetch;
 }

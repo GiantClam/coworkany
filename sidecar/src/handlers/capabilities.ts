@@ -19,7 +19,7 @@ import type {
     ExtensionGovernanceState,
     ExtensionGovernanceStore,
 } from '../extensions/governanceStore';
-import type { Directive, DirectiveManager } from '../agent/directives/directiveManager';
+import type { Directive, DirectiveManager } from '../directives/directiveManager';
 import type { ToolpackStore } from '../storage/toolpackStore';
 import type { SkillStore } from '../storage/skillStore';
 import type { ToolpackManifest } from '../protocol/commands';
@@ -511,14 +511,14 @@ export async function handleCapabilityCommand(
             const toolpacks = deps.toolpackStore
                 .list()
                 .filter((tp) => includeDisabled || tp.enabled)
-                .map((tp) => toToolpackRecord(tp as any, deps));
-            return respond(command.id, 'list_toolpacks_response', { toolpacks: toolpacks as any });
+                .map((tp) => toToolpackRecord(tp, deps));
+            return respond(command.id, 'list_toolpacks_response', { toolpacks });
         }
         case 'get_toolpack': {
             const toolpackId = (command.payload as { toolpackId: string }).toolpackId;
             const stored = deps.toolpackStore.getById(toolpackId);
             return respond(command.id, 'get_toolpack_response', {
-                toolpack: (stored ? toToolpackRecord(stored as any, deps) : undefined) as any,
+                toolpack: stored ? toToolpackRecord(stored, deps) : undefined,
             });
         }
         case 'install_toolpack':
@@ -529,9 +529,7 @@ export async function handleCapabilityCommand(
                 enabled: boolean;
             };
             if (enabled) {
-                const stored = deps.toolpackStore.getById(toolpackId) as
-                    | { isBuiltin?: boolean; manifest?: { id?: string; name?: string } }
-                    | undefined;
+                const stored = deps.toolpackStore.getById(toolpackId);
                 const extensionId = stored?.manifest?.id ?? stored?.manifest?.name ?? toolpackId;
                 if (!isExtensionEnableAllowed(deps, {
                     extensionType: 'toolpack',
@@ -557,7 +555,7 @@ export async function handleCapabilityCommand(
                 toolpackId: string;
                 deleteFiles?: boolean;
             };
-            const record = deps.toolpackStore.getById(toolpackId) as { workingDir?: string } | undefined;
+            const record = deps.toolpackStore.getById(toolpackId);
             const success = deps.toolpackStore.removeById(toolpackId);
             if (success && deleteFiles !== false && record?.workingDir) {
                 try {
@@ -567,8 +565,8 @@ export async function handleCapabilityCommand(
                 }
             }
             if (success) {
-                const extensionId = (record as { manifest?: { id?: string; name?: string } } | undefined)?.manifest?.id
-                    ?? (record as { manifest?: { id?: string; name?: string } } | undefined)?.manifest?.name
+                const extensionId = record?.manifest?.id
+                    ?? record?.manifest?.name
                     ?? toolpackId;
                 deps.getExtensionGovernanceStore().clear('toolpack', extensionId);
             }
@@ -583,14 +581,14 @@ export async function handleCapabilityCommand(
             const skills = deps.skillStore
                 .list()
                 .filter((skill) => includeDisabled || skill.enabled)
-                .map((skill) => toSkillRecord(skill as any, deps));
-            return respond(command.id, 'list_claude_skills_response', { skills: skills as any });
+                .map((skill) => toSkillRecord(skill, deps));
+            return respond(command.id, 'list_claude_skills_response', { skills });
         }
         case 'get_claude_skill': {
             const skillId = (command.payload as { skillId: string }).skillId;
             const stored = deps.skillStore.get(skillId);
             return respond(command.id, 'get_claude_skill_response', {
-                skill: (stored ? toSkillRecord(stored as any, deps) : undefined) as any,
+                skill: stored ? toSkillRecord(stored, deps) : undefined,
             });
         }
         case 'import_claude_skill': {
@@ -628,9 +626,7 @@ export async function handleCapabilityCommand(
                 enabled: boolean;
             };
             if (enabled) {
-                const stored = deps.skillStore.get(skillId) as
-                    | { isBuiltin?: boolean; manifest?: { name?: string } }
-                    | undefined;
+                const stored = deps.skillStore.get(skillId);
                 const extensionId = stored?.manifest?.name ?? skillId;
                 if (!isExtensionEnableAllowed(deps, {
                     extensionType: 'skill',

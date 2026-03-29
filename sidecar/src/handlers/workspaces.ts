@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { IpcCommand, IpcResponse } from '../protocol';
 import type { WorkspaceStore } from '../storage/workspaceStore';
+import type { Workspace } from '../storage/workspaceStore';
 
 export type WorkspaceCommandDeps = {
     workspaceStore: Pick<WorkspaceStore, 'list' | 'create' | 'update' | 'delete'>;
@@ -69,9 +70,9 @@ export async function handleWorkspaceCommand(
         case 'update_workspace': {
             const { id, updates } = command.payload as {
                 id: string;
-                updates: Record<string, unknown>;
+                updates: Partial<Omit<Workspace, 'id' | 'createdAt'>>;
             };
-            const workspace = deps.workspaceStore.update(id, updates as any);
+            const workspace = deps.workspaceStore.update(id, updates);
             return respond(command.id, 'update_workspace_response', {
                 success: !!workspace,
                 workspace: workspace ? cloneJson(workspace) : undefined,
