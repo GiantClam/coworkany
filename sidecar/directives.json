@@ -1,0 +1,20 @@
+{
+  "directives": [
+    {
+      "id": "no-any",
+      "name": "No Any",
+      "content": "Do NOT use the `any` type in TypeScript. Use `unknown` or define a specific interface.",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "id": "concise",
+      "name": "Concise Responses",
+      "content": "Keep responses brief and to the point. Minimal explanation unless asked.",
+      "enabled": false,
+      "priority": 0
+    }
+  ],
+  "personas": [],
+  "activePersonaId": null
+}

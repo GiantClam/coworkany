@@ -123,7 +123,7 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 
 ### 当前结果
 - `typecheck`: 通过
-- `test:mastra:phases`: 111 通过 / 1 跳过 / 0 失败
+- `test:mastra:phases`: 116 通过 / 1 跳过 / 0 失败
 - `test:stable`: 112 通过 / 0 失败
 - `bun test tests/ipc-*.test.ts`: 40 通过 / 0 失败
 - `desktop cargo check`: 通过（已修复 tauri bundle 资源路径失效）
@@ -139,6 +139,8 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮补齐 Sidecar 关闭流程下“挂起 IPC 请求快速失败”机制：进程关闭时主动拒绝全部 pending 响应，避免调用端等待超时；并补充并发/乱序响应回归用例。
 - 本轮新增 runtime command dispatcher 并发回归：同任务串行、跨任务并行、失败后队列继续执行与错误回调收敛。
 - 本轮新增 `phase6-final-validation` 验收用例，覆盖：`main.ts` 引导器化、默认 Mastra 路由、`main-legacy.ts`/`legacy` 目录已移除、Python 旧服务文件删除、legacy 启动脚本显式化。
+- 本轮完成 Desktop 侧 Python 运行时清理：`process_manager.rs` 移除 Python 下载/venv/main.py 启动链路，改为兼容 no-op managed services；`platform_runtime.rs` 将 Python 标记为 `not_required_in_mastra_single_process`，并移除系统 Python 探测分支。
+- 本轮补强 `phase6-final-validation`（14 通过）：新增 Desktop 侧“无 Python runtime 引导”与“platform runtime 不再探测 Python”断言，防止回归到双栈。
 - 本轮新增 `main-mastra` IPC 协议处理器增强：在原有 `start_task/send_task_message/report_effect_result/health_check` 基础上，补齐 `bootstrap_runtime_context/doctor_preflight/get_runtime_snapshot/get_tasks/resume_interrupted_task` 与 Policy Gate 转发等待映射。
 - 本轮新增/扩展 `tests/mastra-entrypoint.test.ts`（25 通过），覆盖启动/续跑/审批、snapshot/resume/get_tasks、语音命令、token usage 事件映射、autonomous 兼容收口、additional-command 委托、Policy Gate 转发成功/异常响应/不可用兜底，以及“定时创建/取消 + memory resource 作用域回退”。
 - 本轮新增 `tests/mastra-bridge.test.ts`（4 通过），覆盖 Mastra chunk（payload/direct）到 DesktopEvent 映射与 token usage 解析。
@@ -160,6 +162,8 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮新增 `tests/mastra-entrypoint.test.ts` 故障注入回归：覆盖 `read_file` 转发超时重试成功、重试耗尽失败，以及 `processor.close()` 触发挂起请求快速失败。
 - 本轮补齐审批态一致性：`cancel_task/clear_task_history` 会清理该任务挂起审批请求，阻断“任务已取消但旧 `requestId` 仍可恢复执行”的陈旧审批路径；并新增对应回归。
 - 本轮继续补齐审批生命周期收口：任务进入终态（`complete/error`）时也会清理该任务挂起审批请求，阻断“任务已完成但旧 `requestId` 仍可恢复执行”的陈旧审批路径；并新增对应回归。
+- 本轮补齐真实进程级故障注入：新增 `tests/main-mastra-policy-gate.e2e.test.ts`，直接通过 stdio 与 `src/main.ts` 交互，覆盖 Policy Gate 转发“超时后重试成功”与“stdin 关闭快速失败”链路。
+- `main-mastra` 新增 Policy Gate 转发超时/重试参数化环境变量：`COWORKANY_POLICY_GATE_FORWARD_TIMEOUT_MS`、`COWORKANY_POLICY_GATE_TIMEOUT_RETRY_COUNT`，用于稳定复现故障注入场景并控制回归耗时。
 - 沙箱环境需显式追加 `PATH=/opt/homebrew/bin:$PATH` 才能找到 `bun/node`；已在该前提下完成本轮验证。
 
 ## 新增脚本

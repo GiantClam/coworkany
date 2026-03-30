@@ -22,6 +22,29 @@ function writeEvent(event: Record<string, unknown>): void {
     process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
+function readBoundedIntEnv(
+    name: string,
+    fallback: number,
+    min: number,
+    max: number,
+): number {
+    const raw = process.env[name];
+    if (!raw) {
+        return fallback;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    if (parsed < min) {
+        return min;
+    }
+    if (parsed > max) {
+        return max;
+    }
+    return parsed;
+}
+
 async function run(): Promise<void> {
     const rl = readline.createInterface({
         input: process.stdin,
@@ -66,6 +89,18 @@ async function run(): Promise<void> {
             return await schedulerRuntime.cancelBySourceTask(input);
         },
         handleAdditionalCommand: additionalCommandRuntime.handler,
+        policyGateResponseTimeoutMs: readBoundedIntEnv(
+            'COWORKANY_POLICY_GATE_FORWARD_TIMEOUT_MS',
+            30_000,
+            10,
+            300_000,
+        ),
+        policyGateTimeoutRetryCount: readBoundedIntEnv(
+            'COWORKANY_POLICY_GATE_TIMEOUT_RETRY_COUNT',
+            1,
+            0,
+            5,
+        ),
     });
 
     schedulerRuntime = createMastraSchedulerRuntime({

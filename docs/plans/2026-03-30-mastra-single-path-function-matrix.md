@@ -60,9 +60,11 @@
 - 本轮补齐单路径故障注入能力（功能项）：`src/mastra/entrypoint.ts` 的 Policy Gate 转发新增“超时单次重试（默认 1 次）+ 传输关闭快速失败”，并在 `src/main-mastra.ts` 关闭流程中调用 `processor.close('stdin_closed')` 主动拒绝挂起转发，避免进程退出阶段额外等待超时。
 - 本轮补齐审批态一致性：`cancel_task/clear_task_history` 会清理该任务挂起审批请求，阻断“任务已取消但旧 `requestId` 仍可恢复执行”的陈旧审批路径。
 - 本轮补齐审批生命周期收口：任务进入终态（`complete/error`）时也会清理该任务挂起审批请求，阻断“任务已完成但旧 `requestId` 仍可恢复执行”的陈旧审批路径。
+- 本轮补齐进程级故障注入能力：新增 `main-mastra` Policy Gate 转发超时/重试参数化环境变量（`COWORKANY_POLICY_GATE_FORWARD_TIMEOUT_MS`、`COWORKANY_POLICY_GATE_TIMEOUT_RETRY_COUNT`），便于真实进程场景下稳定复现实验。
 - 构建链路已补齐：`bun run build` 与 `bun run build:release` 均通过（release 构建脚本已适配 `main-mastra` 单路径与新 bridge 路径）。
 - 新增回归：
   - `tests/mastra-entrypoint.test.ts`（25 通过，含 `cancel_task` 调度取消联动、故障注入与审批态一致性/生命周期回归）
+  - `tests/main-mastra-policy-gate.e2e.test.ts`（2 通过，真实 stdio 进程级故障注入）
   - `tests/mastra-additional-commands.test.ts`（3 通过）
   - `tests/mastra-bridge.test.ts`（4 通过）
   - `tests/mastra-scheduler-runtime.test.ts`（9 通过，含 stale-running 恢复 / 重复命令抑制 / 启动即时恢复）
@@ -73,6 +75,12 @@
   - `processor.close()` 时挂起转发请求快速失败（不等待默认 30s 超时）。
 - 本轮新增 `tests/mastra-entrypoint.test.ts` 审批态一致性覆盖：`cancel_task` 后再上报旧 `requestId` 将返回 `approval_request_not_found`，不再恢复已取消任务执行。
 - 本轮新增 `tests/mastra-entrypoint.test.ts` 审批生命周期覆盖：任务 `complete` 后再上报旧 `requestId` 将返回 `approval_request_not_found`，不再恢复已结束任务执行。
+- 本轮新增 `tests/main-mastra-policy-gate.e2e.test.ts`：
+  - 真实进程下 `read_file` 转发超时后重试一次并在第二次回包成功收口；
+  - 真实进程下关闭 stdin 后，挂起转发快速返回 `policy_gate_unavailable:stdin_closed`。
+- 本轮完成 Desktop Python 双栈收口（兼容层）：`desktop/src-tauri/src/process_manager.rs` 移除 Python 下载/venv/main.py 启动逻辑，改为 no-op managed service 兼容实现；`prepare_service_runtime/start_service/health_check` 保持协议兼容但不再拉起 Python 进程。
+- `desktop/src-tauri/src/platform_runtime.rs` 移除系统 Python 探测，`runtimeContext.python` 固定标记为 `not_required_in_mastra_single_process`；`rag-service/browser-use-service` 依赖状态改为内建 ready，避免首次引导误提示安装 Python 运行时。
+- `tests/phase6-final-validation.test.ts` 新增 Desktop 侧回归断言，覆盖“无 Python runtime 引导 + 无 system python probe”。
 - 门禁全绿：
   - `bun run typecheck`
   - `bun run build`

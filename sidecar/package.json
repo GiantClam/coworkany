@@ -34,7 +34,7 @@
     "test:e2e:browser-resilience": "bun test tests/browser-service-resilience.e2e.test.ts tests/browser-service-recovery-inprocess.e2e.test.ts",
     "test:e2e:x-learning": "bun test tests/x-following-ai-learning-e2e.test.ts",
     "test:x-following": "bun test tests/x-following-posts-regression.test.ts",
-    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-mastra-protocol-compat.test.ts tests/phase6-final-validation.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts"
+    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-mastra-protocol-compat.test.ts tests/phase6-final-validation.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",

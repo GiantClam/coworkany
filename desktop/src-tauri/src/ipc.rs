@@ -3764,23 +3764,11 @@ pub fn health_check_service(
 pub async fn prepare_rag_embedding_model(
     app_handle: AppHandle,
 ) -> Result<GenericIpcResult, String> {
-    match tauri::async_runtime::spawn_blocking(move || {
-        crate::process_manager::RagService::predownload_embedding_model(&app_handle)
+    let _ = app_handle;
+    Ok(GenericIpcResult {
+        success: true,
+        payload: json!({
+            "message": "RAG embedding predownload is no longer required in Mastra single-process mode."
+        }),
     })
-    .await
-    .map_err(|e| e.to_string())?
-    {
-        Ok(message) => Ok(GenericIpcResult {
-            success: true,
-            payload: json!({
-                "message": message
-            }),
-        }),
-        Err(e) => Ok(GenericIpcResult {
-            success: false,
-            payload: json!({
-                "error": e.to_string()
-            }),
-        }),
-    }
 }

@@ -5,6 +5,7 @@ import * as path from 'path';
 
 const SIDECAR_ROOT = path.resolve(__dirname, '..');
 const SRC_ROOT = path.join(SIDECAR_ROOT, 'src');
+const DESKTOP_TAURI_SRC_ROOT = path.resolve(SIDECAR_ROOT, '..', 'desktop', 'src-tauri', 'src');
 
 function read(filePath: string): string {
     return fs.readFileSync(filePath, 'utf-8');
@@ -82,6 +83,57 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         for (const filePath of removedFiles) {
             expect(fs.existsSync(filePath)).toBe(false);
         }
+    });
+
+    test('tracked python utility scripts are removed after migration to non-python tooling', () => {
+        const removedFiles = [
+            path.resolve(SIDECAR_ROOT, 'remove_similar_images.py'),
+            path.resolve(SIDECAR_ROOT, 'csv_demo.py'),
+            path.resolve(SIDECAR_ROOT, 'csv_reading_demo.py'),
+            path.resolve(SIDECAR_ROOT, 'read_csv_demo.py'),
+            path.resolve(SIDECAR_ROOT, 'add_watermark.py'),
+            path.resolve(SIDECAR_ROOT, 'save_screenshot.py'),
+            path.resolve(SIDECAR_ROOT, 'screenshot_example.py'),
+            path.resolve(SIDECAR_ROOT, 'sum100.py'),
+            path.resolve(SIDECAR_ROOT, 'sum_100.py'),
+            path.resolve(SIDECAR_ROOT, 'sum_1_to_10.py'),
+            path.resolve(SIDECAR_ROOT, 'sum_1_to_100.py'),
+            path.resolve(SIDECAR_ROOT, 'sum_numbers.py'),
+            path.resolve(SIDECAR_ROOT, 'factorial.py'),
+            path.resolve(SIDECAR_ROOT, 'factorial_calculator.py'),
+            path.resolve(SIDECAR_ROOT, 'calculate_factorials.py'),
+            path.resolve(SIDECAR_ROOT, 'create_ppt.py'),
+            path.resolve(SIDECAR_ROOT, 'create_smart_city_ppt.py'),
+            path.resolve(SIDECAR_ROOT, 'create_ai_smart_city_ppt.py'),
+            path.resolve(SIDECAR_ROOT, 'create_ai_sanitation_ppt.py'),
+            path.resolve(SIDECAR_ROOT, 'test_csv_reading.py'),
+            path.resolve(SIDECAR_ROOT, 'ai_trends_analysis.py'),
+            path.resolve(SIDECAR_ROOT, '..', 'desktop', 'src-tauri', 'fix_await.py'),
+        ];
+
+        for (const filePath of removedFiles) {
+            expect(fs.existsSync(filePath)).toBe(false);
+        }
+    });
+
+    test('desktop process manager no longer bootstraps python runtimes', () => {
+        const processManagerPath = path.join(DESKTOP_TAURI_SRC_ROOT, 'process_manager.rs');
+        const source = read(processManagerPath);
+
+        expect(source).not.toContain("python-build-standalone");
+        expect(source).not.toContain("main.py");
+        expect(source).not.toContain("pip install");
+        expect(source).not.toContain("virtualenv");
+        expect(source).toContain("NoopManagedService");
+    });
+
+    test('desktop platform runtime marks python as not required and skips python probes', () => {
+        const platformRuntimePath = path.join(DESKTOP_TAURI_SRC_ROOT, 'platform_runtime.rs');
+        const source = read(platformRuntimePath);
+
+        expect(source).toContain("not_required_in_mastra_single_process");
+        expect(source).not.toContain("for cmd in [\"python3\", \"python\", \"py\"]");
+        expect(source).not.toContain(".join(\"main.py\")");
     });
 
     test('package scripts no longer expose legacy/compat startup aliases', () => {

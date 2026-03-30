@@ -115,17 +115,6 @@ pub fn resolve_sidecar_entry_path() -> Result<PathBuf, String> {
         })
 }
 
-pub fn find_system_python() -> Option<PathBuf> {
-    for cmd in ["python3", "python", "py"] {
-        if let Ok(output) = Command::new(cmd).arg("--version").output() {
-            if output.status.success() {
-                return Some(PathBuf::from(cmd));
-            }
-        }
-    }
-    None
-}
-
 pub fn managed_service_runtime_dir(
     app_handle: &AppHandle,
     service_name: &str,
@@ -137,40 +126,17 @@ pub fn managed_service_runtime_dir(
     Ok(app_data_dir
         .join("managed-services")
         .join(service_name)
-        .join(".venv"))
+        .join("runtime"))
 }
 
 pub fn managed_service_runtime_ready(app_handle: &AppHandle, service_name: &str) -> bool {
-    let Ok(venv_dir) = managed_service_runtime_dir(app_handle, service_name) else {
-        return false;
-    };
-
-    #[cfg(target_os = "windows")]
-    let python = venv_dir.join("Scripts").join("python.exe");
-    #[cfg(not(target_os = "windows"))]
-    let python = venv_dir.join("bin").join("python3");
-
-    python.exists()
+    let _ = app_handle;
+    matches!(service_name, "rag-service" | "browser-use-service")
 }
 
 pub fn packaged_service_exists(app_handle: &AppHandle, service_name: &str) -> bool {
-    if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        if resource_dir.join(service_name).join("main.py").exists() {
-            return true;
-        }
-    }
-    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        if PathBuf::from(dir)
-            .join("..")
-            .join("..")
-            .join(service_name)
-            .join("main.py")
-            .exists()
-        {
-            return true;
-        }
-    }
-    false
+    let _ = app_handle;
+    matches!(service_name, "rag-service" | "browser-use-service")
 }
 
 pub fn resolve_skillhub_executable() -> Result<PathBuf, String> {
@@ -274,7 +240,6 @@ pub fn build_platform_runtime_context(
     app_handle: &AppHandle,
     sidecar_launch_mode: Option<&str>,
 ) -> PlatformRuntimeContext {
-    let python = find_system_python();
     let skillhub = resolve_skillhub_executable().ok();
 
     PlatformRuntimeContext {
@@ -285,12 +250,8 @@ pub fn build_platform_runtime_context(
         shell: detect_shell(),
         sidecar_launch_mode: sidecar_launch_mode.map(str::to_string),
         python: binary_info(
-            python,
-            Some(if running_from_app_bundle() {
-                "system_or_bundle"
-            } else {
-                "system"
-            }),
+            None,
+            Some("not_required_in_mastra_single_process"),
         ),
         skillhub: binary_info(skillhub, Some("path_lookup")),
         managed_services: ["rag-service", "browser-use-service"]
@@ -362,12 +323,13 @@ pub fn build_runtime_snapshot(
             RuntimeDependencyStatus {
                 id: "rag-service".to_string(),
                 name: "RAG Service".to_string(),
-                description: "Semantic memory indexing and retrieval for the local vault."
-                    .to_string(),
-                installed: packaged_service_exists(app_handle, "rag-service"),
-                ready: managed_service_runtime_ready(app_handle, "rag-service"),
+                description:
+                    "Built-in semantic memory capability in Mastra single-process runtime."
+                        .to_string(),
+                installed: true,
+                ready: true,
                 running: rag_running,
-                bundled: packaged_service_exists(app_handle, "rag-service"),
+                bundled: true,
                 optional: false,
                 path: None,
                 version: None,
@@ -376,12 +338,12 @@ pub fn build_runtime_snapshot(
             RuntimeDependencyStatus {
                 id: "browser-use-service".to_string(),
                 name: "Browser Smart Mode".to_string(),
-                description: "Optional AI browser automation backend used by browser_ai_action."
-                    .to_string(),
-                installed: packaged_service_exists(app_handle, "browser-use-service"),
-                ready: managed_service_runtime_ready(app_handle, "browser-use-service"),
+                description:
+                    "Optional browser automation capability (Python sidecar retired).".to_string(),
+                installed: true,
+                ready: true,
                 running: browser_running,
-                bundled: packaged_service_exists(app_handle, "browser-use-service"),
+                bundled: true,
                 optional: true,
                 path: None,
                 version: None,
@@ -389,13 +351,6 @@ pub fn build_runtime_snapshot(
             },
         ],
     }
-}
-
-fn running_from_app_bundle() -> bool {
-    std::env::current_exe()
-        .ok()
-        .map(|path| path.to_string_lossy().contains(".app/Contents/MacOS/"))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -414,9 +369,9 @@ mod tests {
             shell: "/bin/zsh".to_string(),
             sidecar_launch_mode: None,
             python: RuntimeBinaryInfo {
-                available: true,
-                path: Some("python3".to_string()),
-                source: Some("system".to_string()),
+                available: false,
+                path: None,
+                source: Some("not_required_in_mastra_single_process".to_string()),
             },
             skillhub: RuntimeBinaryInfo {
                 available: false,

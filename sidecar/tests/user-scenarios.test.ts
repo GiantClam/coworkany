@@ -641,7 +641,7 @@ describe('S10: image dedupe - uninstall deps then recover', () => {
     let sidecar: SidecarProcess;
     afterAll(() => sidecar?.kill());
 
-    test('uninstall imagehash and Pillow, then clear similar images', async () => {
+    test('run Node-based image dedupe script and recover from command errors', async () => {
         ensureWorkspace();
         const imageWorkspace = path.join(TEST_WORKSPACE, 's10-similar-images');
         fs.mkdirSync(imageWorkspace, { recursive: true });
@@ -654,23 +654,12 @@ describe('S10: image dedupe - uninstall deps then recover', () => {
         fs.writeFileSync(path.join(imageWorkspace, 'img_b.png'), onePixelPng);
         fs.writeFileSync(path.join(imageWorkspace, 'img_c.png'), onePixelPng);
 
-        const uninstall = Bun.spawnSync({
-            cmd: ['python3', '-m', 'pip', 'uninstall', '-y', 'imagehash', 'Pillow'],
-            stdout: 'pipe',
-            stderr: 'pipe',
-        });
-        const uninstallStdout = uninstall.stdout ? Buffer.from(uninstall.stdout).toString('utf-8') : '';
-        const uninstallStderr = uninstall.stderr ? Buffer.from(uninstall.stderr).toString('utf-8') : '';
-        console.log('[S10] uninstall exitCode:', uninstall.exitCode);
-        if (uninstallStdout.trim()) console.log('[S10] uninstall stdout:', uninstallStdout.trim().slice(0, 500));
-        if (uninstallStderr.trim()) console.log('[S10] uninstall stderr:', uninstallStderr.trim().slice(0, 500));
-
         const result = await runScenario({
             name: 'S10-image-dedupe-uninstall-and-recover',
             userQuery: [
                 `Clean similar images in: ${imageWorkspace}`,
-                `Use this script: python3 "${path.join(process.cwd(), 'remove_similar_images.py')}" "${imageWorkspace}" --delete --threshold 0`,
-                'If dependency import fails, install imagehash and Pillow once, then rerun the same command.',
+                `Use this script: node "${path.join(process.cwd(), 'remove_similar_images.mjs')}" "${imageWorkspace}" --delete --threshold 0`,
+                'If command fails, inspect error and rerun the same command after minimal fix.',
                 'Stop after the cleanup succeeds.',
             ].join('\n'),
             timeoutMs: TIMEOUT_MEDIUM,
@@ -695,8 +684,8 @@ describe('S10: image dedupe - uninstall deps then recover', () => {
             .map((call) => String(call.toolArgs?.command || ''))
             .map((cmd) => cmd.trim().replace(/\s+/g, ' ').toLowerCase());
 
-        const installRegex = /(pip|pip3|python(?:3)?\s+-m\s+pip|uv\s+pip)\s+install/i;
-        const imageInstallRegex = /(imagehash|pillow)/i;
+        const installRegex = /(npm|pnpm|yarn|bun)\s+(add|install)|pip|uv\s+pip/i;
+        const imageInstallRegex = /(sharp|jimp|imagehash|pillow)/i;
         const installCalls = normalizedCommands.filter((cmd) => installRegex.test(cmd));
         const imageInstallCalls = installCalls.filter((cmd) => imageInstallRegex.test(cmd));
 
@@ -719,18 +708,13 @@ describe('S10: image dedupe - uninstall deps then recover', () => {
             : false;
 
         const allText = collector.getAllText();
-        const installRecoveredInCommandOutput = /installing required packages:.*(pillow|imagehash)/i.test(allText);
+        const installRecoveredInCommandOutput = /(installing|required packages|dependency installed)/i.test(allText);
 
         verifier.printReport();
         saveTestArtifacts('s10', {
             'output.txt': collector.textBuffer,
             'report.json': JSON.stringify({
                 ...verifier.toJSON(),
-                uninstall: {
-                    exitCode: uninstall.exitCode,
-                    stdout: uninstallStdout,
-                    stderr: uninstallStderr,
-                },
                 runCommandCount: runCommandCalls.length,
                 installCalls,
                 imageInstallCalls,
@@ -755,7 +739,7 @@ describe('S11: image dedupe - hard acceptance', () => {
     let sidecar: SidecarProcess;
     afterAll(() => sidecar?.kill());
 
-    test('uninstall imagehash/Pillow, then dedupe must reduce files', async () => {
+    test('node dedupe script hard acceptance: must reduce files', async () => {
         ensureWorkspace();
         const imageWorkspace = path.join(TEST_WORKSPACE, 's11-similar-images');
         fs.rmSync(imageWorkspace, { recursive: true, force: true });
@@ -770,21 +754,13 @@ describe('S11: image dedupe - hard acceptance', () => {
         fs.writeFileSync(path.join(imageWorkspace, 'img_c.png'), onePixelPng);
         const beforeCount = fs.readdirSync(imageWorkspace).filter((name) => /\.(png|jpg|jpeg|webp)$/i.test(name)).length;
 
-        const uninstall = Bun.spawnSync({
-            cmd: ['python3', '-m', 'pip', 'uninstall', '-y', 'imagehash', 'Pillow'],
-            stdout: 'pipe',
-            stderr: 'pipe',
-        });
-        console.log('[S11] uninstall exitCode:', uninstall.exitCode);
-
-        const dedupeScript = path.join(process.cwd(), 'remove_similar_images.py');
+        const dedupeScript = path.join(process.cwd(), 'remove_similar_images.mjs');
 
         const result = await runScenario({
             name: 'S11-image-dedupe-hard-acceptance',
             userQuery: [
                 `Clean similar images in: ${imageWorkspace}`,
-                `Use this exact script first: python3 "${dedupeScript}" "${imageWorkspace}" --delete --threshold 0`,
-                'If dependency import fails, install imagehash and Pillow once, then rerun the same command.',
+                `Use this exact script first: node "${dedupeScript}" "${imageWorkspace}" --delete --threshold 0`,
                 'You must print DEDUPE_DONE marker from command output and then stop.',
             ].join('\n'),
             timeoutMs: TIMEOUT_MEDIUM,
@@ -814,7 +790,6 @@ describe('S11: image dedupe - hard acceptance', () => {
             'output.txt': collector.textBuffer,
             'report.json': JSON.stringify({
                 ...verifier.toJSON(),
-                uninstallExitCode: uninstall.exitCode,
                 runCommandCount: runCommandCalls.length,
                 beforeCount,
                 afterCount,
