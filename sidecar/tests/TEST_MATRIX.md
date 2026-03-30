@@ -44,6 +44,8 @@ These spawn the sidecar and drive task flows. They usually require a valid model
 | `tests/file-operations.test.ts` | Agent-mediated local file workflows |
 | `tests/memory-learning.test.ts` | Memory and self-learning flows |
 | `tests/gui-simulation.test.ts` | IPC simulation of desktop to sidecar workflow |
+| `tests/scheduled-full-chain.e2e.test.ts` | Full stdio chain for scheduled intent/cancel/missing-key branch split |
+| `tests/additional-commands-full-chain.e2e.test.ts` | Full stdio chain for runtime bootstrap, snapshot, workspace/capability command handling |
 
 ### Agent scenario and comparison suites
 

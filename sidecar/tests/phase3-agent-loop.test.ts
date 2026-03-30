@@ -58,10 +58,49 @@ describe('Phase 3: Agent Loop', () => {
             resolveMissingApiKeyForModel('openai/gpt-4.1', {}),
         ).toBe('OPENAI_API_KEY');
         expect(
+            resolveMissingApiKeyForModel('aiberm/gpt-5.3-codex', {}),
+        ).toBe('OPENAI_API_KEY');
+        expect(
             resolveMissingApiKeyForModel('anthropic/claude-sonnet-4-5', {
                 ANTHROPIC_API_KEY: 'x',
             }),
         ).toBeNull();
+        expect(
+            resolveMissingApiKeyForModel('aiberm/gpt-5.3-codex', {
+                OPENAI_API_KEY: 'x',
+            }),
+        ).toBeNull();
+    });
+
+    test('missing api key preflight emits error without synthetic completion', async () => {
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+        delete process.env.ANTHROPIC_API_KEY;
+
+        const events: Array<{ type?: string; message?: string; finishReason?: string }> = [];
+        try {
+            await handleUserMessage(
+                'hello',
+                `phase3-preflight-${Date.now()}`,
+                'employee-test',
+                (event) => events.push(event as { type?: string; message?: string; finishReason?: string }),
+            );
+        } finally {
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+        }
+
+        expect(events.some((event) => event.type === 'error' && event.message?.includes('missing_api_key:ANTHROPIC_API_KEY'))).toBe(true);
+        expect(events.some((event) => event.type === 'complete' && event.finishReason === 'error')).toBe(false);
     });
 
     test.skip('integration: stream emits text deltas', async () => {

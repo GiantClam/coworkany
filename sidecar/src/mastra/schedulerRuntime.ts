@@ -198,6 +198,9 @@ const chainMessage = (record: ScheduledTaskRecord, stageCount: number): string =
 const shouldCancelScheduledTasks = (text: string): boolean => {
     const trimmed = text.trim();
     if (!trimmed) return false;
+    if (trimmed === 'cancel_task') {
+        return true;
+    }
     if (/(?:取消|停止|终止|结束|关闭|关掉|停掉).*(?:提醒|定时|任务|闹钟|计划|上述|这个|该)/u.test(trimmed)) {
         return true;
     }

@@ -127,6 +127,7 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 跳过项：`Phase 3 integration stream`（依赖真实模型 API Key）
 - 本轮新增 `phase6` 用例（审批等待不提前完成 + 审批通过/拒绝恢复收口 + Mastra 模式阻断 autonomous 命令全矩阵 + suspended 不误完成）已补充。
 - 本轮新增 `phase6` 失败注入回归：Policy Gate 转发的“异常响应类型”“桥接抛错”“`get_policy_config` 转发失败回退默认策略”均已覆盖。
+- 本轮新增“真实模型端到端冒烟”能力：`sidecar/tests/real-model-smoke.e2e.test.ts`（可自动处理审批事件、默认无 key 跳过，严格模式下缺 key 直接失败），并接入 `release-readiness` 可选门禁 `--real-model-smoke`（环境变量 `COWORKANY_REAL_MODEL_SMOKE=1` 可开启）。
 - 本轮新增 `phase6` 覆盖 `propose_patch` 的 Rust 转发通路，验证 Sidecar→Desktop ShadowFS 流程可用。
 - 本轮新增 Policy Gate 超时重试策略（单次重试，仅对 `IPC response timeout` 生效），并补充 `read_file/propose_patch` 超时重试成功与超时耗尽失败回归。
 - 本轮补齐 `reject_patch` Sidecar→Desktop 转发闭环与响应回传（`reject_patch_response`），并加入协议 schema。
@@ -208,6 +209,8 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - `start:mastra`
 - `dev:mastra`
 - `test:mastra:phases`
+- `test:real-model-smoke`
+- `release:readiness:commercial`（`--build-desktop --real-e2e --real-model-smoke`）
 
 ## 与商用标准仍有差距（下一步）
 1. 生产可观测性：需补齐统一 tracing、指标埋点、告警阈值和故障演练。

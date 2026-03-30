@@ -1,22 +1,23 @@
 # Release Readiness Report
 
-Generated at: 2026-03-30T08:10:42.692Z
+Generated at: 2026-03-30T08:44:34.825Z
 Repository: /Users/beihuang/Documents/github/coworkany
 
 ## Requested Options
 - Build desktop: no
 - Real E2E: no
+- Real model smoke: no
 - Doctor required status: degraded
 - Canary evidence path: /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json
 - Require canary evidence: no
 
 ## Stages
-- [PASSED] Control-plane eval suite (1047ms)
-- [PASSED] Sidecar typecheck (1643ms)
-- [PASSED] Sidecar stable regression suite (198ms)
-- [PASSED] Sidecar release gate tests (1018ms)
-- [PASSED] Desktop typecheck (2970ms)
-- [PASSED] Desktop acceptance suite (single-path compatible) (303ms)
+- [PASSED] Control-plane eval suite (1114ms)
+- [PASSED] Sidecar typecheck (1895ms)
+- [PASSED] Sidecar stable regression suite (133ms)
+- [PASSED] Sidecar release gate tests (1056ms)
+- [PASSED] Desktop typecheck (3198ms)
+- [PASSED] Desktop acceptance suite (single-path compatible) (297ms)
 - [PASSED] Sidecar doctor preflight (1ms)
 - [PASSED] Workspace extension allowlist gate (0ms)
   - No enabled third-party extensions detected. (mode=off, enabledSkills=0, enabledToolpacks=0)

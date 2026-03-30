@@ -88,6 +88,7 @@ const SCHEDULE_PREFIX_PATTERNS = [
 ] as const;
 const ENGLISH_RELATIVE_PATTERN = /in\s+(\d+)\s*(seconds?|minutes?|hours?|days?)/i;
 const CHINESE_RELATIVE_PATTERN = /([零〇一二两兩三四五六七八九十\d]+)\s*(秒钟?|分钟?|分|小时|小時|天|日)(?:\s*(后|以后|之后))?/u;
+const CHINESE_ABSOLUTE_TIME_PATTERN = /^(今天|明天|后天)?\s*(凌晨|早上|上午|中午|下午|晚上)?\s*([零〇一二两兩三四五六七八九十\d]{1,3})\s*点(?:\s*([零〇一二两兩三四五六七八九十\d]{1,3})\s*分?)?$/u;
 const RECURRING_INTERVAL_PATTERN = /(every\s+\d*\s*(?:minutes?|hours?|days?)|每\s*[零〇一二两兩三四五六七八九十\d]*\s*(?:分钟?|分|小时|小時|天|日))/iu;
 const ENGLISH_RECURRING_PATTERN = /^(.*?\b)?every\s+(\d+)?\s*(minutes?|hours?|days?)\s+(.+)$/i;
 const CHINESE_RECURRING_PATTERN = /^(.*?)每\s*([零〇一二两兩三四五六七八九十\d]*)\s*(分钟?|分|小时|小時|天|日)\s*(.+)$/u;
@@ -99,6 +100,14 @@ const SPEECH_DIRECTIVE_PATTERNS = [
 const SPEECH_MARKER_FALLBACK = /(语音播报|朗读|读出来|read\s+.*aloud|speak\s+.*aloud)/iu;
 function normalizeText(input: string): string {
     return input.replace(/\s+/g, ' ').trim();
+}
+function stripRoutedEnvelope(input: string): string {
+    let text = input.trim();
+    const routedMatch = text.match(/^原始任务[：:]\s*([\s\S]*?)(?:\n+用户路由[：:][^\n]*)?$/u);
+    if (routedMatch?.[1]) {
+        text = routedMatch[1].trim();
+    }
+    return text;
 }
 function stripScheduledTaskPrefix(input: string): string {
     let text = input.trim();
@@ -189,6 +198,61 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
         return next;
     }
     return null;
+}
+function parseChineseAbsoluteTimeExpression(expression: string, now: Date): Date | null {
+    const match = expression.trim().match(CHINESE_ABSOLUTE_TIME_PATTERN);
+    if (!match) {
+        return null;
+    }
+    const dayMarker = match[1];
+    const period = match[2];
+    const rawHour = match[3];
+    const rawMinute = match[4];
+    if (!rawHour) {
+        return null;
+    }
+    let hour = parseRelativeAmount(rawHour);
+    let minute = rawMinute ? parseRelativeAmount(rawMinute) : 0;
+    if (!Number.isFinite(hour) || hour < 0 || hour > 24) {
+        return null;
+    }
+    if (!Number.isFinite(minute) || minute < 0 || minute > 59) {
+        return null;
+    }
+
+    if (period === '凌晨' || period === '早上' || period === '上午') {
+        hour = hour % 12;
+    } else if (period === '中午') {
+        if (hour < 11) {
+            hour += 12;
+        }
+    } else if (period === '下午' || period === '晚上') {
+        if (hour < 12) {
+            hour += 12;
+        }
+    }
+    if (hour === 24) {
+        hour = 0;
+    }
+
+    let dayOffset = 0;
+    if (dayMarker === '明天') {
+        dayOffset = 1;
+    } else if (dayMarker === '后天') {
+        dayOffset = 2;
+    }
+
+    const scheduled = new Date(now);
+    scheduled.setMilliseconds(0);
+    scheduled.setSeconds(0);
+    scheduled.setMinutes(minute);
+    scheduled.setHours(hour);
+    scheduled.setDate(scheduled.getDate() + dayOffset);
+
+    if (!dayMarker && scheduled.getTime() <= now.getTime()) {
+        scheduled.setDate(scheduled.getDate() + 1);
+    }
+    return scheduled;
 }
 function cleanupSpeechDirectiveRemoval(input: string): string {
     return input
@@ -360,6 +424,16 @@ function extractLeadingScheduleExpression(candidate: string): { originalTimeExpr
             taskQueryRaw: chinese[2],
         };
     }
+    const absolute = candidate.match(/^(今天|明天|后天)?\s*(凌晨|早上|上午|中午|下午|晚上)?\s*([零〇一二两兩三四五六七八九十\d]{1,3})\s*点(?:\s*([零〇一二两兩三四五六七八九十\d]{1,3})\s*分?)?[,，、:\s-]*(.+)$/u);
+    if (absolute?.[5]) {
+        const timeExpression = normalizeText(
+            `${absolute[1] ?? ''}${absolute[2] ?? ''}${absolute[3]}点${absolute[4] ? `${absolute[4]}分` : ''}`,
+        );
+        return {
+            originalTimeExpression: timeExpression,
+            taskQueryRaw: absolute[5],
+        };
+    }
     const english = candidate.match(/^(in\s+\d+\s*(?:seconds?|minutes?|hours?|days?))[,，、:\s-]*(.+)$/i);
     if (english?.[1] && english[2]) {
         return {
@@ -378,10 +452,14 @@ export function parseScheduledTimeExpression(expression: string, now: Date = new
     if (relative) {
         return relative;
     }
+    const chineseAbsolute = parseChineseAbsoluteTimeExpression(expression, now);
+    if (chineseAbsolute) {
+        return chineseAbsolute;
+    }
     throw new Error(`Unable to parse scheduled time expression: "${expression}"`);
 }
 export function detectScheduledIntent(query: string, now: Date = new Date()): ParsedScheduledIntent | null {
-    const trimmed = query.trim();
+    const trimmed = stripRoutedEnvelope(query);
     if (!trimmed) {
         return null;
     }

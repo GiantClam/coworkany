@@ -14,6 +14,7 @@
     "build:release": "node scripts/build-release.mjs",
     "release:readiness": "bun run scripts/release-readiness.ts",
     "release:readiness:full": "bun run scripts/release-readiness.ts --build-desktop --real-e2e",
+    "release:readiness:commercial": "bun run scripts/release-readiness.ts --build-desktop --real-e2e --real-model-smoke",
     "doctor": "bun run scripts/sidecar-doctor.ts",
     "doctor:replay-incident": "bun run scripts/replay-control-plane-incident.ts",
     "eval:control-plane": "bun run src/evals/controlPlaneEvalRunner.ts",
@@ -23,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
     "test:stable": "bun test tests/token-usage.test.ts tests/command-sandbox.test.ts tests/scheduler-heartbeat.test.ts",
+    "test:real-model-smoke": "bun test tests/real-model-smoke.e2e.test.ts",
     "test:ci": "npm run test:stable",
     "test:agent:core": "node scripts/run-tests-sequential.mjs tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",
     "test:agent:scenarios": "node scripts/run-tests-sequential.mjs tests/capabilities.test.ts tests/user-scenarios.test.ts tests/e2e-composite.test.ts tests/openclaw-quick.test.ts tests/openclaw-simulation.test.ts tests/openclaw-extended.test.ts tests/openclow-comparison.test.ts",
@@ -32,7 +34,7 @@
     "test:all": "npm run test:stable && npm run test:agent:core && npm run test:agent:scenarios && npm run test:agent:research && npm run test:browser && npm run test:desktop",
     "test:e2e:x-learning": "bun test tests/x-following-ai-learning-e2e.test.ts",
     "test:x-following": "bun test tests/x-following-posts-regression.test.ts",
-    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-final-validation.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts"
+    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-final-validation.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts tests/scheduled-full-chain.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",

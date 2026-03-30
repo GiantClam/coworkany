@@ -40,6 +40,51 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 function getNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
+function extractErrorMessage(value: unknown, depth = 0): string | null {
+    if (depth > 4 || value == null) {
+        return null;
+    }
+    if (typeof value === 'string') {
+        return value.length > 0 ? value : null;
+    }
+    if (value instanceof Error) {
+        return value.message.length > 0 ? value.message : null;
+    }
+    const record = toRecord(value);
+    if (!record) {
+        return null;
+    }
+
+    const directKeys = [
+        'message',
+        'detail',
+        'error_description',
+        'reason',
+        'title',
+    ];
+    for (const key of directKeys) {
+        const candidate = record[key];
+        if (typeof candidate === 'string' && candidate.length > 0) {
+            return candidate;
+        }
+    }
+
+    const nestedKeys = ['error', 'cause', 'response', 'data'];
+    for (const key of nestedKeys) {
+        const nested = extractErrorMessage(record[key], depth + 1);
+        if (nested) {
+            return nested;
+        }
+    }
+
+    const code = typeof record.code === 'string' ? record.code : null;
+    const status = typeof record.status === 'number' ? record.status : null;
+    if (code || status !== null) {
+        const statusText = typeof record.statusText === 'string' ? record.statusText : null;
+        return [code, status !== null ? String(status) : null, statusText].filter(Boolean).join(':');
+    }
+    return null;
+}
 function resolveChunkData(chunk: MastraChunkLike): Record<string, unknown> | null {
     const payloadRecord = toRecord(chunk.payload);
     if (payloadRecord) {
@@ -184,11 +229,10 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
                         : undefined,
             };
         case 'error': {
-            const message = typeof data.error === 'string'
-                ? data.error
-                : typeof data.message === 'string'
-                    ? data.message
-                    : 'unknown_error';
+            const message = extractErrorMessage(data.error)
+                ?? extractErrorMessage(data.message)
+                ?? extractErrorMessage(data)
+                ?? 'unknown_error';
             return {
                 type: 'error',
                 runId,

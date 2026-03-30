@@ -77,4 +77,23 @@ describe('ipc bridge', () => {
             finishReason: 'stop',
         });
     });
+
+    test('maps structured error chunk to error event with nested message', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'error',
+            payload: {
+                error: {
+                    error: {
+                        message: 'provider unauthorized',
+                    },
+                },
+            },
+        }, 'run-5');
+
+        expect(event).toEqual({
+            type: 'error',
+            runId: 'run-5',
+            message: 'provider unauthorized',
+        });
+    });
 });

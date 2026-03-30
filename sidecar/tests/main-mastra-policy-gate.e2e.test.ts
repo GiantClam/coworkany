@@ -255,4 +255,211 @@ describe('main-mastra policy-gate stdio e2e', () => {
         expect(payload.success).toBe(false);
         expect(String(payload.error ?? '')).toContain('policy_gate_unavailable:stdin_closed');
     }, 30_000);
+
+    test('forwards exec_shell and maps desktop response payload end-to-end', async () => {
+        session = new MastraStdioSession();
+        await session.start();
+
+        const commandId = 'cmd-exec-shell-e2e';
+        session.send({
+            id: commandId,
+            timestamp: new Date().toISOString(),
+            type: 'exec_shell',
+            payload: {
+                command: 'echo policy-gate-e2e',
+            },
+        });
+
+        const forwarded = await session.waitFor(
+            (message) =>
+                message.type === 'exec_shell'
+                && typeof message.id === 'string'
+                && toRecord(message.payload).command === 'echo policy-gate-e2e',
+            5_000,
+        );
+        const forwardedId = String(forwarded.id);
+
+        session.send({
+            type: 'exec_shell_response',
+            commandId: forwardedId,
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                stdout: 'policy-gate-e2e\n',
+                stderr: '',
+                exitCode: 0,
+            },
+        });
+
+        const response = await session.waitFor(
+            (message) =>
+                message.type === 'exec_shell_response'
+                && message.commandId === commandId,
+            5_000,
+        );
+        const payload = toRecord(response.payload);
+        expect(payload.success).toBe(true);
+        expect(payload.stdout).toBe('policy-gate-e2e\n');
+        expect(payload.exitCode).toBe(0);
+    }, 30_000);
+
+    test('forwards propose_patch and reject_patch with stable response mapping end-to-end', async () => {
+        session = new MastraStdioSession();
+        await session.start();
+
+        const patchId = 'patch-e2e-1';
+        const proposeCommandId = 'cmd-propose-patch-e2e';
+        session.send({
+            id: proposeCommandId,
+            timestamp: new Date().toISOString(),
+            type: 'propose_patch',
+            payload: {
+                patchId,
+                title: 'demo patch',
+                diff: '*** Begin Patch\n*** End Patch\n',
+            },
+        });
+        const proposeForward = await session.waitFor(
+            (message) =>
+                message.type === 'propose_patch'
+                && typeof message.id === 'string'
+                && toRecord(message.payload).patchId === patchId,
+            5_000,
+        );
+        session.send({
+            type: 'propose_patch_response',
+            commandId: String(proposeForward.id),
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                patchId,
+            },
+        });
+        const proposeResponse = await session.waitFor(
+            (message) =>
+                message.type === 'propose_patch_response'
+                && message.commandId === proposeCommandId,
+            5_000,
+        );
+        expect(toRecord(proposeResponse.payload).success).toBe(true);
+        expect(toRecord(proposeResponse.payload).patchId).toBe(patchId);
+
+        const rejectCommandId = 'cmd-reject-patch-e2e';
+        session.send({
+            id: rejectCommandId,
+            timestamp: new Date().toISOString(),
+            type: 'reject_patch',
+            payload: {
+                patchId,
+                reason: 'not needed',
+            },
+        });
+        const rejectForward = await session.waitFor(
+            (message) =>
+                message.type === 'reject_patch'
+                && typeof message.id === 'string'
+                && toRecord(message.payload).patchId === patchId,
+            5_000,
+        );
+        session.send({
+            type: 'reject_patch_response',
+            commandId: String(rejectForward.id),
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                patchId,
+            },
+        });
+        const rejectResponse = await session.waitFor(
+            (message) =>
+                message.type === 'reject_patch_response'
+                && message.commandId === rejectCommandId,
+            5_000,
+        );
+        expect(toRecord(rejectResponse.payload).success).toBe(true);
+        expect(toRecord(rejectResponse.payload).patchId).toBe(patchId);
+    }, 30_000);
+
+    test('returns policy_gate_invalid_response when desktop returns mismatched response type', async () => {
+        session = new MastraStdioSession();
+        await session.start();
+
+        const commandId = 'cmd-list-dir-invalid-e2e';
+        session.send({
+            id: commandId,
+            timestamp: new Date().toISOString(),
+            type: 'list_dir',
+            payload: {
+                path: '/tmp',
+            },
+        });
+        const forwarded = await session.waitFor(
+            (message) =>
+                message.type === 'list_dir'
+                && typeof message.id === 'string'
+                && toRecord(message.payload).path === '/tmp',
+            5_000,
+        );
+        session.send({
+            type: 'read_file_response',
+            commandId: String(forwarded.id),
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                content: 'unexpected',
+            },
+        });
+
+        const response = await session.waitFor(
+            (message) =>
+                message.type === 'list_dir_response'
+                && message.commandId === commandId,
+            5_000,
+        );
+        const payload = toRecord(response.payload);
+        expect(payload.success).toBe(false);
+        expect(payload.error).toBe('policy_gate_invalid_response:read_file_response');
+    }, 30_000);
+
+    test('apply_patch maps stdin_closed to io_error when policy-gate transport closes', async () => {
+        session = new MastraStdioSession({
+            env: {
+                COWORKANY_POLICY_GATE_FORWARD_TIMEOUT_MS: '30000',
+                COWORKANY_POLICY_GATE_TIMEOUT_RETRY_COUNT: '0',
+            },
+        });
+        await session.start();
+
+        const commandId = 'cmd-apply-patch-close-e2e';
+        session.send({
+            id: commandId,
+            timestamp: new Date().toISOString(),
+            type: 'apply_patch',
+            payload: {
+                patchId: 'patch-apply-close-e2e',
+                diff: '*** Begin Patch\n*** End Patch\n',
+            },
+        });
+        await session.waitFor(
+            (message) =>
+                message.type === 'apply_patch'
+                && typeof message.id === 'string'
+                && toRecord(message.payload).patchId === 'patch-apply-close-e2e',
+            5_000,
+        );
+
+        session.closeStdin();
+
+        const response = await session.waitFor(
+            (message) =>
+                message.type === 'apply_patch_response'
+                && message.commandId === commandId,
+            8_000,
+        );
+        const payload = toRecord(response.payload);
+        expect(payload.patchId).toBe('patch-apply-close-e2e');
+        expect(payload.success).toBe(false);
+        expect(payload.errorCode).toBe('io_error');
+        expect(String(payload.error ?? '')).toContain('policy_gate_unavailable:stdin_closed');
+    }, 30_000);
 });

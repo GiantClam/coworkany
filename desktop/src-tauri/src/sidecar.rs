@@ -64,6 +64,33 @@ struct SidecarProxySettings {
 #[serde(rename_all = "camelCase")]
 struct SidecarLlmConfig {
     proxy: Option<SidecarProxySettings>,
+    provider: Option<String>,
+    anthropic: Option<SidecarProviderSettings>,
+    openrouter: Option<SidecarProviderSettings>,
+    openai: Option<SidecarProviderSettings>,
+    custom: Option<SidecarProviderSettings>,
+    profiles: Option<Vec<SidecarLlmProfile>>,
+    active_profile_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SidecarProviderSettings {
+    api_key: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    api_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SidecarLlmProfile {
+    id: Option<String>,
+    provider: Option<String>,
+    anthropic: Option<SidecarProviderSettings>,
+    openrouter: Option<SidecarProviderSettings>,
+    openai: Option<SidecarProviderSettings>,
+    custom: Option<SidecarProviderSettings>,
 }
 
 const STDERR_NOISE_LOG_INTERVAL: Duration = Duration::from_secs(30);
@@ -1177,6 +1204,7 @@ impl SidecarManager {
 
         Self::apply_singleton_env(&mut command, app_data_dir);
         Self::apply_proxy_env(&mut command, app_data_dir);
+        Self::apply_llm_env(&mut command, app_data_dir);
         command.spawn().map_err(SidecarError::from)
     }
 
@@ -1205,6 +1233,7 @@ impl SidecarManager {
                 .env("COWORKANY_APP_DATA_DIR", app_data_dir);
             Self::apply_singleton_env(&mut node_cmd, app_data_dir);
             Self::apply_proxy_env(&mut node_cmd, app_data_dir);
+            Self::apply_llm_env(&mut node_cmd, app_data_dir);
 
             return node_cmd.spawn().map_err(SidecarError::from);
         }
@@ -1225,6 +1254,7 @@ impl SidecarManager {
             .env("COWORKANY_APP_DATA_DIR", app_data_dir);
         Self::apply_singleton_env(&mut npx_cmd, app_data_dir);
         Self::apply_proxy_env(&mut npx_cmd, app_data_dir);
+        Self::apply_llm_env(&mut npx_cmd, app_data_dir);
 
         npx_cmd
             .spawn()
@@ -1240,6 +1270,7 @@ impl SidecarManager {
                     .env("COWORKANY_APP_DATA_DIR", app_data_dir);
                 Self::apply_singleton_env(&mut bun_cmd, app_data_dir);
                 Self::apply_proxy_env(&mut bun_cmd, app_data_dir);
+                Self::apply_llm_env(&mut bun_cmd, app_data_dir);
                 bun_cmd.spawn()
             })
             .map_err(SidecarError::from)
@@ -1368,10 +1399,226 @@ impl SidecarManager {
         proxy_url.to_string()
     }
 
-    fn proxy_from_llm_config(app_data_dir: &str) -> Option<(String, Option<String>)> {
+    fn load_llm_config(app_data_dir: &str) -> Option<SidecarLlmConfig> {
         let path = std::path::Path::new(app_data_dir).join("llm-config.json");
         let raw = fs::read_to_string(path).ok()?;
-        let config: SidecarLlmConfig = serde_json::from_str(&raw).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    fn normalize_model_id(provider: &str, model: &str) -> String {
+        const KNOWN_PREFIXES: [&str; 8] = [
+            "anthropic/",
+            "openai/",
+            "openrouter/",
+            "google/",
+            "xai/",
+            "groq/",
+            "deepseek/",
+            "mistral/",
+        ];
+        let normalized = model.trim();
+        if KNOWN_PREFIXES.iter().any(|prefix| normalized.starts_with(prefix)) {
+            return normalized.to_string();
+        }
+        match provider {
+            "anthropic" => format!("anthropic/{normalized}"),
+            "openrouter" => format!("openrouter/{normalized}"),
+            _ => format!("openai/{normalized}"),
+        }
+    }
+
+    fn openai_compatible_default(provider: &str) -> Option<(&'static str, &'static str)> {
+        match provider {
+            "openai" => Some(("https://api.openai.com/v1", "gpt-4o")),
+            "aiberm" => Some(("https://aiberm.com/v1", "gpt-5.3-codex")),
+            "nvidia" => Some((
+                "https://integrate.api.nvidia.com/v1",
+                "meta/llama-3.1-70b-instruct",
+            )),
+            "siliconflow" => Some(("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct")),
+            "gemini" => Some((
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+                "gemini-2.0-flash",
+            )),
+            "qwen" => Some((
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-plus",
+            )),
+            "minimax" => Some(("https://api.minimax.chat/v1", "MiniMax-Text-01")),
+            "kimi" => Some(("https://api.moonshot.cn/v1", "moonshot-v1-8k")),
+            _ => None,
+        }
+    }
+
+    fn apply_llm_env(command: &mut Command, app_data_dir: &str) {
+        let Some(config) = Self::load_llm_config(app_data_dir) else {
+            return;
+        };
+
+        let active_profile = config.profiles.as_ref().and_then(|profiles| {
+            let preferred_id = config.active_profile_id.as_deref().map(str::trim);
+            preferred_id
+                .and_then(|id| {
+                    profiles
+                        .iter()
+                        .find(|profile| profile.id.as_deref().map(str::trim) == Some(id))
+                })
+                .or_else(|| profiles.first())
+        });
+
+        let provider = active_profile
+            .and_then(|profile| profile.provider.as_deref())
+            .or(config.provider.as_deref())
+            .map(str::trim)
+            .filter(|provider| !provider.is_empty());
+        let Some(provider) = provider else {
+            return;
+        };
+
+        let provider_settings = match provider {
+            "anthropic" => active_profile
+                .and_then(|profile| profile.anthropic.as_ref())
+                .or(config.anthropic.as_ref()),
+            "openrouter" => active_profile
+                .and_then(|profile| profile.openrouter.as_ref())
+                .or(config.openrouter.as_ref()),
+            "custom" => active_profile
+                .and_then(|profile| profile.custom.as_ref())
+                .or(config.custom.as_ref()),
+            _ => active_profile
+                .and_then(|profile| profile.openai.as_ref())
+                .or(config.openai.as_ref()),
+        };
+
+        let Some(settings) = provider_settings else {
+            return;
+        };
+
+        let mut resolved_model: Option<String> = None;
+        match provider {
+            "anthropic" => {
+                if let Some(api_key) = settings
+                    .api_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    command.env("ANTHROPIC_API_KEY", api_key);
+                }
+                if let Some(model) = settings
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    resolved_model = Some(Self::normalize_model_id(provider, model));
+                }
+            }
+            "openrouter" => {
+                if let Some(api_key) = settings
+                    .api_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    command.env("OPENROUTER_API_KEY", api_key);
+                }
+                if let Some(model) = settings
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    resolved_model = Some(Self::normalize_model_id(provider, model));
+                }
+            }
+            "custom" => {
+                if let Some(api_key) = settings
+                    .api_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    let api_format = settings
+                        .api_format
+                        .as_deref()
+                        .map(str::trim)
+                        .unwrap_or("openai");
+                    if api_format.eq_ignore_ascii_case("anthropic") {
+                        command.env("ANTHROPIC_API_KEY", api_key);
+                    } else {
+                        command.env("OPENAI_API_KEY", api_key);
+                    }
+                }
+                if let Some(base_url) = settings
+                    .base_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    command.env("OPENAI_BASE_URL", base_url);
+                }
+                if let Some(model) = settings
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    let api_format = settings
+                        .api_format
+                        .as_deref()
+                        .map(str::trim)
+                        .unwrap_or("openai");
+                    let model_provider = if api_format.eq_ignore_ascii_case("anthropic") {
+                        "anthropic"
+                    } else {
+                        "openai"
+                    };
+                    resolved_model = Some(Self::normalize_model_id(model_provider, model));
+                }
+            }
+            openai_compatible_provider => {
+                if let Some(api_key) = settings
+                    .api_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    command.env("OPENAI_API_KEY", api_key);
+                }
+                if let Some((default_base_url, default_model)) =
+                    Self::openai_compatible_default(openai_compatible_provider)
+                {
+                    let base_url = settings
+                        .base_url
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(default_base_url);
+                    command.env("OPENAI_BASE_URL", base_url);
+                    let model = settings
+                        .model
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(default_model);
+                    resolved_model = Some(Self::normalize_model_id("openai", model));
+                }
+            }
+        }
+
+        if let Some(model_id) = resolved_model {
+            command.env("COWORKANY_MODEL", &model_id);
+            info!(
+                "Sidecar LLM runtime configured from llm-config: provider={} model={}",
+                provider,
+                model_id
+            );
+        }
+    }
+
+    fn proxy_from_llm_config(app_data_dir: &str) -> Option<(String, Option<String>)> {
+        let config = Self::load_llm_config(app_data_dir)?;
         let proxy = config.proxy?;
         if proxy.enabled != Some(true) {
             return None;
@@ -2721,6 +2968,62 @@ mod tests {
             Some(value) => std::env::set_var("COWORKANY_PROXY_URL", value),
             None => std::env::remove_var("COWORKANY_PROXY_URL"),
         }
+
+        let _ = fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[test]
+    fn apply_llm_env_uses_active_openai_compatible_profile() {
+        let app_data_dir = unique_temp_dir("sidecar-llm-config");
+        fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        fs::write(
+            app_data_dir.join("llm-config.json"),
+            r#"{
+                "provider": "aiberm",
+                "activeProfileId": "profile-aiberm",
+                "profiles": [
+                    {
+                        "id": "profile-anthropic",
+                        "provider": "anthropic",
+                        "anthropic": {
+                            "apiKey": "sk-ant-wrong",
+                            "model": "claude-sonnet-4-5"
+                        }
+                    },
+                    {
+                        "id": "profile-aiberm",
+                        "provider": "aiberm",
+                        "openai": {
+                            "apiKey": "sk-aiberm-real",
+                            "baseUrl": "https://aiberm.com/v1",
+                            "model": "gpt-5.3-codex"
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("write llm-config");
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_llm_env(&mut command, app_data_dir.to_str().expect("utf8 path"));
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("OPENAI_API_KEY"),
+            Some(&"sk-aiberm-real".to_string())
+        );
+        assert_eq!(
+            envs.get("OPENAI_BASE_URL"),
+            Some(&"https://aiberm.com/v1".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MODEL"),
+            Some(&"openai/gpt-5.3-codex".to_string())
+        );
+        assert!(
+            !envs.contains_key("ANTHROPIC_API_KEY"),
+            "active profile should decide provider key propagation"
+        );
 
         let _ = fs::remove_dir_all(&app_data_dir);
     }

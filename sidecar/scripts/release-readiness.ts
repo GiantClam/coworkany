@@ -1,10 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as net from 'net';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
     applyControlPlaneThresholdUpdateSuggestion,
     buildControlPlaneThresholdUpdateSuggestion,
+    classifyRealModelGateFailure,
     evaluateCanaryChecklistEvidence,
     evaluateSidecarDoctorReadiness,
     evaluateControlPlaneEvalReadiness,
@@ -18,6 +20,7 @@ import {
     summarizeControlPlaneEvalSummary,
     summarizeProductionReplayImportSummary,
     summarizeCanaryChecklistEvidence,
+    type RealModelProxyPreflight,
     type ReleaseReadinessReport,
     type ReleaseStageResult,
 } from '../src/release/readiness';
@@ -27,6 +30,7 @@ import { loadWorkspaceExtensionAllowlistPolicy } from '../src/extensions/workspa
 type CliOptions = {
     buildDesktop: boolean;
     realE2E: boolean;
+    realModelSmoke: boolean;
     appDataDir?: string;
     startupProfile?: string;
     doctorRequiredStatus?: 'healthy' | 'degraded' | 'blocked';
@@ -55,6 +59,8 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
     const options: CliOptions = {
         buildDesktop: false,
         realE2E: false,
+        realModelSmoke: process.env.COWORKANY_REAL_MODEL_SMOKE === '1'
+            || process.env.COWORKANY_REAL_MODEL_SMOKE === 'true',
         appDataDir: process.env.COWORKANY_APP_DATA_DIR || undefined,
         startupProfile: process.env.COWORKANY_STARTUP_PROFILE || undefined,
         doctorRequiredStatus: isDoctorRequiredStatus(process.env.COWORKANY_DOCTOR_REQUIRED_STATUS)
@@ -80,6 +86,9 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
                 break;
             case '--real-e2e':
                 options.realE2E = true;
+                break;
+            case '--real-model-smoke':
+                options.realModelSmoke = true;
                 break;
             case '--app-data-dir':
                 options.appDataDir = argv[index + 1];
@@ -208,6 +217,27 @@ function readEnabledToolpackIds(workspaceRoot: string): string[] {
     return Array.from(enabled).sort((left, right) => left.localeCompare(right));
 }
 
+function collectFailureOutput(stdout: string | null, stderr: string | null): string | undefined {
+    const merged = [stdout ?? '', stderr ?? '']
+        .join('\n')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    if (merged.length === 0) {
+        return undefined;
+    }
+    const keyLines = merged.filter((line) => /error:|failed|missing_api_key|unauthorized|timeout|econn|socket/i.test(line));
+    const selected = (keyLines.length > 0 ? keyLines : merged).slice(-6);
+    const excerpt = selected
+        .join(' | ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (excerpt.length <= 1200) {
+        return excerpt;
+    }
+    return `${excerpt.slice(0, 1197)}...`;
+}
+
 function runStage(input: {
     id: string;
     label: string;
@@ -215,6 +245,7 @@ function runStage(input: {
     command: string;
     args: string[];
     optional?: boolean;
+    env?: NodeJS.ProcessEnv;
 }): ReleaseStageResult {
     const startedAt = Date.now();
     const commandLine = [input.command, ...input.args].join(' ');
@@ -224,13 +255,25 @@ function runStage(input: {
 
     const result = spawnSync(input.command, input.args, {
         cwd: input.cwd,
-        stdio: 'inherit',
-        env: process.env,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+        env: {
+            ...process.env,
+            ...(input.env ?? {}),
+        },
     });
+    if (result.stdout) {
+        process.stdout.write(result.stdout);
+    }
+    if (result.stderr) {
+        process.stderr.write(result.stderr);
+    }
 
     const exitCode = result.status ?? (result.error ? 1 : 0);
     const status = exitCode === 0 ? 'passed' : input.optional ? 'skipped' : 'failed';
-    const note = result.error ? String(result.error.message || result.error) : undefined;
+    const note = result.error
+        ? String(result.error.message || result.error)
+        : (exitCode !== 0 ? collectFailureOutput(result.stdout, result.stderr) : undefined);
 
     return {
         id: input.id,
@@ -242,6 +285,212 @@ function runStage(input: {
         exitCode,
         optional: input.optional,
         note,
+    };
+}
+
+type RealModelProxyConfig = {
+    source: 'env' | 'llm-config' | 'none';
+    proxyUrl?: string;
+    bypass?: string;
+};
+
+function resolveRealModelProxyConfig(sidecarDir: string): RealModelProxyConfig {
+    const envProxyKeys = [
+        'COWORKANY_PROXY_URL',
+        'HTTPS_PROXY',
+        'https_proxy',
+        'HTTP_PROXY',
+        'http_proxy',
+        'ALL_PROXY',
+        'all_proxy',
+    ] as const;
+    for (const key of envProxyKeys) {
+        const value = process.env[key]?.trim();
+        if (value) {
+            return {
+                source: 'env',
+                proxyUrl: value,
+                bypass: process.env.NO_PROXY?.trim() || process.env.no_proxy?.trim(),
+            };
+        }
+    }
+
+    const configCandidates = [
+        path.join(sidecarDir, 'llm-config.json'),
+    ];
+    const homeDir = process.env.HOME?.trim();
+    if (homeDir) {
+        configCandidates.push(path.join(
+            homeDir,
+            'Library',
+            'Application Support',
+            'com.coworkany.desktop',
+            'llm-config.json',
+        ));
+    }
+
+    for (const candidatePath of configCandidates) {
+        if (!fs.existsSync(candidatePath)) {
+            continue;
+        }
+        try {
+            const root = JSON.parse(fs.readFileSync(candidatePath, 'utf-8')) as {
+                proxy?: {
+                    enabled?: boolean;
+                    url?: string;
+                    bypass?: string;
+                };
+            };
+            if (root.proxy?.enabled !== true) {
+                continue;
+            }
+            const proxyUrl = root.proxy.url?.trim();
+            if (!proxyUrl) {
+                continue;
+            }
+            return {
+                source: 'llm-config',
+                proxyUrl,
+                bypass: root.proxy.bypass?.trim(),
+            };
+        } catch {
+            continue;
+        }
+    }
+
+    return { source: 'none' };
+}
+
+function probeTcpReachability(
+    host: string,
+    port: number,
+    timeoutMs: number,
+): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        const socket = new net.Socket();
+        let settled = false;
+        const done = (result: { ok: boolean; latencyMs: number; error?: string }): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            socket.destroy();
+            resolve(result);
+        };
+
+        socket.setTimeout(timeoutMs);
+        socket.once('connect', () => {
+            done({
+                ok: true,
+                latencyMs: Date.now() - startedAt,
+            });
+        });
+        socket.once('timeout', () => {
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: `timeout after ${timeoutMs}ms`,
+            });
+        });
+        socket.once('error', (error) => {
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: String(error.message || error),
+            });
+        });
+        socket.connect(port, host);
+    });
+}
+
+async function runRealModelProxyPreflight(input: {
+    sidecarDir: string;
+    timeoutMs?: number;
+}): Promise<RealModelProxyPreflight> {
+    const timeoutMs = input.timeoutMs ?? 3000;
+    const proxyConfig = resolveRealModelProxyConfig(input.sidecarDir);
+    if (!proxyConfig.proxyUrl) {
+        return {
+            status: 'skipped',
+            source: proxyConfig.source,
+            timeoutMs,
+            findings: ['No proxy configured; skip proxy reachability precheck.'],
+            recommendations: [],
+        };
+    }
+
+    let parsed: URL;
+    try {
+        parsed = new URL(proxyConfig.proxyUrl);
+    } catch (error) {
+        return {
+            status: 'failed',
+            source: proxyConfig.source,
+            proxyUrl: proxyConfig.proxyUrl,
+            bypass: proxyConfig.bypass,
+            timeoutMs,
+            error: String(error),
+            findings: ['Proxy URL is invalid.'],
+            recommendations: [
+                'Fix proxy URL format in llm-config or proxy environment variables.',
+                'Re-run release:readiness:commercial after proxy URL is corrected.',
+            ],
+        };
+    }
+
+    const host = parsed.hostname;
+    const port = parsed.port
+        ? Number.parseInt(parsed.port, 10)
+        : (parsed.protocol === 'https:' || parsed.protocol.startsWith('socks') ? 443 : 80);
+
+    if (!host || !Number.isFinite(port) || port <= 0) {
+        return {
+            status: 'failed',
+            source: proxyConfig.source,
+            proxyUrl: proxyConfig.proxyUrl,
+            bypass: proxyConfig.bypass,
+            timeoutMs,
+            error: `invalid proxy endpoint host=${host || '<empty>'}, port=${String(parsed.port || port)}`,
+            findings: ['Proxy endpoint host or port is invalid.'],
+            recommendations: [
+                'Fix proxy host/port in llm-config or proxy environment variables.',
+                'Re-run release:readiness:commercial after endpoint validation passes.',
+            ],
+        };
+    }
+
+    const probe = await probeTcpReachability(host, port, timeoutMs);
+    const checkedAddress = `${host}:${port}`;
+    if (!probe.ok) {
+        return {
+            status: 'failed',
+            source: proxyConfig.source,
+            proxyUrl: proxyConfig.proxyUrl,
+            bypass: proxyConfig.bypass,
+            timeoutMs,
+            checkedAddress,
+            latencyMs: probe.latencyMs,
+            error: probe.error,
+            findings: ['Proxy endpoint is unreachable from current host.'],
+            recommendations: [
+                'Ensure proxy process/service is running and reachable.',
+                `Verify outbound route to ${checkedAddress} from this machine.`,
+                'Re-run release:readiness:commercial after proxy connectivity is restored.',
+            ],
+        };
+    }
+
+    return {
+        status: 'passed',
+        source: proxyConfig.source,
+        proxyUrl: proxyConfig.proxyUrl,
+        bypass: proxyConfig.bypass,
+        timeoutMs,
+        checkedAddress,
+        latencyMs: probe.latencyMs,
+        findings: ['Proxy endpoint TCP reachability check passed.'],
+        recommendations: [],
     };
 }
 
@@ -271,6 +520,8 @@ async function main(): Promise<void> {
         ?? (options.appDataDir ? 'healthy' : 'degraded');
 
     const stages: ReleaseStageResult[] = [];
+    let realModelProxyPreflight: RealModelProxyPreflight | undefined;
+    let realModelFailureClassification: ReturnType<typeof classifyRealModelGateFailure> | undefined;
 
     if (options.syncProductionReplays) {
         const syncArgs = ['run', 'eval:control-plane:sync-replays', '--', '--summary-out', productionReplayImportSummaryPath];
@@ -333,6 +584,8 @@ async function main(): Promise<void> {
                 'tests/mastra-scheduler-runtime.test.ts',
                 'tests/mastra-bridge.test.ts',
                 'tests/main-mastra-policy-gate.e2e.test.ts',
+                'tests/scheduled-full-chain.e2e.test.ts',
+                'tests/additional-commands-full-chain.e2e.test.ts',
                 'tests/sidecar-doctor.test.ts',
                 'tests/release-readiness.test.ts',
             ])],
@@ -378,6 +631,88 @@ async function main(): Promise<void> {
             ],
             optional: false,
         }));
+    }
+
+    if (options.realModelSmoke) {
+        const preflightStartedAt = Date.now();
+        realModelProxyPreflight = await runRealModelProxyPreflight({ sidecarDir });
+        const preflightPassed = realModelProxyPreflight.status !== 'failed';
+        const preflightNoteParts: string[] = [
+            `source=${realModelProxyPreflight.source}`,
+            `proxy=${realModelProxyPreflight.proxyUrl ?? 'not-configured'}`,
+        ];
+        if (realModelProxyPreflight.checkedAddress) {
+            preflightNoteParts.push(`checked=${realModelProxyPreflight.checkedAddress}`);
+        }
+        if (typeof realModelProxyPreflight.latencyMs === 'number') {
+            preflightNoteParts.push(`latency=${realModelProxyPreflight.latencyMs}ms`);
+        }
+        if (realModelProxyPreflight.error) {
+            preflightNoteParts.push(`error=${realModelProxyPreflight.error}`);
+        }
+        if (realModelProxyPreflight.findings.length > 0) {
+            preflightNoteParts.push(realModelProxyPreflight.findings.join('; '));
+        }
+        if (realModelProxyPreflight.recommendations.length > 0) {
+            preflightNoteParts.push(`actions=${realModelProxyPreflight.recommendations.join(' / ')}`);
+        }
+
+        stages.push({
+            id: 'sidecar-real-model-preflight',
+            label: 'Sidecar real model proxy preflight',
+            command: 'proxy tcp preflight',
+            cwd: sidecarDir,
+            durationMs: Date.now() - preflightStartedAt,
+            status: realModelProxyPreflight.status === 'failed' ? 'failed' : 'passed',
+            exitCode: preflightPassed ? 0 : 1,
+            optional: false,
+            note: preflightNoteParts.join(' | '),
+        });
+
+        if (!preflightPassed) {
+            realModelFailureClassification = classifyRealModelGateFailure({
+                preflight: realModelProxyPreflight,
+            });
+            stages.push({
+                id: 'sidecar-real-model-smoke',
+                label: 'Sidecar real model smoke',
+                command: `bun test tests/real-model-smoke.e2e.test.ts`,
+                cwd: sidecarDir,
+                durationMs: 0,
+                status: 'skipped',
+                exitCode: 1,
+                optional: false,
+                note: `Skipped due to preflight failure category=${realModelFailureClassification?.category ?? 'proxy_unreachable'}; ${realModelFailureClassification?.summary ?? ''}`,
+            });
+        } else {
+            const realModelStage = runStage({
+                id: 'sidecar-real-model-smoke',
+                label: 'Sidecar real model smoke',
+                cwd: sidecarDir,
+                command: bin('bun'),
+                args: ['test', 'tests/real-model-smoke.e2e.test.ts'],
+                env: {
+                    COWORKANY_REQUIRE_REAL_MODEL_SMOKE: '1',
+                },
+                optional: false,
+            });
+            if (realModelStage.status === 'failed') {
+                realModelFailureClassification = classifyRealModelGateFailure({
+                    stageNote: realModelStage.note,
+                    preflight: realModelProxyPreflight,
+                });
+                if (realModelFailureClassification) {
+                    const actionSummary = realModelFailureClassification.recommendations.join(' / ');
+                    realModelStage.note = [
+                        `category=${realModelFailureClassification.category}`,
+                        `summary=${realModelFailureClassification.summary}`,
+                        `evidence=${realModelFailureClassification.evidence}`,
+                        `actions=${actionSummary}`,
+                    ].join(' | ');
+                }
+            }
+            stages.push(realModelStage);
+        }
     }
 
     const observability = inspectObservability({
@@ -462,6 +797,7 @@ async function main(): Promise<void> {
         requestedOptions: {
             buildDesktop: options.buildDesktop,
             realE2E: options.realE2E,
+            realModelSmoke: options.realModelSmoke,
             appDataDir: options.appDataDir,
             startupProfile: options.startupProfile,
             doctorRequiredStatus,
@@ -493,6 +829,12 @@ async function main(): Promise<void> {
         canaryEvidenceGate,
         observability,
         checklist,
+        realModelGate: options.realModelSmoke
+            ? {
+                preflight: realModelProxyPreflight,
+                failureClassification: realModelFailureClassification,
+            }
+            : undefined,
     };
 
     fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf-8');
@@ -587,6 +929,12 @@ async function main(): Promise<void> {
         sidecarDoctorGate,
         canaryEvidence,
         canaryEvidenceGate,
+        realModelGate: options.realModelSmoke
+            ? {
+                preflight: realModelProxyPreflight,
+                failureClassification: realModelFailureClassification,
+            }
+            : undefined,
     };
 
     fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf-8');

@@ -165,12 +165,48 @@ export type ObservabilitySummary = {
     };
 };
 
+export type RealModelProxyPreflightStatus = 'passed' | 'failed' | 'skipped';
+
+export type RealModelProxyPreflightSource = 'env' | 'llm-config' | 'none';
+
+export type RealModelProxyPreflight = {
+    status: RealModelProxyPreflightStatus;
+    source: RealModelProxyPreflightSource;
+    proxyUrl?: string;
+    bypass?: string;
+    timeoutMs: number;
+    latencyMs?: number;
+    checkedAddress?: string;
+    error?: string;
+    findings: string[];
+    recommendations: string[];
+};
+
+export type RealModelGateFailureCategory =
+    | 'proxy_unreachable'
+    | 'proxy_tls_certificate'
+    | 'provider_missing_api_key'
+    | 'provider_auth'
+    | 'provider_model_not_found'
+    | 'provider_rate_limited'
+    | 'network_connectivity'
+    | 'timeout'
+    | 'unknown';
+
+export type RealModelGateFailureClassification = {
+    category: RealModelGateFailureCategory;
+    summary: string;
+    evidence: string;
+    recommendations: string[];
+};
+
 export type ReleaseReadinessReport = {
     generatedAt: string;
     repositoryRoot: string;
     requestedOptions: {
         buildDesktop: boolean;
         realE2E: boolean;
+        realModelSmoke?: boolean;
         appDataDir?: string;
         startupProfile?: string;
         doctorRequiredStatus: 'healthy' | 'degraded' | 'blocked';
@@ -200,6 +236,10 @@ export type ReleaseReadinessReport = {
     canaryEvidence?: CanaryChecklistEvidenceSummary;
     canaryEvidenceGate?: CanaryChecklistEvidenceGate;
     observability: ObservabilitySummary;
+    realModelGate?: {
+        preflight?: RealModelProxyPreflight;
+        failureClassification?: RealModelGateFailureClassification;
+    };
 };
 
 type ControlPlaneThresholdConfig = {
@@ -273,6 +313,194 @@ function listJsonlEntries(filePath: string): number {
         entries += 1;
     }
     return entries;
+}
+
+function classifyFailureCategoryFromText(text: string): RealModelGateFailureCategory {
+    const normalized = text.toLowerCase();
+    if (normalized.includes('issuer certificate') || normalized.includes('self signed certificate')) {
+        return 'proxy_tls_certificate';
+    }
+    if (
+        normalized.includes('missing_api_key')
+        || /missing\s+[a-z_]+_api_key/.test(normalized)
+    ) {
+        return 'provider_missing_api_key';
+    }
+    if (
+        normalized.includes('socket connection was closed unexpectedly')
+        || normalized.includes('proxy connect')
+        || normalized.includes('proxy error')
+        || normalized.includes('econnrefused')
+        || normalized.includes('connect econnrefused')
+    ) {
+        return 'proxy_unreachable';
+    }
+    if (
+        normalized.includes('unauthorized')
+        || normalized.includes('authentication')
+        || normalized.includes('invalid api key')
+        || normalized.includes('status 401')
+        || normalized.includes(' 401 ')
+    ) {
+        return 'provider_auth';
+    }
+    if (
+        normalized.includes('model_not_found')
+        || normalized.includes('unknown model')
+        || normalized.includes('not found')
+        || normalized.includes('status 404')
+        || normalized.includes(' 404 ')
+    ) {
+        return 'provider_model_not_found';
+    }
+    if (
+        normalized.includes('rate limit')
+        || normalized.includes('quota')
+        || normalized.includes('status 429')
+        || normalized.includes(' 429 ')
+    ) {
+        return 'provider_rate_limited';
+    }
+    if (normalized.includes('timed out') || normalized.includes('timeout')) {
+        return 'timeout';
+    }
+    if (
+        normalized.includes('enotfound')
+        || normalized.includes('eai_again')
+        || normalized.includes('dns')
+        || normalized.includes('fetch failed')
+        || normalized.includes('network')
+        || normalized.includes('connect')
+    ) {
+        return 'network_connectivity';
+    }
+    return 'unknown';
+}
+
+function recommendationsForFailureCategory(category: RealModelGateFailureCategory): string[] {
+    switch (category) {
+        case 'proxy_unreachable':
+            return [
+                'Verify proxy process is running and listening on configured host/port.',
+                'Verify COWORKANY_PROXY_URL/HTTPS_PROXY points to reachable address from this host.',
+                'Retry release:readiness:commercial after proxy connectivity is restored.',
+            ];
+        case 'proxy_tls_certificate':
+            return [
+                'Install enterprise/interception CA certificate into runtime trust store.',
+                'For diagnostic only, temporarily set NODE_TLS_REJECT_UNAUTHORIZED=0 to confirm TLS root cause.',
+                'Retry release:readiness:commercial after certificate trust is fixed.',
+            ];
+        case 'provider_missing_api_key':
+            return [
+                'Set required provider API key (for example OPENAI_API_KEY or ANTHROPIC_API_KEY).',
+                'Confirm active llm profile/provider matches configured key.',
+                'Retry release:readiness:commercial after key injection is verified.',
+            ];
+        case 'provider_auth':
+            return [
+                'Validate provider API key, org/project binding, and account status.',
+                'Rotate key and reconfigure secret if token is revoked.',
+                'Retry release:readiness:commercial after auth verification passes.',
+            ];
+        case 'provider_model_not_found':
+            return [
+                'Verify COWORKANY_MODEL exists for current provider account and region.',
+                'Switch to an available model id in active llm profile.',
+                'Retry release:readiness:commercial after model route is corrected.',
+            ];
+        case 'provider_rate_limited':
+            return [
+                'Increase provider quota or switch to higher-capacity key/project.',
+                'Reduce concurrent smoke traffic and rerun gate.',
+                'Retry release:readiness:commercial after rate limit pressure is resolved.',
+            ];
+        case 'network_connectivity':
+            return [
+                'Verify DNS/network egress from host to provider endpoint.',
+                'Check firewall/VPN policy and corporate outbound rules.',
+                'Retry release:readiness:commercial once network path is stable.',
+            ];
+        case 'timeout':
+            return [
+                'Check proxy/provider latency and packet loss.',
+                'Re-run gate when network latency is back to normal.',
+                'If persistent, capture provider trace and escalate with timestamp.',
+            ];
+        case 'unknown':
+        default:
+            return [
+                'Inspect stage stderr/stdout in release readiness logs.',
+                'Reproduce with bun test tests/real-model-smoke.e2e.test.ts for focused diagnosis.',
+                'Classify and codify new signature in readiness classifier if recurring.',
+            ];
+    }
+}
+
+function summaryForFailureCategory(category: RealModelGateFailureCategory): string {
+    switch (category) {
+        case 'proxy_unreachable':
+            return 'Proxy connectivity failed before or during real-model call.';
+        case 'proxy_tls_certificate':
+            return 'TLS certificate trust failed on proxy/provider route.';
+        case 'provider_missing_api_key':
+            return 'Provider API key is missing for selected model/provider.';
+        case 'provider_auth':
+            return 'Provider authentication was rejected.';
+        case 'provider_model_not_found':
+            return 'Configured model is unavailable for the provider account.';
+        case 'provider_rate_limited':
+            return 'Provider request was rate-limited or quota-limited.';
+        case 'network_connectivity':
+            return 'Network path to provider endpoint is unstable or unreachable.';
+        case 'timeout':
+            return 'Real-model gate timed out before successful completion.';
+        case 'unknown':
+        default:
+            return 'Real-model gate failed with uncategorized error.';
+    }
+}
+
+function summarizeFailureEvidence(text: string): string {
+    const normalized = text.trim();
+    if (!normalized) {
+        return '';
+    }
+    const lines = normalized
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    const keyLines = lines.filter((line) => /error:|missing_api_key|unauthorized|model_not_found|rate limit|timeout|socket|econn/i.test(line));
+    const chosen = (keyLines.length > 0 ? keyLines[keyLines.length - 1] : lines[lines.length - 1]) ?? normalized;
+    if (chosen.length <= 600) {
+        return chosen;
+    }
+    return `${chosen.slice(0, 597)}...`;
+}
+
+export function classifyRealModelGateFailure(input: {
+    stageNote?: string;
+    preflight?: RealModelProxyPreflight;
+}): RealModelGateFailureClassification | undefined {
+    const evidence = (input.stageNote ?? '').trim();
+    if (!evidence && input.preflight?.status !== 'failed') {
+        return undefined;
+    }
+
+    let category: RealModelGateFailureCategory;
+    if (input.preflight?.status === 'failed') {
+        const normalizedError = (input.preflight.error ?? '').toLowerCase();
+        category = normalizedError.includes('certificate') ? 'proxy_tls_certificate' : 'proxy_unreachable';
+    } else {
+        category = classifyFailureCategoryFromText(evidence);
+    }
+
+    return {
+        category,
+        summary: summaryForFailureCategory(category),
+        evidence: summarizeFailureEvidence(evidence || String(input.preflight?.error ?? 'real-model proxy preflight failed')),
+        recommendations: recommendationsForFailureCategory(category),
+    };
 }
 
 export function createDefaultControlPlaneEvalThresholds(): ControlPlaneEvalThresholds {
@@ -849,6 +1077,7 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
     lines.push('## Requested Options');
     lines.push(`- Build desktop: ${report.requestedOptions.buildDesktop ? 'yes' : 'no'}`);
     lines.push(`- Real E2E: ${report.requestedOptions.realE2E ? 'yes' : 'no'}`);
+    lines.push(`- Real model smoke: ${report.requestedOptions.realModelSmoke ? 'yes' : 'no'}`);
     lines.push(`- Doctor required status: ${report.requestedOptions.doctorRequiredStatus}`);
     lines.push(`- Canary evidence path: ${report.requestedOptions.canaryEvidencePath ?? 'not provided'}`);
     lines.push(`- Require canary evidence: ${report.requestedOptions.requireCanaryEvidence ? 'yes' : 'no'}`);
@@ -928,6 +1157,41 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
         lines.push('## Sidecar Doctor');
         lines.push(`- Overall status: ${report.sidecarDoctor.overallStatus}`);
         lines.push(`- Required overall status: ${report.sidecarDoctorGate?.requiredOverallStatus ?? 'healthy'}`);
+        lines.push('');
+    }
+
+    if (report.realModelGate?.preflight || report.realModelGate?.failureClassification) {
+        lines.push('## Real-Model Gate Diagnosis');
+        if (report.realModelGate.preflight) {
+            const preflight = report.realModelGate.preflight;
+            lines.push(`- Proxy preflight status: ${preflight.status}`);
+            lines.push(`- Proxy source: ${preflight.source}`);
+            lines.push(`- Proxy URL: ${preflight.proxyUrl ?? 'not configured'}`);
+            if (preflight.checkedAddress) {
+                lines.push(`- Proxy checked address: ${preflight.checkedAddress}`);
+            }
+            if (typeof preflight.latencyMs === 'number') {
+                lines.push(`- Proxy latency: ${preflight.latencyMs}ms`);
+            }
+            if (preflight.error) {
+                lines.push(`- Proxy preflight error: ${preflight.error}`);
+            }
+            for (const finding of preflight.findings) {
+                lines.push(`- Preflight finding: ${finding}`);
+            }
+            for (const recommendation of preflight.recommendations) {
+                lines.push(`- Preflight action: ${recommendation}`);
+            }
+        }
+        if (report.realModelGate.failureClassification) {
+            const classification = report.realModelGate.failureClassification;
+            lines.push(`- Failure category: ${classification.category}`);
+            lines.push(`- Failure summary: ${classification.summary}`);
+            lines.push(`- Failure evidence: ${classification.evidence}`);
+            for (const recommendation of classification.recommendations) {
+                lines.push(`- Next action: ${recommendation}`);
+            }
+        }
         lines.push('');
     }
 

@@ -17,6 +17,7 @@ const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-4-5';
 const PROVIDER_KEY_MAP: Record<string, string> = {
     anthropic: 'ANTHROPIC_API_KEY',
     openai: 'OPENAI_API_KEY',
+    aiberm: 'OPENAI_API_KEY',
     google: 'GOOGLE_GENERATIVE_AI_API_KEY',
     xai: 'XAI_API_KEY',
     groq: 'GROQ_API_KEY',
@@ -68,11 +69,6 @@ export async function handleUserMessage(
             type: 'error',
             runId,
             message: `missing_api_key:${missingApiKey}`,
-        });
-        sendToDesktop({
-            type: 'complete',
-            runId,
-            finishReason: 'error',
         });
         return { runId };
     }

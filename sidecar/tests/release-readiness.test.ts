@@ -5,6 +5,7 @@ import * as path from 'path';
 import {
     buildControlPlaneThresholdUpdateSuggestion,
     applyControlPlaneThresholdUpdateSuggestion,
+    classifyRealModelGateFailure,
     createDefaultControlPlaneEvalThresholds,
     createDefaultCanaryChecklist,
     evaluateControlPlaneEvalReadiness,
@@ -195,6 +196,25 @@ describe('release readiness helpers', () => {
                 },
             },
             checklist: createDefaultCanaryChecklist(),
+            realModelGate: {
+                preflight: {
+                    status: 'failed',
+                    source: 'env',
+                    proxyUrl: 'http://127.0.0.1:7890',
+                    timeoutMs: 3000,
+                    checkedAddress: '127.0.0.1:7890',
+                    latencyMs: 26,
+                    error: 'connect ECONNREFUSED 127.0.0.1:7890',
+                    findings: ['Proxy endpoint is unreachable from current host.'],
+                    recommendations: ['Ensure proxy process/service is running and reachable.'],
+                },
+                failureClassification: {
+                    category: 'proxy_unreachable',
+                    summary: 'Proxy connectivity failed before or during real-model call.',
+                    evidence: 'connect ECONNREFUSED 127.0.0.1:7890',
+                    recommendations: ['Ensure proxy process/service is running and reachable.'],
+                },
+            },
         });
 
         expect(markdown).toContain('# Release Readiness Report');
@@ -221,9 +241,38 @@ describe('release readiness helpers', () => {
         expect(markdown).toContain('## Sidecar Doctor');
         expect(markdown).toContain('Overall status: healthy');
         expect(markdown).toContain('Required overall status: healthy');
+        expect(markdown).toContain('## Real-Model Gate Diagnosis');
+        expect(markdown).toContain('Proxy preflight status: failed');
+        expect(markdown).toContain('Failure category: proxy_unreachable');
         expect(markdown).toContain('## Canary Checklist');
         expect(markdown).toContain('Observability');
         expect(markdown).toContain('No appDataDir provided');
+    });
+
+    test('classifies real-model failures into actionable categories', () => {
+        expect(classifyRealModelGateFailure({
+            stageNote: 'real model smoke failed: socket connection was closed unexpectedly',
+        })?.category).toBe('proxy_unreachable');
+
+        expect(classifyRealModelGateFailure({
+            stageNote: 'provider request failed with status 401 unauthorized',
+        })?.category).toBe('provider_auth');
+
+        expect(classifyRealModelGateFailure({
+            stageNote: 'missing_api_key:ANTHROPIC_API_KEY',
+        })?.category).toBe('provider_missing_api_key');
+
+        expect(classifyRealModelGateFailure({
+            preflight: {
+                status: 'failed',
+                source: 'env',
+                proxyUrl: 'http://127.0.0.1:7890',
+                timeoutMs: 3000,
+                error: 'connect ECONNREFUSED 127.0.0.1:7890',
+                findings: [],
+                recommendations: [],
+            },
+        })?.category).toBe('proxy_unreachable');
     });
 
     test('summarizes control-plane eval metrics from json output', () => {

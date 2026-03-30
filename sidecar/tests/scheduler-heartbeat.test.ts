@@ -39,6 +39,16 @@ describe('SCH-02: 文件监控（收敛后结构能力）', () => {
         expect(parsed?.recurrence).toBeUndefined();
         expect(parsed?.executeAt.toISOString()).toBe('2026-03-30T10:10:00.000Z');
     });
+
+    test('detectScheduledIntent 可解析带路由封装的中文定时任务', () => {
+        const now = new Date('2026-03-30T00:00:00.000Z');
+        const parsed = detectScheduledIntent('原始任务：早上3点关机\n用户路由：chat', now);
+        expect(parsed).toBeDefined();
+        expect(parsed?.taskQuery).toBe('关机');
+        expect(parsed!.executeAt.getTime()).toBeGreaterThan(now.getTime());
+        expect(parsed!.executeAt.getHours()).toBe(3);
+        expect(parsed!.executeAt.getMinutes()).toBe(0);
+    });
 });
 
 describe('SCH-03: Webhook 触发（收敛后链式调度能力）', () => {

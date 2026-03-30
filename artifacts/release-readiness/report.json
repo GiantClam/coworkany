@@ -1,9 +1,10 @@
 {
-  "generatedAt": "2026-03-30T08:10:42.692Z",
+  "generatedAt": "2026-03-30T08:44:34.825Z",
   "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
   "requestedOptions": {
     "buildDesktop": false,
     "realE2E": false,
+    "realModelSmoke": false,
     "doctorRequiredStatus": "degraded",
     "canaryEvidencePath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json",
     "requireCanaryEvidence": false,
@@ -17,7 +18,7 @@
       "label": "Control-plane eval suite",
       "command": "bun run eval:control-plane --out /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 1047,
+      "durationMs": 1114,
       "status": "passed",
       "exitCode": 0
     },
@@ -26,7 +27,7 @@
       "label": "Sidecar typecheck",
       "command": "npm run typecheck",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 1643,
+      "durationMs": 1895,
       "status": "passed",
       "exitCode": 0
     },
@@ -35,7 +36,7 @@
       "label": "Sidecar stable regression suite",
       "command": "npm run test:stable",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 198,
+      "durationMs": 133,
       "status": "passed",
       "exitCode": 0
     },
@@ -44,7 +45,7 @@
       "label": "Sidecar release gate tests",
       "command": "bun test tests/phase6-final-validation.test.ts tests/workspace-commands.test.ts tests/ipc-bridge.test.ts tests/mastra-entrypoint.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts tests/sidecar-doctor.test.ts tests/release-readiness.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 1018,
+      "durationMs": 1056,
       "status": "passed",
       "exitCode": 0
     },
@@ -53,7 +54,7 @@
       "label": "Desktop typecheck",
       "command": "npx tsc --noEmit",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 2970,
+      "durationMs": 3198,
       "status": "passed",
       "exitCode": 0
     },
@@ -62,7 +63,7 @@
       "label": "Desktop acceptance suite (single-path compatible)",
       "command": "bun test tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 303,
+      "durationMs": 297,
       "status": "passed",
       "exitCode": 0
     },
