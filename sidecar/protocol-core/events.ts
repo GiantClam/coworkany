@@ -98,6 +98,7 @@ export type ChatMessagePayload = {
 };
 
 export type TextDeltaPayload = {
+    delta?: string;
     text?: string;
     content?: string;
     messageId?: string;

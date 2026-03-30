@@ -284,4 +284,49 @@ describe('task event store hydration', () => {
         expect(created?.currentUserAction?.id).toBe('req-3');
         expect(active).toBeUndefined();
     });
+
+    test('hydrates historical scheduled sessions by inferring taskMode from scheduled event signals', () => {
+        useTaskEventStore.getState().hydrate({
+            sessions: [
+                makeSession({
+                    taskId: 'task-scheduled-hydrate',
+                    title: '早上3 点关机',
+                    status: 'finished',
+                    taskMode: undefined,
+                    events: [
+                        {
+                            id: 'started',
+                            taskId: 'task-scheduled-hydrate',
+                            sequence: 1,
+                            type: 'TASK_STARTED',
+                            timestamp: '2026-03-31T00:01:00.000Z',
+                            payload: {
+                                title: '早上3 点关机',
+                                context: {
+                                    userQuery: '原始任务：早上3 点关机\n用户路由：chat',
+                                    scheduled: true,
+                                },
+                            },
+                        },
+                        {
+                            id: 'finished',
+                            taskId: 'task-scheduled-hydrate',
+                            sequence: 2,
+                            type: 'TASK_FINISHED',
+                            timestamp: '2026-03-31T00:01:01.000Z',
+                            payload: {
+                                summary: '已安排在 03/31 03:00:00 执行：早上3 点关机。',
+                                finishReason: 'scheduled',
+                            },
+                        },
+                    ],
+                }),
+            ],
+            activeTaskId: 'task-scheduled-hydrate',
+        });
+
+        const session = useTaskEventStore.getState().getSession('task-scheduled-hydrate');
+        expect(session?.taskMode).toBe('scheduled_task');
+        expect(session?.status).toBe('finished');
+    });
 });

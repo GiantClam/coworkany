@@ -62,6 +62,46 @@ function makeCanonicalMessage(overrides: Partial<CanonicalTaskMessage> & Pick<Ca
 }
 
 describe('scheduled timeline rendering', () => {
+    test('renders scheduled summary and task card even when only TASK_STARTED + TASK_FINISHED arrive', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'scheduled_task',
+            title: '早上3点关机',
+            events: [
+                makeEvent({
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    payload: {
+                        title: '早上3点关机',
+                        context: {
+                            displayText: '早上3点关机',
+                            userQuery: '原始任务：早上3点关机\n用户路由：chat',
+                        },
+                    },
+                }),
+                makeEvent({
+                    sequence: 2,
+                    type: 'TASK_FINISHED',
+                    payload: {
+                        summary: '已安排在 03/31 03:00:00 执行：早上3点关机。',
+                        finishReason: 'scheduled',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const turns = extractAssistantTurns(result.items);
+        const taskCards = turns.map((turn) => turn.taskCard).filter(Boolean);
+        const assistantMessages = extractAssistantMessages(result.items);
+
+        expect(turns.length).toBeGreaterThan(0);
+        expect(taskCards).toHaveLength(1);
+        expect(taskCards[0]?.status).toBe('finished');
+        expect(taskCards[0]?.result?.summary).toContain('03/31 03:00:00');
+        expect(assistantMessages.some((content) => content.includes('03/31 03:00:00'))).toBe(true);
+    });
+
     test('hides scheduled internal user echoes and research thinking noise', () => {
         const session = makeSession({
             events: [

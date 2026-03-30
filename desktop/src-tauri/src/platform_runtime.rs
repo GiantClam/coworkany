@@ -249,10 +249,7 @@ pub fn build_platform_runtime_context(
         app_data_dir: resolve_app_data_dir(app_handle),
         shell: detect_shell(),
         sidecar_launch_mode: sidecar_launch_mode.map(str::to_string),
-        python: binary_info(
-            None,
-            Some("not_required_in_mastra_single_process"),
-        ),
+        python: binary_info(None, Some("not_required_in_mastra_single_process")),
         skillhub: binary_info(skillhub, Some("path_lookup")),
         managed_services: ["rag-service", "browser-use-service"]
             .into_iter()
@@ -338,8 +335,8 @@ pub fn build_runtime_snapshot(
             RuntimeDependencyStatus {
                 id: "browser-use-service".to_string(),
                 name: "Browser Smart Mode".to_string(),
-                description:
-                    "Optional browser automation capability (Python sidecar retired).".to_string(),
+                description: "Optional browser automation capability (Python sidecar retired)."
+                    .to_string(),
                 installed: true,
                 ready: true,
                 running: browser_running,
@@ -356,7 +353,8 @@ pub fn build_runtime_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        ManagedServiceCapability, PlatformRuntimeContext, RuntimeBinaryInfo, RuntimeDependencyStatus,
+        ManagedServiceCapability, PlatformRuntimeContext, RuntimeBinaryInfo,
+        RuntimeDependencyStatus,
     };
 
     #[test]

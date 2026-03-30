@@ -45,6 +45,77 @@ async function readActiveSessionSnapshot(page: any) {
     });
 }
 
+async function ensureTaskListVisible(page: any) {
+    const taskList = page.locator('.task-list').first();
+    const isVisible = await taskList.isVisible().catch(() => false);
+    if (isVisible) {
+        return taskList;
+    }
+
+    const toggle = page.getByRole('button', { name: /Tasks|任务/ }).first();
+    if (await toggle.isVisible().catch(() => false)) {
+        await toggle.click();
+    }
+    await expect(taskList).toBeVisible({ timeout: 10_000 });
+    return taskList;
+}
+
+function buildAibermSeededLlmConfigFromEnv() {
+    const apiKey = process.env.E2E_AIBERM_API_KEY?.trim();
+    if (!apiKey) {
+        return null;
+    }
+
+    const profileId = 'desktop-message-protocol-regression-aiberm';
+    const model = process.env.TEST_MODEL_ID?.trim() || 'gpt-5.3-codex';
+    const baseUrl = process.env.E2E_AIBERM_BASE_URL?.trim() || 'https://aiberm.com/v1';
+
+    return {
+        provider: 'aiberm',
+        activeProfileId: profileId,
+        maxHistoryMessages: 20,
+        profiles: [
+            {
+                id: profileId,
+                name: 'Aiberm Desktop Protocol Regression',
+                provider: 'aiberm',
+                verified: true,
+                openai: {
+                    apiKey,
+                    baseUrl,
+                    model,
+                },
+            },
+        ],
+    } as const;
+}
+
+async function seedAibermLlmConfigIfAvailable(page: any): Promise<boolean> {
+    const config = buildAibermSeededLlmConfigFromEnv();
+    if (!config) {
+        return false;
+    }
+
+    const seededProvider = await page.evaluate(async (input) => {
+        const tauriInternals = (window as Window & {
+            __TAURI_INTERNALS__?: {
+                invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+            };
+        }).__TAURI_INTERNALS__;
+        if (!tauriInternals?.invoke) {
+            throw new Error('TAURI invoke bridge is unavailable');
+        }
+
+        await tauriInternals.invoke('save_llm_settings', { input });
+        const saved = await tauriInternals.invoke('get_llm_settings', {});
+        const payload = (saved as { payload?: { provider?: string } })?.payload;
+        return typeof payload?.provider === 'string' ? payload.provider : null;
+    }, config);
+
+    expect(seededProvider, 'full-chain regression should run with seeded Aiberm provider when E2E_AIBERM_API_KEY is present').toBe('aiberm');
+    return true;
+}
+
 function buildProtocolRegressionSnapshot() {
     const finalSummary = '已从 skillhub 安装并启用技能 `skill-vetter`。';
     const latestFollowUp = '从 skillhub 中安装 skill-vetter';
@@ -157,6 +228,219 @@ test.describe('desktop message protocol regression', () => {
             timeout: 20_000,
             message: 'desktop status chip should leave idle and show a pending/running state while the reply is in progress',
         }).toMatch(/等待模型响应|正在调用|进行中|Waiting for model response|Using |In progress/);
+    });
+
+    test('shows scheduled confirmation in timeline and sidebar after desktop submit', async ({ page }) => {
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(15_000);
+
+        const input = await findChatInput(page);
+        await input.fill('早上3 点关机');
+        await input.press('Enter');
+
+        await expect.poll(async () => {
+            const snapshot = await readActiveSessionSnapshot(page);
+            return snapshot?.messages.some((message: any) =>
+                message.role === 'assistant'
+                && String(message.content ?? '').includes('已安排在')
+                && String(message.content ?? '').includes('执行')
+            ) ?? false;
+        }, {
+            timeout: 60_000,
+            message: 'active session should include the scheduled confirmation assistant message',
+        }).toBe(true);
+
+        await expect(page.getByRole('heading', { name: /早上3\s*点关机/ })).toBeVisible({
+            timeout: 30_000,
+        });
+        await expect(page.getByRole('heading', { name: /How can I help you today\?/ })).toHaveCount(0);
+
+        await ensureTaskListVisible(page);
+        await expect.poll(async () => {
+            const inTaskList = await page
+                .locator('.task-list .session-item', { hasText: /早上3\s*点关机/ })
+                .first()
+                .isVisible()
+                .catch(() => false);
+            const inWorkspaceSessions = await page
+                .locator('.workspace-sessions .session-item', { hasText: /早上3\s*点关机/ })
+                .first()
+                .isVisible()
+                .catch(() => false);
+            return inTaskList || inWorkspaceSessions;
+        }, {
+            timeout: 30_000,
+            message: 'scheduled task should be visible in sidebar (task list or workspace section)',
+        }).toBe(true);
+    });
+
+    test('@regression renders real assistant timeline reply after send_task_message (full chain)', async ({ page, tauriLogs }) => {
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(15_000);
+        const seededAibermConfig = await seedAibermLlmConfigIfAvailable(page);
+
+        const input = await findChatInput(page);
+        const prompt = '请用一句中文回复“桌面端回复回归验证通过”，不要执行命令或调用工具。';
+        tauriLogs.setBaseline();
+
+        await input.fill(prompt);
+        await input.press('Enter');
+
+        let sawTextDelta = false;
+        let sawTaskFailed = false;
+        let latestAssistantContent = '';
+        const start = Date.now();
+
+        while (Date.now() - start < 120_000) {
+            await page.waitForTimeout(2_000);
+            const logs = tauriLogs.getRawSinceBaseline();
+            if (!sawTextDelta && logs.includes('"type":"TEXT_DELTA"')) {
+                sawTextDelta = true;
+            }
+            if (!sawTaskFailed && logs.includes('"type":"TASK_FAILED"')) {
+                sawTaskFailed = true;
+            }
+
+            const snapshot = await readActiveSessionSnapshot(page);
+            const assistantMessages = (snapshot?.messages ?? [])
+                .filter((message: any) => message.role === 'assistant')
+                .map((message: any) => String(message.content ?? '').trim())
+                .filter((content: string) => content.length > 0);
+            if (assistantMessages.length > 0) {
+                latestAssistantContent = assistantMessages[assistantMessages.length - 1] ?? '';
+            }
+
+            if (sawTextDelta && latestAssistantContent.length > 0) {
+                break;
+            }
+        }
+
+        const postLogs = tauriLogs.getRawSinceBaseline();
+        const externalDependencyFailure = sawTaskFailed && (
+            postLogs.includes('missing_api_key')
+            || postLogs.includes('ANTHROPIC_API_KEY')
+            || postLogs.includes('OPENAI_API_KEY')
+            || postLogs.includes('OPENROUTER_API_KEY')
+            || postLogs.includes('E2E_AIBERM_API_KEY')
+            || postLogs.includes('Provider returned status 401')
+            || postLogs.includes('rate_limit')
+            || postLogs.includes('quota')
+            || postLogs.includes('insufficient credits')
+        );
+        if (externalDependencyFailure) {
+            const reason = seededAibermConfig
+                ? 'External model quota/endpoint failure detected after seeding Aiberm settings.'
+                : 'External model configuration/quota failure detected during full-chain assistant reply validation (Aiberm seed unavailable).';
+            test.skip(true, reason);
+        }
+
+        expect(sawTaskFailed, 'task should not fail while validating real assistant timeline rendering').toBe(false);
+        expect(sawTextDelta, 'real chain should stream assistant content via TEXT_DELTA').toBe(true);
+        expect(latestAssistantContent.length > 0, 'active session should record a non-empty assistant reply').toBe(true);
+
+        const normalizedAssistant = latestAssistantContent.replace(/\s+/g, ' ').trim();
+        const excerpt = normalizedAssistant.slice(0, Math.min(24, normalizedAssistant.length));
+        expect(excerpt.length > 0, 'assistant reply excerpt should be non-empty').toBe(true);
+        await expect(page.locator('main')).toContainText(excerpt, { timeout: 20_000 });
+
+        expect(latestAssistantContent.includes('原始任务：'), 'assistant timeline content should not leak runtime wrapper text').toBe(false);
+        expect(latestAssistantContent.includes('用户路由：'), 'assistant timeline content should not leak runtime wrapper text').toBe(false);
+    });
+
+    test('@regression renders sidecar task events in UI even when event id is missing', async ({ page }) => {
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(5_000);
+
+        const taskId = `task-ui-missing-id-${Date.now()}`;
+        const now = new Date().toISOString();
+        const streamedAssistantText = '流式回复展示验证：请在时间线展示这条助手消息。';
+        const finishedSummaryText = '任务已结束：这是完成摘要（不应替代上面的流式回复）。';
+
+        await page.evaluate((payload) => {
+            const emit = (window as Window & { __codexEmit?: (eventName: string, payload: unknown) => void }).__codexEmit;
+            if (!emit) {
+                return;
+            }
+            emit('task-event', {
+                taskId: payload.taskId,
+                type: 'TASK_STARTED',
+                timestamp: payload.now,
+                payload: {
+                    title: '早上3 点关机',
+                    description: '原始任务：早上3 点关机\n用户路由：chat',
+                    context: {
+                        workspacePath: '/tmp/ui-missing-id',
+                        userQuery: '原始任务：早上3 点关机\n用户路由：chat',
+                        scheduled: true,
+                    },
+                },
+            });
+            emit('task-event', {
+                taskId: payload.taskId,
+                type: 'TEXT_DELTA',
+                timestamp: payload.now,
+                payload: {
+                    delta: payload.streamedAssistantText,
+                    role: 'assistant',
+                },
+            });
+            emit('task-event', {
+                taskId: payload.taskId,
+                type: 'TASK_FINISHED',
+                timestamp: payload.now,
+                payload: {
+                    summary: payload.finishedSummaryText,
+                    finishReason: 'scheduled',
+                },
+            });
+        }, { taskId, now, streamedAssistantText, finishedSummaryText });
+
+        await expect.poll(async () => {
+            return await page.evaluate(async (targetTaskId) => {
+                const storeModule = await import('/src/stores/taskEvents/index.ts');
+                const session = storeModule.useTaskEventStore.getState().getSession(targetTaskId as string);
+                if (!session) {
+                    return { exists: false, eventCount: 0, allHaveIds: false };
+                }
+                const allHaveIds = session.events.every((event: any) =>
+                    typeof event.id === 'string' && event.id.trim().length > 0
+                );
+                const hasAssistantDeltaMessage = session.messages.some((message: any) =>
+                    message.role === 'assistant'
+                    && typeof message.content === 'string'
+                    && message.content.includes('流式回复展示验证')
+                );
+                return {
+                    exists: true,
+                    eventCount: session.events.length,
+                    allHaveIds,
+                    hasAssistantDeltaMessage,
+                };
+            }, taskId);
+        }, {
+            timeout: 20_000,
+            message: 'missing-id sidecar events should still be stored with synthesized ids',
+        }).toEqual({
+            exists: true,
+            eventCount: 3,
+            allHaveIds: true,
+            hasAssistantDeltaMessage: true,
+        });
+
+        const taskList = await ensureTaskListVisible(page);
+        const sessionItem = taskList.locator('.session-item', { hasText: /早上3\s*点关机/ }).first();
+        await expect(sessionItem).toBeVisible({
+            timeout: 20_000,
+        });
+        await sessionItem.click();
+
+        await expect(page.getByRole('heading', { name: /早上3\s*点关机/ })).toBeVisible({
+            timeout: 20_000,
+        });
+        await expect(page.getByRole('heading', { name: /How can I help you today\?/ })).toHaveCount(0);
+        await expect(page.locator('main').getByText(streamedAssistantText)).toBeVisible({
+            timeout: 20_000,
+        });
     });
 
     test('routes direct system command into shell authorization without chat confirmation fallback', async ({ page, tauriLogs }) => {

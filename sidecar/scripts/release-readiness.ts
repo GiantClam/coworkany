@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
+import * as tls from 'tls';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
@@ -20,6 +21,7 @@ import {
     summarizeControlPlaneEvalSummary,
     summarizeProductionReplayImportSummary,
     summarizeCanaryChecklistEvidence,
+    type RealModelProviderPreflight,
     type RealModelProxyPreflight,
     type ReleaseReadinessReport,
     type ReleaseStageResult,
@@ -43,6 +45,28 @@ type CliOptions = {
     syncProductionReplays: boolean;
     productionReplayImportRoots: string[];
     productionReplayDatasetPath?: string;
+};
+
+type ResolvedProviderFromLlmConfig = {
+    source: 'llm-config';
+    configPath: string;
+    provider: string;
+    modelId?: string;
+    baseUrl?: string;
+    apiKeyPresent: boolean;
+};
+
+const PROVIDER_KEY_ENV_MAP: Record<string, string> = {
+    anthropic: 'ANTHROPIC_API_KEY',
+    openrouter: 'OPENROUTER_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    aiberm: 'OPENAI_API_KEY',
+    nvidia: 'OPENAI_API_KEY',
+    siliconflow: 'OPENAI_API_KEY',
+    gemini: 'OPENAI_API_KEY',
+    qwen: 'OPENAI_API_KEY',
+    minimax: 'OPENAI_API_KEY',
+    kimi: 'OPENAI_API_KEY',
 };
 
 function bin(name: string): string {
@@ -147,6 +171,38 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
     }
 
     return options;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    return value as Record<string, unknown>;
+}
+
+function toTrimmedString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveLlmConfigCandidates(sidecarDir: string): string[] {
+    const configCandidates = [
+        path.join(sidecarDir, 'llm-config.json'),
+    ];
+    const homeDir = process.env.HOME?.trim();
+    if (homeDir) {
+        configCandidates.push(path.join(
+            homeDir,
+            'Library',
+            'Application Support',
+            'com.coworkany.desktop',
+            'llm-config.json',
+        ));
+    }
+    return [...new Set(configCandidates)];
 }
 
 function readEnabledSkillIds(workspaceRoot: string): string[] {
@@ -315,21 +371,7 @@ function resolveRealModelProxyConfig(sidecarDir: string): RealModelProxyConfig {
         }
     }
 
-    const configCandidates = [
-        path.join(sidecarDir, 'llm-config.json'),
-    ];
-    const homeDir = process.env.HOME?.trim();
-    if (homeDir) {
-        configCandidates.push(path.join(
-            homeDir,
-            'Library',
-            'Application Support',
-            'com.coworkany.desktop',
-            'llm-config.json',
-        ));
-    }
-
-    for (const candidatePath of configCandidates) {
+    for (const candidatePath of resolveLlmConfigCandidates(sidecarDir)) {
         if (!fs.existsSync(candidatePath)) {
             continue;
         }
@@ -359,6 +401,163 @@ function resolveRealModelProxyConfig(sidecarDir: string): RealModelProxyConfig {
     }
 
     return { source: 'none' };
+}
+
+function resolveProviderFromLlmConfig(sidecarDir: string): ResolvedProviderFromLlmConfig | undefined {
+    for (const candidatePath of resolveLlmConfigCandidates(sidecarDir)) {
+        if (!fs.existsSync(candidatePath)) {
+            continue;
+        }
+        try {
+            const root = toRecord(JSON.parse(fs.readFileSync(candidatePath, 'utf-8')));
+            if (!root) {
+                continue;
+            }
+            const profilesRaw = Array.isArray(root.profiles)
+                ? root.profiles
+                    .map((entry) => toRecord(entry))
+                    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+                : [];
+            const activeProfileId = toTrimmedString(root.activeProfileId);
+            const activeProfile = (activeProfileId
+                ? profilesRaw.find((profile) => toTrimmedString(profile.id) === activeProfileId)
+                : undefined)
+                ?? profilesRaw[0];
+            const provider = (
+                toTrimmedString(activeProfile?.provider)
+                ?? toTrimmedString(root.provider)
+            )?.toLowerCase();
+            if (!provider) {
+                continue;
+            }
+            const providerSettings = (() => {
+                switch (provider) {
+                    case 'anthropic':
+                        return toRecord(activeProfile?.anthropic) ?? toRecord(root.anthropic);
+                    case 'openrouter':
+                        return toRecord(activeProfile?.openrouter) ?? toRecord(root.openrouter);
+                    case 'custom':
+                        return toRecord(activeProfile?.custom) ?? toRecord(root.custom);
+                    default:
+                        return toRecord(activeProfile?.openai) ?? toRecord(root.openai);
+                }
+            })();
+            return {
+                source: 'llm-config',
+                configPath: candidatePath,
+                provider,
+                modelId: toTrimmedString(providerSettings?.model),
+                baseUrl: toTrimmedString(providerSettings?.baseURL) ?? toTrimmedString(providerSettings?.baseUrl),
+                apiKeyPresent: Boolean(toTrimmedString(providerSettings?.apiKey)),
+            };
+        } catch {
+            continue;
+        }
+    }
+    return undefined;
+}
+
+function inferProviderFromEnvironment(): { provider?: string; modelId?: string; baseUrl?: string } {
+    const modelId = process.env.COWORKANY_MODEL?.trim();
+    const baseUrl = process.env.OPENAI_BASE_URL?.trim();
+    if (modelId && modelId.includes('/')) {
+        return {
+            provider: modelId.split('/')[0]?.trim().toLowerCase() || undefined,
+            modelId,
+            baseUrl,
+        };
+    }
+    const baseUrlLower = baseUrl?.toLowerCase() ?? '';
+    if (baseUrlLower.includes('aiberm.com')) {
+        return { provider: 'aiberm', modelId, baseUrl };
+    }
+    if (process.env.ANTHROPIC_API_KEY?.trim()) {
+        return { provider: 'anthropic', modelId, baseUrl };
+    }
+    if (process.env.OPENROUTER_API_KEY?.trim()) {
+        return { provider: 'openrouter', modelId, baseUrl };
+    }
+    if (process.env.OPENAI_API_KEY?.trim()) {
+        return { provider: 'openai', modelId, baseUrl };
+    }
+    return { provider: undefined, modelId, baseUrl };
+}
+
+function runRealModelProviderPreflight(input: {
+    sidecarDir: string;
+}): RealModelProviderPreflight {
+    const fromEnv = inferProviderFromEnvironment();
+    const fromConfig = resolveProviderFromLlmConfig(input.sidecarDir);
+    const provider = (fromEnv.provider ?? fromConfig?.provider)?.toLowerCase();
+    const modelId = fromEnv.modelId ?? fromConfig?.modelId;
+    const source: RealModelProviderPreflight['source'] = fromEnv.provider
+        ? 'env'
+        : (fromConfig ? 'llm-config' : 'none');
+
+    if (!provider) {
+        return {
+            status: 'failed',
+            source,
+            modelId,
+            error: 'provider_not_resolved',
+            findings: ['Unable to resolve active provider for real-model smoke gate.'],
+            recommendations: [
+                'Set COWORKANY_MODEL (provider/model) or configure an active llm profile in llm-config.json.',
+                'Re-run release:readiness:commercial after provider selection is explicit.',
+            ],
+        };
+    }
+
+    const requiredApiKeyEnv = PROVIDER_KEY_ENV_MAP[provider];
+    if (!requiredApiKeyEnv) {
+        return {
+            status: 'failed',
+            source,
+            provider,
+            modelId,
+            error: `unsupported_provider:${provider}`,
+            findings: [`No API key mapping is defined for provider ${provider}.`],
+            recommendations: [
+                'Use a supported provider or add provider-key mapping for release readiness gate.',
+                'Re-run release:readiness:commercial after provider mapping is configured.',
+            ],
+        };
+    }
+
+    const hasApiKeyFromEnv = Boolean(process.env[requiredApiKeyEnv]?.trim());
+    const hasApiKeyFromConfig = Boolean(
+        fromConfig
+        && fromConfig.provider === provider
+        && fromConfig.apiKeyPresent,
+    );
+    const hasApiKey = hasApiKeyFromEnv || hasApiKeyFromConfig;
+    if (!hasApiKey) {
+        return {
+            status: 'failed',
+            source,
+            provider,
+            modelId,
+            requiredApiKeyEnv,
+            hasApiKey: false,
+            error: `missing_api_key:${requiredApiKeyEnv}`,
+            findings: [`Required API key ${requiredApiKeyEnv} is missing for provider ${provider}.`],
+            recommendations: [
+                `Set ${requiredApiKeyEnv} in environment or save a valid key in the active llm profile.`,
+                'Re-run release:readiness:commercial after key injection is verified.',
+            ],
+        };
+    }
+
+    return {
+        status: 'passed',
+        source,
+        provider,
+        modelId,
+        requiredApiKeyEnv,
+        hasApiKey: true,
+        findings: [`Provider ${provider} has required API key available.`],
+        recommendations: [],
+    };
 }
 
 function probeTcpReachability(
@@ -401,6 +600,269 @@ function probeTcpReachability(
             });
         });
         socket.connect(port, host);
+    });
+}
+
+type ProxyTunnelProbeTarget = {
+    source: 'env' | 'llm-config' | 'provider-default';
+    host: string;
+    port: number;
+};
+
+function resolveProxyTunnelProbeTarget(sidecarDir: string): ProxyTunnelProbeTarget | undefined {
+    const fromEnv = inferProviderFromEnvironment();
+    if (fromEnv.baseUrl) {
+        try {
+            const parsed = new URL(fromEnv.baseUrl);
+            if (parsed.hostname) {
+                return {
+                    source: 'env',
+                    host: parsed.hostname,
+                    port: parsed.port ? Number.parseInt(parsed.port, 10) : (parsed.protocol === 'http:' ? 80 : 443),
+                };
+            }
+        } catch {
+            // ignore invalid env base URL and continue to other candidates
+        }
+    }
+
+    const fromConfig = resolveProviderFromLlmConfig(sidecarDir);
+    if (fromConfig?.baseUrl) {
+        try {
+            const parsed = new URL(fromConfig.baseUrl);
+            if (parsed.hostname) {
+                return {
+                    source: 'llm-config',
+                    host: parsed.hostname,
+                    port: parsed.port ? Number.parseInt(parsed.port, 10) : (parsed.protocol === 'http:' ? 80 : 443),
+                };
+            }
+        } catch {
+            // ignore invalid llm-config base URL and continue to provider defaults
+        }
+    }
+
+    const provider = (fromEnv.provider ?? fromConfig?.provider)?.toLowerCase();
+    const defaultHostByProvider: Record<string, string> = {
+        anthropic: 'api.anthropic.com',
+        openrouter: 'openrouter.ai',
+        aiberm: 'aiberm.com',
+        openai: 'api.openai.com',
+        nvidia: 'integrate.api.nvidia.com',
+        siliconflow: 'api.siliconflow.cn',
+        gemini: 'generativelanguage.googleapis.com',
+        qwen: 'dashscope.aliyuncs.com',
+        minimax: 'api.minimax.chat',
+        kimi: 'api.moonshot.cn',
+    };
+
+    const defaultHost = provider ? defaultHostByProvider[provider] : undefined;
+    if (!defaultHost) {
+        return undefined;
+    }
+
+    return {
+        source: 'provider-default',
+        host: defaultHost,
+        port: 443,
+    };
+}
+
+function probeHttpConnectTunnel(input: {
+    proxyHost: string;
+    proxyPort: number;
+    timeoutMs: number;
+    targetHost: string;
+    targetPort: number;
+    proxyAuthHeader?: string;
+}): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        const socket = new net.Socket();
+        let settled = false;
+        let responseBuffer = '';
+
+        const done = (result: { ok: boolean; latencyMs: number; error?: string }): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            socket.destroy();
+            resolve(result);
+        };
+
+        socket.setTimeout(input.timeoutMs);
+        socket.once('connect', () => {
+            const headers = [
+                `CONNECT ${input.targetHost}:${input.targetPort} HTTP/1.1`,
+                `Host: ${input.targetHost}:${input.targetPort}`,
+                'Proxy-Connection: Keep-Alive',
+            ];
+            if (input.proxyAuthHeader) {
+                headers.push(`Proxy-Authorization: ${input.proxyAuthHeader}`);
+            }
+            headers.push('', '');
+            socket.write(headers.join('\r\n'));
+        });
+        socket.on('data', (chunk: Buffer) => {
+            responseBuffer += chunk.toString('utf8');
+            if (!responseBuffer.includes('\r\n\r\n')) {
+                return;
+            }
+            const firstLine = responseBuffer.split('\r\n', 1)[0] ?? '';
+            const statusMatch = firstLine.match(/^HTTP\/\d\.\d\s+(\d{3})/i);
+            const statusCode = statusMatch ? Number.parseInt(statusMatch[1], 10) : NaN;
+            if (Number.isFinite(statusCode) && statusCode >= 200 && statusCode < 300) {
+                done({
+                    ok: true,
+                    latencyMs: Date.now() - startedAt,
+                });
+                return;
+            }
+            if (statusCode === 407) {
+                done({
+                    ok: false,
+                    latencyMs: Date.now() - startedAt,
+                    error: `proxy_connect_auth_required:status=407 line=${firstLine}`,
+                });
+                return;
+            }
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: `proxy_connect_failed:${firstLine || 'invalid_response'}`,
+            });
+        });
+        socket.once('timeout', () => {
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: `proxy CONNECT timeout after ${input.timeoutMs}ms`,
+            });
+        });
+        socket.once('error', (error) => {
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: `proxy CONNECT socket error: ${String(error.message || error)}`,
+            });
+        });
+        socket.once('end', () => {
+            if (!settled) {
+                done({
+                    ok: false,
+                    latencyMs: Date.now() - startedAt,
+                    error: 'proxy CONNECT socket closed before response',
+                });
+            }
+        });
+        socket.connect(input.proxyPort, input.proxyHost);
+    });
+}
+
+function probeTlsHandshakeViaProxy(input: {
+    proxyHost: string;
+    proxyPort: number;
+    timeoutMs: number;
+    targetHost: string;
+    targetPort: number;
+    proxyAuthHeader?: string;
+}): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        const socket = new net.Socket();
+        let settled = false;
+        let responseBuffer = '';
+
+        const done = (result: { ok: boolean; latencyMs: number; error?: string }): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            socket.destroy();
+            resolve(result);
+        };
+
+        socket.setTimeout(input.timeoutMs);
+        socket.once('connect', () => {
+            const headers = [
+                `CONNECT ${input.targetHost}:${input.targetPort} HTTP/1.1`,
+                `Host: ${input.targetHost}:${input.targetPort}`,
+                'Proxy-Connection: Keep-Alive',
+            ];
+            if (input.proxyAuthHeader) {
+                headers.push(`Proxy-Authorization: ${input.proxyAuthHeader}`);
+            }
+            headers.push('', '');
+            socket.write(headers.join('\r\n'));
+        });
+        socket.on('data', (chunk: Buffer) => {
+            responseBuffer += chunk.toString('utf8');
+            if (!responseBuffer.includes('\r\n\r\n')) {
+                return;
+            }
+
+            const firstLine = responseBuffer.split('\r\n', 1)[0] ?? '';
+            const statusMatch = firstLine.match(/^HTTP\/\d\.\d\s+(\d{3})/i);
+            const statusCode = statusMatch ? Number.parseInt(statusMatch[1], 10) : NaN;
+            if (!Number.isFinite(statusCode) || statusCode < 200 || statusCode >= 300) {
+                done({
+                    ok: false,
+                    latencyMs: Date.now() - startedAt,
+                    error: `proxy_connect_failed:${firstLine || 'invalid_response'}`,
+                });
+                return;
+            }
+
+            // Switch ownership of the underlying socket to TLS layer.
+            socket.removeAllListeners('data');
+            socket.removeAllListeners('timeout');
+            socket.removeAllListeners('error');
+            socket.setTimeout(0);
+
+            const secureSocket = tls.connect({
+                socket,
+                servername: input.targetHost,
+                rejectUnauthorized: true,
+            });
+            secureSocket.setTimeout(input.timeoutMs);
+            secureSocket.once('secureConnect', () => {
+                secureSocket.end();
+                done({
+                    ok: true,
+                    latencyMs: Date.now() - startedAt,
+                });
+            });
+            secureSocket.once('timeout', () => {
+                done({
+                    ok: false,
+                    latencyMs: Date.now() - startedAt,
+                    error: `proxy CONNECT TLS handshake timeout after ${input.timeoutMs}ms`,
+                });
+            });
+            secureSocket.once('error', (error) => {
+                done({
+                    ok: false,
+                    latencyMs: Date.now() - startedAt,
+                    error: `proxy CONNECT TLS handshake failed: ${String(error.message || error)}`,
+                });
+            });
+        });
+        socket.once('timeout', () => {
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: `proxy CONNECT timeout after ${input.timeoutMs}ms`,
+            });
+        });
+        socket.once('error', (error) => {
+            done({
+                ok: false,
+                latencyMs: Date.now() - startedAt,
+                error: `proxy CONNECT socket error: ${String(error.message || error)}`,
+            });
+        });
+        socket.connect(input.proxyPort, input.proxyHost);
     });
 }
 
@@ -481,6 +943,107 @@ async function runRealModelProxyPreflight(input: {
         };
     }
 
+    const proxyAuthHeader = parsed.username
+        ? `Basic ${Buffer.from(
+            `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`,
+            'utf8',
+        ).toString('base64')}`
+        : undefined;
+    const tunnelTarget = resolveProxyTunnelProbeTarget(input.sidecarDir);
+    if (!parsed.protocol.startsWith('socks') && tunnelTarget) {
+        const tunnelProbe = await probeHttpConnectTunnel({
+            proxyHost: host,
+            proxyPort: port,
+            timeoutMs,
+            targetHost: tunnelTarget.host,
+            targetPort: tunnelTarget.port,
+            proxyAuthHeader,
+        });
+
+        if (!tunnelProbe.ok) {
+            return {
+                status: 'failed',
+                source: proxyConfig.source,
+                proxyUrl: proxyConfig.proxyUrl,
+                bypass: proxyConfig.bypass,
+                timeoutMs,
+                checkedAddress,
+                latencyMs: probe.latencyMs,
+                tunnelTarget: `${tunnelTarget.host}:${tunnelTarget.port}`,
+                tunnelSource: tunnelTarget.source,
+                tunnelLatencyMs: tunnelProbe.latencyMs,
+                tunnelStatus: 'failed',
+                error: tunnelProbe.error,
+                findings: ['Proxy TCP reachable, but HTTP CONNECT tunnel probe failed.'],
+                recommendations: [
+                    'Check proxy upstream policy/authentication for HTTPS CONNECT.',
+                    'Verify proxy allows CONNECT to the configured provider host.',
+                    'Re-run release:readiness:commercial after proxy tunnel path is healthy.',
+                ],
+            };
+        }
+
+        const tlsProbe = await probeTlsHandshakeViaProxy({
+            proxyHost: host,
+            proxyPort: port,
+            timeoutMs,
+            targetHost: tunnelTarget.host,
+            targetPort: tunnelTarget.port,
+            proxyAuthHeader,
+        });
+
+        if (!tlsProbe.ok) {
+            return {
+                status: 'failed',
+                source: proxyConfig.source,
+                proxyUrl: proxyConfig.proxyUrl,
+                bypass: proxyConfig.bypass,
+                timeoutMs,
+                checkedAddress,
+                latencyMs: probe.latencyMs,
+                tunnelTarget: `${tunnelTarget.host}:${tunnelTarget.port}`,
+                tunnelSource: tunnelTarget.source,
+                tunnelLatencyMs: tunnelProbe.latencyMs,
+                tunnelStatus: 'passed',
+                tlsLatencyMs: tlsProbe.latencyMs,
+                tlsStatus: 'failed',
+                error: tlsProbe.error,
+                findings: [
+                    'Proxy endpoint TCP reachability check passed.',
+                    'HTTP CONNECT tunnel probe passed.',
+                    'TLS handshake through proxy failed.',
+                ],
+                recommendations: [
+                    'Check proxy TLS interception/trust chain and outbound TLS policy.',
+                    'Verify target provider host is reachable without TLS handshake resets.',
+                    'Re-run release:readiness:commercial after proxy TLS path is healthy.',
+                ],
+            };
+        }
+
+        return {
+            status: 'passed',
+            source: proxyConfig.source,
+            proxyUrl: proxyConfig.proxyUrl,
+            bypass: proxyConfig.bypass,
+            timeoutMs,
+            checkedAddress,
+            latencyMs: probe.latencyMs,
+            tunnelTarget: `${tunnelTarget.host}:${tunnelTarget.port}`,
+            tunnelSource: tunnelTarget.source,
+            tunnelLatencyMs: tunnelProbe.latencyMs,
+            tunnelStatus: 'passed',
+            tlsLatencyMs: tlsProbe.latencyMs,
+            tlsStatus: 'passed',
+            findings: [
+                'Proxy endpoint TCP reachability check passed.',
+                'HTTP CONNECT tunnel probe passed.',
+                'TLS handshake through proxy passed.',
+            ],
+            recommendations: [],
+        };
+    }
+
     return {
         status: 'passed',
         source: proxyConfig.source,
@@ -489,6 +1052,7 @@ async function runRealModelProxyPreflight(input: {
         timeoutMs,
         checkedAddress,
         latencyMs: probe.latencyMs,
+        tunnelStatus: 'skipped',
         findings: ['Proxy endpoint TCP reachability check passed.'],
         recommendations: [],
     };
@@ -520,6 +1084,7 @@ async function main(): Promise<void> {
         ?? (options.appDataDir ? 'healthy' : 'degraded');
 
     const stages: ReleaseStageResult[] = [];
+    let realModelProviderPreflight: RealModelProviderPreflight | undefined;
     let realModelProxyPreflight: RealModelProxyPreflight | undefined;
     let realModelFailureClassification: ReturnType<typeof classifyRealModelGateFailure> | undefined;
 
@@ -634,84 +1199,165 @@ async function main(): Promise<void> {
     }
 
     if (options.realModelSmoke) {
-        const preflightStartedAt = Date.now();
-        realModelProxyPreflight = await runRealModelProxyPreflight({ sidecarDir });
-        const preflightPassed = realModelProxyPreflight.status !== 'failed';
-        const preflightNoteParts: string[] = [
-            `source=${realModelProxyPreflight.source}`,
-            `proxy=${realModelProxyPreflight.proxyUrl ?? 'not-configured'}`,
+        const providerPreflightStartedAt = Date.now();
+        realModelProviderPreflight = runRealModelProviderPreflight({ sidecarDir });
+        const providerPreflightPassed = realModelProviderPreflight.status !== 'failed';
+        const providerPreflightNoteParts: string[] = [
+            `source=${realModelProviderPreflight.source}`,
+            `provider=${realModelProviderPreflight.provider ?? 'unknown'}`,
+            `model=${realModelProviderPreflight.modelId ?? 'not-configured'}`,
         ];
-        if (realModelProxyPreflight.checkedAddress) {
-            preflightNoteParts.push(`checked=${realModelProxyPreflight.checkedAddress}`);
+        if (realModelProviderPreflight.requiredApiKeyEnv) {
+            providerPreflightNoteParts.push(`requiredKey=${realModelProviderPreflight.requiredApiKeyEnv}`);
         }
-        if (typeof realModelProxyPreflight.latencyMs === 'number') {
-            preflightNoteParts.push(`latency=${realModelProxyPreflight.latencyMs}ms`);
+        if (typeof realModelProviderPreflight.hasApiKey === 'boolean') {
+            providerPreflightNoteParts.push(`keyPresent=${realModelProviderPreflight.hasApiKey ? 'yes' : 'no'}`);
         }
-        if (realModelProxyPreflight.error) {
-            preflightNoteParts.push(`error=${realModelProxyPreflight.error}`);
+        if (realModelProviderPreflight.error) {
+            providerPreflightNoteParts.push(`error=${realModelProviderPreflight.error}`);
         }
-        if (realModelProxyPreflight.findings.length > 0) {
-            preflightNoteParts.push(realModelProxyPreflight.findings.join('; '));
+        if (realModelProviderPreflight.findings.length > 0) {
+            providerPreflightNoteParts.push(realModelProviderPreflight.findings.join('; '));
         }
-        if (realModelProxyPreflight.recommendations.length > 0) {
-            preflightNoteParts.push(`actions=${realModelProxyPreflight.recommendations.join(' / ')}`);
+        if (realModelProviderPreflight.recommendations.length > 0) {
+            providerPreflightNoteParts.push(`actions=${realModelProviderPreflight.recommendations.join(' / ')}`);
         }
 
         stages.push({
-            id: 'sidecar-real-model-preflight',
-            label: 'Sidecar real model proxy preflight',
-            command: 'proxy tcp preflight',
+            id: 'sidecar-real-model-provider-preflight',
+            label: 'Sidecar real model provider preflight',
+            command: 'provider key preflight',
             cwd: sidecarDir,
-            durationMs: Date.now() - preflightStartedAt,
-            status: realModelProxyPreflight.status === 'failed' ? 'failed' : 'passed',
-            exitCode: preflightPassed ? 0 : 1,
+            durationMs: Date.now() - providerPreflightStartedAt,
+            status: providerPreflightPassed ? 'passed' : 'failed',
+            exitCode: providerPreflightPassed ? 0 : 1,
             optional: false,
-            note: preflightNoteParts.join(' | '),
+            note: providerPreflightNoteParts.join(' | '),
         });
 
-        if (!preflightPassed) {
+        if (!providerPreflightPassed) {
             realModelFailureClassification = classifyRealModelGateFailure({
-                preflight: realModelProxyPreflight,
+                providerPreflight: realModelProviderPreflight,
             });
             stages.push({
-                id: 'sidecar-real-model-smoke',
-                label: 'Sidecar real model smoke',
-                command: `bun test tests/real-model-smoke.e2e.test.ts`,
+                id: 'sidecar-real-model-preflight',
+                label: 'Sidecar real model proxy preflight',
+                command: 'proxy health preflight (tcp + connect)',
                 cwd: sidecarDir,
                 durationMs: 0,
                 status: 'skipped',
                 exitCode: 1,
                 optional: false,
-                note: `Skipped due to preflight failure category=${realModelFailureClassification?.category ?? 'proxy_unreachable'}; ${realModelFailureClassification?.summary ?? ''}`,
+                note: `Skipped due to provider preflight failure; ${realModelFailureClassification?.summary ?? ''}`,
             });
-        } else {
-            const realModelStage = runStage({
+            stages.push({
                 id: 'sidecar-real-model-smoke',
                 label: 'Sidecar real model smoke',
+                command: 'bun test tests/real-model-smoke.e2e.test.ts',
                 cwd: sidecarDir,
-                command: bin('bun'),
-                args: ['test', 'tests/real-model-smoke.e2e.test.ts'],
-                env: {
-                    COWORKANY_REQUIRE_REAL_MODEL_SMOKE: '1',
-                },
+                durationMs: 0,
+                status: 'skipped',
+                exitCode: 1,
                 optional: false,
+                note: `Skipped due to provider preflight failure category=${realModelFailureClassification?.category ?? 'provider_missing_api_key'}; ${realModelFailureClassification?.summary ?? ''}`,
             });
-            if (realModelStage.status === 'failed') {
+        } else {
+            const preflightStartedAt = Date.now();
+            realModelProxyPreflight = await runRealModelProxyPreflight({ sidecarDir });
+            const preflightPassed = realModelProxyPreflight.status !== 'failed';
+            const preflightNoteParts: string[] = [
+                `source=${realModelProxyPreflight.source}`,
+                `proxy=${realModelProxyPreflight.proxyUrl ?? 'not-configured'}`,
+            ];
+            if (realModelProxyPreflight.checkedAddress) {
+                preflightNoteParts.push(`checked=${realModelProxyPreflight.checkedAddress}`);
+            }
+            if (typeof realModelProxyPreflight.latencyMs === 'number') {
+                preflightNoteParts.push(`latency=${realModelProxyPreflight.latencyMs}ms`);
+            }
+            if (realModelProxyPreflight.tunnelStatus) {
+                preflightNoteParts.push(`connect=${realModelProxyPreflight.tunnelStatus}`);
+            }
+            if (realModelProxyPreflight.tunnelTarget) {
+                preflightNoteParts.push(`connectTarget=${realModelProxyPreflight.tunnelTarget}`);
+            }
+            if (typeof realModelProxyPreflight.tunnelLatencyMs === 'number') {
+                preflightNoteParts.push(`connectLatency=${realModelProxyPreflight.tunnelLatencyMs}ms`);
+            }
+            if (realModelProxyPreflight.tlsStatus) {
+                preflightNoteParts.push(`tls=${realModelProxyPreflight.tlsStatus}`);
+            }
+            if (typeof realModelProxyPreflight.tlsLatencyMs === 'number') {
+                preflightNoteParts.push(`tlsLatency=${realModelProxyPreflight.tlsLatencyMs}ms`);
+            }
+            if (realModelProxyPreflight.error) {
+                preflightNoteParts.push(`error=${realModelProxyPreflight.error}`);
+            }
+            if (realModelProxyPreflight.findings.length > 0) {
+                preflightNoteParts.push(realModelProxyPreflight.findings.join('; '));
+            }
+            if (realModelProxyPreflight.recommendations.length > 0) {
+                preflightNoteParts.push(`actions=${realModelProxyPreflight.recommendations.join(' / ')}`);
+            }
+
+            stages.push({
+                id: 'sidecar-real-model-preflight',
+                label: 'Sidecar real model proxy preflight',
+                command: 'proxy health preflight (tcp + connect)',
+                cwd: sidecarDir,
+                durationMs: Date.now() - preflightStartedAt,
+                status: realModelProxyPreflight.status === 'failed' ? 'failed' : 'passed',
+                exitCode: preflightPassed ? 0 : 1,
+                optional: false,
+                note: preflightNoteParts.join(' | '),
+            });
+
+            if (!preflightPassed) {
                 realModelFailureClassification = classifyRealModelGateFailure({
-                    stageNote: realModelStage.note,
+                    providerPreflight: realModelProviderPreflight,
                     preflight: realModelProxyPreflight,
                 });
-                if (realModelFailureClassification) {
-                    const actionSummary = realModelFailureClassification.recommendations.join(' / ');
-                    realModelStage.note = [
-                        `category=${realModelFailureClassification.category}`,
-                        `summary=${realModelFailureClassification.summary}`,
-                        `evidence=${realModelFailureClassification.evidence}`,
-                        `actions=${actionSummary}`,
-                    ].join(' | ');
+                stages.push({
+                    id: 'sidecar-real-model-smoke',
+                    label: 'Sidecar real model smoke',
+                    command: 'bun test tests/real-model-smoke.e2e.test.ts',
+                    cwd: sidecarDir,
+                    durationMs: 0,
+                    status: 'skipped',
+                    exitCode: 1,
+                    optional: false,
+                    note: `Skipped due to preflight failure category=${realModelFailureClassification?.category ?? 'proxy_unreachable'}; ${realModelFailureClassification?.summary ?? ''}`,
+                });
+            } else {
+                const realModelStage = runStage({
+                    id: 'sidecar-real-model-smoke',
+                    label: 'Sidecar real model smoke',
+                    cwd: sidecarDir,
+                    command: bin('bun'),
+                    args: ['test', 'tests/real-model-smoke.e2e.test.ts'],
+                    env: {
+                        COWORKANY_REQUIRE_REAL_MODEL_SMOKE: '1',
+                    },
+                    optional: false,
+                });
+                if (realModelStage.status === 'failed') {
+                    realModelFailureClassification = classifyRealModelGateFailure({
+                        stageNote: realModelStage.note,
+                        providerPreflight: realModelProviderPreflight,
+                        preflight: realModelProxyPreflight,
+                    });
+                    if (realModelFailureClassification) {
+                        const actionSummary = realModelFailureClassification.recommendations.join(' / ');
+                        realModelStage.note = [
+                            `category=${realModelFailureClassification.category}`,
+                            `summary=${realModelFailureClassification.summary}`,
+                            `evidence=${realModelFailureClassification.evidence}`,
+                            `actions=${actionSummary}`,
+                        ].join(' | ');
+                    }
                 }
+                stages.push(realModelStage);
             }
-            stages.push(realModelStage);
         }
     }
 
@@ -831,6 +1477,7 @@ async function main(): Promise<void> {
         checklist,
         realModelGate: options.realModelSmoke
             ? {
+                providerPreflight: realModelProviderPreflight,
                 preflight: realModelProxyPreflight,
                 failureClassification: realModelFailureClassification,
             }
@@ -931,6 +1578,7 @@ async function main(): Promise<void> {
         canaryEvidenceGate,
         realModelGate: options.realModelSmoke
             ? {
+                providerPreflight: realModelProviderPreflight,
                 preflight: realModelProxyPreflight,
                 failureClassification: realModelFailureClassification,
             }

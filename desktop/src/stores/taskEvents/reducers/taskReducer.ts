@@ -6,6 +6,48 @@
 
 import type { TaskSession, TaskEvent, PlanStep, TaskStatus } from '../../../types';
 
+function isTaskMode(value: unknown): value is NonNullable<TaskSession['taskMode']> {
+    return value === 'chat'
+        || value === 'immediate_task'
+        || value === 'scheduled_task'
+        || value === 'scheduled_multi_task';
+}
+
+function extractOriginalTaskFromRoutedQuery(value: string): string | null {
+    const patterns = [
+        /^\s*原始任务[:：]\s*(.+?)(?:\n|$)/u,
+        /^\s*original task[:：]\s*(.+?)(?:\n|$)/iu,
+    ];
+    for (const pattern of patterns) {
+        const matched = value.match(pattern);
+        const candidate = matched?.[1]?.trim();
+        if (candidate && candidate.length > 0) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+function resolveTaskStartedDisplayText(payload: Record<string, unknown>, context: Record<string, unknown>): string {
+    const displayText = typeof context.displayText === 'string' ? context.displayText.trim() : '';
+    if (displayText.length > 0) {
+        return displayText;
+    }
+
+    const userQuery = typeof context.userQuery === 'string' ? context.userQuery.trim() : '';
+    if (userQuery.length > 0) {
+        return extractOriginalTaskFromRoutedQuery(userQuery) ?? userQuery;
+    }
+
+    const description = typeof payload.description === 'string' ? payload.description.trim() : '';
+    if (description.length > 0) {
+        return extractOriginalTaskFromRoutedQuery(description) ?? description;
+    }
+
+    const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+    return title;
+}
+
 function isRiskTier(value: unknown): value is 'low' | 'medium' | 'high' {
     return value === 'low' || value === 'medium' || value === 'high';
 }
@@ -431,11 +473,18 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
     const payload = event.payload as Record<string, unknown>;
 
     switch (event.type) {
-        case 'TASK_STARTED':
+        case 'TASK_STARTED': {
+            const context = ((payload.context as Record<string, unknown> | undefined) ?? {});
+            const resolvedTaskMode = isTaskMode(context.mode)
+                ? context.mode
+                : context.scheduled === true
+                    ? 'scheduled_task'
+                    : session.taskMode;
+            const displayText = resolveTaskStartedDisplayText(payload, context);
             return {
                 ...session,
                 status: 'running',
-                taskMode: undefined,
+                taskMode: resolvedTaskMode,
                 title: payload.title as string,
                 failure: undefined,
                 clarificationQuestions: undefined,
@@ -447,21 +496,18 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 contractReopenCount: 0,
                 plannedTasks: undefined,
                 blockingReason: undefined,
-                workspacePath: (payload.context as Record<string, unknown>)?.workspacePath as string,
+                workspacePath: context.workspacePath as string,
                 messages: [
                     ...session.messages,
                     {
                         id: event.id,
                         role: 'user',
-                        content:
-                            ((payload.context as Record<string, unknown>)?.displayText as string) ??
-                            ((payload.context as Record<string, unknown>)?.userQuery as string) ??
-                            (payload.description as string) ??
-                            '',
+                        content: displayText,
                         timestamp: event.timestamp,
                     },
                 ],
             };
+        }
 
         case 'PLAN_UPDATED':
         {
@@ -663,11 +709,14 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             ].filter(Boolean).join('\n'));
         }
 
-        case 'TASK_FINISHED':
-        {
+        case 'TASK_FINISHED': {
+            const finishReason = typeof payload.finishReason === 'string' ? payload.finishReason : undefined;
+            const resolvedTaskMode = session.taskMode
+                ?? (finishReason === 'scheduled' ? 'scheduled_task' : undefined);
             return {
                 ...session,
                 status: 'finished',
+                taskMode: resolvedTaskMode,
                 summary: payload.summary as string,
                 failure: undefined,
                 suspension: undefined,

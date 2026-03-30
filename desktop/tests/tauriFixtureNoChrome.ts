@@ -523,12 +523,14 @@ class DarwinBrowserHarness {
     private async startSidecar(): Promise<void> {
         const disableBrowserCdp = process.env.COWORKANY_DISABLE_BROWSER_CDP
             ?? (this.isSharedChromeCdpEnabled() ? 'false' : 'true');
+        const llmEnv = this.buildLlmRuntimeEnvFromConfig();
         this.sidecarProc = childProcess.spawn('bun', ['run', 'src/main.ts'], {
             cwd: this.sidecarDir,
             env: {
                 ...process.env,
                 COWORKANY_APP_DATA_DIR: this.appDataDir,
                 COWORKANY_DISABLE_BROWSER_CDP: disableBrowserCdp,
+                ...llmEnv,
                 PATH: `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH || ''}`,
             },
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -611,6 +613,125 @@ class DarwinBrowserHarness {
                 managedServices: [],
             },
         });
+    }
+
+    private normalizeModelId(provider: string, model: string): string {
+        return model.includes('/') ? model : `${provider}/${model}`;
+    }
+
+    private openAiCompatibleDefault(provider: string): { baseUrl: string; model: string } | null {
+        const defaults: Record<string, { baseUrl: string; model: string }> = {
+            openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
+            aiberm: { baseUrl: 'https://aiberm.com/v1', model: 'gpt-5.3-codex' },
+            nvidia: { baseUrl: 'https://integrate.api.nvidia.com/v1', model: 'meta/llama-3.1-70b-instruct' },
+            siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+            gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.0-flash' },
+            qwen: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+            minimax: { baseUrl: 'https://api.minimax.chat/v1', model: 'MiniMax-Text-01' },
+            kimi: { baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+        };
+        return defaults[provider] ?? null;
+    }
+
+    private buildLlmRuntimeEnvFromConfig(): Record<string, string> {
+        const config = this.readLlmConfig();
+        const profiles = Array.isArray(config.profiles) ? config.profiles as Record<string, unknown>[] : [];
+        const activeProfileId = typeof config.activeProfileId === 'string' ? config.activeProfileId : '';
+        const activeProfile = profiles.find((profile) => String(profile.id ?? '') === activeProfileId)
+            ?? profiles[0]
+            ?? null;
+        const provider = String(activeProfile?.provider ?? config.provider ?? '').trim().toLowerCase();
+        if (!provider) {
+            return {};
+        }
+
+        const env: Record<string, string> = {};
+        const profileAnthropic = activeProfile?.anthropic as Record<string, unknown> | undefined;
+        const rootAnthropic = config.anthropic as Record<string, unknown> | undefined;
+        const profileOpenRouter = activeProfile?.openrouter as Record<string, unknown> | undefined;
+        const rootOpenRouter = config.openrouter as Record<string, unknown> | undefined;
+        const profileOpenAi = activeProfile?.openai as Record<string, unknown> | undefined;
+        const rootOpenAi = config.openai as Record<string, unknown> | undefined;
+        const profileCustom = activeProfile?.custom as Record<string, unknown> | undefined;
+        const rootCustom = config.custom as Record<string, unknown> | undefined;
+
+        const readString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+
+        if (provider === 'anthropic') {
+            const apiKey = readString(profileAnthropic?.apiKey ?? rootAnthropic?.apiKey);
+            const model = readString(profileAnthropic?.model ?? rootAnthropic?.model) || 'claude-sonnet-4-5';
+            if (apiKey) {
+                env.ANTHROPIC_API_KEY = apiKey;
+            }
+            env.COWORKANY_MODEL = this.normalizeModelId('anthropic', model);
+            this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=anthropic model=${model}\n`);
+            return env;
+        }
+
+        if (provider === 'openrouter') {
+            const apiKey = readString(profileOpenRouter?.apiKey ?? rootOpenRouter?.apiKey);
+            const model = readString(profileOpenRouter?.model ?? rootOpenRouter?.model) || 'anthropic/claude-sonnet-4.5';
+            if (apiKey) {
+                env.OPENROUTER_API_KEY = apiKey;
+            }
+            env.COWORKANY_MODEL = this.normalizeModelId('openrouter', model);
+            this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=openrouter model=${model}\n`);
+            return env;
+        }
+
+        if (provider === 'custom') {
+            const apiFormat = readString(profileCustom?.apiFormat ?? rootCustom?.apiFormat).toLowerCase();
+            const apiKey = readString(profileCustom?.apiKey ?? rootCustom?.apiKey);
+            const baseUrl = readString(profileCustom?.baseUrl ?? rootCustom?.baseUrl);
+            const model = readString(profileCustom?.model ?? rootCustom?.model) || 'gpt-4o';
+            if (apiFormat === 'anthropic') {
+                if (apiKey) {
+                    env.ANTHROPIC_API_KEY = apiKey;
+                }
+                if (baseUrl) {
+                    env.ANTHROPIC_BASE_URL = baseUrl;
+                }
+                env.COWORKANY_MODEL = this.normalizeModelId('anthropic', model);
+                this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=custom(anthropic) model=${model}\n`);
+                return env;
+            }
+            if (apiKey) {
+                env.OPENAI_API_KEY = apiKey;
+            }
+            if (baseUrl) {
+                env.OPENAI_BASE_URL = baseUrl;
+            }
+            env.COWORKANY_MODEL = this.normalizeModelId('openai', model);
+            this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=custom(openai) model=${model}\n`);
+            return env;
+        }
+
+        if (provider === 'ollama') {
+            const model = readString((activeProfile?.ollama as Record<string, unknown> | undefined)?.model ?? (config.ollama as Record<string, unknown> | undefined)?.model) || 'qwen2.5:7b';
+            const baseUrl = readString((activeProfile?.ollama as Record<string, unknown> | undefined)?.baseUrl ?? (config.ollama as Record<string, unknown> | undefined)?.baseUrl);
+            if (baseUrl) {
+                env.OLLAMA_BASE_URL = baseUrl;
+            }
+            env.COWORKANY_MODEL = this.normalizeModelId('ollama', model);
+            this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=ollama model=${model}\n`);
+            return env;
+        }
+
+        const openAiDefaults = this.openAiCompatibleDefault(provider) ?? { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' };
+        const apiKey = readString(profileOpenAi?.apiKey ?? rootOpenAi?.apiKey);
+        const baseUrl = readString(profileOpenAi?.baseUrl ?? rootOpenAi?.baseUrl) || openAiDefaults.baseUrl;
+        const model = readString(profileOpenAi?.model ?? rootOpenAi?.model) || openAiDefaults.model;
+
+        if (apiKey) {
+            env.OPENAI_API_KEY = apiKey;
+        }
+        if (baseUrl) {
+            env.OPENAI_BASE_URL = baseUrl;
+        }
+        const modelProvider = provider === 'aiberm' ? 'openai' : provider;
+        env.COWORKANY_MODEL = this.normalizeModelId(modelProvider, model);
+        this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=${provider} runtime_model_provider=${modelProvider} model=${model}\n`);
+        return env;
     }
 
     private async emitToPage(eventName: string, payload: unknown): Promise<void> {

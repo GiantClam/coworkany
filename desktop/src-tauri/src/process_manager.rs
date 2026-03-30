@@ -138,8 +138,7 @@ impl ManagedService for NoopManagedService {
     fn spawn(&mut self, _app_handle: &AppHandle) -> Result<(), ProcessError> {
         warn!(
             "[ProcessManager] '{}' start requested but service is retired: {}",
-            self.config.name,
-            self.startup_notice,
+            self.config.name, self.startup_notice,
         );
         Ok(())
     }
@@ -342,8 +341,10 @@ impl ProcessManager {
     }
 
     pub fn predownload_rag_model(&mut self) -> Result<String, ProcessError> {
-        Ok("RAG embedding predownload is no longer required in Mastra single-process mode."
-            .to_string())
+        Ok(
+            "RAG embedding predownload is no longer required in Mastra single-process mode."
+                .to_string(),
+        )
     }
 
     pub fn prepare_service_runtime(&mut self, name: &str) -> Result<String, ProcessError> {

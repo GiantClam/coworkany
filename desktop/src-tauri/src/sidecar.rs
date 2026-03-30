@@ -34,8 +34,7 @@ use uuid::Uuid;
 use crate::diff::{apply_patch as apply_patch_diff, DiffHunk, FilePatch, PatchOperation};
 use crate::platform_runtime::{
     build_platform_runtime_context, resolve_app_data_dir, resolve_app_dir,
-    PlatformRuntimeContext,
-    resolve_sidecar_entry_path,
+    resolve_sidecar_entry_path, PlatformRuntimeContext,
 };
 use crate::policy::commands as policy_commands;
 use crate::policy::{
@@ -94,6 +93,7 @@ struct SidecarLlmProfile {
 }
 
 const STDERR_NOISE_LOG_INTERVAL: Duration = Duration::from_secs(30);
+const JSON_LOG_PREVIEW_MAX_CHARS: usize = 2_048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SidecarStderrCategory {
@@ -443,9 +443,7 @@ impl SidecarManager {
                 return Err(error);
             }
             if let Err(error) = self.wait_for_runtime_snapshot(Duration::from_secs(5)) {
-                self.invalidate_transport(
-                    "runtime snapshot handshake failed after sidecar attach",
-                );
+                self.invalidate_transport("runtime snapshot handshake failed after sidecar attach");
                 return Err(error);
             }
 
@@ -494,29 +492,28 @@ impl SidecarManager {
             Box<dyn Read + Send>,
             SharedCommandWriter,
             bool,
-        ) =
-            if let Some(attached) = attached {
-                info!(
-                    "Connected to spawned sidecar singleton transport; routing commands+events via {}",
-                    attached.descriptor
-                );
-                // Close the direct stdin pipe when singleton transport is active so command
-                // delivery does not depend on stdin behavior of the packaged runtime.
-                let _ = child.stdin.take();
-                self.stdout_drain_handle = Some(Self::start_stdout_drain_thread(stdout));
-                (attached.reader, attached.writer, true)
-            } else {
-                warn!(
+        ) = if let Some(attached) = attached {
+            info!(
+                "Connected to spawned sidecar singleton transport; routing commands+events via {}",
+                attached.descriptor
+            );
+            // Close the direct stdin pipe when singleton transport is active so command
+            // delivery does not depend on stdin behavior of the packaged runtime.
+            let _ = child.stdin.take();
+            self.stdout_drain_handle = Some(Self::start_stdout_drain_thread(stdout));
+            (attached.reader, attached.writer, true)
+        } else {
+            warn!(
                     "Spawned sidecar singleton transport not available yet; falling back to stdin/stdout transport"
                 );
-                (
-                    Box::new(stdout),
-                    Arc::new(Mutex::new(CommandWriter::Child(
-                        child.stdin.take().expect("Failed to get stdin"),
-                    ))),
-                    false,
-                )
-            };
+            (
+                Box::new(stdout),
+                Arc::new(Mutex::new(CommandWriter::Child(
+                    child.stdin.take().expect("Failed to get stdin"),
+                ))),
+                false,
+            )
+        };
         self.command_writer = Some(command_writer.clone());
         self.child = Some(child);
 
@@ -544,14 +541,17 @@ impl SidecarManager {
     /// Send a command to the sidecar
     pub fn send_command(&self, command: IpcCommand) -> Result<(), SidecarError> {
         let json = serde_json::to_string(&command)?;
-        debug!("Sending command to sidecar: {}", json);
+        debug!("Sending command to sidecar: {}", truncate_log_line(&json, JSON_LOG_PREVIEW_MAX_CHARS));
         self.write_stdin_line(&json)
     }
 
     /// Send a raw JSON command to the sidecar
     pub fn send_raw_command(&self, command: serde_json::Value) -> Result<(), SidecarError> {
         let json = serde_json::to_string(&command)?;
-        debug!("Sending raw command to sidecar: {}", json);
+        debug!(
+            "Sending raw command to sidecar: {}",
+            truncate_log_line(&json, JSON_LOG_PREVIEW_MAX_CHARS)
+        );
         self.write_stdin_line(&json)
     }
 
@@ -781,6 +781,7 @@ impl SidecarManager {
         transport_healthy: Arc<AtomicBool>,
     ) {
         let reader = BufReader::new(stdout);
+        let mut suppressed_non_protocol_lines = 0usize;
 
         for line_result in reader.lines() {
             match line_result {
@@ -789,57 +790,85 @@ impl SidecarManager {
                         continue;
                     }
 
-                    debug!("Received from sidecar: {}", line);
+                    if !is_json_object_line(&line) {
+                        suppressed_non_protocol_lines += 1;
+                        continue;
+                    }
+                    if suppressed_non_protocol_lines > 0 {
+                        debug!(
+                            "Suppressed {} non-protocol sidecar stdout lines",
+                            suppressed_non_protocol_lines
+                        );
+                        suppressed_non_protocol_lines = 0;
+                    }
 
                     match serde_json::from_str::<serde_json::Value>(&line) {
-                        Ok(message) => match classify_sidecar_message(&message) {
-                            Some(SidecarMessageKind::TaskEvent) => {
-                                if let Err(e) = app_handle.emit("task-event", &message) {
-                                    error!("Failed to emit task-event: {}", e);
-                                }
+                        Ok(message) => {
+                            if !message.is_object() {
+                                warn!("Ignoring sidecar stdout JSON value that is not an object");
+                                continue;
                             }
-                            Some(SidecarMessageKind::CanonicalStreamEvent) => {
-                                if let Err(e) = app_handle.emit("canonical-stream-event", &message)
-                                {
-                                    error!("Failed to emit canonical-stream-event: {}", e);
-                                }
-                            }
-                            Some(SidecarMessageKind::VoiceState) => {
-                                let payload =
-                                    message.get("payload").cloned().unwrap_or(message.clone());
-                                if let Err(e) = app_handle.emit("voice-state", payload) {
-                                    error!("Failed to emit voice-state: {}", e);
-                                }
-                            }
-                            Some(SidecarMessageKind::IpcResponse) => {
-                                if let Some(command_id) = message
-                                    .get("commandId")
-                                    .and_then(|v| v.as_str())
-                                    .map(|v| v.to_string())
-                                {
-                                    if let Ok(mut pending) = pending_responses.lock() {
-                                        if let Some(waiter) = pending.remove(&command_id) {
-                                            let _ = waiter.send(message.clone());
-                                        }
+                            debug!(
+                                "Received from sidecar: {}",
+                                truncate_log_line(&line, JSON_LOG_PREVIEW_MAX_CHARS)
+                            );
+
+                            match classify_sidecar_message(&message) {
+                                Some(SidecarMessageKind::TaskEvent) => {
+                                    if let Err(e) = app_handle.emit("task-event", &message) {
+                                        error!("Failed to emit task-event: {}", e);
                                     }
                                 }
-                                if let Err(e) = app_handle.emit("ipc-response", &message) {
-                                    error!("Failed to emit ipc-response: {}", e);
+                                Some(SidecarMessageKind::CanonicalStreamEvent) => {
+                                    if let Err(e) =
+                                        app_handle.emit("canonical-stream-event", &message)
+                                    {
+                                        error!("Failed to emit canonical-stream-event: {}", e);
+                                    }
                                 }
+                                Some(SidecarMessageKind::VoiceState) => {
+                                    let payload =
+                                        message.get("payload").cloned().unwrap_or(message.clone());
+                                    if let Err(e) = app_handle.emit("voice-state", payload) {
+                                        error!("Failed to emit voice-state: {}", e);
+                                    }
+                                }
+                                Some(SidecarMessageKind::IpcResponse) => {
+                                    if let Some(command_id) = message
+                                        .get("commandId")
+                                        .and_then(|v| v.as_str())
+                                        .map(|v| v.to_string())
+                                    {
+                                        if let Ok(mut pending) = pending_responses.lock() {
+                                            if let Some(waiter) = pending.remove(&command_id) {
+                                                let _ = waiter.send(message.clone());
+                                            }
+                                        }
+                                    }
+                                    if let Err(e) = app_handle.emit("ipc-response", &message) {
+                                        error!("Failed to emit ipc-response: {}", e);
+                                    }
+                                }
+                                Some(SidecarMessageKind::IpcCommand) => {
+                                    handle_sidecar_command(
+                                        message,
+                                        app_handle.clone(),
+                                        command_writer.clone(),
+                                    );
+                                }
+                                None => warn!(
+                                    "Ignoring unclassified sidecar message: {}",
+                                    truncate_log_line(&line, JSON_LOG_PREVIEW_MAX_CHARS)
+                                ),
                             }
-                            Some(SidecarMessageKind::IpcCommand) => {
-                                handle_sidecar_command(
-                                    message,
-                                    app_handle.clone(),
-                                    command_writer.clone(),
-                                );
-                            }
-                            None => warn!("Ignoring unclassified sidecar message: {}", line),
-                        },
-                        Err(e) => warn!(
-                            "Failed to parse sidecar output as JSON: {} - line: {}",
-                            e, line
-                        ),
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to parse sidecar output as JSON: {} - preview: {}",
+                                e,
+                                truncate_log_line(&line, 256)
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -847,6 +876,12 @@ impl SidecarManager {
                     break;
                 }
             }
+        }
+        if suppressed_non_protocol_lines > 0 {
+            debug!(
+                "Suppressed {} non-protocol sidecar stdout lines before stream closed",
+                suppressed_non_protocol_lines
+            );
         }
 
         transport_healthy.store(false, Ordering::SeqCst);
@@ -1145,12 +1180,7 @@ impl SidecarManager {
             .node_entry
             .as_ref()
             .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-            .or_else(|| {
-                packaged
-                    .executable
-                    .parent()
-                    .map(|path| path.to_path_buf())
-            })
+            .or_else(|| packaged.executable.parent().map(|path| path.to_path_buf()))
             .unwrap_or_else(|| std::path::PathBuf::from(app_dir));
 
         let use_node_runtime = Self::should_launch_packaged_sidecar_via_node();
@@ -1198,7 +1228,10 @@ impl SidecarManager {
         }
         if let Some(playwright_browsers_path) = &packaged.playwright_browsers_path {
             command
-                .env("COWORKANY_PLAYWRIGHT_BROWSERS_PATH", playwright_browsers_path)
+                .env(
+                    "COWORKANY_PLAYWRIGHT_BROWSERS_PATH",
+                    playwright_browsers_path,
+                )
                 .env("PLAYWRIGHT_BROWSERS_PATH", playwright_browsers_path);
         }
 
@@ -1417,7 +1450,10 @@ impl SidecarManager {
             "mistral/",
         ];
         let normalized = model.trim();
-        if KNOWN_PREFIXES.iter().any(|prefix| normalized.starts_with(prefix)) {
+        if KNOWN_PREFIXES
+            .iter()
+            .any(|prefix| normalized.starts_with(prefix))
+        {
             return normalized.to_string();
         }
         match provider {
@@ -1611,8 +1647,7 @@ impl SidecarManager {
             command.env("COWORKANY_MODEL", &model_id);
             info!(
                 "Sidecar LLM runtime configured from llm-config: provider={} model={}",
-                provider,
-                model_id
+                provider, model_id
             );
         }
     }
@@ -1733,6 +1768,20 @@ enum SidecarMessageKind {
     IpcResponse,
     IpcCommand,
     VoiceState,
+}
+
+fn is_json_object_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('{') && trimmed.ends_with('}')
+}
+
+fn truncate_log_line(line: &str, max_chars: usize) -> String {
+    let mut iter = line.chars();
+    let preview: String = iter.by_ref().take(max_chars).collect();
+    if iter.next().is_none() {
+        return preview;
+    }
+    format!("{}…", preview)
 }
 
 fn classify_sidecar_message(message: &serde_json::Value) -> Option<SidecarMessageKind> {
@@ -2267,7 +2316,10 @@ fn handle_sidecar_command(
                     .and_then(|v| v.as_str())
                     .unwrap_or("utf-8")
                     .to_lowercase();
-                let max_bytes = payload.get("maxBytes").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+                let max_bytes = payload
+                    .get("maxBytes")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(u64::MAX);
 
                 if path.is_empty() {
                     send_raw(
@@ -2308,7 +2360,9 @@ fn handle_sidecar_command(
                             }
                         })
                     }
-                    Err(err) => build_error_response(&command_id, "read_file_response", &err.to_string()),
+                    Err(err) => {
+                        build_error_response(&command_id, "read_file_response", &err.to_string())
+                    }
                 };
                 send_raw(&command_writer, response_msg);
             });
@@ -2489,7 +2543,9 @@ fn handle_sidecar_command(
                             "timedOut": false,
                         }
                     }),
-                    Ok(Err(err)) => build_error_response(&command_id, "exec_shell_response", &err.to_string()),
+                    Ok(Err(err)) => {
+                        build_error_response(&command_id, "exec_shell_response", &err.to_string())
+                    }
                     Err(_) => json!({
                         "type": "exec_shell_response",
                         "commandId": command_id,
@@ -2871,7 +2927,10 @@ impl Default for SidecarState {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_sidecar_message, SidecarManager, SidecarMessageKind};
+    use super::{
+        classify_sidecar_message, is_json_object_line, truncate_log_line, SidecarManager,
+        SidecarMessageKind,
+    };
     use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
@@ -3102,5 +3161,22 @@ mod tests {
             let kind = classify_sidecar_message(&message);
             assert!(matches!(kind, Some(SidecarMessageKind::IpcResponse)));
         }
+    }
+
+    #[test]
+    fn is_json_object_line_filters_non_protocol_stdout_lines() {
+        assert!(is_json_object_line(
+            r#"{"type":"ready","runtime":"mastra"}"#
+        ));
+        assert!(!is_json_object_line("[SkillStore] Loaded 8 skills"));
+        assert!(!is_json_object_line("\"null\""));
+        assert!(!is_json_object_line("{"));
+        assert!(!is_json_object_line("error: {"));
+    }
+
+    #[test]
+    fn truncate_log_line_limits_json_log_length() {
+        assert_eq!(truncate_log_line("short", 16), "short");
+        assert_eq!(truncate_log_line("1234567890", 5), "12345…");
     }
 }

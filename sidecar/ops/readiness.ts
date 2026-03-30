@@ -177,6 +177,28 @@ export type RealModelProxyPreflight = {
     timeoutMs: number;
     latencyMs?: number;
     checkedAddress?: string;
+    tunnelStatus?: 'passed' | 'failed' | 'skipped';
+    tunnelTarget?: string;
+    tunnelSource?: 'env' | 'llm-config' | 'provider-default';
+    tunnelLatencyMs?: number;
+    tlsStatus?: 'passed' | 'failed' | 'skipped';
+    tlsLatencyMs?: number;
+    error?: string;
+    findings: string[];
+    recommendations: string[];
+};
+
+export type RealModelProviderPreflightStatus = 'passed' | 'failed' | 'skipped';
+
+export type RealModelProviderPreflightSource = 'env' | 'llm-config' | 'none';
+
+export type RealModelProviderPreflight = {
+    status: RealModelProviderPreflightStatus;
+    source: RealModelProviderPreflightSource;
+    provider?: string;
+    modelId?: string;
+    requiredApiKeyEnv?: string;
+    hasApiKey?: boolean;
     error?: string;
     findings: string[];
     recommendations: string[];
@@ -184,6 +206,7 @@ export type RealModelProxyPreflight = {
 
 export type RealModelGateFailureCategory =
     | 'proxy_unreachable'
+    | 'proxy_auth_required'
     | 'proxy_tls_certificate'
     | 'provider_missing_api_key'
     | 'provider_auth'
@@ -237,6 +260,7 @@ export type ReleaseReadinessReport = {
     canaryEvidenceGate?: CanaryChecklistEvidenceGate;
     observability: ObservabilitySummary;
     realModelGate?: {
+        providerPreflight?: RealModelProviderPreflight;
         preflight?: RealModelProxyPreflight;
         failureClassification?: RealModelGateFailureClassification;
     };
@@ -317,7 +341,19 @@ function listJsonlEntries(filePath: string): number {
 
 function classifyFailureCategoryFromText(text: string): RealModelGateFailureCategory {
     const normalized = text.toLowerCase();
-    if (normalized.includes('issuer certificate') || normalized.includes('self signed certificate')) {
+    if (
+        normalized.includes('proxy_connect_auth_required')
+        || normalized.includes('status=407')
+        || normalized.includes('proxy authentication')
+        || normalized.includes('proxy auth')
+    ) {
+        return 'proxy_auth_required';
+    }
+    if (
+        normalized.includes('issuer certificate')
+        || normalized.includes('self signed certificate')
+        || normalized.includes('tls handshake')
+    ) {
         return 'proxy_tls_certificate';
     }
     if (
@@ -385,6 +421,12 @@ function recommendationsForFailureCategory(category: RealModelGateFailureCategor
                 'Verify COWORKANY_PROXY_URL/HTTPS_PROXY points to reachable address from this host.',
                 'Retry release:readiness:commercial after proxy connectivity is restored.',
             ];
+        case 'proxy_auth_required':
+            return [
+                'Configure proxy credentials in proxy URL (for example http://user:pass@host:port).',
+                'Confirm proxy policy allows CONNECT to provider endpoints.',
+                'Retry release:readiness:commercial after proxy authentication succeeds.',
+            ];
         case 'proxy_tls_certificate':
             return [
                 'Install enterprise/interception CA certificate into runtime trust store.',
@@ -441,6 +483,8 @@ function summaryForFailureCategory(category: RealModelGateFailureCategory): stri
     switch (category) {
         case 'proxy_unreachable':
             return 'Proxy connectivity failed before or during real-model call.';
+        case 'proxy_auth_required':
+            return 'Proxy requires authentication or denied CONNECT tunnel setup.';
         case 'proxy_tls_certificate':
             return 'TLS certificate trust failed on proxy/provider route.';
         case 'provider_missing_api_key':
@@ -480,17 +524,36 @@ function summarizeFailureEvidence(text: string): string {
 
 export function classifyRealModelGateFailure(input: {
     stageNote?: string;
+    providerPreflight?: RealModelProviderPreflight;
     preflight?: RealModelProxyPreflight;
 }): RealModelGateFailureClassification | undefined {
     const evidence = (input.stageNote ?? '').trim();
-    if (!evidence && input.preflight?.status !== 'failed') {
+    if (!evidence && input.providerPreflight?.status !== 'failed' && input.preflight?.status !== 'failed') {
         return undefined;
     }
 
     let category: RealModelGateFailureCategory;
-    if (input.preflight?.status === 'failed') {
+    if (input.providerPreflight?.status === 'failed') {
+        const normalizedError = (input.providerPreflight.error ?? '').toLowerCase();
+        category = normalizedError.includes('missing_api_key') ? 'provider_missing_api_key' : 'unknown';
+    } else if (input.preflight?.status === 'failed') {
         const normalizedError = (input.preflight.error ?? '').toLowerCase();
-        category = normalizedError.includes('certificate') ? 'proxy_tls_certificate' : 'proxy_unreachable';
+        if (input.preflight.tlsStatus === 'failed') {
+            category = 'proxy_tls_certificate';
+        } else if (
+            normalizedError.includes('status=407')
+            || normalizedError.includes('proxy_connect_auth_required')
+            || normalizedError.includes('proxy auth')
+        ) {
+            category = 'proxy_auth_required';
+        } else {
+            category = (
+                normalizedError.includes('certificate')
+                || normalizedError.includes('tls handshake')
+            )
+                ? 'proxy_tls_certificate'
+                : 'proxy_unreachable';
+        }
     } else {
         category = classifyFailureCategoryFromText(evidence);
     }
@@ -498,7 +561,14 @@ export function classifyRealModelGateFailure(input: {
     return {
         category,
         summary: summaryForFailureCategory(category),
-        evidence: summarizeFailureEvidence(evidence || String(input.preflight?.error ?? 'real-model proxy preflight failed')),
+        evidence: summarizeFailureEvidence(
+            evidence
+            || String(
+                input.providerPreflight?.error
+                ?? input.preflight?.error
+                ?? 'real-model preflight failed',
+            ),
+        ),
         recommendations: recommendationsForFailureCategory(category),
     };
 }
@@ -1160,8 +1230,34 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
         lines.push('');
     }
 
-    if (report.realModelGate?.preflight || report.realModelGate?.failureClassification) {
+    if (
+        report.realModelGate?.providerPreflight
+        || report.realModelGate?.preflight
+        || report.realModelGate?.failureClassification
+    ) {
         lines.push('## Real-Model Gate Diagnosis');
+        if (report.realModelGate.providerPreflight) {
+            const providerPreflight = report.realModelGate.providerPreflight;
+            lines.push(`- Provider preflight status: ${providerPreflight.status}`);
+            lines.push(`- Provider source: ${providerPreflight.source}`);
+            lines.push(`- Provider: ${providerPreflight.provider ?? 'unknown'}`);
+            lines.push(`- Model: ${providerPreflight.modelId ?? 'unknown'}`);
+            if (providerPreflight.requiredApiKeyEnv) {
+                lines.push(`- Required key: ${providerPreflight.requiredApiKeyEnv}`);
+            }
+            if (typeof providerPreflight.hasApiKey === 'boolean') {
+                lines.push(`- Key present: ${providerPreflight.hasApiKey ? 'yes' : 'no'}`);
+            }
+            if (providerPreflight.error) {
+                lines.push(`- Provider preflight error: ${providerPreflight.error}`);
+            }
+            for (const finding of providerPreflight.findings) {
+                lines.push(`- Provider finding: ${finding}`);
+            }
+            for (const recommendation of providerPreflight.recommendations) {
+                lines.push(`- Provider action: ${recommendation}`);
+            }
+        }
         if (report.realModelGate.preflight) {
             const preflight = report.realModelGate.preflight;
             lines.push(`- Proxy preflight status: ${preflight.status}`);
@@ -1172,6 +1268,24 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
             }
             if (typeof preflight.latencyMs === 'number') {
                 lines.push(`- Proxy latency: ${preflight.latencyMs}ms`);
+            }
+            if (preflight.tunnelStatus) {
+                lines.push(`- Proxy CONNECT status: ${preflight.tunnelStatus}`);
+            }
+            if (preflight.tunnelTarget) {
+                lines.push(`- Proxy CONNECT target: ${preflight.tunnelTarget}`);
+            }
+            if (preflight.tunnelSource) {
+                lines.push(`- Proxy CONNECT target source: ${preflight.tunnelSource}`);
+            }
+            if (typeof preflight.tunnelLatencyMs === 'number') {
+                lines.push(`- Proxy CONNECT latency: ${preflight.tunnelLatencyMs}ms`);
+            }
+            if (preflight.tlsStatus) {
+                lines.push(`- Proxy TLS status: ${preflight.tlsStatus}`);
+            }
+            if (typeof preflight.tlsLatencyMs === 'number') {
+                lines.push(`- Proxy TLS latency: ${preflight.tlsLatencyMs}ms`);
             }
             if (preflight.error) {
                 lines.push(`- Proxy preflight error: ${preflight.error}`);

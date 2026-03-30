@@ -1,7 +1,7 @@
 # 2026-03-29 Mastra 重构落地进展（阶段 1-6）
 
 ## 背景
-- 参考方案文档：`/Users/beihuang/Downloads/2026-03-29-mastra-refactoring-plan.md`
+- 参考方案文档：`docs/plans/2026-03-29-mastra-refactoring-plan.md`（已从附件同步）
 - 目标：以 Mastra 为核心分阶段迁移 Sidecar，保留企业级能力与审批/风控特性。
 
 ## 已完成（本次提交）
@@ -190,6 +190,7 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮继续完成低风险死代码清理：删除无运行时入边的 `src/bridges/policyBridge.ts`，并移除 `orchestration/localWorkflowRegistry.ts` 中未使用导出 `formatWorkflowForPrompt`。
 - 本轮继续收敛 barrel 导出面：`src/{storage,utils}/index.ts` 仅保留当前运行链路在用导出，避免无入边导出继续增长。
 - 本轮新增一次严格类型清理门禁验证：`tsc --noEmit --noUnusedLocals --noUnusedParameters` 通过。
+- 本轮新增 Desktop 时间线回合 view-model 抽象：`desktop/src/components/Chat/Timeline/viewModels/turnRounds.ts`，`Timeline.tsx` 改为基于 round view-model 渲染，为后续 Assistant UI runtime 对接保留稳定数据边界。
 - 本轮继续完成运行链路无入边模块清理：删除 `src/scheduling/scheduledTaskPresentation.ts`、`src/tools/stubs.ts`、`src/utils/tls.ts`，并同步删除对应历史测试 `tests/scheduled-task-presentation.test.ts`、`tests/tts-content-processing.test.ts`、`tests/tts-direct-speak.ts`；同时移除 `src` 下空目录，保持单路径源码树整洁。
 - 本轮继续收敛协议层死代码：删除未进入单路径运行链路的 `src/protocol/events.ts` 与 `src/protocol/canonicalStream.ts`，并收敛 `src/protocol/index.ts` 导出面；同步删除历史测试 `tests/canonical-task-stream.test.ts`。
 - 本轮继续收敛 `src/protocol/commands.ts`：由大而全的细粒度命令 schema 收敛为“在用 manifest/runtime context schema + 通用 IPC schema + autonomous 命令常量”，模块行数从 1173 降至 179，保留当前单路径能力所需协议契约。

@@ -20,9 +20,7 @@ use uuid::Uuid;
 
 use crate::platform_asr;
 use crate::platform_runtime::{
-    build_platform_runtime_context,
-    build_runtime_snapshot,
-    resolve_skillhub_executable,
+    build_platform_runtime_context, build_runtime_snapshot, resolve_skillhub_executable,
 };
 use crate::process_manager::{ProcessManagerState, ServiceInfo};
 use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
@@ -1221,27 +1219,28 @@ pub async fn get_voice_state(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("get_voice_state", json!({}));
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
-        Ok(response) => response,
-        Err(error) => {
-            warn!(
-                "get_voice_state timed out without invalidating sidecar transport: {}",
-                error
-            );
-            return Ok(GenericIpcResult {
-                success: true,
-                payload: json!({
-                    "success": true,
-                    "state": {
-                        "isSpeaking": false,
-                        "canStop": false
-                    },
-                    "degraded": true,
-                    "error": error
-                }),
-            });
-        }
-    };
+    let response =
+        match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(
+                    "get_voice_state timed out without invalidating sidecar transport: {}",
+                    error
+                );
+                return Ok(GenericIpcResult {
+                    success: true,
+                    payload: json!({
+                        "success": true,
+                        "state": {
+                            "isSpeaking": false,
+                            "canStop": false
+                        },
+                        "degraded": true,
+                        "error": error
+                    }),
+                });
+            }
+        };
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
     Ok(GenericIpcResult {
@@ -1265,25 +1264,26 @@ pub async fn get_voice_provider_status(
             "providerMode": provider_mode,
         }),
     );
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
-        Ok(response) => response,
-        Err(error) => {
-            warn!(
+    let response =
+        match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(
                 "get_voice_provider_status timed out without invalidating sidecar transport: {}",
                 error
             );
-            return Ok(GenericIpcResult {
-                success: true,
-                payload: json!({
-                    "success": true,
-                    "preferredAsr": "system",
-                    "hasCustomAsr": false,
-                    "degraded": true,
-                    "error": error
-                }),
-            });
-        }
-    };
+                return Ok(GenericIpcResult {
+                    success: true,
+                    payload: json!({
+                        "success": true,
+                        "preferredAsr": "system",
+                        "hasCustomAsr": false,
+                        "degraded": true,
+                        "error": error
+                    }),
+                });
+            }
+        };
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
     Ok(GenericIpcResult {
@@ -1300,27 +1300,28 @@ pub async fn stop_voice(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("stop_voice", json!({}));
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
-        Ok(response) => response,
-        Err(error) => {
-            warn!(
-                "stop_voice timed out without invalidating sidecar transport: {}",
-                error
-            );
-            return Ok(GenericIpcResult {
-                success: true,
-                payload: json!({
-                    "success": false,
-                    "stopped": false,
-                    "state": {
-                        "isSpeaking": false,
-                        "canStop": false
-                    },
-                    "error": error
-                }),
-            });
-        }
-    };
+    let response =
+        match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(
+                    "stop_voice timed out without invalidating sidecar transport: {}",
+                    error
+                );
+                return Ok(GenericIpcResult {
+                    success: true,
+                    payload: json!({
+                        "success": false,
+                        "stopped": false,
+                        "state": {
+                            "isSpeaking": false,
+                            "canStop": false
+                        },
+                        "error": error
+                    }),
+                });
+            }
+        };
     let inner_payload = response.get("payload").cloned().unwrap_or(json!({}));
 
     Ok(GenericIpcResult {
@@ -2476,8 +2477,8 @@ pub async fn download_remote_file(
         })
         .unwrap_or_else(|| format!("download-{}", Uuid::new_v4()));
 
-    let downloads_dir = dirs::download_dir()
-        .ok_or("Unable to resolve the system Downloads directory")?;
+    let downloads_dir =
+        dirs::download_dir().ok_or("Unable to resolve the system Downloads directory")?;
     fs::create_dir_all(&downloads_dir).map_err(|e| e.to_string())?;
     let target_path = dedupe_download_path(&downloads_dir, &inferred_name);
 
@@ -2501,9 +2502,15 @@ pub async fn read_text_file_preview(
     input: ReadTextFilePreviewInput,
 ) -> Result<TextPreviewResult, String> {
     let max_bytes = input.max_bytes.unwrap_or(1024 * 1024) as usize;
-    let bytes = tokio::fs::read(&input.path).await.map_err(|e| e.to_string())?;
+    let bytes = tokio::fs::read(&input.path)
+        .await
+        .map_err(|e| e.to_string())?;
     let truncated = bytes.len() > max_bytes;
-    let slice = if truncated { &bytes[..max_bytes] } else { &bytes[..] };
+    let slice = if truncated {
+        &bytes[..max_bytes]
+    } else {
+        &bytes[..]
+    };
 
     Ok(TextPreviewResult {
         content: String::from_utf8_lossy(slice).to_string(),
@@ -2527,12 +2534,19 @@ pub async fn fetch_remote_text_preview(
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("Preview request failed with status {}", response.status()));
+        return Err(format!(
+            "Preview request failed with status {}",
+            response.status()
+        ));
     }
 
     let bytes = response.bytes().await.map_err(|e| e.to_string())?;
     let truncated = bytes.len() > max_bytes;
-    let slice = if truncated { &bytes[..max_bytes] } else { &bytes[..] };
+    let slice = if truncated {
+        &bytes[..max_bytes]
+    } else {
+        &bytes[..]
+    };
 
     Ok(TextPreviewResult {
         content: String::from_utf8_lossy(slice).to_string(),
@@ -2580,29 +2594,29 @@ pub async fn list_toolpacks(
         "includeDisabled": input.and_then(|v| v.include_disabled).unwrap_or(true)
     });
     let command = build_command("list_toolpacks", payload);
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            if is_response_timeout_error(&error) {
-                warn!(
-                    "list_toolpacks timed out without invalidating sidecar transport: {}",
-                    error
-                );
-                json!({
-                    "type": "list_toolpacks_response",
-                    "payload": {
-                        "success": true,
-                        "toolpacks": [],
-                        "degraded": true,
-                        "error": error,
-                    }
-                })
-            } else {
-                return Err(error);
+    let response =
+        match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+            Ok(response) => response,
+            Err(error) => {
+                if is_response_timeout_error(&error) {
+                    warn!(
+                        "list_toolpacks timed out without invalidating sidecar transport: {}",
+                        error
+                    );
+                    json!({
+                        "type": "list_toolpacks_response",
+                        "payload": {
+                            "success": true,
+                            "toolpacks": [],
+                            "degraded": true,
+                            "error": error,
+                        }
+                    })
+                } else {
+                    return Err(error);
+                }
             }
-        }
-    };
+        };
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -2699,29 +2713,29 @@ pub async fn list_claude_skills(
         "includeDisabled": input.and_then(|v| v.include_disabled).unwrap_or(true)
     });
     let command = build_command("list_claude_skills", payload);
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            if is_response_timeout_error(&error) {
-                warn!(
-                    "list_claude_skills timed out without invalidating sidecar transport: {}",
-                    error
-                );
-                json!({
-                    "type": "list_claude_skills_response",
-                    "payload": {
-                        "success": true,
-                        "skills": [],
-                        "degraded": true,
-                        "error": error,
-                    }
-                })
-            } else {
-                return Err(error);
+    let response =
+        match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+            Ok(response) => response,
+            Err(error) => {
+                if is_response_timeout_error(&error) {
+                    warn!(
+                        "list_claude_skills timed out without invalidating sidecar transport: {}",
+                        error
+                    );
+                    json!({
+                        "type": "list_claude_skills_response",
+                        "payload": {
+                            "success": true,
+                            "skills": [],
+                            "degraded": true,
+                            "error": error,
+                        }
+                    })
+                } else {
+                    return Err(error);
+                }
             }
-        }
-    };
+        };
     Ok(GenericIpcResult {
         success: true,
         payload: response,
@@ -2928,29 +2942,29 @@ pub async fn list_workspaces(
 ) -> Result<GenericIpcResult, String> {
     ensure_sidecar_running(&state, &app_handle).await?;
     let command = build_command("list_workspaces", json!({}));
-    let response = match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            if is_response_timeout_error(&error) {
-                warn!(
-                    "list_workspaces timed out without invalidating sidecar transport: {}",
-                    error
-                );
-                json!({
-                    "type": "list_workspaces_response",
-                    "payload": {
-                        "success": true,
-                        "workspaces": [],
-                        "degraded": true,
-                        "error": error,
-                    }
-                })
-            } else {
-                return Err(error);
+    let response =
+        match send_command_and_wait_with_timeout_policy(&state, command, 3000, false).await {
+            Ok(response) => response,
+            Err(error) => {
+                if is_response_timeout_error(&error) {
+                    warn!(
+                        "list_workspaces timed out without invalidating sidecar transport: {}",
+                        error
+                    );
+                    json!({
+                        "type": "list_workspaces_response",
+                        "payload": {
+                            "success": true,
+                            "workspaces": [],
+                            "degraded": true,
+                            "error": error,
+                        }
+                    })
+                } else {
+                    return Err(error);
+                }
             }
-        }
-    };
+        };
     Ok(GenericIpcResult {
         success: true,
         payload: response,

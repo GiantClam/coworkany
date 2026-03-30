@@ -942,11 +942,7 @@ function shouldPreserveTaskMessageTrajectory(session: TaskSession): boolean {
     }
 
     const userMessageCount = countMeaningfulUserMessages(session.messages);
-    if (userMessageCount >= 2) {
-        return true;
-    }
-
-    return userMessageCount >= 1 && session.status === 'running';
+    return userMessageCount >= 1;
 }
 
 function buildRawConversationTrajectoryItems(session: TaskSession): TimelineItemType[] {
@@ -1034,6 +1030,270 @@ function appendLatestTaskStatusTurn(
     return [...rawItems, latestTaskTurn];
 }
 
+function mergeUniqueTextParts(base: string[], incoming: string[]): string[] {
+    const merged: string[] = [];
+    for (const text of [...base, ...incoming]) {
+        const normalized = normalizeComparableText(text);
+        if (!normalized) {
+            continue;
+        }
+        if (merged.some((candidate) => normalizeComparableText(candidate) === normalized)) {
+            continue;
+        }
+        merged.push(text);
+    }
+    return merged;
+}
+
+function mergeById<T extends { id: string }>(base: T[], incoming: T[]): T[] {
+    const merged = new Map<string, T>();
+    for (const entry of base) {
+        merged.set(entry.id, entry);
+    }
+    for (const entry of incoming) {
+        merged.set(entry.id, entry);
+    }
+    return [...merged.values()];
+}
+
+function cloneTaskCard(card: TaskCardItem): TaskCardItem {
+    return {
+        ...card,
+        sections: [...card.sections],
+        tasks: card.tasks ? [...card.tasks] : undefined,
+        collaboration: card.collaboration
+            ? {
+                ...card.collaboration,
+                questions: [...card.collaboration.questions],
+                instructions: [...card.collaboration.instructions],
+                input: card.collaboration.input ? { ...card.collaboration.input } : undefined,
+                action: card.collaboration.action ? { ...card.collaboration.action } : undefined,
+                choices: card.collaboration.choices ? [...card.collaboration.choices] : undefined,
+            }
+            : undefined,
+        result: card.result
+            ? {
+                ...card.result,
+                artifacts: card.result.artifacts ? [...card.result.artifacts] : undefined,
+                files: card.result.files ? [...card.result.files] : undefined,
+            }
+            : undefined,
+    };
+}
+
+function mergeTaskCard(base: TaskCardItem | undefined, incoming: TaskCardItem | undefined): TaskCardItem | undefined {
+    if (!base && !incoming) {
+        return undefined;
+    }
+    if (!base) {
+        return incoming ? cloneTaskCard(incoming) : undefined;
+    }
+    if (!incoming) {
+        return cloneTaskCard(base);
+    }
+
+    const mergedSections = new Map<string, { label: string; lines: string[] }>();
+    for (const section of base.sections) {
+        mergedSections.set(section.label, {
+            label: section.label,
+            lines: [...section.lines],
+        });
+    }
+    for (const section of incoming.sections) {
+        const existing = mergedSections.get(section.label);
+        if (!existing) {
+            mergedSections.set(section.label, {
+                label: section.label,
+                lines: [...section.lines],
+            });
+            continue;
+        }
+        existing.lines = mergeUniqueTextParts(existing.lines, section.lines);
+        mergedSections.set(section.label, existing);
+    }
+
+    return {
+        ...base,
+        ...incoming,
+        sections: [...mergedSections.values()],
+        tasks: incoming.tasks ? [...incoming.tasks] : base.tasks ? [...base.tasks] : undefined,
+        collaboration: incoming.collaboration
+            ? {
+                ...incoming.collaboration,
+                questions: [...incoming.collaboration.questions],
+                instructions: [...incoming.collaboration.instructions],
+                input: incoming.collaboration.input ? { ...incoming.collaboration.input } : undefined,
+                action: incoming.collaboration.action ? { ...incoming.collaboration.action } : undefined,
+                choices: incoming.collaboration.choices ? [...incoming.collaboration.choices] : undefined,
+            }
+            : base.collaboration
+                ? {
+                    ...base.collaboration,
+                    questions: [...base.collaboration.questions],
+                    instructions: [...base.collaboration.instructions],
+                    input: base.collaboration.input ? { ...base.collaboration.input } : undefined,
+                    action: base.collaboration.action ? { ...base.collaboration.action } : undefined,
+                    choices: base.collaboration.choices ? [...base.collaboration.choices] : undefined,
+                }
+                : undefined,
+        result: incoming.result
+            ? {
+                ...incoming.result,
+                artifacts: incoming.result.artifacts ? [...incoming.result.artifacts] : undefined,
+                files: incoming.result.files ? [...incoming.result.files] : undefined,
+            }
+            : base.result
+                ? {
+                    ...base.result,
+                    artifacts: base.result.artifacts ? [...base.result.artifacts] : undefined,
+                    files: base.result.files ? [...base.result.files] : undefined,
+                }
+                : undefined,
+    };
+}
+
+function cloneAssistantTurn(turn: AssistantTurnItem): AssistantTurnItem {
+    return {
+        ...turn,
+        steps: [...turn.steps],
+        messages: [...turn.messages],
+        systemEvents: turn.systemEvents ? [...turn.systemEvents] : undefined,
+        toolCalls: turn.toolCalls ? [...turn.toolCalls] : undefined,
+        effectRequests: turn.effectRequests ? [...turn.effectRequests] : undefined,
+        patches: turn.patches ? [...turn.patches] : undefined,
+        taskCard: turn.taskCard ? cloneTaskCard(turn.taskCard) : undefined,
+    };
+}
+
+function mergeAssistantTurn(base: AssistantTurnItem, incoming: AssistantTurnItem): AssistantTurnItem {
+    const mergedLead = sanitizeDisplayText(incoming.lead || '') || sanitizeDisplayText(base.lead || '') || '';
+    const incomingSteps = incoming.steps.length > 0 ? incoming.steps : base.steps;
+    const baseSystemEvents = base.systemEvents ?? [];
+    const incomingSystemEvents = incoming.systemEvents ?? [];
+    const baseToolCalls = base.toolCalls ?? [];
+    const incomingToolCalls = incoming.toolCalls ?? [];
+    const baseEffects = base.effectRequests ?? [];
+    const incomingEffects = incoming.effectRequests ?? [];
+    const basePatches = base.patches ?? [];
+    const incomingPatches = incoming.patches ?? [];
+
+    return {
+        ...base,
+        timestamp: incoming.timestamp,
+        lead: mergedLead || undefined,
+        steps: [...incomingSteps],
+        messages: mergeUniqueTextParts(base.messages, incoming.messages),
+        systemEvents: mergeUniqueTextParts(baseSystemEvents, incomingSystemEvents),
+        toolCalls: mergeById(baseToolCalls, incomingToolCalls),
+        effectRequests: mergeById(baseEffects, incomingEffects),
+        patches: mergeById(basePatches, incomingPatches),
+        taskCard: mergeTaskCard(base.taskCard, incoming.taskCard),
+    };
+}
+
+function normalizeTimelineToTurnRounds(items: TimelineItemType[]): TimelineItemType[] {
+    const output: TimelineItemType[] = [];
+
+    const ensureAssistantTurn = (seed: { id: string; timestamp: string }): AssistantTurnItem => {
+        const last = output[output.length - 1];
+        if (last?.type === 'assistant_turn') {
+            return last;
+        }
+        const turn: AssistantTurnItem = {
+            type: 'assistant_turn',
+            id: `assistant-turn-round-${seed.id}`,
+            timestamp: seed.timestamp,
+            steps: [],
+            messages: [],
+        };
+        output.push(turn);
+        return turn;
+    };
+
+    for (const item of items) {
+        switch (item.type) {
+            case 'user_message':
+                output.push(item);
+                break;
+            case 'assistant_turn': {
+                const last = output[output.length - 1];
+                if (last?.type === 'assistant_turn') {
+                    output[output.length - 1] = mergeAssistantTurn(last, item);
+                } else {
+                    output.push(cloneAssistantTurn(item));
+                }
+                break;
+            }
+            case 'assistant_message': {
+                const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
+                turn.timestamp = item.timestamp;
+                turn.lead = sanitizeDisplayText(item.content);
+                turn.messages = mergeUniqueTextParts(turn.messages, [sanitizeDisplayText(item.content)]);
+                break;
+            }
+            case 'system_event': {
+                const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
+                turn.timestamp = item.timestamp;
+                turn.systemEvents = mergeUniqueTextParts(turn.systemEvents ?? [], [sanitizeDisplayText(item.content)]);
+                break;
+            }
+            case 'tool_call': {
+                const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
+                turn.timestamp = item.timestamp;
+                turn.toolCalls = mergeById(turn.toolCalls ?? [], [item]);
+                break;
+            }
+            case 'effect_request': {
+                const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
+                turn.timestamp = item.timestamp;
+                turn.effectRequests = mergeById(turn.effectRequests ?? [], [item]);
+                break;
+            }
+            case 'patch': {
+                const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
+                turn.timestamp = item.timestamp;
+                turn.patches = mergeById(turn.patches ?? [], [item]);
+                break;
+            }
+            case 'task_card': {
+                const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
+                turn.timestamp = item.timestamp;
+                turn.taskCard = mergeTaskCard(turn.taskCard, item);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    return output;
+}
+
+function ensureVisibleUserEntry(items: TimelineItemType[], session: TaskSession): TimelineItemType[] {
+    if (items.some((item) => item.type === 'user_message')) {
+        return items;
+    }
+
+    const fallbackUserMessage = [...session.messages]
+        .reverse()
+        .find((message) => message.role === 'user' && normalizeText(message.content).length > 0);
+    if (!fallbackUserMessage) {
+        return items;
+    }
+
+    const content = sanitizeDisplayText(fallbackUserMessage.content);
+    if (!content) {
+        return items;
+    }
+
+    return [{
+        type: 'user_message',
+        id: fallbackUserMessage.id,
+        content,
+        timestamp: fallbackUserMessage.timestamp || session.updatedAt,
+    }, ...items];
+}
+
 function buildCanonicalMessagesFromTaskEvents(taskId: string, events: TaskSession['events']): CanonicalTaskMessage[] {
     const canonicalEvents = events.flatMap((event): CanonicalStreamEvent[] => {
         if (event.type === 'RATE_LIMITED') {
@@ -1086,9 +1346,11 @@ export function buildTimelineItems(
     const standardItems = effectiveCanonicalMessages.length > 0
         ? buildCanonicalTimelineItems(session, effectiveCanonicalMessages)
         : buildLegacyTimelineItems(session, sourceEvents);
-    const items = shouldPreserveTaskMessageTrajectory(session)
+    const rawItems = shouldPreserveTaskMessageTrajectory(session)
         ? appendLatestTaskStatusTurn(buildRawConversationTrajectoryItems(session), standardItems)
         : standardItems;
+    const turnRoundItems = normalizeTimelineToTurnRounds(rawItems);
+    const items = ensureVisibleUserEntry(turnRoundItems, session);
 
     return {
         items,

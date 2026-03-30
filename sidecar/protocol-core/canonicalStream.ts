@@ -383,7 +383,7 @@ function eventToCanonicalMessageDelta(event: TaskEvent): CanonicalStreamEvent | 
         return undefined;
     }
     const payload = event.payload as TextDeltaPayload;
-    const delta = payload.content ?? payload.text ?? '';
+    const delta = payload.delta ?? payload.content ?? payload.text ?? '';
     if (!delta) {
         return undefined;
     }

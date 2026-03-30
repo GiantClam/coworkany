@@ -17,6 +17,7 @@ import { MessageBubble } from './components/MessageBubble';
 import { AssistantTurnBlock } from './components/AssistantTurnBlock';
 import { getPendingTaskStatus } from './pendingTaskStatus';
 import { useCanonicalTaskStreamStore } from '../../../stores/useCanonicalTaskStreamStore';
+import { buildTimelineTurnRoundViewModel } from './viewModels/turnRounds';
 
 // ============================================================================
 // Main Timeline Component
@@ -30,6 +31,31 @@ interface TimelineProps {
         actionId?: string;
         value: string;
     }) => void;
+}
+
+export function buildDisplayItemsWithPendingState(
+    visibleItems: TimelineItemType[],
+    pendingLabel: string,
+    session: Pick<TaskSession, 'taskId' | 'updatedAt'>,
+): TimelineItemType[] {
+    if (!pendingLabel) {
+        return visibleItems;
+    }
+
+    const lastVisibleItem = visibleItems[visibleItems.length - 1];
+    if (lastVisibleItem?.type === 'assistant_turn') {
+        return visibleItems;
+    }
+
+    const pendingTurn: AssistantTurnItem = {
+        type: 'assistant_turn',
+        id: `pending-turn-${session.taskId}`,
+        timestamp: session.updatedAt,
+        lead: '',
+        steps: [],
+        messages: [],
+    };
+    return [...visibleItems, pendingTurn];
 }
 
 const TimelineComponent: React.FC<TimelineProps> = ({
@@ -58,24 +84,14 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 return '';
         }
     }, [pendingStatus, t]);
-    const displayItems = React.useMemo<TimelineItemType[]>(() => {
-        if (!pendingLabel) {
-            return visibleItems;
-        }
-        const hasAssistantTurn = visibleItems.some((item) => item.type === 'assistant_turn');
-        if (hasAssistantTurn) {
-            return visibleItems;
-        }
-        const pendingTurn: AssistantTurnItem = {
-            type: 'assistant_turn',
-            id: `pending-turn-${session.taskId}`,
-            timestamp: session.updatedAt,
-            lead: '',
-            steps: [],
-            messages: [],
-        };
-        return [...visibleItems, pendingTurn];
-    }, [pendingLabel, session.taskId, session.updatedAt, visibleItems]);
+    const displayItems = React.useMemo<TimelineItemType[]>(
+        () => buildDisplayItemsWithPendingState(visibleItems, pendingLabel, session),
+        [pendingLabel, session, visibleItems],
+    );
+    const turnRoundViewModel = React.useMemo(
+        () => buildTimelineTurnRoundViewModel(displayItems),
+        [displayItems],
+    );
     const lastAssistantTurnId = React.useMemo(() => {
         for (let index = displayItems.length - 1; index >= 0; index -= 1) {
             const item = displayItems[index];
@@ -135,24 +151,44 @@ const TimelineComponent: React.FC<TimelineProps> = ({
         setUserScrolled(false);
     }, [visibleItems.length]);
 
-    const renderTimelineItem = React.useCallback((item: TimelineItemType, key: string): React.ReactNode => {
-        switch (item.type) {
-            case 'user_message':
-                return <MessageBubble key={key} item={item} isUser={true} />;
-            case 'assistant_turn':
-                return (
-                    <div key={key} className={styles.assistantThread}>
-                        <AssistantTurnBlock
-                            item={item}
-                            pendingLabel={item.id === lastAssistantTurnId ? pendingLabel : undefined}
-                            onTaskCollaborationSubmit={onTaskCollaborationSubmit}
-                        />
-                    </div>
-                );
-            default:
-                return null;
+    const renderTimelineRound = React.useCallback((index: number): React.ReactNode => {
+        const round = turnRoundViewModel.rounds[index];
+        if (!round) {
+            return null;
         }
-    }, [lastAssistantTurnId, onTaskCollaborationSubmit, pendingLabel]);
+
+        const parts: React.ReactNode[] = [];
+        if (round.userMessage) {
+            parts.push(
+                <MessageBubble
+                    key={`${round.id}-user`}
+                    item={round.userMessage}
+                    isUser={true}
+                />
+            );
+        }
+        if (round.assistantTurn) {
+            parts.push(
+                <div key={`${round.id}-assistant`} className={styles.assistantThread}>
+                    <AssistantTurnBlock
+                        item={round.assistantTurn}
+                        pendingLabel={round.assistantTurn.id === lastAssistantTurnId ? pendingLabel : undefined}
+                        onTaskCollaborationSubmit={onTaskCollaborationSubmit}
+                    />
+                </div>
+            );
+        }
+
+        if (parts.length === 0) {
+            return null;
+        }
+
+        return (
+            <React.Fragment key={round.id}>
+                {parts}
+            </React.Fragment>
+        );
+    }, [lastAssistantTurnId, onTaskCollaborationSubmit, pendingLabel, turnRoundViewModel.rounds]);
 
     return (
         <div className={styles.timeline} ref={containerRef}>
@@ -167,10 +203,7 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                         : t('chat.showEarlierMessages', { count: hiddenMessageCount })}
                 </button>
             )}
-            {displayItems.map((item, index) => renderTimelineItem(
-                item,
-                item.id || `${session.taskId}-${item.type}-${index}`,
-            ))}
+            {turnRoundViewModel.rounds.map((_, index) => renderTimelineRound(index))}
             <div ref={endRef} />
         </div>
     );

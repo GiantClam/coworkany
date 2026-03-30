@@ -197,6 +197,17 @@ describe('release readiness helpers', () => {
             },
             checklist: createDefaultCanaryChecklist(),
             realModelGate: {
+                providerPreflight: {
+                    status: 'failed',
+                    source: 'llm-config',
+                    provider: 'aiberm',
+                    modelId: 'openai/gpt-5.3-codex',
+                    requiredApiKeyEnv: 'OPENAI_API_KEY',
+                    hasApiKey: false,
+                    error: 'missing_api_key:OPENAI_API_KEY',
+                    findings: ['Required API key OPENAI_API_KEY is missing for provider aiberm.'],
+                    recommendations: ['Set OPENAI_API_KEY in environment or active llm profile.'],
+                },
                 preflight: {
                     status: 'failed',
                     source: 'env',
@@ -242,6 +253,8 @@ describe('release readiness helpers', () => {
         expect(markdown).toContain('Overall status: healthy');
         expect(markdown).toContain('Required overall status: healthy');
         expect(markdown).toContain('## Real-Model Gate Diagnosis');
+        expect(markdown).toContain('Provider preflight status: failed');
+        expect(markdown).toContain('Required key: OPENAI_API_KEY');
         expect(markdown).toContain('Proxy preflight status: failed');
         expect(markdown).toContain('Failure category: proxy_unreachable');
         expect(markdown).toContain('## Canary Checklist');
@@ -263,6 +276,20 @@ describe('release readiness helpers', () => {
         })?.category).toBe('provider_missing_api_key');
 
         expect(classifyRealModelGateFailure({
+            providerPreflight: {
+                status: 'failed',
+                source: 'llm-config',
+                provider: 'aiberm',
+                modelId: 'openai/gpt-5.3-codex',
+                requiredApiKeyEnv: 'OPENAI_API_KEY',
+                hasApiKey: false,
+                error: 'missing_api_key:OPENAI_API_KEY',
+                findings: [],
+                recommendations: [],
+            },
+        })?.category).toBe('provider_missing_api_key');
+
+        expect(classifyRealModelGateFailure({
             preflight: {
                 status: 'failed',
                 source: 'env',
@@ -273,6 +300,44 @@ describe('release readiness helpers', () => {
                 recommendations: [],
             },
         })?.category).toBe('proxy_unreachable');
+
+        expect(classifyRealModelGateFailure({
+            preflight: {
+                status: 'failed',
+                source: 'env',
+                proxyUrl: 'http://127.0.0.1:7890',
+                timeoutMs: 3000,
+                error: 'proxy_connect_auth_required:status=407 line=HTTP/1.1 407 Proxy Authentication Required',
+                findings: [],
+                recommendations: [],
+            },
+        })?.category).toBe('proxy_auth_required');
+
+        expect(classifyRealModelGateFailure({
+            preflight: {
+                status: 'failed',
+                source: 'env',
+                proxyUrl: 'http://127.0.0.1:7890',
+                timeoutMs: 3000,
+                error: 'proxy CONNECT TLS handshake failed: socket hang up',
+                findings: [],
+                recommendations: [],
+            },
+        })?.category).toBe('proxy_tls_certificate');
+
+        expect(classifyRealModelGateFailure({
+            preflight: {
+                status: 'failed',
+                source: 'env',
+                proxyUrl: 'http://127.0.0.1:7890',
+                timeoutMs: 3000,
+                tunnelStatus: 'passed',
+                tlsStatus: 'failed',
+                error: 'proxy CONNECT timeout after 3000ms',
+                findings: [],
+                recommendations: [],
+            },
+        })?.category).toBe('proxy_tls_certificate');
     });
 
     test('summarizes control-plane eval metrics from json output', () => {

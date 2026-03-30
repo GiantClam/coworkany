@@ -218,6 +218,77 @@ describe('mastra entrypoint processor', () => {
         ).toBe(true);
     });
 
+    test('send_task_message retries with recovery thread after store-disabled history reference error', async () => {
+        const calls: Array<{ threadId: string; message: string }> = [];
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                calls.push({
+                    threadId: input.threadId,
+                    message: input.message,
+                });
+
+                if (input.threadId === 'task-recover') {
+                    emit({
+                        type: 'error',
+                        runId: 'run-retry-1',
+                        message: "Item with id 'msg_x' not found. Items are not persisted when `store` is set to false.",
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-retry-1',
+                        finishReason: 'error',
+                    });
+                    return { runId: 'run-retry-1' };
+                }
+
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-retry-2',
+                    content: `recovered:${input.message}`,
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-retry-2',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-retry-2' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-followup-recover-1',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-recover',
+                content: 'continue after failure',
+            },
+        });
+
+        expect(calls.map((call) => call.threadId)).toEqual([
+            'task-recover',
+            'task-recover-recovery-req-fixed',
+        ]);
+        expect(
+            harness.outgoing.some(
+                (message) =>
+                    message.type === 'TEXT_DELTA'
+                    && (message.payload as Record<string, unknown>)?.delta === 'recovered:continue after failure',
+            ),
+        ).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+
+        await harness.process({
+            id: 'cmd-followup-recover-2',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-recover',
+                content: 'second follow-up',
+            },
+        });
+
+        expect(calls[calls.length - 1]?.threadId).toBe('task-recover-recovery-req-fixed');
+    });
+
     test('token usage desktop events are forwarded as TOKEN_USAGE payloads', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {

@@ -34,6 +34,7 @@ type PendingForwardResponse = {
 type TaskRuntimeStatus = 'running' | 'idle' | 'finished' | 'failed' | 'interrupted' | 'suspended' | 'scheduled';
 type TaskRuntimeState = {
     taskId: string;
+    conversationThreadId: string;
     title: string;
     workspacePath: string;
     createdAt: string;
@@ -178,6 +179,13 @@ function isScheduledCancellationRequest(text: string): boolean {
     }
     return /\b(cancel|stop|abort|terminate)\b/i.test(trimmed) && /\b(reminder|scheduled?|task)\b/i.test(trimmed);
 }
+function isStoreDisabledHistoryReferenceError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return normalized.includes('item with id')
+        && normalized.includes('not found')
+        && normalized.includes('store')
+        && normalized.includes('false');
+}
 function pickResourceOverride(payload: Record<string, unknown>): string | null {
     const fromPayload = getString(payload.resourceId) ?? getString(payload.memoryResourceId);
     if (fromPayload) {
@@ -291,6 +299,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const hasLastUserMessage = Object.prototype.hasOwnProperty.call(patch, 'lastUserMessage');
         const next: TaskRuntimeState = {
             taskId,
+            conversationThreadId: patch.conversationThreadId ?? existing?.conversationThreadId ?? taskId,
             title: patch.title ?? existing?.title ?? 'Task',
             workspacePath: patch.workspacePath ?? existing?.workspacePath ?? process.cwd(),
             createdAt: existing?.createdAt ?? patch.createdAt ?? getNowIso(),
@@ -306,6 +315,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const collectRuntimeSnapshot = () => {
         const tasks = Array.from(taskStates.values()).map((task) => ({
             taskId: task.taskId,
+            threadId: task.conversationThreadId,
             title: task.title,
             workspacePath: task.workspacePath,
             createdAt: task.createdAt,
@@ -671,6 +681,51 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     },
                 });
             };
+            const runUserMessageWithThreadRecovery = async (input: {
+                taskId: string;
+                message: string;
+                resourceId: string;
+                preferredThreadId: string;
+            }): Promise<void> => {
+                const executeAttempt = async (threadId: string): Promise<DesktopEvent[]> => {
+                    const events: DesktopEvent[] = [];
+                    await deps.handleUserMessage(
+                        input.message,
+                        threadId,
+                        input.resourceId,
+                        (event) => events.push(event),
+                    );
+                    return events;
+                };
+
+                const firstAttemptEvents = await executeAttempt(input.preferredThreadId);
+                const hasRecoverableHistoryError = firstAttemptEvents.some((event) =>
+                    event.type === 'error'
+                    && isStoreDisabledHistoryReferenceError(event.message),
+                );
+                const hasAssistantProgress = firstAttemptEvents.some((event) =>
+                    event.type === 'text_delta'
+                    || event.type === 'tool_call'
+                    || event.type === 'approval_required'
+                    || event.type === 'tool_result',
+                );
+
+                if (hasRecoverableHistoryError && !hasAssistantProgress) {
+                    const recoveryThreadId = `${input.taskId}-recovery-${createId()}`;
+                    upsertTaskState(input.taskId, {
+                        conversationThreadId: recoveryThreadId,
+                    });
+                    const retryEvents = await executeAttempt(recoveryThreadId);
+                    for (const event of retryEvents) {
+                        emitDesktopEvent(input.taskId, event, emit);
+                    }
+                    return;
+                }
+
+                for (const event of firstAttemptEvents) {
+                    emitDesktopEvent(input.taskId, event, emit);
+                }
+            };
             if (command.type === 'bootstrap_runtime_context') {
                 bootstrapRuntimeContext = toRecord(payload.runtimeContext);
                 emitFor('bootstrap_runtime_context_response', {
@@ -881,7 +936,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         return;
                     }
                 }
-                upsertTaskState(taskId, {
+                const state = upsertTaskState(taskId, {
                     title: getString(payload.title) ?? taskStates.get(taskId)?.title ?? 'Task',
                     workspacePath,
                     status: 'running',
@@ -902,12 +957,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     success: true,
                     taskId,
                 });
-                await deps.handleUserMessage(
-                    message,
+                await runUserMessageWithThreadRecovery({
                     taskId,
+                    message,
                     resourceId,
-                    (event) => emitDesktopEvent(taskId, event, emit),
-                );
+                    preferredThreadId: state.conversationThreadId,
+                });
                 return;
             }
             if (command.type === 'resume_interrupted_task') {
@@ -929,7 +984,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 });
                 await deps.handleUserMessage(
                     resumeMessage,
-                    taskId,
+                    state.conversationThreadId,
                     state.resourceId,
                     (event) => emitDesktopEvent(taskId, event, emit),
                 );

@@ -107,6 +107,20 @@ function normalizeTaskId(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function createSyntheticEventId(taskId: string, eventType: string): string {
+    const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    return `sidecar-${taskId}-${eventType.toLowerCase()}-${randomPart}`;
+}
+
+function normalizeEventPayload(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
 function createInterruptedFailureState(): NonNullable<TaskSession['failure']> {
     return {
         error: 'Task interrupted by app restart',
@@ -217,6 +231,112 @@ function pickMostRecentTaskId(sessions: Map<string, TaskSession>): string | null
     }
 
     return latestTaskId;
+}
+
+function isKnownTaskMode(value: unknown): value is NonNullable<TaskSession['taskMode']> {
+    return value === 'chat'
+        || value === 'immediate_task'
+        || value === 'scheduled_task'
+        || value === 'scheduled_multi_task';
+}
+
+function inferTaskModeFromSession(session: TaskSession): TaskSession['taskMode'] {
+    if (isKnownTaskMode(session.taskMode)) {
+        return session.taskMode;
+    }
+
+    if (typeof session.title === 'string' && session.title.trim().startsWith('[Scheduled]')) {
+        return 'scheduled_task';
+    }
+
+    for (const event of session.events) {
+        if (event.type === 'TASK_PLAN_READY') {
+            const mode = (event.payload as Record<string, unknown> | undefined)?.mode;
+            if (isKnownTaskMode(mode)) {
+                return mode;
+            }
+        }
+        if (event.type === 'TASK_STARTED') {
+            const context = ((event.payload as Record<string, unknown> | undefined)?.context as Record<string, unknown> | undefined);
+            if (context?.scheduled === true) {
+                return 'scheduled_task';
+            }
+            const mode = context?.mode;
+            if (isKnownTaskMode(mode)) {
+                return mode;
+            }
+        }
+        if (event.type === 'TASK_FINISHED') {
+            const finishReason = (event.payload as Record<string, unknown> | undefined)?.finishReason;
+            if (finishReason === 'scheduled') {
+                return 'scheduled_task';
+            }
+        }
+    }
+
+    return undefined;
+}
+
+function isTerminalTaskStatus(status: TaskStatus | undefined): status is 'finished' | 'failed' {
+    return status === 'finished' || status === 'failed';
+}
+
+function resolveSessionStatus(
+    existingStatus: TaskStatus | undefined,
+    incomingStatus: TaskStatus | undefined,
+    fallback: TaskStatus
+): TaskStatus {
+    if (isTerminalTaskStatus(existingStatus) && incomingStatus === 'running') {
+        return existingStatus;
+    }
+    return incomingStatus ?? existingStatus ?? fallback;
+}
+
+function mergeTaskEvents(
+    primary: TaskEvent[] | undefined,
+    secondary: TaskEvent[] | undefined
+): TaskEvent[] {
+    const merged = [...(primary ?? []), ...(secondary ?? [])];
+    if (merged.length <= 1) {
+        return merged;
+    }
+
+    const deduped = new Map<string, TaskEvent>();
+    for (const event of merged) {
+        if (!deduped.has(event.id)) {
+            deduped.set(event.id, event);
+        }
+    }
+
+    return [...deduped.values()].sort((left, right) => {
+        if (left.sequence !== right.sequence) {
+            return left.sequence - right.sequence;
+        }
+        const leftTime = Date.parse(left.timestamp);
+        const rightTime = Date.parse(right.timestamp);
+        if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime) && leftTime !== rightTime) {
+            return leftTime - rightTime;
+        }
+        return left.id.localeCompare(right.id);
+    });
+}
+
+function mergeMessages(
+    primary: TaskSession['messages'] | undefined,
+    secondary: TaskSession['messages'] | undefined
+): TaskSession['messages'] {
+    const merged = [...(primary ?? []), ...(secondary ?? [])];
+    if (merged.length <= 1) {
+        return merged;
+    }
+
+    const deduped = new Map<string, TaskSession['messages'][number]>();
+    for (const message of merged) {
+        if (!deduped.has(message.id)) {
+            deduped.set(message.id, message);
+        }
+    }
+    return [...deduped.values()];
 }
 
 function persistStateSnapshot(
@@ -347,13 +467,21 @@ function applyEventsBatch(
             continue;
         }
 
-        if (typeof event.id !== 'string' || event.id.trim().length === 0) {
-            console.warn('[TaskEventStore] Ignored task event without a valid id:', event);
-            continue;
-        }
-
-        const normalizedEvent = taskId === event.taskId ? event : { ...event, taskId };
         const existing = sessions.get(taskId) ?? createEmptySession(taskId);
+        const normalizedEvent: TaskEvent = {
+            ...event,
+            taskId,
+            id: typeof event.id === 'string' && event.id.trim().length > 0
+                ? event.id
+                : createSyntheticEventId(taskId, String(event.type ?? 'task_event')),
+            timestamp: typeof event.timestamp === 'string' && event.timestamp.trim().length > 0
+                ? event.timestamp
+                : new Date().toISOString(),
+            sequence: typeof event.sequence === 'number' && Number.isFinite(event.sequence) && event.sequence > 0
+                ? Math.trunc(event.sequence)
+                : (existing.events.at(-1)?.sequence ?? 0) + 1,
+            payload: normalizeEventPayload(event.payload),
+        };
         if (hasSeenEvent(taskId, normalizedEvent.id, existing)) {
             continue;
         }
@@ -517,6 +645,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                         ...seed,
                         taskId,
                         isDraft: seed?.isDraft ?? existing.isDraft,
+                        status: resolveSessionStatus(existing.status, seed?.status, existing.status),
                         updatedAt: seed?.updatedAt ?? now,
                     }
                     : {
@@ -540,16 +669,20 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
             set((state) => {
                 const sessions = new Map(state.sessions);
                 const draft = sessions.get(draftTaskId);
+                const existing = sessions.get(nextTaskId);
                 const now = new Date().toISOString();
+                const promotedBase = existing ?? draft ?? createEmptySession(nextTaskId);
                 const promoted: TaskSession = {
-                    ...(draft ?? createEmptySession(nextTaskId)),
+                    ...promotedBase,
                     taskId: nextTaskId,
                     isDraft: false,
-                    status: seed?.status ?? 'running',
-                    title: seed?.title ?? draft?.title,
-                    workspacePath: seed?.workspacePath ?? draft?.workspacePath,
+                    status: resolveSessionStatus(promotedBase.status, seed?.status, 'running'),
+                    title: seed?.title ?? existing?.title ?? draft?.title,
+                    workspacePath: seed?.workspacePath ?? existing?.workspacePath ?? draft?.workspacePath,
+                    events: mergeTaskEvents(existing?.events, draft?.events),
+                    messages: mergeMessages(existing?.messages, draft?.messages),
                     updatedAt: now,
-                    createdAt: draft?.createdAt ?? now,
+                    createdAt: draft?.createdAt ?? existing?.createdAt ?? now,
                 };
 
                 if (draftTaskId !== nextTaskId) {
@@ -721,6 +854,7 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                 }
                 map.set(cleanedSession.taskId, {
                     ...cleanedSession,
+                    taskMode: inferTaskModeFromSession(cleanedSession),
                     title: deriveLatestUserFacingTitle(cleanedSession),
                 });
                 getOrCreateEventIdSet(cleanedSession.taskId, cleanedSession);
