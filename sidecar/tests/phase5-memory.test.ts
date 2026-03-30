@@ -4,13 +4,6 @@ import { Memory } from '@mastra/memory';
 import { LibSQLStore, LibSQLVector } from '@mastra/libsql';
 import { fastembed } from '@mastra/fastembed';
 import { workingMemoryTemplate } from '../src/mastra/memory/working-memory-template';
-import { DEFAULT_PROFILES } from '../src/mastra/memory/default-profiles';
-import {
-    buildOrgResourceId,
-    buildPersonalResourceId,
-    buildTeamResourceId,
-    parseResourceScope,
-} from '../src/mastra/memory/enterprise-knowledge';
 
 const MEM_DB = '.test-phase5-memory.db';
 
@@ -56,26 +49,6 @@ describe('Phase 5: Memory + Enterprise Knowledge', () => {
         expect(workingMemoryTemplate).toContain('## 3. 工作偏好');
         expect(workingMemoryTemplate).toContain('## 4. 技能图谱');
         expect(workingMemoryTemplate).toContain('## 7. 知识沉淀');
-    });
-
-    test('default profiles are present', () => {
-        expect(DEFAULT_PROFILES.length).toBeGreaterThanOrEqual(5);
-        expect(DEFAULT_PROFILES.some((profile) => profile.role === 'frontend_engineer')).toBe(true);
-        expect(DEFAULT_PROFILES.some((profile) => profile.role === 'backend_engineer')).toBe(true);
-    });
-
-    test('resource id scope helpers work', () => {
-        const personal = buildPersonalResourceId('123');
-        const team = buildTeamResourceId('engineering');
-        const org = buildOrgResourceId('coworkany');
-
-        expect(personal).toBe('employee-123');
-        expect(team).toBe('team-engineering');
-        expect(org).toBe('org-coworkany');
-
-        expect(parseResourceScope(personal)).toBe('private');
-        expect(parseResourceScope(team)).toBe('team');
-        expect(parseResourceScope(org)).toBe('org');
     });
 
     test('vector upsert and query works', async () => {

@@ -902,6 +902,131 @@ describe('mastra entrypoint processor', () => {
         expect((response?.payload as Record<string, unknown>)?.content).toBe('hello');
     });
 
+    test('forwards exec_shell and returns forwarded response payload', async () => {
+        const harness = createHarness({
+            onOutgoing: async (message, injectIncoming) => {
+                if (message.type !== 'exec_shell') {
+                    return;
+                }
+                await injectIncoming({
+                    type: 'exec_shell_response',
+                    commandId: message.id,
+                    payload: {
+                        success: true,
+                        stdout: 'ok',
+                        stderr: '',
+                        exitCode: 0,
+                    },
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-exec-shell',
+            type: 'exec_shell',
+            payload: {
+                command: 'echo ok',
+            },
+        });
+
+        const response = harness.outgoing.find((message) => message.type === 'exec_shell_response');
+        expect(response).toBeDefined();
+        expect(response?.commandId).toBe('cmd-exec-shell');
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect((response?.payload as Record<string, unknown>)?.stdout).toBe('ok');
+        expect((response?.payload as Record<string, unknown>)?.exitCode).toBe(0);
+    });
+
+    test('forwards get_policy_config and returns forwarded response payload', async () => {
+        const harness = createHarness({
+            onOutgoing: async (message, injectIncoming) => {
+                if (message.type !== 'get_policy_config') {
+                    return;
+                }
+                await injectIncoming({
+                    type: 'get_policy_config_response',
+                    commandId: message.id,
+                    payload: {
+                        success: true,
+                        globalPolicy: 'strict',
+                        rules: [],
+                    },
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-get-policy-config',
+            type: 'get_policy_config',
+            payload: {},
+        });
+
+        const response = harness.outgoing.find((message) => message.type === 'get_policy_config_response');
+        expect(response).toBeDefined();
+        expect(response?.commandId).toBe('cmd-get-policy-config');
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect((response?.payload as Record<string, unknown>)?.globalPolicy).toBe('strict');
+    });
+
+    test('forwards propose_patch and reject_patch with stable response mapping', async () => {
+        const seen = new Set<string>();
+        const harness = createHarness({
+            onOutgoing: async (message, injectIncoming) => {
+                if (message.type === 'propose_patch') {
+                    seen.add('propose_patch');
+                    await injectIncoming({
+                        type: 'propose_patch_response',
+                        commandId: message.id,
+                        payload: {
+                            success: true,
+                            patchId: 'patch-1',
+                        },
+                    });
+                    return;
+                }
+                if (message.type === 'reject_patch') {
+                    seen.add('reject_patch');
+                    await injectIncoming({
+                        type: 'reject_patch_response',
+                        commandId: message.id,
+                        payload: {
+                            success: true,
+                            patchId: 'patch-1',
+                        },
+                    });
+                }
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-propose-patch',
+            type: 'propose_patch',
+            payload: {
+                patchId: 'patch-1',
+            },
+        });
+        await harness.process({
+            id: 'cmd-reject-patch',
+            type: 'reject_patch',
+            payload: {
+                patchId: 'patch-1',
+            },
+        });
+
+        expect(seen.has('propose_patch')).toBe(true);
+        expect(seen.has('reject_patch')).toBe(true);
+
+        const proposeResponse = harness.outgoing.find((message) => message.type === 'propose_patch_response');
+        expect(proposeResponse).toBeDefined();
+        expect(proposeResponse?.commandId).toBe('cmd-propose-patch');
+        expect((proposeResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+
+        const rejectResponse = harness.outgoing.find((message) => message.type === 'reject_patch_response');
+        expect(rejectResponse).toBeDefined();
+        expect(rejectResponse?.commandId).toBe('cmd-reject-patch');
+        expect((rejectResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+    });
+
     test('retries forwarded read_file once on timeout and succeeds', async () => {
         let attempts = 0;
         const harness = createHarness({

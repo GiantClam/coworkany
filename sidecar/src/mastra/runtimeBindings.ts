@@ -1,10 +1,4 @@
-import type { RuntimeCommandDeps } from '../handlers';
-import type { DesktopEvent as MastraDesktopEvent } from '../ipc/bridge';
 import type { StoredSkill } from '../storage/skillStore';
-import {
-    handleApprovalResponse as handleMastraApprovalResponse,
-    handleUserMessage as handleMastraUserMessage,
-} from '../ipc/streaming';
 import {
     getSpeechProviderStatus,
     invokeCustomAsrProvider,
@@ -17,10 +11,17 @@ type VoiceProviderInput = {
     workspaceRoot: string;
 };
 
-export function createVoiceProviderBindings(input: VoiceProviderInput): Pick<
-    RuntimeCommandDeps,
-    'getVoiceProviderStatus' | 'transcribeWithCustomAsr'
-> {
+type VoiceProviderBindings = {
+    getVoiceProviderStatus: (providerMode?: 'auto' | 'system' | 'custom') => ReturnType<typeof getSpeechProviderStatus>;
+    transcribeWithCustomAsr: (request: {
+        audioBase64: string;
+        mimeType?: string;
+        language?: string;
+        providerMode?: 'auto' | 'system' | 'custom';
+    }) => ReturnType<typeof invokeCustomAsrProvider>;
+};
+
+export function createVoiceProviderBindings(input: VoiceProviderInput): VoiceProviderBindings {
     return {
         getVoiceProviderStatus: (providerMode) => getSpeechProviderStatus(
             input.listEnabledSkills(),
@@ -37,38 +38,5 @@ export function createVoiceProviderBindings(input: VoiceProviderInput): Pick<
             },
             request.providerMode,
         ),
-    };
-}
-
-export function createMastraRuntimeBridge(input: {
-    enabled: boolean;
-}): RuntimeCommandDeps['mastraRuntime'] {
-    if (!input.enabled) {
-        return undefined;
-    }
-
-    return {
-        enabled: true,
-        sendMessage: async (request) => {
-            return await handleMastraUserMessage(
-                request.message,
-                request.threadId,
-                request.resourceId,
-                (event: MastraDesktopEvent) => request.onEvent(event),
-                {
-                    requireToolApproval: request.requireToolApproval,
-                    maxSteps: request.maxSteps,
-                },
-            );
-        },
-        approveToolCall: async (request) => {
-            await handleMastraApprovalResponse(
-                request.runId,
-                request.toolCallId,
-                request.approved,
-                (event: MastraDesktopEvent) => request.onEvent(event),
-            );
-        },
-        cancelTask: async () => ({ success: true }),
     };
 }

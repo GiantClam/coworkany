@@ -518,7 +518,7 @@ export const browserSetModeTool: ToolDefinition = {
     name: 'browser_set_mode',
     description: `Set the browser automation mode.
 - "precise": Use Playwright with CSS selectors. Fast and deterministic. Best for known page structures.
-- "smart": Use AI vision (browser-use). Slower but can handle unknown/dynamic pages. Auto-starts browser-use-service when enabled.
+- "smart": Use AI vision (browser-use). Slower but can handle unknown/dynamic pages.
 - "auto": Try precise mode first, automatically fall back to smart mode on failure (default).`,
     effects: ['ui:notify'],
     input_schema: {
@@ -569,7 +569,7 @@ export const browserAiActionTool: ToolDefinition = {
 Uses the browser-use service to understand the page visually and execute the action.
 Best for: unknown page structures, dynamically rendered content, complex interactions
 that are hard to express with CSS selectors.
-Requires browser-use-service (auto-started when enabled).
+Requires a reachable browser-use-service endpoint.
 Examples:
 - "click the publish button"
 - "scroll down and find the comment box, then type 'Hello'"
@@ -603,13 +603,13 @@ Examples:
                 success: result.success,
                 result: result.result,
                 ...(result.error ? { error: result.error } : {}),
-                tip: result.success ? undefined : 'Smart mode unavailable. Check browserUse.autoStart/serviceUrl configuration and retry.',
+                tip: result.success ? undefined : 'Smart mode unavailable. Check browserUse.serviceUrl and ensure browser-use-service is running.',
             };
         } catch (error) {
             return {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
-                tip: 'Ensure the browser is connected and browserUse auto-start is enabled.',
+                tip: 'Ensure the browser is connected and browser-use-service is reachable from browserUse.serviceUrl.',
             };
         } finally {
             cleanup();

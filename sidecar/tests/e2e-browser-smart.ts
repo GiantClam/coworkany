@@ -1,6 +1,3 @@
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import assert from 'node:assert/strict';
 import { BrowserService } from '../src/runtime/browser/browserService';
 
@@ -17,81 +14,40 @@ async function waitForHealth(baseUrl: string, timeoutMs: number): Promise<void> 
                 return;
             }
         } catch {
-            // Service might still be starting.
+            // External service may not be reachable yet.
         }
         await sleep(500);
     }
-    throw new Error(`browser-use-service did not become healthy within ${timeoutMs}ms`);
-}
-
-function pickPythonExecutable(serviceDir: string): string {
-    const candidates = [
-        path.join(serviceDir, '.venv311', 'Scripts', 'python.exe'),
-        path.join(serviceDir, '.venv', 'Scripts', 'python.exe'),
-    ];
-
-    for (const candidate of candidates) {
-        if (existsSync(candidate)) {
-            return candidate;
-        }
-    }
-
-    throw new Error('No local Python executable found for browser-use-service (.venv311 or .venv).');
+    throw new Error(
+        `browser-use-service is not healthy at ${baseUrl} within ${timeoutMs}ms. Start an external browser-use service before running this E2E.`,
+    );
 }
 
 async function main(): Promise<void> {
-    const sidecarRoot = process.cwd();
-    const serviceDir = path.resolve(sidecarRoot, '..', 'browser-use-service');
-    const mainPy = path.join(serviceDir, 'main.py');
-    const pythonExe = pickPythonExecutable(serviceDir);
-    const port = 8122;
-    const baseUrl = `http://127.0.0.1:${port}`;
+    const configuredUrl = process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL?.trim();
+    const baseUrl = (configuredUrl && configuredUrl.length > 0)
+        ? configuredUrl.replace(/\/$/, '')
+        : 'http://127.0.0.1:8100';
 
-    const svc = spawn(pythonExe, [mainPy], {
-        cwd: serviceDir,
-        env: { ...process.env, BROWSER_USE_PORT: String(port) },
-        stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    await waitForHealth(baseUrl, 20_000);
 
-    let stderr = '';
-    svc.stderr.on('data', (d) => {
-        stderr += d.toString();
-    });
+    const browserService = new BrowserService(baseUrl);
+    await browserService.connect({ headless: true });
 
-    try {
-        await waitForHealth(baseUrl, 20000);
+    const status = await browserService.getSmartModeStatus();
+    assert.equal(status.available, true, `Smart mode expected available, got: ${status.reason || 'unknown'}`);
+    assert.ok(status.sharedCdpUrl?.includes('localhost:'), `Missing sharedCdpUrl: ${JSON.stringify(status)}`);
 
-        const browserService = new BrowserService(baseUrl);
-        await browserService.connect({ headless: true });
+    browserService.setMode('smart');
 
-        const status = await browserService.getSmartModeStatus();
-        assert.equal(status.available, true, `Smart mode expected available, got: ${status.reason || 'unknown'}`);
-        assert.ok(status.sharedCdpUrl?.includes('localhost:'), `Missing sharedCdpUrl: ${JSON.stringify(status)}`);
+    const nav = await browserService.navigate('https://example.com');
+    assert.ok(nav.title.includes('Example'), `Unexpected title: ${nav.title}`);
 
-        browserService.setMode('smart');
+    const shot = await browserService.screenshot();
+    assert.ok(shot.base64.length > 100, 'Screenshot base64 is unexpectedly short');
 
-        const nav = await browserService.navigate('https://example.com');
-        assert.ok(nav.title.includes('Example'), `Unexpected title: ${nav.title}`);
-
-        const shot = await browserService.screenshot();
-        assert.ok(shot.base64.length > 100, 'Screenshot base64 is unexpectedly short');
-
-        await browserService.disconnect();
-        console.log('E2E smart browser reuse passed');
-    } catch (error) {
-        console.error('E2E smart browser reuse failed');
-        if (stderr.trim()) {
-            console.error('[browser-use-service stderr]');
-            console.error(stderr.slice(-4000));
-        }
-        throw error;
-    } finally {
-        svc.kill('SIGTERM');
-        await sleep(500);
-        if (!svc.killed) {
-            svc.kill('SIGKILL');
-        }
-    }
+    await browserService.disconnect();
+    console.log('E2E smart browser reuse passed');
 }
 
 main().catch((err) => {

@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { handleCapabilityCommand, handleWorkspaceCommand } from '../handlers';
-import type { SkillImportResponsePayload } from '../handlers';
+import { handleCapabilityCommand } from '../handlers/capabilities';
+import type { SkillImportResponsePayload } from '../handlers/capabilities';
+import { handleWorkspaceCommand } from '../handlers/workspaces';
 import type { IpcCommand } from '../protocol';
 import { SkillStore, ToolpackStore, createWorkspaceStoreFacade } from '../storage';
 import { DirectiveManager } from '../directives/directiveManager';

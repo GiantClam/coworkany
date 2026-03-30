@@ -214,7 +214,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'view_file',
             marker: 'VIEW_FILE_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('VIEW_FILE_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('VIEW_FILE_BYPASS')\"",
             args: {
                 path: viewFilePath,
             },
@@ -229,7 +229,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'write_to_file',
             marker: 'WRITE_FILE_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('WRITE_FILE_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('WRITE_FILE_BYPASS')\"",
             args: {
                 path: writeFilePath,
                 content: 'WRITE_FILE_MARKER_OK',
@@ -246,7 +246,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'replace_file_content',
             marker: 'REPLACE_FILE_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('REPLACE_FILE_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('REPLACE_FILE_BYPASS')\"",
             args: {
                 path: replaceFilePath,
                 target_content: 'before-token',
@@ -280,7 +280,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'compute_file_hash',
             marker: 'COMPUTE_HASH_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('COMPUTE_HASH_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('COMPUTE_HASH_BYPASS')\"",
             args: {
                 path: hashFilePath,
                 algorithm: 'sha256',
@@ -296,7 +296,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'move_file',
             marker: 'MOVE_FILE_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('MOVE_FILE_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('MOVE_FILE_BYPASS')\"",
             args: {
                 source_path: moveSrcPath,
                 destination_path: moveDstPath,
@@ -313,7 +313,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'delete_path',
             marker: 'DELETE_PATH_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('DELETE_PATH_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('DELETE_PATH_BYPASS')\"",
             args: {
                 path: deletePathFile,
             },
@@ -328,7 +328,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'batch_move_files',
             marker: 'BATCH_MOVE_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('BATCH_MOVE_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('BATCH_MOVE_BYPASS')\"",
             args: {
                 moves: [
                     { source_path: batchMoveSrcA, destination_path: batchMoveDstA },
@@ -351,7 +351,7 @@ function buildScenarios(rootDir: string): Scenario[] {
             toolName: 'batch_delete_paths',
             marker: 'BATCH_DELETE_SCENARIO_DONE',
             bypassDeterministicWorkflow: true,
-            bypassCommand: "python3 -c \"print('BATCH_DELETE_BYPASS')\"",
+            bypassCommand: "node -e \"console.log('BATCH_DELETE_BYPASS')\"",
             args: {
                 deletes: [
                     { path: batchDeleteA },

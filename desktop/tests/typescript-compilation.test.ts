@@ -106,7 +106,7 @@ test.describe('TypeScript Compilation - Sidecar', () => {
             'src/agent/autonomousAgent.ts',
             'src/agent/selfLearning/precipitator.ts',
             'src/data/defaults.ts',
-            'src/tools/builtin.ts',
+            'src/tools/standard.ts',
             'src/storage/skillStore.ts',
         ];
 

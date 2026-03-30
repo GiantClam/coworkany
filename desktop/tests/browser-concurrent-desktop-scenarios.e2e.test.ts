@@ -1,7 +1,6 @@
 import { test, expect } from './tauriFixtureNoChrome';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn, type ChildProcess } from 'child_process';
 import {
     buildBrowserConcurrentScenarioMatrix,
     buildBrowserTaskInventory,
@@ -14,10 +13,12 @@ const POLL_INTERVAL_MS = Number(process.env.COWORKANY_BROWSER_SCENARIO_POLL_MS ?
 
 const REPO_ROOT = path.resolve(process.cwd(), '..');
 const ARTIFACT_DIR = path.join(REPO_ROOT, 'artifacts', 'desktop-browser-concurrent-scenarios');
-const BROWSER_USE_DIR = path.join(REPO_ROOT, 'browser-use-service');
-const BROWSER_USE_MAIN = path.join(BROWSER_USE_DIR, 'main.py');
 const BROWSER_USE_PORT = Number(process.env.BROWSER_USE_PORT ?? 8100);
-const BROWSER_USE_HEALTH_URL = `http://127.0.0.1:${BROWSER_USE_PORT}/health`;
+const BROWSER_USE_SERVICE_URL = (
+    process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL?.trim()
+    || `http://127.0.0.1:${BROWSER_USE_PORT}`
+).replace(/\/$/, '');
+const BROWSER_USE_HEALTH_URL = `${BROWSER_USE_SERVICE_URL}/health`;
 const ORIGINAL_ENABLE_SHARED_CDP = process.env.COWORKANY_TEST_ENABLE_BROWSER_SHARED_CDP;
 const ORIGINAL_DISABLE_BROWSER_CDP = process.env.COWORKANY_DISABLE_BROWSER_CDP;
 const ORIGINAL_ISOLATE_APP_DATA = process.env.COWORKANY_TEST_ISOLATE_APP_DATA;
@@ -27,7 +28,7 @@ type BrowserUseServiceHandle = {
     available: boolean;
     startedByTest: boolean;
     reason: string;
-    process: ChildProcess | null;
+    process: null;
     stderrTail: string;
 };
 
@@ -59,30 +60,6 @@ async function waitForBrowserUseHealth(url: string, timeoutMs: number): Promise<
     return false;
 }
 
-function pickPythonExecutable(): string | null {
-    const candidates = [
-        path.join(BROWSER_USE_DIR, '.venv311', 'bin', 'python'),
-        path.join(BROWSER_USE_DIR, '.venv', 'bin', 'python'),
-        path.join(BROWSER_USE_DIR, '.venv311', 'Scripts', 'python.exe'),
-        path.join(BROWSER_USE_DIR, '.venv', 'Scripts', 'python.exe'),
-        process.env.PYTHON,
-        'python3',
-        'python',
-    ].filter((item): item is string => Boolean(item));
-
-    for (const candidate of candidates) {
-        if (candidate.includes(path.sep)) {
-            if (fs.existsSync(candidate)) {
-                return candidate;
-            }
-            continue;
-        }
-        return candidate;
-    }
-
-    return null;
-}
-
 async function ensureBrowserUseService(): Promise<BrowserUseServiceHandle> {
     if (await isBrowserUseHealthy(BROWSER_USE_HEALTH_URL)) {
         return {
@@ -93,79 +70,28 @@ async function ensureBrowserUseService(): Promise<BrowserUseServiceHandle> {
             stderrTail: '',
         };
     }
-
-    if (!fs.existsSync(BROWSER_USE_MAIN)) {
+    const healthyAfterGrace = await waitForBrowserUseHealth(BROWSER_USE_HEALTH_URL, 5_000);
+    if (healthyAfterGrace) {
         return {
-            available: false,
+            available: true,
             startedByTest: false,
-            reason: `browser-use-service main.py not found at ${BROWSER_USE_MAIN}`,
+            reason: `browser-use-service became healthy at ${BROWSER_USE_HEALTH_URL}`,
             process: null,
             stderrTail: '',
-        };
-    }
-
-    const pythonExec = pickPythonExecutable();
-    if (!pythonExec) {
-        return {
-            available: false,
-            startedByTest: false,
-            reason: 'No Python executable found for browser-use-service startup',
-            process: null,
-            stderrTail: '',
-        };
-    }
-
-    const proc = spawn(pythonExec, [BROWSER_USE_MAIN], {
-        cwd: BROWSER_USE_DIR,
-        env: {
-            ...process.env,
-            BROWSER_USE_PORT: String(BROWSER_USE_PORT),
-            BROWSER_USE_HOST: '127.0.0.1',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        shell: process.platform === 'win32',
-    });
-
-    let stderrBuffer = '';
-    proc.stderr?.on('data', (chunk: Buffer) => {
-        stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-8000);
-    });
-    proc.stdout?.on('data', () => {
-        // Keep process output consumed.
-    });
-
-    const healthy = await waitForBrowserUseHealth(BROWSER_USE_HEALTH_URL, 30_000);
-    if (!healthy) {
-        proc.kill('SIGTERM');
-        await wait(500);
-        if (!proc.killed) {
-            proc.kill('SIGKILL');
-        }
-        return {
-            available: false,
-            startedByTest: true,
-            reason: `browser-use-service failed to become healthy within 30s at ${BROWSER_USE_HEALTH_URL}`,
-            process: null,
-            stderrTail: stderrBuffer,
         };
     }
 
     return {
-        available: true,
-        startedByTest: true,
-        reason: `browser-use-service started by test with ${pythonExec}`,
-        process: proc,
+        available: false,
+        startedByTest: false,
+        reason: `browser-use-service is unavailable at ${BROWSER_USE_HEALTH_URL}; start it externally before running agentbrowser scenarios`,
+        process: null,
         stderrTail: '',
     };
 }
 
 async function stopBrowserUseService(handle: BrowserUseServiceHandle | null): Promise<void> {
-    if (!handle?.process) return;
-    handle.process.kill('SIGTERM');
-    await wait(500);
-    if (!handle.process.killed) {
-        handle.process.kill('SIGKILL');
-    }
+    const _ = handle;
 }
 
 function scenarioRequiresAgentBrowser(scenario: BrowserConcurrentScenario): boolean {
@@ -182,7 +108,7 @@ test.describe('Desktop concurrent browser scenarios (agentbrowser + playwright)'
         process.env.COWORKANY_TEST_ENABLE_BROWSER_SHARED_CDP = 'true';
         process.env.COWORKANY_DISABLE_BROWSER_CDP = 'false';
         process.env.COWORKANY_TEST_ISOLATE_APP_DATA = 'true';
-        process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL = `http://127.0.0.1:${BROWSER_USE_PORT}`;
+        process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL = BROWSER_USE_SERVICE_URL;
 
         ensureDir(ARTIFACT_DIR);
         fs.writeFileSync(

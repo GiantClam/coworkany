@@ -36,7 +36,7 @@
 - 新增 resourceId 作用域辅助：`employee-* / team-* / org-*`。
 
 ### Phase 6: 协议兼容层（阶段性）
-- 在现有 `main.ts + handlers/runtime.ts` 中增加 Mastra 兼容分支（`COWORKANY_RUNTIME_MODE=mastra`）。
+- 已切换为 `main.ts -> main-mastra.ts` 单路径，协议兼容逻辑由 `src/mastra/entrypoint.ts` 承接。
 - `main.ts` 已强制收敛为 `mastra` 单路径入口（直接导入 `main-mastra.ts`，不再保留 runtime mode 分支）。
 - 已打通指令：`bootstrap_runtime_context`、`doctor_preflight`、`get_runtime_snapshot`、`get_tasks`、`start_task`、`send_task_message`、`resume_interrupted_task`、`cancel_task`、`clear_task_history`、`report_effect_result`。
 - `main-mastra` 协议处理器已补齐 Task Snapshot 状态机（`running/idle/finished/failed/suspended`）与 `resume_interrupted_task` 的 last-user-message 回放。
@@ -64,9 +64,9 @@
 - `main.ts` 已抽离命令校验辅助函数到 `ipc/commandValidation.ts`（`summarizeValidationIssues / buildInvalidCommandResponse`），并让 `messageLineProcessor` 复用同一类型定义，减少重复逻辑。
 - `main.ts` 已抽离 singleton 环境配置解析到 `ipc/singletonConfig.ts`（启用开关、socketPath trim、lockPath 派生），主入口不再内联环境拼装细节。
 - `main.ts` 已重构为薄引导器（约 10 行），直接走 `main-mastra.ts`。
-- `handlers/runtime.ts` 已补齐 `propose_patch/reject_patch` 命令处理：支持发出 `PATCH_PROPOSED/PATCH_REJECTED` 生命周期事件，并返回 `propose_patch_response`，避免命令无收口。
-- `handlers/runtime.ts` 已为 `apply_patch/read_file/list_dir/exec_shell/capture_screen/get_policy_config` 接入 Rust Policy Gate IPC 转发：可通过 `sendIpcCommandAndWait` 直连 Rust 响应；当桥接不可用时保留 `policy_gate_required`/默认策略快照兜底，避免桌面端等待超时。
-- `handlers/runtime.ts` 的 `propose_patch` 已改为“优先转发 Rust ShadowFS（`propose_patch_response`）+ 失败回退本地兼容收口”，确保补丁提交流程可走到底层实现。
+- `main-mastra` 协议处理器已补齐 `propose_patch/reject_patch` 命令处理：支持发出 `PATCH_PROPOSED/PATCH_REJECTED` 生命周期事件，并返回 `propose_patch_response`，避免命令无收口。
+- `main-mastra` 已为 `apply_patch/read_file/list_dir/exec_shell/capture_screen/get_policy_config` 接入 Rust Policy Gate IPC 转发：可通过 `sendIpcCommandAndWait` 直连 Rust 响应；当桥接不可用时保留 `policy_gate_required`/默认策略快照兜底，避免桌面端等待超时。
+- `main-mastra` 的 `propose_patch` 已改为“优先转发 Rust ShadowFS（`propose_patch_response`）+ 失败回退本地兼容收口”，确保补丁提交流程可走到底层实现。
 - `desktop/src-tauri/src/sidecar.rs` 已补齐 Sidecar→Desktop IPC 命令识别与处理：新增 `read_file/list_dir/exec_shell/capture_screen/get_policy_config` 分支，并返回对应 `*_response`，完成 Policy Gate 命令端到端回路。
 - `desktop/src-tauri/tauri.conf.json` 已移除已删除 Python 服务资源声明（`rag-service` / `browser-use-service`），恢复 `cargo check` 与打包前置校验可执行性。
 - `main-legacy.ts` 已继续拆分 `runtime snapshot + doctor preflight + suspended auth assist` 到 `legacy/runtimeCommandSupport.ts`，将 `getRuntimeCommandDeps` 中高耦合辅助逻辑下沉。
@@ -80,7 +80,7 @@
 - `main-legacy.ts` 已继续拆分“定时任务执行结果校验与浏览器证据校验”到 `legacy/scheduledTaskExecutionValidation.ts`，减少主文件策略校验内联逻辑。
 - `main-legacy.ts` 已继续拆分“执行协议评估（会话文本提取 + 协议 JSON 解析 + LLM judge + approval-gate 启发式）”到 `legacy/executionProtocolAssessment.ts`，并改为依赖注入调用，进一步收敛主文件复杂度。
 - `main-legacy.ts` 已继续拆分“执行结果收口与会话桥接（assistant 收口替换、artifact telemetry、ExecutionSession/ExecutionResultReporter 装配）”到 `legacy/executionRuntimeSession.ts`，减少主文件状态收口逻辑内联。
-- `main-legacy.ts` 与 `handlers/runtime.ts` 的高频路径已清理一批 `as any`（事件处理、工具流、autonomous/effect payload），`main-legacy.ts` 与 `handlers/runtime.ts` 当前均为 0 处 `as any`。
+- 历史高频路径已清理一批 `as any`（事件处理、工具流、autonomous/effect payload），并在当前单路径架构下保持 `sidecar/src` 为 0 处 `as any`。
 - `sidecar/src` 非测试代码中的 `as any` 已清零（0 处）：本轮继续完成 `memory/ragBridge.ts`、`llm/providers/openai.ts`、`llm/vercelAdapter.ts`、`handlers/capabilities.ts`、`agent/postExecutionLearning.ts`、`tools/personal/weather.ts`、`tools/personal/news.ts`、`utils/tls.ts` 等文件类型收敛。
 - `main-legacy.ts` 当前约 `8865` 行（由最初 `9966` 持续下降）。
 - 旧实现已整体迁移到 `main-legacy.ts`（约 `9150` 行），将“默认运行路径”与“兼容运行路径”彻底解耦，便于后续继续删除 legacy 模块。
@@ -90,25 +90,19 @@
 
 ## 验收测试（阶段 1-6）
 
-### 新增测试文件
+### 当前在用验收测试文件
 - `sidecar/tests/phase1-mastra-infra.test.ts`
 - `sidecar/tests/phase2-tools.test.ts`
 - `sidecar/tests/phase3-agent-loop.test.ts`
 - `sidecar/tests/phase4-control-plane.test.ts`
 - `sidecar/tests/phase5-memory.test.ts`
-- `sidecar/tests/phase6-mastra-protocol-compat.test.ts`
 - `sidecar/tests/phase6-final-validation.test.ts`
 - `sidecar/tests/mastra-additional-commands.test.ts`
-- `sidecar/tests/ipc-command-executor.test.ts`
-- `sidecar/tests/ipc-line-input-processor.test.ts`
-- `sidecar/tests/ipc-response-processing.test.ts`
-- `sidecar/tests/ipc-message-line-processor.test.ts`
-- `sidecar/tests/ipc-singleton-runtime.test.ts`
-- `sidecar/tests/ipc-sidecar-lifecycle.test.ts`
-- `sidecar/tests/ipc-sidecar-process-logging.test.ts`
-- `sidecar/tests/ipc-output-emitter.test.ts`
-- `sidecar/tests/ipc-command-validation.test.ts`
-- `sidecar/tests/ipc-singleton-config.test.ts`
+- `sidecar/tests/mastra-entrypoint.test.ts`
+- `sidecar/tests/mastra-bridge.test.ts`
+- `sidecar/tests/mastra-scheduler-runtime.test.ts`
+- `sidecar/tests/main-mastra-policy-gate.e2e.test.ts`
+- `sidecar/tests/ipc-bridge.test.ts`
 
 ### 执行命令
 ```bash
@@ -123,12 +117,13 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 
 ### 当前结果
 - `typecheck`: 通过
-- `test:mastra:phases`: 116 通过 / 1 跳过 / 0 失败
-- `test:stable`: 112 通过 / 0 失败
-- `bun test tests/ipc-*.test.ts`: 40 通过 / 0 失败
+- `test:mastra:phases`: 92 通过 / 1 跳过 / 0 失败
+- `test:stable`: 106 通过 / 0 失败
+- `bun test tests/ipc-*.test.ts`: 4 通过 / 0 失败
 - `desktop cargo check`: 通过（已修复 tauri bundle 资源路径失效）
 - `desktop cargo test classify_sidecar_message_recognizes_policy_gate_forwarded`: 2 通过 / 0 失败
 - `sidecar/src` 的 `as any` 总数：0（包含测试文件与非测试代码）
+- `sidecar/src` 代码体量快照：80 个 TS/TSX 文件，约 20,558 LOC（`main.ts` 9 行，`main-mastra.ts` 156 行）
 - 跳过项：`Phase 3 integration stream`（依赖真实模型 API Key）
 - 本轮新增 `phase6` 用例（审批等待不提前完成 + 审批通过/拒绝恢复收口 + Mastra 模式阻断 autonomous 命令全矩阵 + suspended 不误完成）已补充。
 - 本轮新增 `phase6` 失败注入回归：Policy Gate 转发的“异常响应类型”“桥接抛错”“`get_policy_config` 转发失败回退默认策略”均已覆盖。
@@ -141,22 +136,31 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮新增 `phase6-final-validation` 验收用例，覆盖：`main.ts` 引导器化、默认 Mastra 路由、`main-legacy.ts`/`legacy` 目录已移除、Python 旧服务文件删除、legacy 启动脚本显式化。
 - 本轮完成 Desktop 侧 Python 运行时清理：`process_manager.rs` 移除 Python 下载/venv/main.py 启动链路，改为兼容 no-op managed services；`platform_runtime.rs` 将 Python 标记为 `not_required_in_mastra_single_process`，并移除系统 Python 探测分支。
 - 本轮补强 `phase6-final-validation`（14 通过）：新增 Desktop 侧“无 Python runtime 引导”与“platform runtime 不再探测 Python”断言，防止回归到双栈。
+- 本轮完成 Sidecar 浏览器智能模式收口（最终）：删除过渡模块 `src/runtime/browser/browserUseServiceBootstrap.ts` 与对应单测 `tests/browser-use-service-bootstrap.test.ts`，彻底移除本地 browser-use Python 自启动语义。
+- 本轮补强 `phase6-final-validation`：新增断言确保 `src/runtime/browser/browserUseServiceBootstrap.ts` 已从仓库删除，防止本地自启动链路回归。
+- 本轮继续清理 browser-use 旧语义：
+  - `src/runtime/browser/browserService.ts` 的不可用错误文案由“could not be auto-started”改为“unavailable or unreachable”，避免误导为仍支持本地自启；
+  - `src/tools/browser.ts` 去除“auto-started when enabled”描述，统一改为“需可达的 browser-use-service endpoint”；
+  - `tests/e2e-browser-smart.ts` 与 `desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts` 不再尝试本地 `python main.py` 拉起服务，改为依赖外部已运行服务并给出清晰跳过/失败原因。
+- 本轮继续清理 Desktop 测试层 Python 假设噪音：
+  - `desktop/tests/system-tools-desktop-e2e.test.ts` 的 deterministic bypass 命令由 `python3 -c` 统一改为 `node -e`，避免测试运行隐式依赖 Python；
+  - `desktop/tests/tauriFixtureNoChrome.ts` 的 runtimeContext mock 改为 `python.available=false` + `source=not_required_in_mastra_single_process`，与单路径架构一致。
 - 本轮新增 `main-mastra` IPC 协议处理器增强：在原有 `start_task/send_task_message/report_effect_result/health_check` 基础上，补齐 `bootstrap_runtime_context/doctor_preflight/get_runtime_snapshot/get_tasks/resume_interrupted_task` 与 Policy Gate 转发等待映射。
-- 本轮新增/扩展 `tests/mastra-entrypoint.test.ts`（25 通过），覆盖启动/续跑/审批、snapshot/resume/get_tasks、语音命令、token usage 事件映射、autonomous 兼容收口、additional-command 委托、Policy Gate 转发成功/异常响应/不可用兜底，以及“定时创建/取消 + memory resource 作用域回退”。
+- 本轮新增/扩展 `tests/mastra-entrypoint.test.ts`（28 通过），覆盖启动/续跑/审批、snapshot/resume/get_tasks、语音命令、token usage 事件映射、autonomous 兼容收口、additional-command 委托、Policy Gate 转发成功/异常响应/不可用兜底，以及“定时创建/取消 + memory resource 作用域回退”。
 - 本轮新增 `tests/mastra-bridge.test.ts`（4 通过），覆盖 Mastra chunk（payload/direct）到 DesktopEvent 映射与 token usage 解析。
 - 本轮新增 `src/mastra/additionalCommands.ts` 并在 `main-mastra.ts` 装配，复用 `handleWorkspaceCommand/handleCapabilityCommand` 以承接 `workspace/toolpack/skill/directive` 管理命令。
 - 本轮新增 `tests/mastra-additional-commands.test.ts`（3 通过），覆盖管理命令链路（workspace lifecycle + capability/directive 管理 + unhandled fallback）。
 - 本轮新增 `src/mastra/schedulerRuntime.ts` 并在 `main-mastra.ts` 装配，提供轻量调度生命周期（定时持久化/轮询执行/循环续排/链式续排/取消）。
 - 本轮新增 `tests/mastra-scheduler-runtime.test.ts`（6 通过），覆盖调度创建、到期执行、循环续排、链式续排、取消，以及 stale-running 恢复失败回收。
 - 本轮完成“强制单路径”收口：`main.ts` 删除 legacy 分支，`package.json` 删除 `start:legacy/dev:legacy/start:mastra:compat/dev:mastra:compat` 脚本，并更新 `phase6-final-validation` 验收断言。
-- 本轮继续完成 Phase6 指定 orchestration 清单收口：`src/orchestration/workRequestRuntime.ts`、`workRequestStore.ts`、`workRequestSnapshot.ts` 从原路径删除并迁移到 `src/runtime/workRequest/{runtime,store,snapshot}.ts`，调用方与测试已全量切换。
+- 本轮继续完成 Phase6 指定 orchestration 清单收口：`src/orchestration/workRequestRuntime.ts`、`workRequestStore.ts`、`workRequestSnapshot.ts` 已从原路径删除；当前在用实现收敛到 `src/runtime/workRequest/store.ts`（其余过渡文件已清理）。
 - 本轮补齐构建门禁：新增 `package.json` 的 `build` 脚本并验证 `bun run build` 可通过；`build:release` 也已修复并可通过。
 - 本轮将 `src` 内测试迁出到 `tests/`（browserService/browserTools/reminder），避免测试代码计入 `sidecar/src` LOC。
 - 本轮将 `src/data/defaults.ts` 的内嵌技能长文案外置为 `src/data/builtinSkills.json`，`defaults.ts` 收敛为轻量装配层（行为不变）。
 - 本轮补强 `phase6-final-validation`：新增 orchestration 原路径删除断言与零 `@ts-ignore/@ts-expect-error` 断言。
 - 本轮继续补强 `phase6-final-validation`：新增 `sidecar/src` 零 `as any` 断言，防止类型回退。
 - 本轮继续收敛协议层：`src/protocol/commands.ts` 抽取共享 task schema（配置/上下文/ack）并修复 `IpcResponseSchema` 误含 `ReloadToolsCommandSchema` 的协议缺陷；`src/protocol/{commands,events,index}.ts` 清理纯注释分隔与冗余空行，在不改行为前提下进一步降体量。
-- 本轮继续做“零语义变化”的体量收敛：对高体量文件批量移除纯空行（`handlers/runtime.ts`、`runtime/browser/browserService.ts`、`orchestration/workRequestAnalyzer.ts`、`tools/builtin.ts`、`protocol/commands.ts` 等），在门禁全绿前提下进一步降低 `sidecar/src` LOC。
+- 本轮继续做“零语义变化”的体量收敛：对高体量文件批量移除纯空行（`runtime/browser/browserService.ts`、`orchestration/workRequestAnalyzer.ts`、`tools/builtin.ts`、`protocol/commands.ts` 等），在门禁全绿前提下进一步降低 `sidecar/src` LOC。
 - 本轮继续做“零语义变化”的体量收敛（第二批）：对 `runtime/browser/browserService.ts`、`storage/skillStore.ts`、`utils/retryWithBackoff.ts`、`protocol/{patches,effects}.ts`、`mcp/gateway/index.ts` 等文件批量移除纯注释行与空行，在门禁全绿前提下继续降低 `sidecar/src` LOC。
 - 本轮补齐单路径故障注入能力（功能项）：`src/mastra/entrypoint.ts` 的 Policy Gate 转发新增“超时单次重试（默认 1 次）+ 传输关闭快速失败”，并在 `src/main-mastra.ts` 的 stdin 关闭路径主动调用 `processor.close('stdin_closed')`，使挂起转发请求在退出时快速失败，避免等待默认超时。
 - 本轮新增 `tests/mastra-entrypoint.test.ts` 故障注入回归：覆盖 `read_file` 转发超时重试成功、重试耗尽失败，以及 `processor.close()` 触发挂起请求快速失败。
@@ -164,6 +168,16 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮继续补齐审批生命周期收口：任务进入终态（`complete/error`）时也会清理该任务挂起审批请求，阻断“任务已完成但旧 `requestId` 仍可恢复执行”的陈旧审批路径；并新增对应回归。
 - 本轮补齐真实进程级故障注入：新增 `tests/main-mastra-policy-gate.e2e.test.ts`，直接通过 stdio 与 `src/main.ts` 交互，覆盖 Policy Gate 转发“超时后重试成功”与“stdin 关闭快速失败”链路。
 - `main-mastra` 新增 Policy Gate 转发超时/重试参数化环境变量：`COWORKANY_POLICY_GATE_FORWARD_TIMEOUT_MS`、`COWORKANY_POLICY_GATE_TIMEOUT_RETRY_COUNT`，用于稳定复现故障注入场景并控制回归耗时。
+- 本轮完成旧兼容 runtime 收口：删除 `src/handlers/runtime.ts`，并移除 `tests/phase6-mastra-protocol-compat.test.ts` / `tests/runtime-commands.test.ts`；Phase6 协议覆盖统一收敛到 `tests/mastra-entrypoint.test.ts` + `tests/main-mastra-policy-gate.e2e.test.ts`。
+- 本轮继续完成旧 IPC 模块收口：删除未进入 `main-mastra` 运行链路的 `src/ipc/{commandExecutor,commandValidation,lineInputProcessor,messageLineProcessor,outputEmitter,pendingIpcResponseRegistry,responseProcessor,runtimeCommandDispatcher,sidecarLifecycle,sidecarProcessLogging,singletonConfig,singletonPaths,singletonRuntime}.ts`，并将 `ipc-*` 回归收敛为 `tests/ipc-bridge.test.ts`（覆盖 bridge 在用能力）。
+- 本轮继续完成 handlers 过渡层收口：`mastra/additionalCommands.ts` 改为直连 `handlers/capabilities.ts` 与 `handlers/workspaces.ts`，并删除不再使用的 `handlers/index.ts`、`handlers/command_router.ts`、`handlers/identity_security.ts`、`handlers/tools.ts`。
+- 本轮继续完成 test-only 历史模块收口：删除 `src/runtime/workRequest/runtime.ts`、`src/proactive/heartbeat.ts`、`src/mastra/memory/{default-profiles,enterprise-knowledge}.ts`，并同步移除 `tests/work-request-runtime.test.ts`、`tests/work-request-control-plane.test.ts`；`tests/scheduler-heartbeat.test.ts` 改为覆盖当前在用 `scheduledTasks + mastra/schedulerRuntime`。
+- 本轮继续完成悬挂引用清理：移除已无实现支撑的历史测试（`attachment-content/task-session-store/planning-files/websearch/execute-javascript-cancellation/agent-memory-isolation/host-access-grant-manager/xiaohongshu-post-tool*`），并将 `desktop/tests/typescript-compilation.test.ts` 的关键文件清单从 `src/tools/builtin.ts` 更新为 `src/tools/standard.ts`。
+- 本轮继续完成低风险死代码收敛：删除无内部引用的聚合入口 `src/tools/{coding,files,memory,personal,productivity,web}/index.ts` 与 `src/runtime/workRequest/snapshot.ts`。
+- 本轮继续完成高收益旧链路收敛（无入边）：删除 `tools/core/{calendar,email,system,tasks}.ts`、`tools/personal/{weather,notes,scheduleTask}.ts`、`tools/codeQuality.ts`、`runtime/jarvis/{proactiveTaskManager,daemonService,types}.ts`、`runtime/codeQuality/*`、`integrations/{calendar,email}/*`。
+- 本轮继续完成零运行时入边死代码收敛：删除 `src/runtime/memory/{index,ragBridge,vaultManager}.ts`、`src/runtime/taskIsolationPolicyStore.ts`、`src/orchestration/{targetResolutionRules,workRequestSemanticRules}.ts`、`src/tools/personal/{news,reminder}.ts`，并同步删除对应历史测试（`news-tool/reminder-tool/task-isolation-policy-store`）。
+- 本轮重写 `src/utils/retryWithBackoff.ts` 为最小实现（保留 `fetchWithBackoff` API 与指数退避/Retry-After/非可重试错误语义），将该模块从 670 行收敛到 146 行，并通过 `tests/rate-limit.test.ts` 全量回归。
+- 本轮重写 `src/runtime/browser/browserService.ts` 为契约保持的精简实现（保留 `BrowserService/PlaywrightBackend/BrowserUseBackend` 外部 API、模式路由与 smart-mode 附着语义），将该模块从 2462 行收敛到 1026 行，并通过 `tests/runtime-browser-service.test.ts`、`tests/browser-tools.test.ts` 与四道门禁回归。
 - 沙箱环境需显式追加 `PATH=/opt/homebrew/bin:$PATH` 才能找到 `bun/node`；已在该前提下完成本轮验证。
 
 ## 新增脚本
@@ -173,7 +187,7 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 
 ## 与商用标准仍有差距（下一步）
 1. IPC 命令类型已实现全覆盖分发，Policy Gate 命令已打通 Sidecar→Desktop 闭环；审批态一致性的单元回归已补齐，下一步需补齐“真实桌面交互链路”故障注入（侧重进程重启与连接抖动场景下的端到端行为）。
-2. Phase 6 删除清单已完成：`agent/execution/llm/memory/services` 与 Python 侧车服务文件已从仓库树移除；剩余重点转向代码量目标与复杂度收敛（当前 `sidecar/src` 约 41.8K LOC，方案目标 `<8K`）。
+2. Phase 6 删除清单已完成：`agent/execution/llm/memory/services` 与 Python 侧车服务文件已从仓库树移除；剩余重点转向代码量目标与复杂度收敛（当前 `sidecar/src` 约 20.6K LOC，方案目标 `<8K`）。
 3. 生产可观测性：需补齐统一 tracing、指标埋点、告警阈值和故障演练。
 4. 集成与回归：需追加真实 API Key 下的端到端流式集成测试与稳定性压测。
 5. 安全治理：需补充更严格的命令沙箱、审批审计、租户隔离与策略回放测试。

@@ -14,7 +14,6 @@ import * as path from 'path';
 const BRIDGE_FILE = path.resolve(__dirname, '../src/ipc/bridge.ts');
 const STREAMING_FILE = path.resolve(__dirname, '../src/ipc/streaming.ts');
 const ENTRYPOINT_FILE = path.resolve(__dirname, '../src/mastra/entrypoint.ts');
-const RUNTIME_FILE = path.resolve(__dirname, '../src/handlers/runtime.ts');
 
 // ============================================================================
 // Helper: Read and check source patterns
@@ -52,17 +51,10 @@ describe('Token Usage: Mastra stream extraction', () => {
 
 describe('Token Usage: Runtime event emission', () => {
     const entrypointSource = read(ENTRYPOINT_FILE);
-    const runtimeSource = read(RUNTIME_FILE);
 
     test('main-mastra entrypoint emits TOKEN_USAGE timeline event', () => {
         expect(entrypointSource).toContain("if (event.type === 'token_usage')");
         expect(entrypointSource).toContain("type: 'TOKEN_USAGE'");
-    });
-
-    test('runtime bridge emits TOKEN_USAGE through TaskEventBus', () => {
-        const tokenUsageEmitPattern = /emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/;
-        expect(runtimeSource).toContain("if (event.type === 'token_usage')");
-        expect(tokenUsageEmitPattern.test(runtimeSource)).toBe(true);
     });
 });
 

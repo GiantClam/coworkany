@@ -600,9 +600,8 @@ class DarwinBrowserHarness {
                 shell: process.env.SHELL || '/bin/zsh',
                 sidecarLaunchMode: 'development',
                 python: {
-                    available: true,
-                    path: 'python3',
-                    source: 'system',
+                    available: false,
+                    source: 'not_required_in_mastra_single_process',
                 },
                 skillhub: {
                     available: fs.existsSync(this.skillhubPath),
@@ -871,9 +870,8 @@ class DarwinBrowserHarness {
             shell: process.env.SHELL || '/bin/zsh',
             sidecarLaunchMode: 'development',
             python: {
-                available: true,
-                path: 'python3',
-                source: 'system',
+                available: false,
+                source: 'not_required_in_mastra_single_process',
             },
             skillhub: {
                 available: fs.existsSync(this.skillhubPath),

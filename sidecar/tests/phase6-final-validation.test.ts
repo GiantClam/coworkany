@@ -48,6 +48,74 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         expect(fs.existsSync(legacyDirPath)).toBe(false);
     });
 
+    test('legacy runtime command handler module is removed after single-path convergence', () => {
+        const legacyRuntimeHandlerPath = path.join(SRC_ROOT, 'handlers', 'runtime.ts');
+        expect(fs.existsSync(legacyRuntimeHandlerPath)).toBe(false);
+    });
+
+    test('legacy singleton/line-processing ipc modules are removed after single-path convergence', () => {
+        const removedIpcModules = [
+            path.join(SRC_ROOT, 'ipc', 'commandExecutor.ts'),
+            path.join(SRC_ROOT, 'ipc', 'commandValidation.ts'),
+            path.join(SRC_ROOT, 'ipc', 'lineInputProcessor.ts'),
+            path.join(SRC_ROOT, 'ipc', 'messageLineProcessor.ts'),
+            path.join(SRC_ROOT, 'ipc', 'outputEmitter.ts'),
+            path.join(SRC_ROOT, 'ipc', 'pendingIpcResponseRegistry.ts'),
+            path.join(SRC_ROOT, 'ipc', 'responseProcessor.ts'),
+            path.join(SRC_ROOT, 'ipc', 'runtimeCommandDispatcher.ts'),
+            path.join(SRC_ROOT, 'ipc', 'sidecarLifecycle.ts'),
+            path.join(SRC_ROOT, 'ipc', 'sidecarProcessLogging.ts'),
+            path.join(SRC_ROOT, 'ipc', 'singletonConfig.ts'),
+            path.join(SRC_ROOT, 'ipc', 'singletonPaths.ts'),
+            path.join(SRC_ROOT, 'ipc', 'singletonRuntime.ts'),
+        ];
+        for (const modulePath of removedIpcModules) {
+            expect(fs.existsSync(modulePath)).toBe(false);
+        }
+    });
+
+    test('legacy test-only runtime modules are removed after single-path convergence', () => {
+        const removedModules = [
+            path.join(SRC_ROOT, 'runtime', 'workRequest', 'runtime.ts'),
+            path.join(SRC_ROOT, 'runtime', 'workRequest', 'snapshot.ts'),
+            path.join(SRC_ROOT, 'proactive', 'heartbeat.ts'),
+            path.join(SRC_ROOT, 'mastra', 'memory', 'default-profiles.ts'),
+            path.join(SRC_ROOT, 'mastra', 'memory', 'enterprise-knowledge.ts'),
+        ];
+        for (const modulePath of removedModules) {
+            expect(fs.existsSync(modulePath)).toBe(false);
+        }
+    });
+
+    test('unreferenced legacy tooling chains are removed after mastra single-path convergence', () => {
+        const removedModules = [
+            path.join(SRC_ROOT, 'tools', 'core', 'calendar.ts'),
+            path.join(SRC_ROOT, 'tools', 'core', 'email.ts'),
+            path.join(SRC_ROOT, 'tools', 'core', 'system.ts'),
+            path.join(SRC_ROOT, 'tools', 'core', 'tasks.ts'),
+            path.join(SRC_ROOT, 'tools', 'codeQuality.ts'),
+            path.join(SRC_ROOT, 'tools', 'personal', 'weather.ts'),
+            path.join(SRC_ROOT, 'tools', 'personal', 'notes.ts'),
+            path.join(SRC_ROOT, 'tools', 'personal', 'scheduleTask.ts'),
+            path.join(SRC_ROOT, 'runtime', 'jarvis', 'proactiveTaskManager.ts'),
+            path.join(SRC_ROOT, 'runtime', 'jarvis', 'daemonService.ts'),
+            path.join(SRC_ROOT, 'runtime', 'jarvis', 'types.ts'),
+            path.join(SRC_ROOT, 'runtime', 'codeQuality', 'analyzer.ts'),
+            path.join(SRC_ROOT, 'runtime', 'codeQuality', 'autoTrigger.ts'),
+            path.join(SRC_ROOT, 'runtime', 'codeQuality', 'types.ts'),
+            path.join(SRC_ROOT, 'runtime', 'codeQuality', 'index.ts'),
+            path.join(SRC_ROOT, 'integrations', 'calendar', 'calendarManager.ts'),
+            path.join(SRC_ROOT, 'integrations', 'calendar', 'googleCalendarProvider.ts'),
+            path.join(SRC_ROOT, 'integrations', 'calendar', 'types.ts'),
+            path.join(SRC_ROOT, 'integrations', 'email', 'emailManager.ts'),
+            path.join(SRC_ROOT, 'integrations', 'email', 'gmailProvider.ts'),
+            path.join(SRC_ROOT, 'integrations', 'email', 'types.ts'),
+        ];
+        for (const modulePath of removedModules) {
+            expect(fs.existsSync(modulePath)).toBe(false);
+        }
+    });
+
     test('legacy runtime module directories are removed from sidecar source tree', () => {
         const removedDirs = [
             path.join(SRC_ROOT, 'agent'),
@@ -134,6 +202,19 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         expect(source).toContain("not_required_in_mastra_single_process");
         expect(source).not.toContain("for cmd in [\"python3\", \"python\", \"py\"]");
         expect(source).not.toContain(".join(\"main.py\")");
+    });
+
+    test('sidecar browser-use local bootstrap module is removed', () => {
+        const bootstrapPath = path.join(SRC_ROOT, 'runtime', 'browser', 'browserUseServiceBootstrap.ts');
+        expect(fs.existsSync(bootstrapPath)).toBe(false);
+    });
+
+    test('browser tools no longer describe local browser-use auto-start behavior', () => {
+        const browserToolsPath = path.join(SRC_ROOT, 'tools', 'browser.ts');
+        const source = read(browserToolsPath);
+
+        expect(source).not.toContain('auto-started when enabled');
+        expect(source).toContain('Requires a reachable browser-use-service endpoint.');
     });
 
     test('package scripts no longer expose legacy/compat startup aliases', () => {
