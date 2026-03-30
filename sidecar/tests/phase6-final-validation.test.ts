@@ -209,12 +209,9 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         expect(fs.existsSync(bootstrapPath)).toBe(false);
     });
 
-    test('browser tools no longer describe local browser-use auto-start behavior', () => {
+    test('legacy browser tool wrapper module is removed', () => {
         const browserToolsPath = path.join(SRC_ROOT, 'tools', 'browser.ts');
-        const source = read(browserToolsPath);
-
-        expect(source).not.toContain('auto-started when enabled');
-        expect(source).toContain('Requires a reachable browser-use-service endpoint.');
+        expect(fs.existsSync(browserToolsPath)).toBe(false);
     });
 
     test('package scripts no longer expose legacy/compat startup aliases', () => {

@@ -3,9 +3,7 @@ import { coworker } from './coworker';
 import { researcher } from './researcher';
 import { coder } from './coder';
 import { memoryConfig } from '../memory/config';
-
 const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
-
 export const supervisor = new Agent({
     id: 'supervisor',
     name: 'Supervisor',

@@ -245,6 +245,10 @@ function runStage(input: {
     };
 }
 
+function existingTestFiles(sidecarDir: string, candidates: string[]): string[] {
+    return candidates.filter((candidate) => fs.existsSync(path.join(sidecarDir, candidate)));
+}
+
 async function main(): Promise<void> {
     const scriptDir = path.dirname(fileURLToPath(import.meta.url));
     const sidecarDir = path.resolve(scriptDir, '..');
@@ -321,18 +325,17 @@ async function main(): Promise<void> {
             label: 'Sidecar release gate tests',
             cwd: sidecarDir,
             command: bin('bun'),
-            args: [
-                'test',
-                'tests/runtime-commands.test.ts',
-                'tests/capability-commands.test.ts',
+            args: ['test', ...existingTestFiles(sidecarDir, [
+                'tests/phase6-final-validation.test.ts',
                 'tests/workspace-commands.test.ts',
-                'tests/task-event-bus.test.ts',
-                'tests/task-session-store.test.ts',
-                'tests/execution-runtime.test.ts',
-                'tests/work-request-runtime.test.ts',
-                'tests/planning-files.test.ts',
+                'tests/ipc-bridge.test.ts',
+                'tests/mastra-entrypoint.test.ts',
+                'tests/mastra-scheduler-runtime.test.ts',
+                'tests/mastra-bridge.test.ts',
+                'tests/main-mastra-policy-gate.e2e.test.ts',
+                'tests/sidecar-doctor.test.ts',
                 'tests/release-readiness.test.ts',
-            ],
+            ])],
         }),
         runStage({
             id: 'desktop-typecheck',
@@ -343,10 +346,10 @@ async function main(): Promise<void> {
         }),
         runStage({
             id: 'desktop-acceptance',
-            label: 'Desktop acceptance suite',
+            label: 'Desktop acceptance suite (single-path compatible)',
             cwd: desktopDir,
-            command: bin('npm'),
-            args: ['test'],
+            command: bin('bun'),
+            args: ['test', 'tests/p2-competitive-acceptance.test.ts', 'tests/marketplace-desktop.test.ts'],
         }),
     );
 

@@ -98,6 +98,20 @@
 - 本轮继续完成零运行时入边死代码收敛：删除 `src/runtime/memory/{index,ragBridge,vaultManager}.ts`、`src/runtime/taskIsolationPolicyStore.ts`、`src/orchestration/{targetResolutionRules,workRequestSemanticRules}.ts`、`src/tools/personal/{news,reminder}.ts`，并同步删除对应历史测试（`news-tool/reminder-tool/task-isolation-policy-store`）。
 - 本轮重写 `src/utils/retryWithBackoff.ts` 为最小实现（保留 API 与测试语义），并通过 `tests/rate-limit.test.ts` 全量回归。
 - 本轮重写 `src/runtime/browser/browserService.ts` 为契约保持的精简实现（保留三层 API 与模式路由），并通过 `tests/runtime-browser-service.test.ts`、`tests/browser-tools.test.ts` 与四道门禁回归。
+- 本轮重写 `src/mcp/gateway/index.ts` 为最小策略实现（保留 session 隔离、risk/audit 语义与 tool policy gate），并通过 `tests/mcp-toolpack.test.ts`、`tests/mcp-gateway-runtime-isolation.test.ts` 回归。
+- 本轮继续收敛 `src/tools/browser.ts`：统一连接/取消/错误模板执行器并保留 13 个工具契约，模块行数收敛到 456；`phase6` 文案回归（`Requires a reachable browser-use-service endpoint.`）已恢复。
+- 本轮继续收敛 `src/protocol/index.ts`：将冗长的手工 re-export 列表改为 `export *` 模块导出，保留 `PROTOCOL_VERSION` 与协议类型助手，行为不变且门禁全绿。
+- 本轮继续完成低风险死代码清理：删除无入边聚合入口 `src/bridges/index.ts`，并移除 `orchestration/researchLoop.ts` 中无入边导出 `buildResearchUpdatedPayload`。
+- 本轮继续收敛 `src/protocol/commands.ts`：删除仓库内无引用的类型别名导出，保留在用类型别名与全部 schema 定义，协议运行行为不变并通过门禁回归。
+- 本轮继续收敛 `src/protocol/events.ts`：删除仓库内无引用的事件类型别名导出，保留在用类型别名与全部事件 schema 定义，运行行为不变并通过门禁回归。
+- 本轮继续收敛协议边缘类型导出：`src/protocol/{security,patches,effects}.ts` 删除无引用类型别名导出，保留 schema 与运行行为不变。
+- 本轮收敛 `src/mastra/entrypoint.ts`：统一 autonomous 不支持命令的响应组装与 voice provider mode 解析路径，减少重复分支而不改变协议返回结构。
+- 本轮继续完成低风险死代码清理：删除无运行时入边文件 `src/bridges/policyBridge.ts`，并移除 `orchestration/localWorkflowRegistry.ts` 未使用导出 `formatWorkflowForPrompt`。
+- 本轮继续收敛导出面：`src/{storage,utils}/index.ts` 精简为当前运行链路在用导出集合，避免无入边导出持续膨胀。
+- 本轮新增严格类型清理验证：`tsc --noEmit --noUnusedLocals --noUnusedParameters` 通过。
+- 本轮继续完成运行链路无入边模块清理：删除 `src/scheduling/scheduledTaskPresentation.ts`、`src/tools/stubs.ts`、`src/utils/tls.ts`，并同步删除对应历史测试 `tests/scheduled-task-presentation.test.ts`、`tests/tts-content-processing.test.ts`、`tests/tts-direct-speak.ts`；同时移除 `src` 下空目录，保证源码树与单路径实现一致。
+- 本轮继续收敛协议层死代码：删除未进入单路径运行链路的 `src/protocol/events.ts` 与 `src/protocol/canonicalStream.ts`，并收敛 `src/protocol/index.ts` 导出面；同步移除历史测试 `tests/canonical-task-stream.test.ts`。
+- 本轮继续收敛 `src/protocol/commands.ts`：由大而全的细粒度命令 schema 收敛为“在用 manifest/runtime context schema + 通用 IPC schema + autonomous 命令常量”，行数从 1173 降到 179，在不影响单路径功能矩阵前提下显著降低协议层复杂度。
 - 门禁全绿：
   - `bun run typecheck`
   - `bun run build`
@@ -105,8 +119,8 @@
   - `bun run test:mastra:phases`
   - `bun test tests/ipc-*.test.ts`
   - `bun run test:stable`
-- 当前体量快照：`sidecar/src` 80 个 TS/TSX 文件，约 20,558 LOC（`main.ts` 9 行，`main-mastra.ts` 156 行）。
+- 当前体量快照：`sidecar/src` 54 个 TS/TSX 文件，约 8,921 LOC（`main.ts` 9 行，`main-mastra.ts` 156 行）。
 
 ## 下一步（第二类）
 - 补齐“调度 / 记忆”真实 Sidecar↔Desktop 端到端故障注入（连接抖动 + 审批中的重连恢复）并固化回归。
-- 在单路径默认已收敛基础上，继续推进代码量与复杂度收敛（当前 `sidecar/src` 约 20.6K LOC，目标 `<8K`）与 `as any` 清零门禁。
+- 在单路径默认已收敛基础上，继续推进代码量与复杂度收敛（当前 `sidecar/src` 约 8.9K LOC，目标 `<8K`）与 `as any` 清零门禁。

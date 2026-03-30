@@ -1,26 +1,25 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
-import { createHash } from 'crypto';
-import { getAlternativeCommands, extractBaseCommand } from '../utils/commandAlternatives';
+import { getAlternativeCommands } from '../utils/commandAlternatives';
 import { checkCommand } from './commandSandbox';
 export type ToolEffect =
-    | 'filesystem:read'      // Read files/directories
-    | 'filesystem:write'     // Write/modify files
-    | 'filesystem:delete'    // Delete files/directories
-    | 'network:outbound'     // Make external HTTP requests
-    | 'process:spawn'        // Spawn child processes
-    | 'ui:notify'            // Show notifications to user
-    | 'state:remember'       // Persist data across sessions
-    | 'code:execute'         // Execute arbitrary code
-    | 'code:execute:sandbox' // Sandboxed code execution
-    | 'knowledge:read'       // Read from knowledge base
-    | 'knowledge:update';    // Update knowledge base
+    | 'filesystem:read'
+    | 'filesystem:write'
+    | 'filesystem:delete'
+    | 'network:outbound'
+    | 'process:spawn'
+    | 'ui:notify'
+    | 'state:remember'
+    | 'code:execute'
+    | 'code:execute:sandbox'
+    | 'knowledge:read'
+    | 'knowledge:update';
 export type ToolDefinition = {
     name: string;
-    description: string;
+    description?: string;
     input_schema: Record<string, unknown>;
-    effects: ToolEffect[];   // Security effects this tool can cause
+    effects: ToolEffect[];
     handler: (args: any, context: ToolContext) => Promise<any>;
 };
 export type ToolContext = {
@@ -32,7 +31,7 @@ type CommandErrorType = 'syntax' | 'runtime' | 'dependency' | 'permission' | 'ti
 interface CommandErrorAnalysis {
     type: CommandErrorType;
     suggestion: string;
-    alternatives?: string[];  // Alternative commands to try
+    alternatives?: string[];
 }
 function resolveContextPath(workspacePath: string, candidate: string): string {
     return path.resolve(workspacePath, candidate);
@@ -137,22 +136,18 @@ function analyzeCommandError(stderr: string, exitCode?: number, command?: string
 }
 const listDir: ToolDefinition = {
     name: 'list_dir',
-    description: 'List files and directories in the given path. The path must be relative to the workspace root or absolute.',
     effects: ['filesystem:read'],
     input_schema: {
         type: 'object',
         properties: {
             path: {
                 type: 'string',
-                description: 'The directory path to list. If omitted, lists the workspace root.',
             },
             recursive: {
                 type: 'boolean',
-                description: 'Whether to recursively list descendant files and directories.',
             },
             max_depth: {
                 type: 'integer',
-                description: 'Optional maximum recursion depth when recursive=true. Depth 1 means direct children only.',
             },
         },
     },
@@ -195,22 +190,18 @@ const listDir: ToolDefinition = {
 };
 const viewFile: ToolDefinition = {
     name: 'view_file',
-    description: 'Read the contents of a file. Supports reading specific line ranges.',
     effects: ['filesystem:read'],
     input_schema: {
         type: 'object',
         properties: {
             path: {
                 type: 'string',
-                description: 'The path to the file to read.',
             },
             start_line: {
                 type: 'integer',
-                description: 'The line number to start reading from (1-indexed).',
             },
             end_line: {
                 type: 'integer',
-                description: 'The line number to stop reading at (inclusive).',
             },
         },
         required: ['path'],
@@ -233,18 +224,15 @@ const viewFile: ToolDefinition = {
 };
 const writeToFile: ToolDefinition = {
     name: 'write_to_file',
-    description: 'Write content to a file. Creates the file if it does not exist, overwrites it if it does. Supports creating intermediate directories.',
     effects: ['filesystem:write'],
     input_schema: {
         type: 'object',
         properties: {
             path: {
                 type: 'string',
-                description: 'The path to the file to write to.',
             },
             content: {
                 type: 'string',
-                description: 'The content to write.',
             },
         },
         required: ['path', 'content'],
@@ -262,22 +250,18 @@ const writeToFile: ToolDefinition = {
 };
 const replaceFileContent: ToolDefinition = {
     name: 'replace_file_content',
-    description: 'Replace a specific block of text in a file with new content.',
     effects: ['filesystem:read', 'filesystem:write'],
     input_schema: {
         type: 'object',
         properties: {
             path: {
                 type: 'string',
-                description: 'The path to the file to modify.',
             },
             target_content: {
                 type: 'string',
-                description: 'The exact string to look for and replace.',
             },
             replacement_content: {
                 type: 'string',
-                description: 'The new content to insert in place of target_content.',
             },
         },
         required: ['path', 'target_content', 'replacement_content'],
@@ -297,84 +281,20 @@ const replaceFileContent: ToolDefinition = {
         }
     },
 };
-const createDirectory: ToolDefinition = {
-    name: 'create_directory',
-    description: 'Create a directory if it does not exist. Supports absolute paths and intermediate directories.',
-    effects: ['filesystem:write'],
-    input_schema: {
-        type: 'object',
-        properties: {
-            path: {
-                type: 'string',
-                description: 'The directory path to create.',
-            },
-        },
-        required: ['path'],
-    },
-    handler: async (args: { path: string }, context) => {
-        const targetPath = resolveContextPath(context.workspacePath, args.path);
-        try {
-            await fs.promises.mkdir(targetPath, { recursive: true });
-            return { success: true, path: targetPath };
-        } catch (error: any) {
-            return { error: `Failed to create directory: ${error.message}` };
-        }
-    },
-};
-const computeFileHash: ToolDefinition = {
-    name: 'compute_file_hash',
-    description: 'Compute a content hash for a file. Useful for deterministic duplicate detection.',
-    effects: ['filesystem:read'],
-    input_schema: {
-        type: 'object',
-        properties: {
-            path: {
-                type: 'string',
-                description: 'The file path to hash.',
-            },
-            algorithm: {
-                type: 'string',
-                description: 'The hash algorithm to use. Defaults to sha256.',
-            },
-        },
-        required: ['path'],
-    },
-    handler: async (args: { path: string; algorithm?: string }, context) => {
-        const targetPath = resolveContextPath(context.workspacePath, args.path);
-        const algorithm = args.algorithm || 'sha256';
-        try {
-            const hash = createHash(algorithm);
-            const buffer = await fs.promises.readFile(targetPath);
-            hash.update(buffer);
-            return {
-                success: true,
-                path: targetPath,
-                algorithm,
-                hash: hash.digest('hex'),
-            };
-        } catch (error: any) {
-            return { error: `Failed to compute file hash: ${error.message}` };
-        }
-    },
-};
 const moveFile: ToolDefinition = {
     name: 'move_file',
-    description: 'Move or rename a file. Creates destination directories if needed.',
     effects: ['filesystem:write'],
     input_schema: {
         type: 'object',
         properties: {
             source_path: {
                 type: 'string',
-                description: 'The source file path.',
             },
             destination_path: {
                 type: 'string',
-                description: 'The destination file path.',
             },
             overwrite: {
                 type: 'boolean',
-                description: 'Whether to overwrite the destination file if it exists.',
             },
         },
         required: ['source_path', 'destination_path'],
@@ -402,22 +322,18 @@ const moveFile: ToolDefinition = {
 };
 const deletePath: ToolDefinition = {
     name: 'delete_path',
-    description: 'Delete a file or directory. Directories require recursive=true.',
     effects: ['filesystem:write'],
     input_schema: {
         type: 'object',
         properties: {
             path: {
                 type: 'string',
-                description: 'The file or directory path to delete.',
             },
             recursive: {
                 type: 'boolean',
-                description: 'Required when deleting a directory.',
             },
             force: {
                 type: 'boolean',
-                description: 'Ignore missing files and force deletion.',
             },
         },
         required: ['path'],
@@ -435,146 +351,20 @@ const deletePath: ToolDefinition = {
         }
     },
 };
-const batchMoveFiles: ToolDefinition = {
-    name: 'batch_move_files',
-    description: 'Move multiple files in one structured operation. Creates destination directories as needed.',
-    effects: ['filesystem:write'],
-    input_schema: {
-        type: 'object',
-        properties: {
-            moves: {
-                type: 'array',
-                description: 'A list of move operations to execute.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        source_path: { type: 'string' },
-                        destination_path: { type: 'string' },
-                        overwrite: { type: 'boolean' },
-                    },
-                    required: ['source_path', 'destination_path'],
-                },
-            },
-        },
-        required: ['moves'],
-    },
-    handler: async (
-        args: { moves: Array<{ source_path: string; destination_path: string; overwrite?: boolean }> },
-        context
-    ) => {
-        const results: Array<Record<string, unknown>> = [];
-        for (const move of args.moves ?? []) {
-            const sourcePath = resolveContextPath(context.workspacePath, move.source_path);
-            const destinationPath = resolveContextPath(context.workspacePath, move.destination_path);
-            try {
-                if (!move.overwrite) {
-                    const exists = await fs.promises
-                        .access(destinationPath, fs.constants.F_OK)
-                        .then(() => true)
-                        .catch(() => false);
-                    if (exists) {
-                        results.push({
-                            success: false,
-                            source_path: sourcePath,
-                            destination_path: destinationPath,
-                            error: `Destination already exists: ${destinationPath}`,
-                        });
-                        continue;
-                    }
-                }
-                await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
-                await movePath(sourcePath, destinationPath);
-                results.push({
-                    success: true,
-                    source_path: sourcePath,
-                    destination_path: destinationPath,
-                });
-            } catch (error: any) {
-                results.push({
-                    success: false,
-                    source_path: sourcePath,
-                    destination_path: destinationPath,
-                    error: error.message,
-                });
-            }
-        }
-        return {
-            success: results.every((result) => result.success === true),
-            results,
-        };
-    },
-};
-const batchDeletePaths: ToolDefinition = {
-    name: 'batch_delete_paths',
-    description: 'Delete multiple files or directories in one structured operation.',
-    effects: ['filesystem:write'],
-    input_schema: {
-        type: 'object',
-        properties: {
-            deletes: {
-                type: 'array',
-                description: 'A list of delete operations to execute.',
-                items: {
-                    type: 'object',
-                    properties: {
-                        path: { type: 'string' },
-                        recursive: { type: 'boolean' },
-                        force: { type: 'boolean' },
-                    },
-                    required: ['path'],
-                },
-            },
-        },
-        required: ['deletes'],
-    },
-    handler: async (
-        args: { deletes: Array<{ path: string; recursive?: boolean; force?: boolean }> },
-        context
-    ) => {
-        const results: Array<Record<string, unknown>> = [];
-        for (const deletion of args.deletes ?? []) {
-            const targetPath = resolveContextPath(context.workspacePath, deletion.path);
-            try {
-                await fs.promises.rm(targetPath, {
-                    recursive: deletion.recursive ?? false,
-                    force: deletion.force ?? false,
-                });
-                results.push({
-                    success: true,
-                    path: targetPath,
-                });
-            } catch (error: any) {
-                results.push({
-                    success: false,
-                    path: targetPath,
-                    error: error.message,
-                });
-            }
-        }
-        return {
-            success: results.every((result) => result.success === true),
-            results,
-        };
-    },
-};
 const runCommand: ToolDefinition = {
     name: 'run_command',
-    description: 'Execute a shell command in the context of the workspace.',
     effects: ['process:spawn', 'code:execute'],
     input_schema: {
         type: 'object',
         properties: {
             command: {
                 type: 'string',
-                description: 'The command line to execute.',
             },
             cwd: {
                 type: 'string',
-                description: 'The directory to execute the command in (relative to workspace root).',
             },
             timeout_ms: {
                 type: 'integer',
-                description: 'Timeout in milliseconds (default: 30000).',
             }
         },
         required: ['command'],
@@ -730,11 +520,7 @@ export const STANDARD_TOOLS: ToolDefinition[] = [
     viewFile,
     writeToFile,
     replaceFileContent,
-    createDirectory,
-    computeFileHash,
     moveFile,
     deletePath,
-    batchMoveFiles,
-    batchDeletePaths,
     runCommand,
 ];

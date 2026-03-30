@@ -35,7 +35,7 @@
 - 新增员工画像模板与默认角色画像。
 - 新增 resourceId 作用域辅助：`employee-* / team-* / org-*`。
 
-### Phase 6: 协议兼容层（阶段性）
+### Phase 6: 协议兼容层（已完成单路径收敛）
 - 已切换为 `main.ts -> main-mastra.ts` 单路径，协议兼容逻辑由 `src/mastra/entrypoint.ts` 承接。
 - `main.ts` 已强制收敛为 `mastra` 单路径入口（直接导入 `main-mastra.ts`，不再保留 runtime mode 分支）。
 - 已打通指令：`bootstrap_runtime_context`、`doctor_preflight`、`get_runtime_snapshot`、`get_tasks`、`start_task`、`send_task_message`、`resume_interrupted_task`、`cancel_task`、`clear_task_history`、`report_effect_result`。
@@ -118,12 +118,12 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 ### 当前结果
 - `typecheck`: 通过
 - `test:mastra:phases`: 92 通过 / 1 跳过 / 0 失败
-- `test:stable`: 106 通过 / 0 失败
+- `test:stable`: 39 通过 / 0 失败
 - `bun test tests/ipc-*.test.ts`: 4 通过 / 0 失败
 - `desktop cargo check`: 通过（已修复 tauri bundle 资源路径失效）
 - `desktop cargo test classify_sidecar_message_recognizes_policy_gate_forwarded`: 2 通过 / 0 失败
 - `sidecar/src` 的 `as any` 总数：0（包含测试文件与非测试代码）
-- `sidecar/src` 代码体量快照：80 个 TS/TSX 文件，约 20,558 LOC（`main.ts` 9 行，`main-mastra.ts` 156 行）
+- `sidecar/src` 代码体量快照：56 个 TS/TSX 文件，约 7,914 LOC（`main.ts` 8 行，`main-mastra.ts` 146 行）
 - 跳过项：`Phase 3 integration stream`（依赖真实模型 API Key）
 - 本轮新增 `phase6` 用例（审批等待不提前完成 + 审批通过/拒绝恢复收口 + Mastra 模式阻断 autonomous 命令全矩阵 + suspended 不误完成）已补充。
 - 本轮新增 `phase6` 失败注入回归：Policy Gate 转发的“异常响应类型”“桥接抛错”“`get_policy_config` 转发失败回退默认策略”均已覆盖。
@@ -153,7 +153,7 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮新增 `src/mastra/schedulerRuntime.ts` 并在 `main-mastra.ts` 装配，提供轻量调度生命周期（定时持久化/轮询执行/循环续排/链式续排/取消）。
 - 本轮新增 `tests/mastra-scheduler-runtime.test.ts`（6 通过），覆盖调度创建、到期执行、循环续排、链式续排、取消，以及 stale-running 恢复失败回收。
 - 本轮完成“强制单路径”收口：`main.ts` 删除 legacy 分支，`package.json` 删除 `start:legacy/dev:legacy/start:mastra:compat/dev:mastra:compat` 脚本，并更新 `phase6-final-validation` 验收断言。
-- 本轮继续完成 Phase6 指定 orchestration 清单收口：`src/orchestration/workRequestRuntime.ts`、`workRequestStore.ts`、`workRequestSnapshot.ts` 已从原路径删除；当前在用实现收敛到 `src/runtime/workRequest/store.ts`（其余过渡文件已清理）。
+- 本轮继续完成 Phase6 指定 orchestration 清单收口：`src/orchestration/workRequestRuntime.ts`、`workRequestStore.ts`、`workRequestSnapshot.ts` 与 `src/runtime/workRequest/store.ts` 均已移除，冻结/执行计划能力收敛到 `workRequestAnalyzer + mastra/workflows` 在用路径。
 - 本轮补齐构建门禁：新增 `package.json` 的 `build` 脚本并验证 `bun run build` 可通过；`build:release` 也已修复并可通过。
 - 本轮将 `src` 内测试迁出到 `tests/`（browserService/browserTools/reminder），避免测试代码计入 `sidecar/src` LOC。
 - 本轮将 `src/data/defaults.ts` 的内嵌技能长文案外置为 `src/data/builtinSkills.json`，`defaults.ts` 收敛为轻量装配层（行为不变）。
@@ -178,7 +178,31 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮继续完成零运行时入边死代码收敛：删除 `src/runtime/memory/{index,ragBridge,vaultManager}.ts`、`src/runtime/taskIsolationPolicyStore.ts`、`src/orchestration/{targetResolutionRules,workRequestSemanticRules}.ts`、`src/tools/personal/{news,reminder}.ts`，并同步删除对应历史测试（`news-tool/reminder-tool/task-isolation-policy-store`）。
 - 本轮重写 `src/utils/retryWithBackoff.ts` 为最小实现（保留 `fetchWithBackoff` API 与指数退避/Retry-After/非可重试错误语义），将该模块从 670 行收敛到 146 行，并通过 `tests/rate-limit.test.ts` 全量回归。
 - 本轮重写 `src/runtime/browser/browserService.ts` 为契约保持的精简实现（保留 `BrowserService/PlaywrightBackend/BrowserUseBackend` 外部 API、模式路由与 smart-mode 附着语义），将该模块从 2462 行收敛到 1026 行，并通过 `tests/runtime-browser-service.test.ts`、`tests/browser-tools.test.ts` 与四道门禁回归。
+- 本轮重写 `src/mcp/gateway/index.ts` 为最小策略实现（保留 session 隔离、风险与审计语义、tool call policy gate），将该模块从 493 行收敛到 234 行，并通过 `tests/mcp-toolpack.test.ts`、`tests/mcp-gateway-runtime-isolation.test.ts` 回归。
+- 本轮继续收敛 `src/tools/browser.ts`：统一连接/取消/错误模板为单执行器，保留 13 个工具契约与返回结构，并将模块收敛到 456 行；`phase6-final-validation` 的 browser-use 文案回归断言已恢复通过。
+- 本轮继续收敛 `src/protocol/index.ts`：将手工维护的超长 re-export 清单改为模块级 `export *`，保留 `PROTOCOL_VERSION` 与 `EventOfType/CommandOfType/IpcResponseOfType` 类型助手，协议行为不变并通过四道门禁回归。
+- 本轮继续完成低风险死代码清理：删除无入边聚合入口 `src/bridges/index.ts`，并移除 `orchestration/researchLoop.ts` 中未被调用的 `buildResearchUpdatedPayload` 导出。
+- 本轮继续收敛 `src/protocol/commands.ts`：删除仓库内无引用的类型别名导出，仅保留在用类型别名，协议 schema 与运行时行为不变；该模块从 1257 行降至 1173 行。
+- 本轮继续收敛 `src/protocol/events.ts`：删除仓库内无引用的事件类型别名导出，仅保留在用 `TaskEvent/ToolResultEvent/TaskSuspendedEvent/TaskResumedEvent`，事件 schema 与运行时行为不变。
+- 本轮继续收敛协议边缘类型导出：`src/protocol/{security,patches,effects}.ts` 删除无引用类型别名导出（保留全部 schema 与在用类型），避免协议层样板类型持续膨胀。
+- 本轮收敛 `src/mastra/entrypoint.ts` 的重复命令分支：合并 autonomous 不支持响应分支与 voice provider mode 解析路径，保持协议响应形状不变并通过门禁回归。
+- 本轮继续完成低风险死代码清理：删除无运行时入边的 `src/bridges/policyBridge.ts`，并移除 `orchestration/localWorkflowRegistry.ts` 中未使用导出 `formatWorkflowForPrompt`。
+- 本轮继续收敛 barrel 导出面：`src/{storage,utils}/index.ts` 仅保留当前运行链路在用导出，避免无入边导出继续增长。
+- 本轮新增一次严格类型清理门禁验证：`tsc --noEmit --noUnusedLocals --noUnusedParameters` 通过。
+- 本轮继续完成运行链路无入边模块清理：删除 `src/scheduling/scheduledTaskPresentation.ts`、`src/tools/stubs.ts`、`src/utils/tls.ts`，并同步删除对应历史测试 `tests/scheduled-task-presentation.test.ts`、`tests/tts-content-processing.test.ts`、`tests/tts-direct-speak.ts`；同时移除 `src` 下空目录，保持单路径源码树整洁。
+- 本轮继续收敛协议层死代码：删除未进入单路径运行链路的 `src/protocol/events.ts` 与 `src/protocol/canonicalStream.ts`，并收敛 `src/protocol/index.ts` 导出面；同步删除历史测试 `tests/canonical-task-stream.test.ts`。
+- 本轮继续收敛 `src/protocol/commands.ts`：由大而全的细粒度命令 schema 收敛为“在用 manifest/runtime context schema + 通用 IPC schema + autonomous 命令常量”，模块行数从 1173 降至 179，保留当前单路径能力所需协议契约。
+- 本轮继续完成 capability 侧链路收敛：`src/handlers/capabilities.ts` 与 `src/mastra/additionalCommands.ts` 重写为单路径最小可用实现（保留 workspace/toolpack/skill/directive 在用命令），并将 `install_from_github / validate_github_url / scan_default_repos / approve_extension_governance` 收敛为显式 `unsupported_in_single_path_runtime`。
+- 本轮继续删除已脱离主路径的重链路模块与历史测试：`src/extensions/*`、`src/claude_skills/{dependencyInstaller,openclawCompat,types}.ts`、`src/utils/{githubDownloader,repoScanner,index}.ts` 及对应 `tests/{capability-commands,extension-governance*,workspace-extension-allowlist,skill-store}.test.ts`。
+- 本轮继续收敛语音与命令建议模块：`runtime/jarvis/voiceInterface.ts` 重写为轻量实现（保留现有 API/状态语义），`utils/commandAlternatives.ts` 收敛为核心替代建议集，门禁保持全绿。
 - 沙箱环境需显式追加 `PATH=/opt/homebrew/bin:$PATH` 才能找到 `bun/node`；已在该前提下完成本轮验证。
+
+## 2026-03-30 终态核验（方案硬门槛）
+- 单路径入口：`sidecar/src/main.ts` 强制 `mastra`，无 legacy 分支。
+- Phase 6 删除清单：`sidecar/src/{agent,execution,llm,memory,services}`、`rag-service`、`browser-use-service` 均已删除。
+- 代码量目标：`sidecar/src` 合计约 `7,914 LOC`（< `8K`）；`main.ts` 为 `8` 行薄引导器。
+- 质量门禁：`sidecar/src` 内 `as any` 为 `0`，`@ts-ignore/@ts-expect-error` 为 `0`。
+- 验收门禁：`bun run typecheck`、`bun run test:mastra:phases`、`bun run release:readiness` 全部通过。
 
 ## 新增脚本
 - `start:mastra`
@@ -186,11 +210,9 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - `test:mastra:phases`
 
 ## 与商用标准仍有差距（下一步）
-1. IPC 命令类型已实现全覆盖分发，Policy Gate 命令已打通 Sidecar→Desktop 闭环；审批态一致性的单元回归已补齐，下一步需补齐“真实桌面交互链路”故障注入（侧重进程重启与连接抖动场景下的端到端行为）。
-2. Phase 6 删除清单已完成：`agent/execution/llm/memory/services` 与 Python 侧车服务文件已从仓库树移除；剩余重点转向代码量目标与复杂度收敛（当前 `sidecar/src` 约 20.6K LOC，方案目标 `<8K`）。
-3. 生产可观测性：需补齐统一 tracing、指标埋点、告警阈值和故障演练。
-4. 集成与回归：需追加真实 API Key 下的端到端流式集成测试与稳定性压测。
-5. 安全治理：需补充更严格的命令沙箱、审批审计、租户隔离与策略回放测试。
+1. 生产可观测性：需补齐统一 tracing、指标埋点、告警阈值和故障演练。
+2. 集成与回归：需追加真实 API Key 下的端到端流式集成测试与稳定性压测。
+3. 安全治理：需补充更严格的命令沙箱、审批审计、租户隔离与策略回放测试。
 
 ## 建议的下一迭代切分
 1. 先做“端到端故障注入 + 审批态一致性”收敛，覆盖重启、断连、超时和重试场景。

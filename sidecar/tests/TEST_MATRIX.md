@@ -31,10 +31,7 @@ These are the default test surface because they are deterministic and do not dep
 | File | Notes |
 | --- | --- |
 | `tests/token-usage.test.ts` | Structural/unit validation for token accounting and frontend integration |
-| `tests/tool-disable-config.test.ts` | Pure config serialization/filtering checks |
 | `tests/command-sandbox.test.ts` | Static command policy coverage |
-| `tests/mcp-toolpack.test.ts` | Structural MCP and toolpack checks |
-| `tests/rate-limit.test.ts` | Pure retry/backoff behavior |
 | `tests/scheduler-heartbeat.test.ts` | Structural scheduler/daemon coverage |
 
 ### Agent core integration
@@ -68,7 +65,6 @@ These depend more heavily on external services, search providers, or platform fe
 
 | File | Notes |
 | --- | --- |
-| `tests/websearch.test.ts` | Search providers, fallback, and one E2E summary path |
 | `tests/stock-research.test.ts` | Research-heavy E2E |
 | `tests/ppt-smart-city.test.ts` | Search plus document-generation workflow |
 | `tests/tts-speak.test.ts` | TTS invocation validation |
@@ -82,7 +78,6 @@ These should only run in environments where browser automation is intentionally 
 | `tests/browser-automation.test.ts` | Browser tool E2E and CDP checks |
 | `tests/xiaohongshu-posting.test.ts` | Browser login/posting flow |
 | `tests/x-following-ai-learning-e2e.test.ts` | Long-running browser learning scenario |
-| `tests/e2e-browser-smart.ts` | Direct browser service E2E script |
 
 ### Desktop/manual validation
 

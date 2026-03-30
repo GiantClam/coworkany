@@ -7,9 +7,7 @@ import { researcher } from './agents/researcher';
 import { coder } from './agents/coder';
 import { memoryConfig, memoryStorage } from './memory/config';
 import { controlPlaneWorkflow, scheduledTaskWorkflow } from './workflows';
-
 const logLevel = (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info';
-
 export const mastra = new Mastra({
     storage: memoryStorage,
     logger: new PinoLogger({
@@ -30,7 +28,6 @@ export const mastra = new Mastra({
         default: memoryConfig,
     },
 });
-
 export function getMastraHealth(): {
     agents: string[];
     workflows: string[];

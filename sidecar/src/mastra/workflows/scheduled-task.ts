@@ -1,6 +1,5 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
-
 const loadCheckpointStep = createStep({
     id: 'load-checkpoint',
     inputSchema: z.object({
@@ -20,7 +19,6 @@ const loadCheckpointStep = createStep({
         };
     },
 });
-
 const executeStageStep = createStep({
     id: 'execute-stage',
     inputSchema: z.any(),
@@ -37,7 +35,6 @@ const executeStageStep = createStep({
         };
     },
 });
-
 const saveCheckpointStep = createStep({
     id: 'save-checkpoint',
     inputSchema: z.any(),
@@ -54,7 +51,6 @@ const saveCheckpointStep = createStep({
         };
     },
 });
-
 export const scheduledTaskWorkflow = createWorkflow({
     id: 'scheduled-task',
     inputSchema: z.object({

@@ -23,6 +23,7 @@ import * as path from 'path';
 
 const DESKTOP_SRC = path.resolve(__dirname, '../src');
 const SIDECAR_SRC = path.resolve(__dirname, '../../sidecar/src');
+const SIDECAR_ROOT = path.resolve(__dirname, '../../sidecar');
 
 // ============================================================================
 // Helper: Check if a file exists and contains expected patterns
@@ -166,42 +167,32 @@ describe('P1-3: Dark Mode', () => {
 });
 
 // ============================================================================
-// P1-4: Rate Limit Exponential Backoff
+// P1-4: Rate Limit Protocol Compatibility (single runtime path)
 // ============================================================================
 
-describe('P1-4: Rate Limit Exponential Backoff', () => {
+describe('P1-4: Rate Limit Protocol Compatibility', () => {
     const retryModule = path.join(SIDECAR_SRC, 'utils/retryWithBackoff.ts');
     const mainTs = path.join(SIDECAR_SRC, 'main.ts');
-    const eventsTs = path.join(DESKTOP_SRC, 'types/events.ts');
+    const mainMastraTs = path.join(SIDECAR_SRC, 'main-mastra.ts');
+    const sidecarProtocolEvents = path.join(SIDECAR_ROOT, 'protocol-core/events.ts');
+    const desktopEvents = path.join(DESKTOP_SRC, 'types/events.ts');
 
-    test('retryWithBackoff utility module exists', () => {
-        expect(fileExists(retryModule)).toBe(true);
+    test('single runtime bootstrap is locked to Mastra path', () => {
+        expect(fileContains(mainTs, "process.env.COWORKANY_RUNTIME_MODE = 'mastra'")).toBe(true);
+        expect(fileContains(mainTs, "await import('./main-mastra')")).toBe(true);
+        expect(fileExists(mainMastraTs)).toBe(true);
     });
 
-    test('retryWithBackoff exports fetchWithBackoff function', () => {
-        expect(fileContains(retryModule, 'export async function fetchWithBackoff')).toBe(true);
+    test('legacy retryWithBackoff utility has been removed', () => {
+        expect(fileExists(retryModule)).toBe(false);
     });
 
-    test('retryWithBackoff handles exponential backoff with Math.pow(2, attempt)', () => {
-        expect(fileContains(retryModule, 'Math.pow(2, attempt)')).toBe(true);
+    test('RATE_LIMITED is defined in sidecar protocol TaskEventType', () => {
+        expect(fileContains(sidecarProtocolEvents, "'RATE_LIMITED'")).toBe(true);
     });
 
-    test('retryWithBackoff reads Retry-After header', () => {
-        expect(fileContains(retryModule, 'Retry-After')).toBe(true);
-    });
-
-    test('retryWithBackoff has maxDelay cap', () => {
-        expect(fileContains(retryModule, 'maxDelay')).toBe(true);
-    });
-
-    test('main.ts uses fetchWithBackoff and emits RATE_LIMITED events', () => {
-        expect(fileContains(mainTs, 'fetchWithBackoff')).toBe(true);
-        expect(fileContains(mainTs, 'RATE_LIMITED')).toBe(true);
-        expect(fileContains(mainTs, 'setRateLimitContext')).toBe(true);
-    });
-
-    test('RATE_LIMITED is defined in TaskEventType', () => {
-        expect(fileContains(eventsTs, "'RATE_LIMITED'")).toBe(true);
+    test('RATE_LIMITED is defined in desktop TaskEventType', () => {
+        expect(fileContains(desktopEvents, "'RATE_LIMITED'")).toBe(true);
     });
 });
 

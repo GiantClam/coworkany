@@ -7,101 +7,55 @@ export type WorkspaceExtensionAllowlistPolicy = {
     mode: WorkspaceExtensionAllowlistMode;
     allowedSkills: string[];
     allowedToolpacks: string[];
-    updatedAt?: string;
 };
 
-type RawWorkspaceExtensionAllowlistPolicy = Partial<WorkspaceExtensionAllowlistPolicy>;
+const DEFAULT_POLICY: WorkspaceExtensionAllowlistPolicy = {
+    mode: 'off',
+    allowedSkills: [],
+    allowedToolpacks: [],
+};
 
-function normalizeList(values: unknown): string[] {
-    if (!Array.isArray(values)) {
+function normalizeStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
         return [];
     }
-
-    return Array.from(new Set(
-        values
-            .filter((value): value is string => typeof value === 'string')
-            .map((value) => value.trim())
-            .filter(Boolean)
-    ));
+    const entries = new Set<string>();
+    for (const item of value) {
+        if (typeof item !== 'string') {
+            continue;
+        }
+        const normalized = item.trim();
+        if (normalized.length === 0) {
+            continue;
+        }
+        entries.add(normalized);
+    }
+    return Array.from(entries).sort((left, right) => left.localeCompare(right));
 }
 
-export function createDefaultWorkspaceExtensionAllowlistPolicy(): WorkspaceExtensionAllowlistPolicy {
-    return {
-        mode: 'off',
-        allowedSkills: [],
-        allowedToolpacks: [],
-    };
+export function getWorkspaceExtensionAllowlistPath(repositoryRoot: string): string {
+    return path.join(repositoryRoot, '.coworkany', 'extension-allowlist.json');
 }
 
-export function getWorkspaceExtensionAllowlistPath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, '.coworkany', 'extension-allowlist.json');
-}
-
-export function normalizeWorkspaceExtensionAllowlistPolicy(
-    value: unknown,
-): WorkspaceExtensionAllowlistPolicy {
-    const candidate = (value && typeof value === 'object'
-        ? value as RawWorkspaceExtensionAllowlistPolicy
-        : {}) as RawWorkspaceExtensionAllowlistPolicy;
-
-    return {
-        mode: candidate.mode === 'enforce' ? 'enforce' : 'off',
-        allowedSkills: normalizeList(candidate.allowedSkills),
-        allowedToolpacks: normalizeList(candidate.allowedToolpacks),
-        updatedAt: typeof candidate.updatedAt === 'string' ? candidate.updatedAt : undefined,
-    };
-}
-
-export function loadWorkspaceExtensionAllowlistPolicy(workspaceRoot: string): WorkspaceExtensionAllowlistPolicy {
-    const policyPath = getWorkspaceExtensionAllowlistPath(workspaceRoot);
+export function loadWorkspaceExtensionAllowlistPolicy(repositoryRoot: string): WorkspaceExtensionAllowlistPolicy {
+    const policyPath = getWorkspaceExtensionAllowlistPath(repositoryRoot);
     if (!fs.existsSync(policyPath)) {
-        return createDefaultWorkspaceExtensionAllowlistPolicy();
+        return { ...DEFAULT_POLICY };
     }
 
-    try {
-        const raw = JSON.parse(fs.readFileSync(policyPath, 'utf-8'));
-        return normalizeWorkspaceExtensionAllowlistPolicy(raw);
-    } catch {
-        return createDefaultWorkspaceExtensionAllowlistPolicy();
+    const raw = JSON.parse(fs.readFileSync(policyPath, 'utf-8')) as unknown;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { ...DEFAULT_POLICY };
     }
-}
-
-export function saveWorkspaceExtensionAllowlistPolicy(
-    workspaceRoot: string,
-    policy: Partial<WorkspaceExtensionAllowlistPolicy>,
-): WorkspaceExtensionAllowlistPolicy {
-    const policyPath = getWorkspaceExtensionAllowlistPath(workspaceRoot);
-    const previous = loadWorkspaceExtensionAllowlistPolicy(workspaceRoot);
-    const next = normalizeWorkspaceExtensionAllowlistPolicy({
-        ...previous,
-        ...policy,
-        updatedAt: new Date().toISOString(),
-    });
-
-    fs.mkdirSync(path.dirname(policyPath), { recursive: true });
-    fs.writeFileSync(policyPath, JSON.stringify(next, null, 2), 'utf-8');
-    return next;
-}
-
-export function isWorkspaceExtensionAllowed(
-    policy: WorkspaceExtensionAllowlistPolicy,
-    input: {
-        extensionType: 'skill' | 'toolpack';
-        extensionId: string;
-        isBuiltin?: boolean;
-    },
-): boolean {
-    if (input.isBuiltin) {
-        return true;
-    }
-
-    if (policy.mode !== 'enforce') {
-        return true;
-    }
-
-    if (input.extensionType === 'skill') {
-        return policy.allowedSkills.includes(input.extensionId);
-    }
-
-    return policy.allowedToolpacks.includes(input.extensionId);
+    const root = raw as {
+        mode?: unknown;
+        allowedSkills?: unknown;
+        allowedToolpacks?: unknown;
+    };
+    const mode: WorkspaceExtensionAllowlistMode = root.mode === 'enforce' ? 'enforce' : 'off';
+    return {
+        mode,
+        allowedSkills: normalizeStringList(root.allowedSkills),
+        allowedToolpacks: normalizeStringList(root.allowedToolpacks),
+    };
 }

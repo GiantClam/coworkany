@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-03-22T03:17:53.591Z",
+  "generatedAt": "2026-03-30T08:10:42.692Z",
   "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
   "requestedOptions": {
     "buildDesktop": false,
@@ -17,7 +17,7 @@
       "label": "Control-plane eval suite",
       "command": "bun run eval:control-plane --out /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 5233,
+      "durationMs": 1047,
       "status": "passed",
       "exitCode": 0
     },
@@ -26,7 +26,7 @@
       "label": "Sidecar typecheck",
       "command": "npm run typecheck",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 6072,
+      "durationMs": 1643,
       "status": "passed",
       "exitCode": 0
     },
@@ -35,16 +35,16 @@
       "label": "Sidecar stable regression suite",
       "command": "npm run test:stable",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 4624,
+      "durationMs": 198,
       "status": "passed",
       "exitCode": 0
     },
     {
       "id": "sidecar-release-gates",
       "label": "Sidecar release gate tests",
-      "command": "bun test tests/runtime-commands.test.ts tests/capability-commands.test.ts tests/workspace-commands.test.ts tests/task-event-bus.test.ts tests/task-session-store.test.ts tests/execution-runtime.test.ts tests/work-request-runtime.test.ts tests/planning-files.test.ts tests/release-readiness.test.ts",
+      "command": "bun test tests/phase6-final-validation.test.ts tests/workspace-commands.test.ts tests/ipc-bridge.test.ts tests/mastra-entrypoint.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts tests/sidecar-doctor.test.ts tests/release-readiness.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 438,
+      "durationMs": 1018,
       "status": "passed",
       "exitCode": 0
     },
@@ -53,16 +53,16 @@
       "label": "Desktop typecheck",
       "command": "npx tsc --noEmit",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 2744,
+      "durationMs": 2970,
       "status": "passed",
       "exitCode": 0
     },
     {
       "id": "desktop-acceptance",
-      "label": "Desktop acceptance suite",
-      "command": "npm test",
+      "label": "Desktop acceptance suite (single-path compatible)",
+      "command": "bun test tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 216,
+      "durationMs": 303,
       "status": "passed",
       "exitCode": 0
     },
@@ -71,7 +71,7 @@
       "label": "Sidecar doctor preflight",
       "command": "bun run doctor -- --output-dir /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor --readiness-report /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/report.json",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 4,
+      "durationMs": 1,
       "status": "passed",
       "exitCode": 0
     },
@@ -83,7 +83,7 @@
       "durationMs": 0,
       "status": "passed",
       "exitCode": 0,
-      "note": "No enabled third-party extensions detected; workspace allowlist enforcement is not required yet. (mode=off, enabledSkills=0, enabledToolpacks=0)"
+      "note": "No enabled third-party extensions detected. (mode=off, enabledSkills=0, enabledToolpacks=0)"
     },
     {
       "id": "canary-checklist-evidence",
@@ -93,21 +93,21 @@
       "durationMs": 0,
       "status": "passed",
       "exitCode": 0,
-      "note": "required=no, completedAreas=0, missingAreas=6"
+      "note": "required=no, completedAreas=0, missingAreas=4"
     }
   ],
   "productionReplayThresholdRecommendations": [],
   "controlPlaneEval": {
     "summaryPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
     "exists": true,
-    "totalCases": 8,
-    "passedCases": 8,
+    "totalCases": 36,
+    "passedCases": 36,
     "failedCases": 0,
-    "clarificationRate": 0.16666666666666666,
+    "clarificationRate": 0,
     "unnecessaryClarificationRate": 0,
     "freezeExpectationPassRate": 1,
     "artifactExpectationPassRate": 1,
-    "artifactSatisfactionRate": 0.5,
+    "artifactSatisfactionRate": 1,
     "runtimeReplayPassRate": 1,
     "productionReplaySources": {
       "canary": {
@@ -141,13 +141,13 @@
     "completedAreas": [],
     "missingAreas": [
       "Audience",
-      "Decision Gate",
-      "Fault Injection",
-      "Health",
-      "Observability",
-      "Rollback"
+      "Rollback",
+      "Monitoring",
+      "Signoff"
     ],
-    "findings": []
+    "findings": [
+      "Canary evidence file not found: /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json"
+    ]
   },
   "canaryEvidenceGate": {
     "passed": true,
@@ -167,40 +167,26 @@
       "exists": false,
       "entries": 0,
       "warnings": [
-        "Artifact telemetry file not found: /Users/beihuang/Documents/github/coworkany/.coworkany/self-learning/artifact-contract-telemetry.jsonl"
+        "Artifact telemetry file not found."
       ]
     }
   },
   "checklist": [
     {
       "area": "Audience",
-      "item": "Restrict initial rollout to named internal testers or a small external beta cohort.",
-      "requiredEvidence": "Tester list, install channel, and rollback contact owner documented."
+      "description": "Named canary testers and contact channel are defined."
     },
     {
       "area": "Rollback",
-      "item": "Keep the previous signed/notarized bundle and matching tag available for immediate rollback.",
-      "requiredEvidence": "Previous release asset URLs or archived artifacts attached to the release issue."
+      "description": "Rollback procedure and owner are documented."
     },
     {
-      "area": "Observability",
-      "item": "Collect startup metrics and artifact telemetry from at least one canary session before widening the rollout.",
-      "requiredEvidence": "Startup metrics JSONL path and artifact telemetry JSONL excerpt linked in release notes or issue."
+      "area": "Monitoring",
+      "description": "Runtime and error dashboards are live during canary."
     },
     {
-      "area": "Fault Injection",
-      "item": "Run the database failure recovery scenario and verify logs show the expected recovery path.",
-      "requiredEvidence": "Playwright report or captured logs from the failure-injection run."
-    },
-    {
-      "area": "Health",
-      "item": "Check sidecar and managed service health after install and after the first task execution.",
-      "requiredEvidence": "Health check output or screenshots from the dependency/service status UI."
-    },
-    {
-      "area": "Decision Gate",
-      "item": "Hold rollout expansion until no blocker regression remains in readiness report warnings or failed stages.",
-      "requiredEvidence": "Final go/no-go comment referencing the readiness report artifact."
+      "area": "Signoff",
+      "description": "Release owner signed off the rollout decision."
     }
   ],
   "sidecarDoctor": {
@@ -209,49 +195,49 @@
     "exists": true,
     "overallStatus": "degraded",
     "failedChecks": 0,
-    "warnedChecks": 3,
+    "warnedChecks": 1,
     "checks": [
       {
         "id": "runtime-store",
         "label": "Runtime store integrity",
-        "status": "warn",
-        "summary": "Runtime store not found at /Users/beihuang/Documents/github/coworkany/.coworkany/task-runtime.json"
+        "status": "pass",
+        "summary": "Runtime store healthy with 0 record(s)."
       },
       {
-        "id": "isolation-contracts",
-        "label": "Session/memory/tenant isolation posture",
-        "status": "warn",
-        "summary": "Runtime store not found at /Users/beihuang/Documents/github/coworkany/.coworkany/task-runtime.json"
+        "id": "memory-source-guards",
+        "label": "Memory source guardrails",
+        "status": "pass",
+        "summary": "No memory source guardrail anti-patterns detected."
+      },
+      {
+        "id": "control-plane-readiness",
+        "label": "Control-plane readiness",
+        "status": "pass",
+        "summary": "Control-plane readiness report is passing."
+      },
+      {
+        "id": "anomaly-signals",
+        "label": "Runtime anomaly signals",
+        "status": "pass",
+        "summary": "No elevated anomaly signals detected."
       },
       {
         "id": "extension-governance",
         "label": "Extension governance posture",
         "status": "pass",
-        "summary": "No enabled third-party extensions detected; governance store has not been created yet."
-      },
-      {
-        "id": "memory-source-guards",
-        "label": "Runtime memory source guards",
-        "status": "pass",
-        "summary": "Guarded runtime sources are free of known global memory bypass patterns (3 file(s) scanned)."
-      },
-      {
-        "id": "control-plane-readiness",
-        "label": "Control-plane readiness posture",
-        "status": "pass",
-        "summary": "Latest readiness artifact is present and passing."
+        "summary": "No enabled third-party extensions detected."
       },
       {
         "id": "observability",
         "label": "Observability coverage",
         "status": "warn",
-        "summary": "Observability coverage has 2 warning(s)."
+        "summary": "Startup metrics directory not found: /Users/beihuang/Documents/github/coworkany/.coworkany/startup-metrics | Artifact telemetry file not found."
       },
       {
-        "id": "anomaly-signals",
-        "label": "Incident anomaly signals",
+        "id": "threshold-config",
+        "label": "Control-plane threshold profile",
         "status": "pass",
-        "summary": "No repeated reopen, clarification, or degraded-output anomalies detected."
+        "summary": "Loaded threshold profile \"beta\"."
       }
     ],
     "warnings": []

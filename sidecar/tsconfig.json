@@ -14,13 +14,15 @@
         "declaration": true,
         "declarationMap": true,
         "outDir": "./dist",
-        "rootDir": "./src",
+        "rootDir": ".",
         "types": [
             "node"
         ]
     },
     "include": [
-        "src/**/*"
+        "src/**/*",
+        "ops/**/*",
+        "protocol-core/**/*"
     ],
     "exclude": [
         "node_modules",

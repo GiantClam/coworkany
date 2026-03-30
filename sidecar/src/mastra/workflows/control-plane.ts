@@ -5,7 +5,6 @@ import { buildExecutionProfile } from './steps/assess-risk';
 import { runResearchLoop } from './steps/research-loop';
 import { freezeContract } from './steps/freeze-contract';
 import { executeFrozenTask } from './steps/execute-task';
-
 const analyzeIntentStep = createStep({
     id: 'analyze-intent',
     description: 'Analyze user intent and normalize into work request.',
@@ -24,7 +23,6 @@ const analyzeIntentStep = createStep({
         return analyzeWorkRequest(inputData);
     },
 });
-
 const assessRiskStep = createStep({
     id: 'assess-risk',
     description: 'Assess risk tier and execution policy.',
@@ -38,7 +36,6 @@ const assessRiskStep = createStep({
         };
     },
 });
-
 const researchStep = createStep({
     id: 'research-if-needed',
     description: 'Suspend for user action when needed, otherwise run pre-freeze research loop.',
@@ -56,24 +53,20 @@ const researchStep = createStep({
     execute: async ({ inputData, resumeData, suspend }) => {
         const userActions = inputData.userActions as Array<{ questions: string[]; blocking: boolean }> | undefined;
         const hasBlockingAction = Boolean(userActions && userActions.some((action) => action.blocking));
-
         if (hasBlockingAction && !resumeData?.approved) {
             const questions = (userActions ?? [])
                 .flatMap((action) => action.questions)
                 .filter((question): question is string => typeof question === 'string' && question.length > 0);
-
             return await suspend({
                 questions,
                 reason: 'Waiting for required user input before research/execution.',
                 blocking: true,
             });
         }
-
         const research = await runResearchLoop(
             { normalized: inputData.normalized },
             { answers: resumeData?.answers },
         );
-
         return {
             ...inputData,
             normalized: research.normalized,
@@ -82,7 +75,6 @@ const researchStep = createStep({
         };
     },
 });
-
 const freezeContractStep = createStep({
     id: 'freeze-contract',
     description: 'Freeze normalized request and generate execution plan/query.',
@@ -96,7 +88,6 @@ const freezeContractStep = createStep({
         };
     },
 });
-
 const executeTaskStep = createStep({
     id: 'execute-task',
     description: 'Execute task via coworker agent, with suspend/resume approval gate.',
@@ -117,7 +108,6 @@ const executeTaskStep = createStep({
     execute: async ({ inputData, resumeData, suspend, mastra }) => {
         const requiresCheckpointApproval = (inputData.checkpoints as Array<{ requiresUserConfirmation?: boolean }> | undefined)
             ?.some((checkpoint) => checkpoint.requiresUserConfirmation === true);
-
         if (requiresCheckpointApproval && resumeData?.approved !== true) {
             return await suspend({
                 checkpointTitle: 'Execution checkpoint approval',
@@ -125,7 +115,6 @@ const executeTaskStep = createStep({
                 message: 'Execution is waiting for checkpoint approval.',
             });
         }
-
         const coworker = mastra.getAgent('coworker');
         const executed = await executeFrozenTask({
             coworker,
@@ -136,11 +125,9 @@ const executeTaskStep = createStep({
             },
             approved: resumeData?.approved,
         });
-
         return executed;
     },
 });
-
 export const controlPlaneWorkflow = createWorkflow({
     id: 'control-plane',
     inputSchema: z.object({

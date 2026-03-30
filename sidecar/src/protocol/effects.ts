@@ -39,7 +39,6 @@ export const EffectScopeSchema = z.object({
     maxFileSizeBytes: z.number().optional(),
     timeoutMs: z.number().optional(),
 });
-export type EffectScope = z.infer<typeof EffectScopeSchema>;
 export const EffectRequestSchema = z.object({
     id: z.string().uuid(),
     timestamp: z.string().datetime({ offset: true }),

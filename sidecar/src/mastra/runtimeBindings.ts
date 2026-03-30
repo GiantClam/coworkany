@@ -4,13 +4,11 @@ import {
     invokeCustomAsrProvider,
 } from '../tools/core/speechProviders';
 import type { ToolDefinition } from '../tools/standard';
-
 type VoiceProviderInput = {
     listEnabledSkills: () => StoredSkill[];
     getToolByName: (toolName: string) => ToolDefinition | undefined;
     workspaceRoot: string;
 };
-
 type VoiceProviderBindings = {
     getVoiceProviderStatus: (providerMode?: 'auto' | 'system' | 'custom') => ReturnType<typeof getSpeechProviderStatus>;
     transcribeWithCustomAsr: (request: {
@@ -20,7 +18,6 @@ type VoiceProviderBindings = {
         providerMode?: 'auto' | 'system' | 'custom';
     }) => ReturnType<typeof invokeCustomAsrProvider>;
 };
-
 export function createVoiceProviderBindings(input: VoiceProviderInput): VoiceProviderBindings {
     return {
         getVoiceProviderStatus: (providerMode) => getSpeechProviderStatus(

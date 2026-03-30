@@ -1,10 +1,7 @@
 import { WorkspaceStore } from './workspaceStore';
-
 type WorkspaceStoreApi = Pick<WorkspaceStore, 'list' | 'create' | 'update' | 'delete'>;
-
 export function createWorkspaceStoreFacade(getRoot: () => string): WorkspaceStoreApi {
     let cache: { root: string; store: WorkspaceStore } | null = null;
-
     const getStore = (): WorkspaceStore => {
         const root = getRoot().trim();
         if (!cache || cache.root !== root) {
@@ -15,7 +12,6 @@ export function createWorkspaceStoreFacade(getRoot: () => string): WorkspaceStor
         }
         return cache.store;
     };
-
     return {
         list: () => getStore().list(),
         create: (name, workspacePath) => getStore().create(name, workspacePath),

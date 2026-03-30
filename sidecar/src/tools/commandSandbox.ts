@@ -7,7 +7,6 @@
  * - NEEDS_INTERACTION: Commands that need user interaction (sudo, password)
  * - WARNING: Commands that run but with a warning
  */
-
 export interface CommandCheckResult {
     allowed: boolean;
     riskLevel: 'safe' | 'low' | 'medium' | 'high' | 'critical';
@@ -16,7 +15,6 @@ export interface CommandCheckResult {
     needsInteraction?: boolean;  // Command needs user input (password, etc.)
     interactionHint?: string;    // Hint for user about what to input
 }
-
 /** Dangerous command patterns with risk levels */
 const DANGEROUS_PATTERNS: Array<{
     pattern: RegExp;
@@ -32,7 +30,6 @@ const DANGEROUS_PATTERNS: Array<{
     { pattern: /\bmkfs\b/, riskLevel: 'critical', reason: 'Filesystem format command', blocked: true },
     { pattern: /\bformat\s+[a-zA-Z]:/, riskLevel: 'critical', reason: 'Disk format command', blocked: true },
     { pattern: /\bdd\s+.*of=\/dev\/[sh]d/, riskLevel: 'critical', reason: 'Direct disk write', blocked: true },
-
     // High NEEDS_INTERACTION: System commands that require user confirmation/input
     { 
         pattern: /\b(shutdown|reboot|halt|poweroff|init\s+[06])\b/, 
@@ -55,7 +52,6 @@ const DANGEROUS_PATTERNS: Array<{
     { pattern: /\bchmod\s+(-R\s+)?777\b/, riskLevel: 'high', reason: 'Overly permissive file permissions', needsInteraction: true },
     { pattern: /\bchown\s+(-R\s+)?root/, riskLevel: 'high', reason: 'Change ownership to root', needsInteraction: true },
     { pattern: /\b(visudo|passwd)\b/, riskLevel: 'high', reason: 'User/permission management', needsInteraction: true },
-
     // Medium: Potentially dangerous but can run with warning
     { pattern: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive\s+--force)/, riskLevel: 'medium', reason: 'Recursive force delete' },
     { pattern: /\brmdir\s+\/[sS]\b/, riskLevel: 'medium', reason: 'Recursive directory removal' },
@@ -68,20 +64,17 @@ const DANGEROUS_PATTERNS: Array<{
     { pattern: /\bnpm\s+(-g\s+)?install\s+--unsafe-perm/, riskLevel: 'medium', reason: 'npm install with unsafe permissions' },
     { pattern: /\b(Start-Process|Invoke-Expression|iex)\b/i, riskLevel: 'medium', reason: 'PowerShell code execution' },
 ];
-
 /**
  * Check a command for dangerous patterns.
  * Returns the result with the highest risk level found.
  */
 export function checkCommand(command: string): CommandCheckResult {
     const normalizedCmd = command.trim();
-
     let worstResult: CommandCheckResult = {
         allowed: true,
         riskLevel: 'safe',
         needsInteraction: false,
     };
-
     for (const entry of DANGEROUS_PATTERNS) {
         if (entry.pattern.test(normalizedCmd)) {
             const riskOrder = { safe: 0, low: 1, medium: 2, high: 3, critical: 4 };
@@ -98,10 +91,8 @@ export function checkCommand(command: string): CommandCheckResult {
             }
         }
     }
-
     return worstResult;
 }
-
 /**
  * Get all dangerous patterns for display in settings UI.
  */

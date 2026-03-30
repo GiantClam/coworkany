@@ -117,28 +117,22 @@ describe('P2-1: i18n Internationalization', () => {
 // ============================================================================
 
 describe('P2-2: OpenAI/Ollama Provider Support', () => {
-    test('LlmProvider type includes openai and ollama', () => {
-        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
-        expect(mainTs).toContain("'openai'");
-        expect(mainTs).toContain("'ollama'");
+    test('LlmProfile provider union includes openai and ollama', () => {
+        const uiTypes = readFile(path.join(DESKTOP_SRC, 'types', 'ui.ts'));
+        expect(uiTypes).toContain("'openai'");
+        expect(uiTypes).toContain("'ollama'");
     });
 
-    test('resolveProviderConfig handles openai provider', () => {
-        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
-        expect(mainTs).toMatch(/apiFormat.*openai|openai.*apiFormat/);
+    test('OpenAI-compatible provider settings include apiFormat support', () => {
+        const uiTypes = readFile(path.join(DESKTOP_SRC, 'types', 'ui.ts'));
+        expect(uiTypes).toContain("apiFormat?: 'anthropic' | 'openai'");
     });
 
-    test('resolveProviderConfig handles ollama provider', () => {
-        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
-        expect(mainTs).toContain("provider === 'ollama'");
-    });
-
-    test('Ollama detection utility exists', () => {
-        const ollamaFile = path.join(SIDECAR_SRC, 'tools', 'ollama.ts');
-        expect(fileExists(ollamaFile)).toBe(true);
-        const content = readFile(ollamaFile);
-        expect(content).toContain('isOllamaRunning');
-        expect(content).toContain('detectOllamaModels');
+    test('Sidecar streaming model preflight maps OpenAI API key', () => {
+        const streaming = readFile(path.join(SIDECAR_SRC, 'ipc', 'streaming.ts'));
+        expect(streaming).toContain("openai: 'OPENAI_API_KEY'");
+        expect(streaming).toContain('resolveMissingApiKeyForModel');
+        expect(streaming).toContain("const provider = modelId.split('/')[0]?.toLowerCase()");
     });
 
     test('Frontend UI types include OpenAI and Ollama settings', () => {
@@ -160,6 +154,7 @@ describe('P2-2: OpenAI/Ollama Provider Support', () => {
         expect(editor).toContain("'openai'");
         expect(editor).toContain("'ollama'");
         expect(editor).toContain('handleDetectOllamaModels');
+        expect(editor).toContain('/api/tags');
     });
 });
 
@@ -201,11 +196,15 @@ describe('P2-3: Token Usage Panel', () => {
         expect(store).toContain('estimateTokenCost');
     });
 
-    test('Sidecar emits TOKEN_USAGE for both Anthropic and OpenAI', () => {
-        const mainTs = readFile(path.join(SIDECAR_SRC, 'main.ts'));
-        const matches = mainTs.match(/emitRaw\(\s*taskId\s*,\s*['"]TOKEN_USAGE['"]/g);
-        expect(matches).toBeTruthy();
-        expect(matches!.length).toBeGreaterThanOrEqual(2);
+    test('Sidecar token usage flow exists in bridge + Mastra entrypoint', () => {
+        const bridge = readFile(path.join(SIDECAR_SRC, 'ipc', 'bridge.ts'));
+        const streaming = readFile(path.join(SIDECAR_SRC, 'ipc', 'streaming.ts'));
+        const entrypoint = readFile(path.join(SIDECAR_SRC, 'mastra', 'entrypoint.ts'));
+        expect(bridge).toContain('extractMastraTokenUsageEvent');
+        expect(bridge).toContain("type: 'token_usage'");
+        expect(streaming).toContain('extractMastraTokenUsageEvent');
+        expect(entrypoint).toContain("if (event.type === 'token_usage')");
+        expect(entrypoint).toContain("type: 'TOKEN_USAGE'");
     });
 });
 
@@ -235,7 +234,7 @@ describe('P2-4: Conversation Search & Export', () => {
             path.join(DESKTOP_SRC, 'components', 'jarvis', 'TaskListView.tsx')
         );
         expect(taskList).toContain('TaskListView');
-        expect(taskList).toContain('dashboard.tasks');
+        expect(taskList).toContain('sidebar.tasks');
     });
 
     test('MessageBubble includes copy button', () => {
@@ -318,7 +317,9 @@ describe('P2-5: Global Shortcut Configuration', () => {
     test('App uses unified single-window shortcuts', () => {
         const app = readFile(path.join(DESKTOP_SRC, 'App.tsx'));
         expect(app).toContain('useGlobalShortcuts');
-        expect(app).toContain("onTabChange={setActiveTab}");
+        expect(app).toContain('useGlobalShortcuts({');
+        expect(app).toContain('newTask:');
+        expect(app).toContain('openSettings:');
     });
 
     test('Translation files include shortcut keys', () => {

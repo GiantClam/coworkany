@@ -1,7 +1,6 @@
 import { promises as fs } from 'fs';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-
 export const deleteFilesTool = createTool({
     id: 'delete_files',
     description: 'Delete files or directories in batch. Always requires approval.',
@@ -17,7 +16,6 @@ export const deleteFilesTool = createTool({
     execute: async ({ paths }) => {
         let deleted = 0;
         const failedPaths: string[] = [];
-
         for (const filePath of paths) {
             try {
                 await fs.rm(filePath, { recursive: true, force: true });
@@ -26,14 +24,12 @@ export const deleteFilesTool = createTool({
                 failedPaths.push(filePath);
             }
         }
-
         return {
             deleted,
             failedPaths,
         };
     },
 });
-
 export const sendEmailTool = createTool({
     id: 'send_email',
     description: 'Send email through enterprise mail provider. Always requires approval.',

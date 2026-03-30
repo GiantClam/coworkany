@@ -9,7 +9,6 @@ import { globalToolRegistry } from './tools/registry';
 import { STANDARD_TOOLS } from './tools/standard';
 import { createMastraAdditionalCommandHandler } from './mastra/additionalCommands';
 import { createMastraSchedulerRuntime } from './mastra/schedulerRuntime';
-
 const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim()
     || path.join(workspaceRoot, '.coworkany');
@@ -17,11 +16,9 @@ const additionalCommandRuntime = createMastraAdditionalCommandHandler({
     workspaceRoot,
     appDataRoot,
 });
-
 function writeEvent(event: Record<string, unknown>): void {
     process.stdout.write(`${JSON.stringify(event)}\n`);
 }
-
 function readBoundedIntEnv(
     name: string,
     fallback: number,
@@ -44,19 +41,16 @@ function readBoundedIntEnv(
     }
     return parsed;
 }
-
 async function run(): Promise<void> {
     const rl = readline.createInterface({
         input: process.stdin,
         crlfDelay: Infinity,
     });
-
     writeEvent({
         type: 'ready',
         runtime: 'mastra',
         health: getMastraHealth(),
     });
-
     let schedulerRuntime: ReturnType<typeof createMastraSchedulerRuntime> | null = null;
     const processor = createMastraEntrypointProcessor({
         handleUserMessage,
@@ -102,7 +96,6 @@ async function run(): Promise<void> {
             5,
         ),
     });
-
     schedulerRuntime = createMastraSchedulerRuntime({
         appDataRoot,
         deps: {
@@ -115,7 +108,6 @@ async function run(): Promise<void> {
     });
     schedulerRuntime.start();
     const inFlight = new Set<Promise<void>>();
-
     try {
         for await (const line of rl) {
             try {
@@ -144,12 +136,10 @@ async function run(): Promise<void> {
         processor.close('stdin_closed');
         schedulerRuntime.stop();
     }
-
     if (inFlight.size > 0) {
         await Promise.allSettled([...inFlight]);
     }
 }
-
 run().catch((error) => {
     writeEvent({ type: 'error', message: String(error) });
     process.exitCode = 1;

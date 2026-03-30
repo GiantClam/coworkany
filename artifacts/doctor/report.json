@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-03-30T07:44:50.006Z",
+  "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
+  "appDataDir": "/Users/beihuang/Documents/github/coworkany/.coworkany",
+  "overallStatus": "degraded",
+  "checks": [
+    {
+      "id": "runtime-store",
+      "label": "Runtime store integrity",
+      "status": "pass",
+      "summary": "Runtime store healthy with 0 record(s)."
+    },
+    {
+      "id": "memory-source-guards",
+      "label": "Memory source guardrails",
+      "status": "pass",
+      "summary": "No memory source guardrail anti-patterns detected."
+    },
+    {
+      "id": "control-plane-readiness",
+      "label": "Control-plane readiness",
+      "status": "warn",
+      "summary": "Readiness report path not provided."
+    },
+    {
+      "id": "anomaly-signals",
+      "label": "Runtime anomaly signals",
+      "status": "pass",
+      "summary": "No elevated anomaly signals detected."
+    },
+    {
+      "id": "extension-governance",
+      "label": "Extension governance posture",
+      "status": "pass",
+      "summary": "No enabled third-party extensions detected."
+    },
+    {
+      "id": "observability",
+      "label": "Observability coverage",
+      "status": "warn",
+      "summary": "Startup metrics directory not found: /Users/beihuang/Documents/github/coworkany/.coworkany/startup-metrics | Artifact telemetry file not found."
+    },
+    {
+      "id": "threshold-config",
+      "label": "Control-plane threshold profile",
+      "status": "pass",
+      "summary": "Using default control-plane thresholds."
+    }
+  ]
+}

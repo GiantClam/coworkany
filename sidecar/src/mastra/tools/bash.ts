@@ -1,7 +1,6 @@
 import { spawn } from 'child_process';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-
 export const DANGEROUS_PATTERNS: RegExp[] = [
     /\brm\s+-rf\s+\/?\s*$/i,
     /\brm\s+-rf\s+~\//i,
@@ -12,7 +11,6 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
     /\bcurl\b[^\n|]*\|\s*(sh|bash)\b/i,
     /\bchmod\s+777\b/i,
 ];
-
 export const APPROVAL_PATTERNS: RegExp[] = [
     /\brm\s+-r(f)?\b/i,
     /\bmv\b/i,
@@ -21,7 +19,6 @@ export const APPROVAL_PATTERNS: RegExp[] = [
     /\bbrew\s+install\b/i,
     /\bpip\s+install\b/i,
 ];
-
 export type BashExecutionResult = {
     stdout: string;
     stderr: string;
@@ -29,22 +26,18 @@ export type BashExecutionResult = {
     rejected: boolean;
     reason?: string;
 };
-
 export function isDangerousCommand(command: string): boolean {
     return DANGEROUS_PATTERNS.some((pattern) => pattern.test(command));
 }
-
 export function needsApprovalForCommand(command: string): boolean {
     return APPROVAL_PATTERNS.some((pattern) => pattern.test(command));
 }
-
 async function executeShellCommand(input: {
     command: string;
     workdir?: string;
     timeout?: number;
 }): Promise<BashExecutionResult> {
     const timeoutMs = Math.max(100, input.timeout ?? 30_000);
-
     return await new Promise<BashExecutionResult>((resolve) => {
         const child = spawn(input.command, {
             cwd: input.workdir || process.cwd(),
@@ -55,11 +48,9 @@ async function executeShellCommand(input: {
             shell: true,
             stdio: ['ignore', 'pipe', 'pipe'],
         });
-
         let stdout = '';
         let stderr = '';
         let settled = false;
-
         const finish = (result: BashExecutionResult): void => {
             if (settled) {
                 return;
@@ -67,7 +58,6 @@ async function executeShellCommand(input: {
             settled = true;
             resolve(result);
         };
-
         const timer = setTimeout(() => {
             child.kill('SIGTERM');
             finish({
@@ -78,15 +68,12 @@ async function executeShellCommand(input: {
                 reason: 'timeout',
             });
         }, timeoutMs);
-
         child.stdout.on('data', (chunk: Buffer | string) => {
             stdout += chunk.toString();
         });
-
         child.stderr.on('data', (chunk: Buffer | string) => {
             stderr += chunk.toString();
         });
-
         child.on('error', (error) => {
             clearTimeout(timer);
             finish({
@@ -97,7 +84,6 @@ async function executeShellCommand(input: {
                 reason: 'spawn_error',
             });
         });
-
         child.on('close', (code) => {
             clearTimeout(timer);
             finish({
@@ -109,13 +95,11 @@ async function executeShellCommand(input: {
         });
     });
 }
-
 const bashInputSchema = z.object({
     command: z.string().min(1),
     workdir: z.string().optional(),
     timeout: z.number().int().positive().max(300_000).optional(),
 });
-
 const bashOutputSchema = z.object({
     stdout: z.string(),
     stderr: z.string(),
@@ -123,7 +107,6 @@ const bashOutputSchema = z.object({
     rejected: z.boolean(),
     reason: z.string().optional(),
 });
-
 export const bashTool = createTool({
     id: 'bash',
     description: 'Execute safe shell commands for read and low-risk operations.',
@@ -139,7 +122,6 @@ export const bashTool = createTool({
                 reason: 'dangerous_command',
             };
         }
-
         if (needsApprovalForCommand(inputData.command)) {
             return {
                 stdout: '',
@@ -149,11 +131,9 @@ export const bashTool = createTool({
                 reason: 'approval_required',
             };
         }
-
         return await executeShellCommand(inputData);
     },
 });
-
 export const bashApprovalTool = createTool({
     id: 'bash_approval',
     description: 'Execute potentially mutating shell commands. Always requires user approval.',
@@ -170,7 +150,6 @@ export const bashApprovalTool = createTool({
                 reason: 'dangerous_command',
             };
         }
-
         return await executeShellCommand(inputData);
     },
 });

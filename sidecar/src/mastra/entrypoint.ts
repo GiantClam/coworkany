@@ -108,6 +108,61 @@ function toProtocolCommand(value: unknown): ProtocolCommand | null {
 function getString(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
+function parseVoiceProviderMode(value: unknown): 'auto' | 'system' | 'custom' | undefined {
+    return value === 'auto' || value === 'system' || value === 'custom'
+        ? value
+        : undefined;
+}
+function buildUnsupportedAutonomousResponse(
+    commandType: string,
+    payload: Record<string, unknown>,
+): { type: string; payload: Record<string, unknown> } | null {
+    if (commandType === 'start_autonomous_task') {
+        return {
+            type: 'start_autonomous_task_response',
+            payload: {
+                success: false,
+                taskId: getString(payload.taskId) ?? '',
+                error: 'unsupported_in_mastra_runtime',
+            },
+        };
+    }
+    if (commandType === 'get_autonomous_task_status') {
+        return {
+            type: 'get_autonomous_task_status_response',
+            payload: {
+                success: false,
+                task: null,
+                error: 'unsupported_in_mastra_runtime',
+            },
+        };
+    }
+    if (
+        commandType === 'pause_autonomous_task'
+        || commandType === 'resume_autonomous_task'
+        || commandType === 'cancel_autonomous_task'
+    ) {
+        return {
+            type: `${commandType}_response`,
+            payload: {
+                success: false,
+                taskId: getString(payload.taskId) ?? '',
+                error: 'unsupported_in_mastra_runtime',
+            },
+        };
+    }
+    if (commandType === 'list_autonomous_tasks') {
+        return {
+            type: 'list_autonomous_tasks_response',
+            payload: {
+                success: false,
+                tasks: [],
+                error: 'unsupported_in_mastra_runtime',
+            },
+        };
+    }
+    return null;
+}
 function isScheduledCancellationRequest(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -554,21 +609,83 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             }
             const commandId = getString(command.id) ?? createId();
             const payload = toRecord(command.payload);
+            const emitFor = (type: string, responsePayload: Record<string, unknown>): void => {
+                emit(buildResponse(commandId, type, responsePayload, getNowIso));
+            };
+            const emitCurrent = (responsePayload: Record<string, unknown>): void => {
+                emitFor(`${command.type}_response`, responsePayload);
+            };
+            const emitInvalidPayload = (
+                type: string,
+                extra: Record<string, unknown> = {},
+            ): void => {
+                emitFor(type, {
+                    success: false,
+                    ...extra,
+                    error: 'invalid_payload',
+                });
+            };
+            const emitCurrentInvalidPayload = (extra: Record<string, unknown> = {}): void => {
+                emitInvalidPayload(`${command.type}_response`, extra);
+            };
+            const emitTaskStarted = (input: {
+                taskId: string;
+                title: string;
+                message: string;
+                workspacePath: string;
+                scheduled?: boolean;
+            }): void => {
+                emit({
+                    type: 'TASK_STARTED',
+                    taskId: input.taskId,
+                    payload: {
+                        title: input.title,
+                        description: input.message,
+                        context: {
+                            workspacePath: input.workspacePath,
+                            userQuery: input.message,
+                            ...(input.scheduled ? { scheduled: true } : {}),
+                        },
+                    },
+                });
+            };
+            const emitTaskSummary = (input: {
+                taskId: string;
+                summary: string;
+                finishReason: string;
+            }): void => {
+                emit({
+                    type: 'TEXT_DELTA',
+                    taskId: input.taskId,
+                    payload: {
+                        delta: input.summary,
+                        role: 'assistant',
+                    },
+                });
+                emit({
+                    type: 'TASK_FINISHED',
+                    taskId: input.taskId,
+                    payload: {
+                        summary: input.summary,
+                        finishReason: input.finishReason,
+                    },
+                });
+            };
             if (command.type === 'bootstrap_runtime_context') {
                 bootstrapRuntimeContext = toRecord(payload.runtimeContext);
-                emit(buildResponse(commandId, 'bootstrap_runtime_context_response', {
+                emitFor('bootstrap_runtime_context_response', {
                     success: true,
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'get_runtime_snapshot') {
                 try {
-                    emit(buildResponse(commandId, 'get_runtime_snapshot_response', {
+                    emitFor('get_runtime_snapshot_response', {
                         success: true,
                         snapshot: collectRuntimeSnapshot(),
-                    }, getNowIso));
+                    });
                 } catch (error) {
-                    emit(buildResponse(commandId, 'get_runtime_snapshot_response', {
+                    emitFor('get_runtime_snapshot_response', {
                         success: false,
                         snapshot: {
                             generatedAt: getNowIso(),
@@ -576,12 +693,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             count: 0,
                         },
                         error: error instanceof Error ? error.message : String(error),
-                    }, getNowIso));
+                    });
                 }
                 return;
             }
             if (command.type === 'doctor_preflight') {
-                emit(buildResponse(commandId, 'doctor_preflight_response', {
+                emitFor('doctor_preflight_response', {
                     success: true,
                     report: {
                         runtime: 'mastra',
@@ -589,18 +706,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         hasRuntimeContext: Boolean(bootstrapRuntimeContext),
                     },
                     markdown: '# Doctor Preflight\n\nMastra runtime is healthy.',
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'get_tasks') {
                 const workspacePath = getString(payload.workspacePath);
                 if (!workspacePath) {
-                    emit(buildResponse(commandId, 'get_tasks_response', {
-                        success: false,
-                        tasks: [],
-                        count: 0,
-                        error: 'invalid_payload',
-                    }, getNowIso));
+                    emitInvalidPayload('get_tasks_response', { tasks: [], count: 0 });
                     return;
                 }
                 const statusFilter = Array.isArray(payload.status)
@@ -626,93 +738,55 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         createdAt: task.createdAt,
                     }));
                 const tasks = limit ? all.slice(0, limit) : all;
-                emit(buildResponse(commandId, 'get_tasks_response', {
+                emitFor('get_tasks_response', {
                     success: true,
                     tasks,
                     count: tasks.length,
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'get_voice_state') {
-                emit(buildResponse(commandId, 'get_voice_state_response', {
+                emitFor('get_voice_state_response', {
                     success: true,
                     state: toRecord(getVoicePlaybackState()),
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'stop_voice') {
                 const stopped = await stopVoicePlayback('user_requested');
-                emit(buildResponse(commandId, 'stop_voice_response', {
+                emitFor('stop_voice_response', {
                     success: true,
                     stopped,
                     state: toRecord(getVoicePlaybackState()),
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'get_voice_provider_status') {
-                const providerMode = payload.providerMode;
-                const effectiveProviderMode = providerMode === 'auto' || providerMode === 'system' || providerMode === 'custom'
-                    ? providerMode
-                    : undefined;
-                emit(buildResponse(commandId, 'get_voice_provider_status_response', {
+                const effectiveProviderMode = parseVoiceProviderMode(payload.providerMode);
+                emitFor('get_voice_provider_status_response', {
                     success: true,
                     ...toRecord(getVoiceProviderStatus(effectiveProviderMode)),
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'transcribe_voice') {
                 const audioBase64 = getString(payload.audioBase64) ?? '';
                 if (!audioBase64) {
-                    emit(buildResponse(commandId, 'transcribe_voice_response', {
-                        success: false,
-                        error: 'invalid_payload',
-                    }, getNowIso));
+                    emitInvalidPayload('transcribe_voice_response');
                     return;
                 }
-                const providerMode = payload.providerMode;
-                const effectiveProviderMode = providerMode === 'auto' || providerMode === 'system' || providerMode === 'custom'
-                    ? providerMode
-                    : undefined;
-                emit(buildResponse(commandId, 'transcribe_voice_response', await transcribeWithCustomAsr({
+                const effectiveProviderMode = parseVoiceProviderMode(payload.providerMode);
+                emitFor('transcribe_voice_response', await transcribeWithCustomAsr({
                     audioBase64,
                     mimeType: getString(payload.mimeType) ?? undefined,
                     language: getString(payload.language) ?? undefined,
                     providerMode: effectiveProviderMode,
-                }), getNowIso));
+                }));
                 return;
             }
-            if (command.type === 'start_autonomous_task') {
-                emit(buildResponse(commandId, 'start_autonomous_task_response', {
-                    success: false,
-                    taskId: getString(payload.taskId) ?? '',
-                    error: 'unsupported_in_mastra_runtime',
-                }, getNowIso));
-                return;
-            }
-            if (command.type === 'get_autonomous_task_status') {
-                emit(buildResponse(commandId, 'get_autonomous_task_status_response', {
-                    success: false,
-                    task: null,
-                    error: 'unsupported_in_mastra_runtime',
-                }, getNowIso));
-                return;
-            }
-            if (command.type === 'pause_autonomous_task'
-                || command.type === 'resume_autonomous_task'
-                || command.type === 'cancel_autonomous_task') {
-                emit(buildResponse(commandId, `${command.type}_response`, {
-                    success: false,
-                    taskId: getString(payload.taskId) ?? '',
-                    error: 'unsupported_in_mastra_runtime',
-                }, getNowIso));
-                return;
-            }
-            if (command.type === 'list_autonomous_tasks') {
-                emit(buildResponse(commandId, 'list_autonomous_tasks_response', {
-                    success: false,
-                    tasks: [],
-                    error: 'unsupported_in_mastra_runtime',
-                }, getNowIso));
+            const unsupportedAutonomous = buildUnsupportedAutonomousResponse(command.type, payload);
+            if (unsupportedAutonomous) {
+                emitFor(unsupportedAutonomous.type, unsupportedAutonomous.payload);
                 return;
             }
             if (command.type === 'start_task' || command.type === 'send_task_message') {
@@ -721,11 +795,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     ? getString(payload.userQuery)
                     : getString(payload.content);
                 if (!taskId || !message) {
-                    emit(buildResponse(commandId, `${command.type}_response`, {
-                        success: false,
-                        taskId,
-                        error: 'invalid_payload',
-                    }, getNowIso));
+                    emitCurrentInvalidPayload({ taskId });
                     return;
                 }
                 const workspacePath = getString(toRecord(payload.context).workspacePath) ?? process.cwd();
@@ -749,28 +819,17 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         lastUserMessage: message,
                         resourceId,
                     });
-                    emit(buildResponse(commandId, 'send_task_message_response', {
+                    emitFor('send_task_message_response', {
                         success: true,
                         taskId,
-                    }, getNowIso));
+                    });
                     const cancellationSummary = cancelled.cancelledCount > 0
                         ? `已取消 ${cancelled.cancelledCount} 个定时任务。`
                         : '没有可取消的定时任务。';
-                    emit({
-                        type: 'TEXT_DELTA',
+                    emitTaskSummary({
                         taskId,
-                        payload: {
-                            delta: cancellationSummary,
-                            role: 'assistant',
-                        },
-                    });
-                    emit({
-                        type: 'TASK_FINISHED',
-                        taskId,
-                        payload: {
-                            summary: cancellationSummary,
-                            finishReason: 'scheduled_cancel',
-                        },
+                        summary: cancellationSummary,
+                        finishReason: 'scheduled_cancel',
                     });
                     return;
                 }
@@ -783,11 +842,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         config: toRecord(payload.config),
                     });
                     if (scheduleDecision.error) {
-                        emit(buildResponse(commandId, `${command.type}_response`, {
+                        emitCurrent({
                             success: false,
                             taskId,
                             error: scheduleDecision.error,
-                        }, getNowIso));
+                        });
                         return;
                     }
                     if (scheduleDecision.scheduled) {
@@ -801,40 +860,23 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             resourceId,
                         });
                         if (command.type === 'start_task') {
-                            emit({
-                                type: 'TASK_STARTED',
+                            emitTaskStarted({
                                 taskId,
-                                payload: {
-                                    title: getString(payload.title) ?? 'Task',
-                                    description: message,
-                                    context: {
-                                        workspacePath,
-                                        userQuery: message,
-                                        scheduled: true,
-                                    },
-                                },
+                                title: getString(payload.title) ?? 'Task',
+                                message,
+                                workspacePath,
+                                scheduled: true,
                             });
                         }
-                        emit(buildResponse(commandId, `${command.type}_response`, {
+                        emitCurrent({
                             success: true,
                             taskId,
-                        }, getNowIso));
-                        const summary = scheduleDecision.summary ?? '已安排定时任务。';
-                        emit({
-                            type: 'TEXT_DELTA',
-                            taskId,
-                            payload: {
-                                delta: summary,
-                                role: 'assistant',
-                            },
                         });
-                        emit({
-                            type: 'TASK_FINISHED',
+                        const summary = scheduleDecision.summary ?? '已安排定时任务。';
+                        emitTaskSummary({
                             taskId,
-                            payload: {
-                                summary,
-                                finishReason: 'scheduled',
-                            },
+                            summary,
+                            finishReason: 'scheduled',
                         });
                         return;
                     }
@@ -849,23 +891,17 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     resourceId,
                 });
                 if (command.type === 'start_task') {
-                    emit({
-                        type: 'TASK_STARTED',
+                    emitTaskStarted({
                         taskId,
-                        payload: {
-                            title: getString(payload.title) ?? 'Task',
-                            description: message,
-                            context: {
-                                workspacePath,
-                                userQuery: message,
-                            },
-                        },
+                        title: getString(payload.title) ?? 'Task',
+                        message,
+                        workspacePath,
                     });
                 }
-                emit(buildResponse(commandId, `${command.type}_response`, {
+                emitCurrent({
                     success: true,
                     taskId,
-                }, getNowIso));
+                });
                 await deps.handleUserMessage(
                     message,
                     taskId,
@@ -877,11 +913,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             if (command.type === 'resume_interrupted_task') {
                 const taskId = getString(payload.taskId) ?? '';
                 if (!taskId) {
-                    emit(buildResponse(commandId, 'resume_interrupted_task_response', {
-                        success: false,
-                        taskId,
-                        error: 'invalid_payload',
-                    }, getNowIso));
+                    emitInvalidPayload('resume_interrupted_task_response', { taskId });
                     return;
                 }
                 const state = upsertTaskState(taskId, {
@@ -891,10 +923,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     resourceId: resolveTaskResourceId(taskId, payload, taskStates.get(taskId)?.resourceId),
                 });
                 const resumeMessage = state.lastUserMessage ?? 'Continue from the saved task context.';
-                emit(buildResponse(commandId, 'resume_interrupted_task_response', {
+                emitFor('resume_interrupted_task_response', {
                     success: true,
                     taskId,
-                }, getNowIso));
+                });
                 await deps.handleUserMessage(
                     resumeMessage,
                     taskId,
@@ -907,19 +939,16 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 const requestId = getString(payload.requestId);
                 const success = payload.success;
                 if (!requestId || typeof success !== 'boolean') {
-                    emit(buildResponse(commandId, 'report_effect_result_response', {
-                        success: false,
-                        error: 'invalid_payload',
-                    }, getNowIso));
+                    emitInvalidPayload('report_effect_result_response');
                     return;
                 }
                 const pending = pendingApprovals.get(requestId);
                 if (!pending || !pending.runId) {
-                    emit(buildResponse(commandId, 'report_effect_result_response', {
+                    emitFor('report_effect_result_response', {
                         success: false,
                         requestId,
                         error: 'approval_request_not_found',
-                    }, getNowIso));
+                    });
                     return;
                 }
                 pendingApprovals.delete(requestId);
@@ -929,10 +958,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     success,
                     (event) => emitDesktopEvent(pending.taskId, event, emit),
                 );
-                emit(buildResponse(commandId, 'report_effect_result_response', {
+                emitFor('report_effect_result_response', {
                     success: true,
                     requestId,
-                }, getNowIso));
+                });
                 return;
             }
             if (command.type === 'clear_task_history' || command.type === 'cancel_task') {
@@ -969,7 +998,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 if (command.type === 'cancel_task') {
                     responsePayload.cancelledScheduledCount = cancelledScheduledCount;
                 }
-                emit(buildResponse(commandId, `${command.type}_response`, responsePayload, getNowIso));
+                emitCurrent(responsePayload);
                 return;
             }
             if (forwardedCommandTypes.has(command.type)) {
@@ -982,29 +1011,29 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     );
                     const expectedType = `${command.type}_response`;
                     if (forwarded.type === expectedType) {
-                        emit(buildResponse(commandId, expectedType, toRecord(forwarded.payload), getNowIso));
+                        emitFor(expectedType, toRecord(forwarded.payload));
                         return;
                     }
-                    emit(buildResponse(commandId, expectedType, {
+                    emitFor(expectedType, {
                         success: false,
                         error: `policy_gate_invalid_response:${forwarded.type}`,
-                    }, getNowIso));
+                    });
                     return;
                 } catch (error) {
                     const errorMessage = error instanceof Error ? error.message : String(error);
                     if (command.type === 'apply_patch') {
-                        emit(buildResponse(commandId, 'apply_patch_response', {
+                        emitFor('apply_patch_response', {
                             patchId: getString(payload.patchId) ?? createId(),
                             success: false,
                             error: `policy_gate_unavailable:${errorMessage}`,
                             errorCode: 'io_error',
-                        }, getNowIso));
+                        });
                         return;
                     }
-                    emit(buildResponse(commandId, `${command.type}_response`, {
+                    emitCurrent({
                         success: false,
                         error: `policy_gate_unavailable:${errorMessage}`,
-                    }, getNowIso));
+                    });
                     return;
                 }
             }
@@ -1015,10 +1044,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     return;
                 }
             }
-            emit(buildResponse(commandId, `${command.type}_response`, {
+            emitCurrent({
                 success: false,
                 error: 'unsupported_in_mastra_runtime',
-            }, getNowIso));
+            });
         },
     };
 }

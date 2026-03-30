@@ -4,9 +4,7 @@ import { listMcpToolsSafe } from '../mcp/clients';
 import { deleteFilesTool, sendEmailTool } from '../tools/approval-tools';
 import { bashTool, bashApprovalTool } from '../tools/bash';
 import { enterpriseTools } from '../tools/enterprise';
-
 const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
-
 export const coworker = new Agent({
     id: 'coworker',
     name: 'CoworkAny Assistant',

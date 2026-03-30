@@ -1,9 +1,7 @@
 import type { StoredSkill } from '../../storage/skillStore';
 import type { ToolContext, ToolDefinition } from '../standard';
-
 export type SpeechProviderKind = 'asr' | 'tts';
 export type VoiceProviderMode = 'auto' | 'system' | 'custom';
-
 export type SpeechProviderRegistration = {
     id: string;
     kind: SpeechProviderKind;
@@ -13,9 +11,7 @@ export type SpeechProviderRegistration = {
     sourceSkill: string;
     displayName: string;
 };
-
 type MetadataNode = Record<string, unknown>;
-
 type SpeechProviderConfig = {
     id?: string;
     tool?: string;
@@ -23,13 +19,11 @@ type SpeechProviderConfig = {
     priority?: number;
     displayName?: string;
 };
-
 function asRecord(value: unknown): MetadataNode | null {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as MetadataNode
         : null;
 }
-
 function readString(record: MetadataNode, ...keys: string[]): string | undefined {
     for (const key of keys) {
         const value = record[key];
@@ -39,7 +33,6 @@ function readString(record: MetadataNode, ...keys: string[]): string | undefined
     }
     return undefined;
 }
-
 function readNumber(record: MetadataNode, ...keys: string[]): number | undefined {
     for (const key of keys) {
         const value = record[key];
@@ -49,7 +42,6 @@ function readNumber(record: MetadataNode, ...keys: string[]): number | undefined
     }
     return undefined;
 }
-
 function parseProviderConfig(skill: StoredSkill, kind: SpeechProviderKind): SpeechProviderConfig | null {
     const metadata = asRecord(skill.manifest.metadata);
     const voice = asRecord(metadata?.voice ?? metadata?.speech);
@@ -57,7 +49,6 @@ function parseProviderConfig(skill: StoredSkill, kind: SpeechProviderKind): Spee
     if (!config) {
         return null;
     }
-
     return {
         id: readString(config, 'id'),
         tool: readString(config, 'tool', 'toolName'),
@@ -66,7 +57,6 @@ function parseProviderConfig(skill: StoredSkill, kind: SpeechProviderKind): Spee
         displayName: readString(config, 'displayName', 'name'),
     };
 }
-
 export function listSpeechProviders(
     skills: StoredSkill[],
     kind: SpeechProviderKind,
@@ -79,7 +69,6 @@ export function listSpeechProviders(
             if (!config?.tool || !getTool(config.tool)) {
                 return [];
             }
-
             return [{
                 id: config.id || `${skill.manifest.name}:${kind}`,
                 kind,
@@ -97,7 +86,6 @@ export function listSpeechProviders(
             return left.sourceSkill.localeCompare(right.sourceSkill);
         });
 }
-
 export function getPreferredSpeechProvider(
     skills: StoredSkill[],
     kind: SpeechProviderKind,
@@ -109,7 +97,6 @@ export function getPreferredSpeechProvider(
     }
     return listSpeechProviders(skills, kind, getTool)[0] ?? null;
 }
-
 export function getSpeechProviderStatus(
     skills: StoredSkill[],
     getTool: (toolName: string) => ToolDefinition | undefined,
@@ -127,7 +114,6 @@ export function getSpeechProviderStatus(
     const asr = listSpeechProviders(skills, 'asr', getTool);
     const tts = listSpeechProviders(skills, 'tts', getTool);
     const customAllowed = mode !== 'system';
-
     return {
         preferredAsr: customAllowed && asr.length > 0 ? 'custom' : 'system',
         preferredTts: customAllowed && tts.length > 0 ? 'custom' : 'system',
@@ -136,7 +122,6 @@ export function getSpeechProviderStatus(
         providers: { asr, tts },
     };
 }
-
 export async function invokeCustomAsrProvider(
     skills: StoredSkill[],
     getTool: (toolName: string) => ToolDefinition | undefined,
@@ -155,7 +140,6 @@ export async function invokeCustomAsrProvider(
             error: 'transcription_unavailable',
         };
     }
-
     const tool = getTool(provider.toolName);
     if (!tool) {
         return {
@@ -163,13 +147,11 @@ export async function invokeCustomAsrProvider(
             error: 'transcription_unavailable',
         };
     }
-
     const result = await tool.handler({
         audio_base64: input.audioBase64,
         mime_type: input.mimeType,
         language: input.language,
     }, context);
-
     if (result?.success === false) {
         return {
             success: false,
@@ -178,13 +160,11 @@ export async function invokeCustomAsrProvider(
             providerName: provider.displayName,
         };
     }
-
     const text = typeof result?.text === 'string'
         ? result.text.trim()
         : typeof result?.transcript === 'string'
             ? result.transcript.trim()
             : '';
-
     if (!text) {
         return {
             success: false,
@@ -193,7 +173,6 @@ export async function invokeCustomAsrProvider(
             providerName: provider.displayName,
         };
     }
-
     return {
         success: true,
         text,
@@ -201,7 +180,6 @@ export async function invokeCustomAsrProvider(
         providerName: provider.displayName,
     };
 }
-
 export async function invokeCustomTtsProvider(
     skills: StoredSkill[],
     getTool: (toolName: string) => ToolDefinition | undefined,
@@ -218,7 +196,6 @@ export async function invokeCustomTtsProvider(
     if (!provider) {
         return { success: false };
     }
-
     const tool = getTool(provider.toolName);
     if (!tool) {
         return {
@@ -226,14 +203,12 @@ export async function invokeCustomTtsProvider(
             error: 'tts_unavailable',
         };
     }
-
     const result = await tool.handler({
         text: input.text,
         language: input.language,
         voice: input.voice,
         rate: input.rate,
     }, context);
-
     if (result?.success === false) {
         return {
             success: false,
@@ -241,7 +216,6 @@ export async function invokeCustomTtsProvider(
             error: typeof result.error === 'string' ? result.error : 'tts_failed',
         };
     }
-
     return {
         success: true,
         provider,

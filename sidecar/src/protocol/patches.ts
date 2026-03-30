@@ -31,7 +31,6 @@ export const FilePatchSchema = z.object({
     description: z.string().optional(),
     toolId: z.string().optional(), // Which tool generated this
 });
-export type FilePatch = z.infer<typeof FilePatchSchema>;
 export const PatchSetSchema = z.object({
     id: z.string().uuid(),
     taskId: z.string().uuid(),
@@ -42,7 +41,6 @@ export const PatchSetSchema = z.object({
     totalDeletions: z.number().int().nonnegative(),
     filesAffected: z.number().int().positive(),
 });
-export type PatchSet = z.infer<typeof PatchSetSchema>;
 export const ShadowFileSchema = z.object({
     originalPath: z.string(),
     originalExists: z.boolean(),
@@ -60,7 +58,6 @@ export const ShadowFileSchema = z.object({
     createdAt: z.string().datetime(),
     reviewedAt: z.string().datetime().optional(),
 });
-export type ShadowFile = z.infer<typeof ShadowFileSchema>;
 export const PatchApplyRequestSchema = z.object({
     patchId: z.string().uuid(),
     patchSetId: z.string().uuid().optional(),
@@ -73,7 +70,6 @@ export const PatchApplyRequestSchema = z.object({
         'merge',    // Attempt 3-way merge
     ]).default('abort'),
 });
-export type PatchApplyRequest = z.infer<typeof PatchApplyRequestSchema>;
 export const PatchApplyResultSchema = z.object({
     patchId: z.string().uuid(),
     success: z.boolean(),
@@ -93,7 +89,6 @@ export const PatchApplyResultSchema = z.object({
         conflictingHunks: z.array(z.number()),
     }).optional(),
 });
-export type PatchApplyResult = z.infer<typeof PatchApplyResultSchema>;
 export function createDiffHeader(
     oldPath: string,
     newPath: string,

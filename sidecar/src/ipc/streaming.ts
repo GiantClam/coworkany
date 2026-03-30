@@ -7,18 +7,13 @@ import {
     type DesktopEvent,
     type MastraChunkLike,
 } from './bridge';
-
 type SendToDesktop = (event: DesktopEvent) => void;
-
 type RunContext = {
     threadId: string;
     resourceId: string;
 };
-
 const runContextById = new Map<string, RunContext>();
-
 const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-4-5';
-
 const PROVIDER_KEY_MAP: Record<string, string> = {
     anthropic: 'ANTHROPIC_API_KEY',
     openai: 'OPENAI_API_KEY',
@@ -28,7 +23,6 @@ const PROVIDER_KEY_MAP: Record<string, string> = {
     deepseek: 'DEEPSEEK_API_KEY',
     mistral: 'MISTRAL_API_KEY',
 };
-
 export function resolveMissingApiKeyForModel(
     modelId: string,
     env: Record<string, string | undefined> = process.env,
@@ -37,18 +31,14 @@ export function resolveMissingApiKeyForModel(
     if (!provider) {
         return null;
     }
-
     const apiKeyEnv = PROVIDER_KEY_MAP[provider];
     if (!apiKeyEnv) {
         return null;
     }
-
     return env[apiKeyEnv] ? null : apiKeyEnv;
 }
-
 async function forwardStream(stream: MastraModelOutput<unknown>, sendToDesktop: SendToDesktop): Promise<void> {
     const runId = stream.runId;
-
     for await (const chunk of stream.fullStream) {
         const tokenUsageEvent = extractMastraTokenUsageEvent(chunk as MastraChunkLike, runId);
         if (tokenUsageEvent) {
@@ -60,7 +50,6 @@ async function forwardStream(stream: MastraModelOutput<unknown>, sendToDesktop: 
         }
     }
 }
-
 export async function handleUserMessage(
     message: string,
     threadId: string,
@@ -87,7 +76,6 @@ export async function handleUserMessage(
         });
         return { runId };
     }
-
     const stream = await supervisor.stream(message, {
         memory: {
             thread: threadId,
@@ -96,9 +84,7 @@ export async function handleUserMessage(
         requireToolApproval: options?.requireToolApproval ?? true,
         maxSteps: options?.maxSteps ?? 16,
     });
-
     runContextById.set(stream.runId, { threadId, resourceId });
-
     try {
         await forwardStream(stream, sendToDesktop);
     } catch (error) {
@@ -108,10 +94,8 @@ export async function handleUserMessage(
             message: String(error),
         });
     }
-
     return { runId: stream.runId };
 }
-
 export async function handleApprovalResponse(
     runId: string,
     toolCallId: string,
@@ -119,7 +103,6 @@ export async function handleApprovalResponse(
     sendToDesktop: SendToDesktop,
 ): Promise<void> {
     const runContext = runContextById.get(runId);
-
     const baseOptions = {
         runId,
         toolCallId,
@@ -130,11 +113,9 @@ export async function handleApprovalResponse(
             }
             : undefined,
     };
-
     const stream = approved
         ? await supervisor.approveToolCall(baseOptions)
         : await supervisor.declineToolCall(baseOptions);
-
     try {
         await forwardStream(stream, sendToDesktop);
     } catch (error) {
