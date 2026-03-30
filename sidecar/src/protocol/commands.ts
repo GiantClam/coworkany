@@ -1,11 +1,3 @@
-/**
- * CoworkAny Protocol - IPC Commands Schema
- * 
- * Defines the command/response protocol between Sidecar and Rust.
- * Commands flow: Sidecar → Rust (for execution/policy decisions)
- * Responses flow: Rust → Sidecar (with results/approvals)
- */
-
 import { z } from 'zod';
 import { EffectRequestSchema, EffectResponseSchema, EffectScopeSchema, EffectTypeSchema } from './effects';
 import { PatchApplyRequestSchema, PatchApplyResultSchema, FilePatchSchema } from './patches';
@@ -15,39 +7,44 @@ import {
     McpGatewayDecisionSchema,
     RuntimeSecurityAlertSchema,
 } from './security';
-
-// ============================================================================
-// Base Command/Response
-// ============================================================================
-
 const BaseCommandSchema = z.object({
     id: z.string().uuid(),
     timestamp: z.string().datetime(),
 });
-
 const BaseResponseSchema = z.object({
     commandId: z.string().uuid(),
     timestamp: z.string().datetime(),
 });
-
 const VoiceProviderModeSchema = z.enum(['auto', 'system', 'custom']);
 const OptionalStringFromNullishSchema = z.preprocess(
     (value) => (value === null ? undefined : value),
     z.string().optional(),
 );
-
+const TaskRuntimeConfigSchema = z.object({
+    modelId: z.string().optional(),
+    maxTokens: z.number().optional(),
+    maxHistoryMessages: z.number().int().positive().optional(),
+    enabledClaudeSkills: z.array(z.string()).optional(),
+    enabledToolpacks: z.array(z.string()).optional(),
+    enabledSkills: z.array(z.string()).optional(),
+    disabledTools: z.array(z.string()).optional(),
+    voiceProviderMode: VoiceProviderModeSchema.optional(),
+});
+const TaskAckPayloadSchema = z.object({
+    success: z.boolean(),
+    taskId: z.string().uuid(),
+    error: z.string().optional(),
+});
 export const RuntimeBinaryInfoSchema = z.object({
     available: z.boolean(),
     path: z.string().optional(),
     source: z.string().optional(),
 });
-
 export const ManagedServiceCapabilitySchema = z.object({
     id: z.string(),
     bundled: z.boolean(),
     runtimeReady: z.boolean(),
 });
-
 export const PlatformRuntimeContextSchema = z.object({
     platform: z.string(),
     arch: z.string(),
@@ -59,42 +56,24 @@ export const PlatformRuntimeContextSchema = z.object({
     skillhub: RuntimeBinaryInfoSchema,
     managedServices: z.array(ManagedServiceCapabilitySchema),
 });
-
-// ============================================================================
-// Task Commands
-// ============================================================================
-
-/**
- * Start a new task.
- */
+const TaskContextSchema = z.object({
+    workspacePath: z.string(),
+    activeFile: z.string().optional(),
+    displayText: z.string().optional(),
+    selectedText: z.string().optional(),
+    openFiles: z.array(z.string()).optional(),
+    environmentContext: PlatformRuntimeContextSchema.optional(),
+});
 export const StartTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('start_task'),
     payload: z.object({
         taskId: z.string().uuid(),
         title: z.string(),
         userQuery: z.string(),
-        context: z.object({
-            workspacePath: z.string(),
-            activeFile: z.string().optional(),
-            displayText: z.string().optional(),
-            selectedText: z.string().optional(),
-            openFiles: z.array(z.string()).optional(),
-            environmentContext: PlatformRuntimeContextSchema.optional(),
-        }),
-        config: z.object({
-            modelId: z.string().optional(),
-            maxTokens: z.number().optional(),
-            maxHistoryMessages: z.number().int().positive().optional(),
-            enabledClaudeSkills: z.array(z.string()).optional(),
-            enabledToolpacks: z.array(z.string()).optional(),
-            // Backward-compatible alias
-            enabledSkills: z.array(z.string()).optional(),
-            disabledTools: z.array(z.string()).optional(),
-            voiceProviderMode: VoiceProviderModeSchema.optional(),
-        }).optional(),
+        context: TaskContextSchema,
+        config: TaskRuntimeConfigSchema.optional(),
     }),
 });
-
 export const StartTaskResponseSchema = BaseResponseSchema.extend({
     type: z.literal('start_task_response'),
     payload: z.object({
@@ -110,10 +89,6 @@ export const StartTaskResponseSchema = BaseResponseSchema.extend({
         }).optional(),
     }),
 });
-
-/**
- * Cancel a running task.
- */
 export const CancelTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('cancel_task'),
     payload: z.object({
@@ -121,7 +96,6 @@ export const CancelTaskCommandSchema = BaseCommandSchema.extend({
         reason: z.string().optional(),
     }),
 });
-
 export const CancelTaskResponseSchema = BaseResponseSchema.extend({
     type: z.literal('cancel_task_response'),
     payload: z.object({
@@ -129,17 +103,12 @@ export const CancelTaskResponseSchema = BaseResponseSchema.extend({
         taskId: z.string().uuid(),
     }),
 });
-
-/**
- * Clear task conversation history.
- */
 export const ClearTaskHistoryCommandSchema = BaseCommandSchema.extend({
     type: z.literal('clear_task_history'),
     payload: z.object({
         taskId: z.string().uuid(),
     }),
 });
-
 export const ClearTaskHistoryResponseSchema = BaseResponseSchema.extend({
     type: z.literal('clear_task_history_response'),
     payload: z.object({
@@ -148,81 +117,42 @@ export const ClearTaskHistoryResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-/**
- * Send a message to an existing task.
- */
 export const SendTaskMessageCommandSchema = BaseCommandSchema.extend({
     type: z.literal('send_task_message'),
     payload: z.object({
         taskId: z.string().uuid(),
         content: z.string(),
         environmentContext: PlatformRuntimeContextSchema.optional(),
-        config: z.object({
-            modelId: z.string().optional(),
-            maxTokens: z.number().optional(),
-            maxHistoryMessages: z.number().int().positive().optional(),
-            enabledClaudeSkills: z.array(z.string()).optional(),
-            enabledToolpacks: z.array(z.string()).optional(),
-            enabledSkills: z.array(z.string()).optional(),
-            disabledTools: z.array(z.string()).optional(),
-            voiceProviderMode: VoiceProviderModeSchema.optional(),
-        }).optional(),
+        config: TaskRuntimeConfigSchema.optional(),
     }),
 });
-
 export const SendTaskMessageResponseSchema = BaseResponseSchema.extend({
     type: z.literal('send_task_message_response'),
-    payload: z.object({
-        success: z.boolean(),
-        taskId: z.string().uuid(),
-        error: z.string().optional(),
-    }),
+    payload: TaskAckPayloadSchema,
 });
-
-/**
- * Resume a previously interrupted task from saved context.
- */
 export const ResumeInterruptedTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('resume_interrupted_task'),
     payload: z.object({
         taskId: z.string().uuid(),
-        config: z.object({
-            modelId: z.string().optional(),
-            maxTokens: z.number().optional(),
-            maxHistoryMessages: z.number().int().positive().optional(),
-            enabledClaudeSkills: z.array(z.string()).optional(),
-            enabledToolpacks: z.array(z.string()).optional(),
-            enabledSkills: z.array(z.string()).optional(),
-            disabledTools: z.array(z.string()).optional(),
-            voiceProviderMode: VoiceProviderModeSchema.optional(),
-        }).optional(),
+        config: TaskRuntimeConfigSchema.optional(),
     }),
 });
-
 export const ResumeInterruptedTaskResponseSchema = BaseResponseSchema.extend({
     type: z.literal('resume_interrupted_task_response'),
-    payload: z.object({
-        success: z.boolean(),
-        taskId: z.string().uuid(),
-        error: z.string().optional(),
-    }),
+    payload: TaskAckPayloadSchema,
 });
-
 export const BootstrapRuntimeContextCommandSchema = BaseCommandSchema.extend({
     type: z.literal('bootstrap_runtime_context'),
     payload: z.object({
         runtimeContext: PlatformRuntimeContextSchema,
     }),
 });
-
 export const BootstrapRuntimeContextResponseSchema = BaseResponseSchema.extend({
     type: z.literal('bootstrap_runtime_context_response'),
     payload: z.object({
         success: z.boolean(),
     }),
 });
-
 export const DoctorPreflightCommandSchema = BaseCommandSchema.extend({
     type: z.literal('doctor_preflight'),
     payload: z.object({
@@ -233,7 +163,6 @@ export const DoctorPreflightCommandSchema = BaseCommandSchema.extend({
         outputDir: z.string().optional(),
     }).optional(),
 });
-
 export const DoctorPreflightResponseSchema = BaseResponseSchema.extend({
     type: z.literal('doctor_preflight_response'),
     payload: z.object({
@@ -245,31 +174,18 @@ export const DoctorPreflightResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Effect Commands
-// ============================================================================
-
-/**
- * Request approval for an effect.
- */
 export const RequestEffectCommandSchema = BaseCommandSchema.extend({
     type: z.literal('request_effect'),
     payload: z.object({
         request: EffectRequestSchema,
     }),
 });
-
 export const RequestEffectResponseSchema = BaseResponseSchema.extend({
     type: z.literal('request_effect_response'),
     payload: z.object({
         response: EffectResponseSchema,
     }),
 });
-
-/**
- * Report effect execution result.
- */
 export const ReportEffectResultCommandSchema = BaseCommandSchema.extend({
     type: z.literal('report_effect_result'),
     payload: z.object({
@@ -280,14 +196,6 @@ export const ReportEffectResultCommandSchema = BaseCommandSchema.extend({
         duration: z.number(), // ms
     }),
 });
-
-// ============================================================================
-// Patch Commands
-// ============================================================================
-
-/**
- * Propose a patch for user review.
- */
 export const ProposePatchCommandSchema = BaseCommandSchema.extend({
     type: z.literal('propose_patch'),
     payload: z.object({
@@ -295,7 +203,6 @@ export const ProposePatchCommandSchema = BaseCommandSchema.extend({
         taskId: z.string().uuid(),
     }),
 });
-
 export const ProposePatchResponseSchema = BaseResponseSchema.extend({
     type: z.literal('propose_patch_response'),
     payload: z.object({
@@ -303,23 +210,14 @@ export const ProposePatchResponseSchema = BaseResponseSchema.extend({
         shadowPath: z.string(), // Path to shadow file for preview
     }),
 });
-
-/**
- * Apply an approved patch.
- */
 export const ApplyPatchCommandSchema = BaseCommandSchema.extend({
     type: z.literal('apply_patch'),
     payload: PatchApplyRequestSchema,
 });
-
 export const ApplyPatchResponseSchema = BaseResponseSchema.extend({
     type: z.literal('apply_patch_response'),
     payload: PatchApplyResultSchema,
 });
-
-/**
- * Reject a proposed patch.
- */
 export const RejectPatchCommandSchema = BaseCommandSchema.extend({
     type: z.literal('reject_patch'),
     payload: z.object({
@@ -327,7 +225,6 @@ export const RejectPatchCommandSchema = BaseCommandSchema.extend({
         reason: z.string().optional(),
     }),
 });
-
 export const RejectPatchResponseSchema = BaseResponseSchema.extend({
     type: z.literal('reject_patch_response'),
     payload: z.object({
@@ -336,14 +233,6 @@ export const RejectPatchResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Filesystem Commands (via Policy Gate)
-// ============================================================================
-
-/**
- * Read file (goes through policy for audit).
- */
 export const ReadFileCommandSchema = BaseCommandSchema.extend({
     type: z.literal('read_file'),
     payload: z.object({
@@ -352,7 +241,6 @@ export const ReadFileCommandSchema = BaseCommandSchema.extend({
         maxBytes: z.number().optional(),
     }),
 });
-
 export const ReadFileResponseSchema = BaseResponseSchema.extend({
     type: z.literal('read_file_response'),
     payload: z.object({
@@ -362,10 +250,6 @@ export const ReadFileResponseSchema = BaseResponseSchema.extend({
         truncated: z.boolean().optional(),
     }),
 });
-
-/**
- * List directory.
- */
 export const ListDirCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_dir'),
     payload: z.object({
@@ -375,7 +259,6 @@ export const ListDirCommandSchema = BaseCommandSchema.extend({
         includeHidden: z.boolean().default(false),
     }),
 });
-
 export const ListDirResponseSchema = BaseResponseSchema.extend({
     type: z.literal('list_dir_response'),
     payload: z.object({
@@ -390,14 +273,6 @@ export const ListDirResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Shell Commands (via Policy Gate)
-// ============================================================================
-
-/**
- * Execute shell command.
- */
 export const ExecShellCommandSchema = BaseCommandSchema.extend({
     type: z.literal('exec_shell'),
     payload: z.object({
@@ -409,7 +284,6 @@ export const ExecShellCommandSchema = BaseCommandSchema.extend({
         stdin: z.string().optional(),
     }),
 });
-
 export const ExecShellResponseSchema = BaseResponseSchema.extend({
     type: z.literal('exec_shell_response'),
     payload: z.object({
@@ -421,14 +295,6 @@ export const ExecShellResponseSchema = BaseResponseSchema.extend({
         timedOut: z.boolean().optional(),
     }),
 });
-
-// ============================================================================
-// Screenshot Command
-// ============================================================================
-
-/**
- * Capture screenshot.
- */
 export const CaptureScreenCommandSchema = BaseCommandSchema.extend({
     type: z.literal('capture_screen'),
     payload: z.object({
@@ -437,7 +303,6 @@ export const CaptureScreenCommandSchema = BaseCommandSchema.extend({
         quality: z.number().min(1).max(100).default(90),
     }),
 });
-
 export const CaptureScreenResponseSchema = BaseResponseSchema.extend({
     type: z.literal('capture_screen_response'),
     payload: z.object({
@@ -447,21 +312,12 @@ export const CaptureScreenResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Policy Configuration Commands
-// ============================================================================
-
-/**
- * Get current policy configuration.
- */
 export const GetPolicyConfigCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_policy_config'),
     payload: z.object({
         scope: EffectScopeSchema.optional(),
     }),
 });
-
 export const GetPolicyConfigResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_policy_config_response'),
     payload: z.object({
@@ -478,16 +334,8 @@ export const GetPolicyConfigResponseSchema = BaseResponseSchema.extend({
         }),
     }),
 });
-
-
-// ============================================================================
-// Toolpack and Claude Skill Management Commands
-// ============================================================================
-
-// Toolpacks (MCP tool servers)
 export const ToolpackRuntimeSchema = z.enum(['node', 'bun', 'python', 'internal', 'other']);
 export const ToolpackSourceSchema = z.enum(['local_folder', 'zip', 'registry', 'url', 'git', 'built_in']);
-
 export const ToolpackManifestSchema = z.object({
     id: z.string(),
     name: z.string(),
@@ -503,7 +351,6 @@ export const ToolpackManifestSchema = z.object({
     repository: z.string().optional(),
     signature: z.string().optional(), // Package signature for verification
 });
-
 export const ExtensionPermissionSummarySchema = z.object({
     tools: z.array(z.string()).default([]),
     effects: z.array(z.string()).default([]),
@@ -512,12 +359,10 @@ export const ExtensionPermissionSummarySchema = z.object({
     env: z.array(z.string()).default([]),
     config: z.array(z.string()).default([]),
 });
-
 export const ExtensionPermissionDeltaSchema = z.object({
     added: ExtensionPermissionSummarySchema,
     removed: ExtensionPermissionSummarySchema,
 });
-
 export const ExtensionProvenanceSchema = z.object({
     sourceType: z.enum(['built_in', 'local_folder', 'github', 'skillhub', 'clawhub', 'unknown']),
     sourceRef: z.string().optional(),
@@ -526,13 +371,11 @@ export const ExtensionProvenanceSchema = z.object({
     repository: z.string().optional(),
     signaturePresent: z.boolean(),
 });
-
 export const ExtensionTrustSummarySchema = z.object({
     level: z.enum(['trusted', 'review_required', 'untrusted']),
     pendingReview: z.boolean(),
     reasons: z.array(z.string()).default([]),
 });
-
 export const ExtensionGovernanceReviewSchema = z.object({
     extensionType: z.enum(['skill', 'toolpack']),
     extensionId: z.string(),
@@ -545,7 +388,6 @@ export const ExtensionGovernanceReviewSchema = z.object({
     after: ExtensionPermissionSummarySchema,
     delta: ExtensionPermissionDeltaSchema.optional(),
 });
-
 export const ExtensionGovernanceStateSchema = z.object({
     extensionType: z.enum(['skill', 'toolpack']),
     extensionId: z.string(),
@@ -557,7 +399,6 @@ export const ExtensionGovernanceStateSchema = z.object({
     lastUpdatedAt: z.string().datetime(),
     approvedAt: z.string().datetime().optional(),
 });
-
 export const ToolpackRecordSchema = z.object({
     manifest: ToolpackManifestSchema,
     source: ToolpackSourceSchema,
@@ -571,35 +412,30 @@ export const ToolpackRecordSchema = z.object({
     permissions: ExtensionPermissionSummarySchema.optional(),
     governance: ExtensionGovernanceStateSchema.optional(),
 });
-
 export const ListToolpacksCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_toolpacks'),
     payload: z.object({
         includeDisabled: z.boolean().default(true),
     }).optional(),
 });
-
 export const ListToolpacksResponseSchema = BaseResponseSchema.extend({
     type: z.literal('list_toolpacks_response'),
     payload: z.object({
         toolpacks: z.array(ToolpackRecordSchema),
     }),
 });
-
 export const GetToolpackCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_toolpack'),
     payload: z.object({
         toolpackId: z.string(),
     }),
 });
-
 export const GetToolpackResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_toolpack_response'),
     payload: z.object({
         toolpack: ToolpackRecordSchema.optional(),
     }),
 });
-
 export const InstallToolpackCommandSchema = BaseCommandSchema.extend({
     type: z.literal('install_toolpack'),
     payload: z.object({
@@ -611,7 +447,6 @@ export const InstallToolpackCommandSchema = BaseCommandSchema.extend({
         approvePermissionExpansion: z.boolean().default(false),
     }),
 });
-
 export const InstallToolpackResponseSchema = BaseResponseSchema.extend({
     type: z.literal('install_toolpack_response'),
     payload: z.object({
@@ -622,7 +457,6 @@ export const InstallToolpackResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const SetToolpackEnabledCommandSchema = BaseCommandSchema.extend({
     type: z.literal('set_toolpack_enabled'),
     payload: z.object({
@@ -630,7 +464,6 @@ export const SetToolpackEnabledCommandSchema = BaseCommandSchema.extend({
         enabled: z.boolean(),
     }),
 });
-
 export const SetToolpackEnabledResponseSchema = BaseResponseSchema.extend({
     type: z.literal('set_toolpack_enabled_response'),
     payload: z.object({
@@ -639,7 +472,6 @@ export const SetToolpackEnabledResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const RemoveToolpackCommandSchema = BaseCommandSchema.extend({
     type: z.literal('remove_toolpack'),
     payload: z.object({
@@ -647,7 +479,6 @@ export const RemoveToolpackCommandSchema = BaseCommandSchema.extend({
         deleteFiles: z.boolean().default(true),
     }),
 });
-
 export const RemoveToolpackResponseSchema = BaseResponseSchema.extend({
     type: z.literal('remove_toolpack_response'),
     payload: z.object({
@@ -656,10 +487,7 @@ export const RemoveToolpackResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// Claude Skills (Agent Skills)
 export const ClaudeSkillSourceSchema = z.enum(['local_folder', 'zip', 'api']);
-
 export const ClaudeSkillManifestSchema = z.object({
     id: z.string(),
     name: z.string(),
@@ -670,7 +498,6 @@ export const ClaudeSkillManifestSchema = z.object({
     allowedTools: z.array(z.string()).default([]),
     tags: z.array(z.string()).default([]),
 });
-
 export const DirectiveSchema = z.object({
     id: z.string(),
     name: z.string(),
@@ -679,7 +506,6 @@ export const DirectiveSchema = z.object({
     priority: z.number().int(),
     trigger: z.string().optional(),
 });
-
 export const ClaudeSkillRecordSchema = z.object({
     manifest: ClaudeSkillManifestSchema,
     rootPath: z.string(),
@@ -692,35 +518,30 @@ export const ClaudeSkillRecordSchema = z.object({
     permissions: ExtensionPermissionSummarySchema.optional(),
     governance: ExtensionGovernanceStateSchema.optional(),
 });
-
 export const ListClaudeSkillsCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_claude_skills'),
     payload: z.object({
         includeDisabled: z.boolean().default(true),
     }).optional(),
 });
-
 export const ListClaudeSkillsResponseSchema = BaseResponseSchema.extend({
     type: z.literal('list_claude_skills_response'),
     payload: z.object({
         skills: z.array(ClaudeSkillRecordSchema),
     }),
 });
-
 export const GetClaudeSkillCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_claude_skill'),
     payload: z.object({
         skillId: z.string(),
     }),
 });
-
 export const GetClaudeSkillResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_claude_skill_response'),
     payload: z.object({
         skill: ClaudeSkillRecordSchema.optional(),
     }),
 });
-
 export const ImportClaudeSkillCommandSchema = BaseCommandSchema.extend({
     type: z.literal('import_claude_skill'),
     payload: z.object({
@@ -732,7 +553,6 @@ export const ImportClaudeSkillCommandSchema = BaseCommandSchema.extend({
         approvePermissionExpansion: z.boolean().default(false),
     }),
 });
-
 export const ImportClaudeSkillResponseSchema = BaseResponseSchema.extend({
     type: z.literal('import_claude_skill_response'),
     payload: z.object({
@@ -772,7 +592,6 @@ export const ImportClaudeSkillResponseSchema = BaseResponseSchema.extend({
         governanceState: ExtensionGovernanceStateSchema.optional(),
     }),
 });
-
 export const SetClaudeSkillEnabledCommandSchema = BaseCommandSchema.extend({
     type: z.literal('set_claude_skill_enabled'),
     payload: z.object({
@@ -780,7 +599,6 @@ export const SetClaudeSkillEnabledCommandSchema = BaseCommandSchema.extend({
         enabled: z.boolean(),
     }),
 });
-
 export const SetClaudeSkillEnabledResponseSchema = BaseResponseSchema.extend({
     type: z.literal('set_claude_skill_enabled_response'),
     payload: z.object({
@@ -789,7 +607,6 @@ export const SetClaudeSkillEnabledResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const RemoveClaudeSkillCommandSchema = BaseCommandSchema.extend({
     type: z.literal('remove_claude_skill'),
     payload: z.object({
@@ -797,7 +614,6 @@ export const RemoveClaudeSkillCommandSchema = BaseCommandSchema.extend({
         deleteFiles: z.boolean().default(true),
     }),
 });
-
 export const RemoveClaudeSkillResponseSchema = BaseResponseSchema.extend({
     type: z.literal('remove_claude_skill_response'),
     payload: z.object({
@@ -806,7 +622,6 @@ export const RemoveClaudeSkillResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const ApproveExtensionGovernanceCommandSchema = BaseCommandSchema.extend({
     type: z.literal('approve_extension_governance'),
     payload: z.object({
@@ -815,7 +630,6 @@ export const ApproveExtensionGovernanceCommandSchema = BaseCommandSchema.extend(
         enableAfterApprove: z.boolean().default(true),
     }),
 });
-
 export const ApproveExtensionGovernanceResponseSchema = BaseResponseSchema.extend({
     type: z.literal('approve_extension_governance_response'),
     payload: z.object({
@@ -827,26 +641,22 @@ export const ApproveExtensionGovernanceResponseSchema = BaseResponseSchema.exten
         error: z.string().optional(),
     }),
 });
-
 export const ListDirectivesCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_directives'),
     payload: z.object({}).optional(),
 });
-
 export const ListDirectivesResponseSchema = BaseResponseSchema.extend({
     type: z.literal('list_directives_response'),
     payload: z.object({
         directives: z.array(DirectiveSchema),
     }),
 });
-
 export const UpsertDirectiveCommandSchema = BaseCommandSchema.extend({
     type: z.literal('upsert_directive'),
     payload: z.object({
         directive: DirectiveSchema,
     }),
 });
-
 export const UpsertDirectiveResponseSchema = BaseResponseSchema.extend({
     type: z.literal('upsert_directive_response'),
     payload: z.object({
@@ -855,14 +665,12 @@ export const UpsertDirectiveResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const RemoveDirectiveCommandSchema = BaseCommandSchema.extend({
     type: z.literal('remove_directive'),
     payload: z.object({
         directiveId: z.string(),
     }),
 });
-
 export const RemoveDirectiveResponseSchema = BaseResponseSchema.extend({
     type: z.literal('remove_directive_response'),
     payload: z.object({
@@ -871,22 +679,12 @@ export const RemoveDirectiveResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-
-// ============================================================================
-// Identity and Security Reporting Commands
-// ============================================================================
-
-/**
- * Register agent identity for audit and policy context.
- */
 export const RegisterAgentIdentityCommandSchema = BaseCommandSchema.extend({
     type: z.literal('register_agent_identity'),
     payload: z.object({
         identity: AgentIdentitySchema,
     }),
 });
-
 export const RegisterAgentIdentityResponseSchema = BaseResponseSchema.extend({
     type: z.literal('register_agent_identity_response'),
     payload: z.object({
@@ -895,17 +693,12 @@ export const RegisterAgentIdentityResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-/**
- * Record a delegation edge between agents.
- */
 export const RecordAgentDelegationCommandSchema = BaseCommandSchema.extend({
     type: z.literal('record_agent_delegation'),
     payload: z.object({
         delegation: AgentDelegationSchema,
     }),
 });
-
 export const RecordAgentDelegationResponseSchema = BaseResponseSchema.extend({
     type: z.literal('record_agent_delegation_response'),
     payload: z.object({
@@ -915,10 +708,6 @@ export const RecordAgentDelegationResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-/**
- * Report MCP gateway decision for audit/tracing.
- */
 export const ReportMcpGatewayDecisionCommandSchema = BaseCommandSchema.extend({
     type: z.literal('report_mcp_gateway_decision'),
     payload: z.object({
@@ -926,7 +715,6 @@ export const ReportMcpGatewayDecisionCommandSchema = BaseCommandSchema.extend({
         taskId: z.string().uuid().optional(),
     }),
 });
-
 export const ReportMcpGatewayDecisionResponseSchema = BaseResponseSchema.extend({
     type: z.literal('report_mcp_gateway_decision_response'),
     payload: z.object({
@@ -934,10 +722,6 @@ export const ReportMcpGatewayDecisionResponseSchema = BaseResponseSchema.extend(
         error: z.string().optional(),
     }),
 });
-
-/**
- * Report runtime security alert for audit/tracing.
- */
 export const ReportRuntimeSecurityAlertCommandSchema = BaseCommandSchema.extend({
     type: z.literal('report_runtime_security_alert'),
     payload: z.object({
@@ -945,7 +729,6 @@ export const ReportRuntimeSecurityAlertCommandSchema = BaseCommandSchema.extend(
         taskId: z.string().uuid().optional(),
     }),
 });
-
 export const ReportRuntimeSecurityAlertResponseSchema = BaseResponseSchema.extend({
     type: z.literal('report_runtime_security_alert_response'),
     payload: z.object({
@@ -953,14 +736,6 @@ export const ReportRuntimeSecurityAlertResponseSchema = BaseResponseSchema.exten
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Repository Scanning & Validation Commands
-// ============================================================================
-
-/**
- * Validate a GitHub URL to check if it's a valid skill or MCP server.
- */
 export const ValidateGitHubUrlCommandSchema = BaseCommandSchema.extend({
     type: z.literal('validate_github_url'),
     payload: z.object({
@@ -968,7 +743,6 @@ export const ValidateGitHubUrlCommandSchema = BaseCommandSchema.extend({
         type: z.enum(['skill', 'mcp']),
     }),
 });
-
 export const ValidateGitHubUrlResponseSchema = BaseResponseSchema.extend({
     type: z.literal('validate_github_url_response'),
     payload: z.object({
@@ -983,17 +757,12 @@ export const ValidateGitHubUrlResponseSchema = BaseResponseSchema.extend({
         }).optional(),
     }),
 });
-
-/**
- * Scan default GitHub repositories for available skills and MCP servers.
- */
 export const ScanDefaultReposCommandSchema = BaseCommandSchema.extend({
     type: z.literal('scan_default_repos'),
     payload: z.object({
         forceRefresh: z.boolean().default(false),
     }).optional(),
 });
-
 export const ScanDefaultReposResponseSchema = BaseResponseSchema.extend({
     type: z.literal('scan_default_repos_response'),
     payload: z.object({
@@ -1016,19 +785,10 @@ export const ScanDefaultReposResponseSchema = BaseResponseSchema.extend({
         errors: z.array(z.string()).default([]),
     }),
 });
-
-// ============================================================================
-// Workspace Commands
-// ============================================================================
-
-/**
- * List available workspaces.
- */
 export const ListWorkspacesCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_workspaces'),
     payload: z.object({}).optional(),
 });
-
 export const ListWorkspacesResponseSchema = BaseResponseSchema.extend({
     type: z.literal('list_workspaces_response'),
     payload: z.object({
@@ -1041,10 +801,6 @@ export const ListWorkspacesResponseSchema = BaseResponseSchema.extend({
         })).default([]),
     }),
 });
-
-/**
- * Create a new workspace.
- */
 export const CreateWorkspaceCommandSchema = BaseCommandSchema.extend({
     type: z.literal('create_workspace'),
     payload: z.object({
@@ -1052,7 +808,6 @@ export const CreateWorkspaceCommandSchema = BaseCommandSchema.extend({
         path: z.string(),
     }),
 });
-
 export const CreateWorkspaceResponseSchema = BaseResponseSchema.extend({
     type: z.literal('create_workspace_response'),
     payload: z.object({
@@ -1061,17 +816,12 @@ export const CreateWorkspaceResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-/**
- * Delete a workspace.
- */
 export const DeleteWorkspaceCommandSchema = BaseCommandSchema.extend({
     type: z.literal('delete_workspace'),
     payload: z.object({
         id: z.string(),
     }),
 });
-
 export const DeleteWorkspaceResponseSchema = BaseResponseSchema.extend({
     type: z.literal('delete_workspace_response'),
     payload: z.object({
@@ -1079,10 +829,6 @@ export const DeleteWorkspaceResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-/**
- * Install content from GitHub into a workspace.
- */
 export const InstallFromGitHubCommandSchema = BaseCommandSchema.extend({
     type: z.literal('install_from_github'),
     payload: z.object({
@@ -1092,22 +838,12 @@ export const InstallFromGitHubCommandSchema = BaseCommandSchema.extend({
         approvePermissionExpansion: z.boolean().default(false),
     }),
 });
-
-// ============================================================================
-// Tool Reloading Commands
-// ============================================================================
-
-/**
- * Reload tools and capabilities from disk.
- * Useful for development to hot-reload changes without restarting sidecar.
- */
 export const ReloadToolsCommandSchema = BaseCommandSchema.extend({
     type: z.literal('reload_tools'),
     payload: z.object({
         force: z.boolean().default(false),
     }).optional(),
 });
-
 export const ReloadToolsResponseSchema = BaseResponseSchema.extend({
     type: z.literal('reload_tools_response'),
     payload: z.object({
@@ -1117,10 +853,8 @@ export const ReloadToolsResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export type ReloadToolsCommand = z.infer<typeof ReloadToolsCommandSchema>;
 export type ReloadToolsResponse = z.infer<typeof ReloadToolsResponseSchema>;
-
 export const UpdateWorkspaceCommandSchema = BaseCommandSchema.extend({
     type: z.literal('update_workspace'),
     payload: z.object({
@@ -1132,7 +866,6 @@ export const UpdateWorkspaceCommandSchema = BaseCommandSchema.extend({
         }),
     }),
 });
-
 export const UpdateWorkspaceResponseSchema = BaseResponseSchema.extend({
     type: z.literal('update_workspace_response'),
     payload: z.object({
@@ -1140,7 +873,6 @@ export const UpdateWorkspaceResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const InstallFromGitHubResponseSchema = BaseResponseSchema.extend({
     type: z.literal('install_from_github_response'),
     payload: z.object({
@@ -1153,11 +885,6 @@ export const InstallFromGitHubResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Core Skills Commands
-// ============================================================================
-
 export const GetTasksCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_tasks'),
     payload: z.object({
@@ -1166,7 +893,6 @@ export const GetTasksCommandSchema = BaseCommandSchema.extend({
         status: z.array(z.string()).optional(),
     }),
 });
-
 export const GetTasksResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_tasks_response'),
     payload: z.object({
@@ -1176,7 +902,6 @@ export const GetTasksResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 const RuntimeSnapshotTaskSchema = z.object({
     taskId: z.string(),
     title: z.string(),
@@ -1186,12 +911,10 @@ const RuntimeSnapshotTaskSchema = z.object({
     suspended: z.boolean().optional(),
     suspensionReason: z.string().optional(),
 });
-
 export const GetRuntimeSnapshotCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_runtime_snapshot'),
     payload: z.object({}).optional(),
 });
-
 export const GetRuntimeSnapshotResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_runtime_snapshot_response'),
     payload: z.object({
@@ -1205,7 +928,6 @@ export const GetRuntimeSnapshotResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 const VoicePlaybackStateSchema = z.object({
     isSpeaking: z.boolean(),
     canStop: z.boolean(),
@@ -1218,12 +940,10 @@ const VoicePlaybackStateSchema = z.object({
     reason: z.string().optional(),
     error: z.string().optional(),
 });
-
 export const GetVoiceStateCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_voice_state'),
     payload: z.object({}),
 });
-
 export const GetVoiceStateResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_voice_state_response'),
     payload: z.object({
@@ -1232,12 +952,10 @@ export const GetVoiceStateResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const StopVoiceCommandSchema = BaseCommandSchema.extend({
     type: z.literal('stop_voice'),
     payload: z.object({}),
 });
-
 export const StopVoiceResponseSchema = BaseResponseSchema.extend({
     type: z.literal('stop_voice_response'),
     payload: z.object({
@@ -1247,14 +965,12 @@ export const StopVoiceResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const GetVoiceProviderStatusCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_voice_provider_status'),
     payload: z.object({
         providerMode: VoiceProviderModeSchema.optional(),
     }),
 });
-
 export const SpeechProviderRegistrationSchema = z.object({
     id: z.string(),
     kind: z.enum(['asr', 'tts']),
@@ -1264,7 +980,6 @@ export const SpeechProviderRegistrationSchema = z.object({
     sourceSkill: z.string(),
     displayName: z.string(),
 });
-
 export const GetVoiceProviderStatusResponseSchema = BaseResponseSchema.extend({
     type: z.literal('get_voice_provider_status_response'),
     payload: z.object({
@@ -1280,7 +995,6 @@ export const GetVoiceProviderStatusResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
 export const TranscribeVoiceCommandSchema = BaseCommandSchema.extend({
     type: z.literal('transcribe_voice'),
     payload: z.object({
@@ -1290,7 +1004,6 @@ export const TranscribeVoiceCommandSchema = BaseCommandSchema.extend({
         providerMode: VoiceProviderModeSchema.optional(),
     }),
 });
-
 export const TranscribeVoiceResponseSchema = BaseResponseSchema.extend({
     type: z.literal('transcribe_voice_response'),
     payload: z.object({
@@ -1301,11 +1014,6 @@ export const TranscribeVoiceResponseSchema = BaseResponseSchema.extend({
         error: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Autonomous Task Commands (OpenClaw-style)
-// ============================================================================
-
 export const StartAutonomousTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('start_autonomous_task'),
     payload: z.object({
@@ -1315,21 +1023,18 @@ export const StartAutonomousTaskCommandSchema = BaseCommandSchema.extend({
         autoSaveMemory: z.boolean().optional(),
     }),
 });
-
 export const GetAutonomousTaskStatusCommandSchema = BaseCommandSchema.extend({
     type: z.literal('get_autonomous_task_status'),
     payload: z.object({
         taskId: z.string(),
     }),
 });
-
 export const PauseAutonomousTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('pause_autonomous_task'),
     payload: z.object({
         taskId: z.string(),
     }),
 });
-
 export const ResumeAutonomousTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('resume_autonomous_task'),
     payload: z.object({
@@ -1337,23 +1042,16 @@ export const ResumeAutonomousTaskCommandSchema = BaseCommandSchema.extend({
         userInput: z.record(z.string()).optional(),
     }),
 });
-
 export const CancelAutonomousTaskCommandSchema = BaseCommandSchema.extend({
     type: z.literal('cancel_autonomous_task'),
     payload: z.object({
         taskId: z.string(),
     }),
 });
-
 export const ListAutonomousTasksCommandSchema = BaseCommandSchema.extend({
     type: z.literal('list_autonomous_tasks'),
     payload: z.object({}).optional(),
 });
-
-// ============================================================================
-// Union Types
-// ============================================================================
-
 export const IpcCommandSchema = z.discriminatedUnion('type', [
     BootstrapRuntimeContextCommandSchema,
     DoctorPreflightCommandSchema,
@@ -1397,7 +1095,6 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     UpdateWorkspaceCommandSchema,
     DeleteWorkspaceCommandSchema,
     InstallFromGitHubCommandSchema,
-
     ReloadToolsCommandSchema,
     GetTasksCommandSchema,
     GetRuntimeSnapshotCommandSchema,
@@ -1405,8 +1102,6 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     StopVoiceCommandSchema,
     GetVoiceProviderStatusCommandSchema,
     TranscribeVoiceCommandSchema,
-
-    // Autonomous Task Commands
     StartAutonomousTaskCommandSchema,
     GetAutonomousTaskStatusCommandSchema,
     PauseAutonomousTaskCommandSchema,
@@ -1414,7 +1109,6 @@ export const IpcCommandSchema = z.discriminatedUnion('type', [
     CancelAutonomousTaskCommandSchema,
     ListAutonomousTasksCommandSchema,
 ]);
-
 export const IpcResponseSchema = z.discriminatedUnion('type', [
     BootstrapRuntimeContextResponseSchema,
     DoctorPreflightResponseSchema,
@@ -1457,7 +1151,6 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     UpdateWorkspaceResponseSchema,
     DeleteWorkspaceResponseSchema,
     InstallFromGitHubResponseSchema,
-    ReloadToolsCommandSchema,
     ReloadToolsResponseSchema,
     GetTasksResponseSchema,
     GetRuntimeSnapshotResponseSchema,
@@ -1466,11 +1159,8 @@ export const IpcResponseSchema = z.discriminatedUnion('type', [
     GetVoiceProviderStatusResponseSchema,
     TranscribeVoiceResponseSchema,
 ]);
-
 export type IpcCommand = z.infer<typeof IpcCommandSchema>;
 export type IpcResponse = z.infer<typeof IpcResponseSchema>;
-
-// Individual types
 export type RuntimeBinaryInfo = z.infer<typeof RuntimeBinaryInfoSchema>;
 export type ManagedServiceCapability = z.infer<typeof ManagedServiceCapabilitySchema>;
 export type PlatformRuntimeContext = z.infer<typeof PlatformRuntimeContextSchema>;

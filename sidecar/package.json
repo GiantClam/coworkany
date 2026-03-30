@@ -10,6 +10,7 @@
     "start:mastra": "bun run src/main-mastra.ts",
     "dev": "bun run --watch src/main.ts",
     "dev:mastra": "bun run --watch src/main-mastra.ts",
+    "build": "bun build --target=bun -e electron -e chromium-bidi -e chromium-bidi/* -e playwright -e playwright-core -e playwright-core/* src/main-mastra.ts --outdir dist/build",
     "build:release": "node scripts/build-release.mjs",
     "release:readiness": "bun run scripts/release-readiness.ts",
     "release:readiness:full": "bun run scripts/release-readiness.ts --build-desktop --real-e2e",
@@ -21,7 +22,7 @@
     "eval:control-plane:apply-threshold-suggestion": "bun run scripts/apply-control-plane-threshold-suggestion.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
-    "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts tests/browser-use-service-bootstrap.test.ts src/services/__tests__/browserService.test.ts",
+    "test:stable": "bun test tests/token-usage.test.ts tests/tool-disable-config.test.ts tests/command-sandbox.test.ts tests/mcp-toolpack.test.ts tests/rate-limit.test.ts tests/scheduler-heartbeat.test.ts tests/browser-use-service-bootstrap.test.ts tests/runtime-browser-service.test.ts",
     "test:ci": "npm run test:stable",
     "test:agent:core": "node scripts/run-tests-sequential.mjs tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",
     "test:agent:scenarios": "node scripts/run-tests-sequential.mjs tests/capabilities.test.ts tests/user-scenarios.test.ts tests/e2e-composite.test.ts tests/openclaw-quick.test.ts tests/openclaw-simulation.test.ts tests/openclaw-extended.test.ts tests/openclow-comparison.test.ts",
@@ -33,7 +34,7 @@
     "test:e2e:browser-resilience": "bun test tests/browser-service-resilience.e2e.test.ts tests/browser-service-recovery-inprocess.e2e.test.ts",
     "test:e2e:x-learning": "bun test tests/x-following-ai-learning-e2e.test.ts",
     "test:x-following": "bun test tests/x-following-posts-regression.test.ts",
-    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-mastra-protocol-compat.test.ts tests/phase6-final-validation.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts"
+    "test:mastra:phases": "bun test tests/phase1-mastra-infra.test.ts tests/phase2-tools.test.ts tests/phase3-agent-loop.test.ts tests/phase4-control-plane.test.ts tests/phase5-memory.test.ts tests/phase6-mastra-protocol-compat.test.ts tests/phase6-final-validation.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",

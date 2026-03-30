@@ -4,9 +4,9 @@
  * Tools for checking code quality, complexity, and security issues
  */
 
-import { getCodeQualityAnalyzer } from '../agent/codeQuality';
+import { getCodeQualityAnalyzer } from '../runtime/codeQuality';
 import type { ToolDefinition, ToolContext } from './standard';
-import type { CodeQualityConfig } from '../agent/codeQuality/types';
+import type { CodeQualityConfig } from '../runtime/codeQuality/types';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 

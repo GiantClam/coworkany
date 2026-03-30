@@ -1,41 +1,16 @@
-/**
- * Command Alternatives - Cross-Platform Command Mapping
- *
- * Provides intelligent command alternatives when a command fails.
- * Supports Windows, macOS, and Linux with automatic OS detection.
- */
-
 import * as os from 'os';
-
-// ============================================================================
-// Types
-// ============================================================================
-
 export type Platform = 'windows' | 'macos' | 'linux';
-
 export interface CommandAlternative {
     command: string;
     platform?: Platform | Platform[];  // If undefined, works on all platforms
     note?: string;  // Usage note for the user
 }
-
 export interface AlternativeResult {
     alternatives: string[];
     platformSpecific: string[];  // Alternatives specific to current platform
     notes: string[];
 }
-
-// ============================================================================
-// Command Mappings
-// ============================================================================
-
-/**
- * Comprehensive command alternatives mapping.
- * Key: base command name (lowercase)
- * Value: array of alternatives with optional platform restrictions
- */
 const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
-    // ========== Python ==========
     'python3': [
         { command: 'python', note: 'Windows often uses python instead of python3' },
         { command: 'py', platform: 'windows', note: 'Windows Python launcher' },
@@ -62,8 +37,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'python -m pip' },
         { command: 'python3 -m pip' },
     ],
-
-    // ========== Node.js ==========
     'node': [
         { command: 'nodejs', platform: 'linux', note: 'Some Linux distros use nodejs' },
         { command: 'node.exe', platform: 'windows' },
@@ -95,13 +68,9 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'npm' },
         { command: 'node' },
     ],
-
-    // ========== Version Control ==========
     'git': [
         { command: 'git.exe', platform: 'windows' },
     ],
-
-    // ========== File Operations (Unix -> Windows) ==========
     'ls': [
         { command: 'dir', platform: 'windows', note: 'Windows equivalent' },
         { command: 'Get-ChildItem', platform: 'windows', note: 'PowerShell cmdlet' },
@@ -155,8 +124,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'mklink', platform: 'windows', note: 'Create symbolic link' },
         { command: 'New-Item -ItemType SymbolicLink', platform: 'windows' },
     ],
-
-    // ========== File Operations (Windows -> Unix) ==========
     'dir': [
         { command: 'ls', platform: ['macos', 'linux'] },
     ],
@@ -179,8 +146,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'rmdir', platform: ['macos', 'linux'] },
         { command: 'rm -r', platform: ['macos', 'linux'] },
     ],
-
-    // ========== Search & Text Processing ==========
     'grep': [
         { command: 'findstr', platform: 'windows', note: 'Basic pattern matching' },
         { command: 'Select-String', platform: 'windows', note: 'PowerShell grep equivalent' },
@@ -211,8 +176,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
     'awk': [
         { command: 'powershell -c "... | ForEach-Object"', platform: 'windows' },
     ],
-
-    // ========== Network ==========
     'curl': [
         { command: 'curl.exe', platform: 'windows' },
         { command: 'Invoke-WebRequest', platform: 'windows', note: 'PowerShell cmdlet' },
@@ -239,8 +202,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'ss', platform: 'linux', note: 'Modern replacement' },
         { command: 'Get-NetTCPConnection', platform: 'windows' },
     ],
-
-    // ========== Process Management ==========
     'ps': [
         { command: 'tasklist', platform: 'windows' },
         { command: 'Get-Process', platform: 'windows', note: 'PowerShell cmdlet' },
@@ -262,8 +223,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'htop', note: 'Better alternative if installed' },
         { command: 'btop', note: 'Modern alternative' },
     ],
-
-    // ========== Environment ==========
     'export': [
         { command: 'set', platform: 'windows', note: 'CMD syntax' },
         { command: '$env:', platform: 'windows', note: 'PowerShell syntax' },
@@ -277,8 +236,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'Get-ChildItem Env:', platform: 'windows' },
         { command: 'env', platform: ['macos', 'linux'] },
     ],
-
-    // ========== Terminal ==========
     'clear': [
         { command: 'cls', platform: 'windows' },
         { command: 'Clear-Host', platform: 'windows' },
@@ -286,8 +243,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
     'cls': [
         { command: 'clear', platform: ['macos', 'linux'] },
     ],
-
-    // ========== Archive ==========
     'tar': [
         { command: 'Expand-Archive', platform: 'windows', note: 'For zip files' },
         { command: '7z', note: '7-Zip command line' },
@@ -300,8 +255,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
     'gzip': [
         { command: '7z', platform: 'windows' },
     ],
-
-    // ========== Misc ==========
     'man': [
         { command: 'Get-Help', platform: 'windows', note: 'PowerShell help' },
         { command: '--help', note: 'Most commands support --help flag' },
@@ -329,14 +282,6 @@ const COMMAND_ALTERNATIVES: Record<string, CommandAlternative[]> = {
         { command: 'xclip -o', platform: 'linux' },
     ],
 };
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-/**
- * Get current platform
- */
 export function getCurrentPlatform(): Platform {
     switch (os.platform()) {
         case 'win32':
@@ -347,10 +292,6 @@ export function getCurrentPlatform(): Platform {
             return 'linux';
     }
 }
-
-/**
- * Check if an alternative is valid for a given platform
- */
 function isValidForPlatform(alt: CommandAlternative, platform: Platform): boolean {
     if (!alt.platform) return true;  // No platform restriction
     if (Array.isArray(alt.platform)) {
@@ -358,49 +299,31 @@ function isValidForPlatform(alt: CommandAlternative, platform: Platform): boolea
     }
     return alt.platform === platform;
 }
-
-/**
- * Extract base command from a full command string
- * e.g., "python3 -c 'print(1)'" -> "python3"
- */
 export function extractBaseCommand(command: string): string {
     return command.trim().split(/\s+/)[0].toLowerCase();
 }
-
-/**
- * Find alternative commands for a failed command
- */
 export function findAlternatives(failedCommand: string, platform?: Platform): AlternativeResult {
     const currentPlatform = platform || getCurrentPlatform();
     const baseCommand = extractBaseCommand(failedCommand);
-
     const result: AlternativeResult = {
         alternatives: [],
         platformSpecific: [],
         notes: [],
     };
-
-    // Direct lookup
     let alternatives = COMMAND_ALTERNATIVES[baseCommand];
-
-    // Try without trailing numbers (python3 -> python)
     if (!alternatives) {
         const withoutNumber = baseCommand.replace(/\d+(\.\d+)*$/, '');
         if (withoutNumber !== baseCommand) {
             alternatives = COMMAND_ALTERNATIVES[withoutNumber];
         }
     }
-
-    // Try without .exe extension
     if (!alternatives && baseCommand.endsWith('.exe')) {
         const withoutExe = baseCommand.slice(0, -4);
         alternatives = COMMAND_ALTERNATIVES[withoutExe];
     }
-
     if (!alternatives) {
         return result;
     }
-
     for (const alt of alternatives) {
         if (isValidForPlatform(alt, currentPlatform)) {
             result.platformSpecific.push(alt.command);
@@ -408,62 +331,38 @@ export function findAlternatives(failedCommand: string, platform?: Platform): Al
                 result.notes.push(`${alt.command}: ${alt.note}`);
             }
         }
-        // Add to general alternatives regardless of platform
         if (!result.alternatives.includes(alt.command)) {
             result.alternatives.push(alt.command);
         }
     }
-
     return result;
 }
-
-/**
- * Get simple list of alternatives (most common use case)
- */
 export function getAlternativeCommands(failedCommand: string): string[] {
     const result = findAlternatives(failedCommand);
-    // Prefer platform-specific alternatives, fall back to all alternatives
     return result.platformSpecific.length > 0 ? result.platformSpecific : result.alternatives;
 }
-
-/**
- * Format alternatives as a user-friendly message
- */
 export function formatAlternativesMessage(failedCommand: string): string {
     const result = findAlternatives(failedCommand);
     const platform = getCurrentPlatform();
     const baseCmd = extractBaseCommand(failedCommand);
-
     if (result.platformSpecific.length === 0) {
         return `Command '${baseCmd}' not found. No known alternatives for ${platform}.`;
     }
-
     let message = `Command '${baseCmd}' not found on ${platform}. Try these alternatives:\n`;
     result.platformSpecific.forEach((cmd, i) => {
         message += `  ${i + 1}. ${cmd}\n`;
     });
-
     if (result.notes.length > 0) {
         message += '\nNotes:\n';
         result.notes.forEach(note => {
             message += `  - ${note}\n`;
         });
     }
-
     return message;
 }
-
-/**
- * Check if we have alternatives for a command
- */
 export function hasAlternatives(command: string): boolean {
     return getAlternativeCommands(command).length > 0;
 }
-
-// ============================================================================
-// Export
-// ============================================================================
-
 export default {
     findAlternatives,
     getAlternativeCommands,

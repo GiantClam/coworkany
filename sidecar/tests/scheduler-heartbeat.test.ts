@@ -132,7 +132,7 @@ describe('SCH-05: Daemon 循环', () => {
     test('Daemon 服务模块存在', () => {
         // Check for daemon service
         const daemonPaths = [
-            path.join(SRC_ROOT, 'agent', 'jarvis', 'daemonService.ts'),
+            path.join(SRC_ROOT, 'runtime', 'jarvis', 'daemonService.ts'),
             path.join(SRC_ROOT, 'proactive', 'heartbeat.ts'),
         ];
 

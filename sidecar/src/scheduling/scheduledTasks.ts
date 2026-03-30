@@ -18,7 +18,6 @@ import {
     SPEECH_FALLBACK_MARKER_PATTERN,
     STRIP_DANGLING_SPEECH_TAIL_PATTERN,
 } from './scheduledTaskRules';
-
 export interface ScheduledTaskConfig {
     modelId?: string;
     maxTokens?: number;
@@ -29,7 +28,6 @@ export interface ScheduledTaskConfig {
     disabledTools?: string[];
     environmentContext?: PlatformRuntimeContext;
 }
-
 export type ScheduledTaskStatus =
     | 'scheduled'
     | 'running'
@@ -37,7 +35,6 @@ export type ScheduledTaskStatus =
     | 'completed'
     | 'failed'
     | 'cancelled';
-
 export interface ScheduledTaskRecord {
     id: string;
     title: string;
@@ -62,7 +59,6 @@ export interface ScheduledTaskRecord {
     startedAt?: string;
     completedAt?: string;
 }
-
 export interface ScheduledTaskInput {
     title: string;
     taskQuery: string;
@@ -80,7 +76,6 @@ export interface ScheduledTaskInput {
     sourceTaskId?: string;
     config?: ScheduledTaskConfig;
 }
-
 export interface ParsedScheduledIntent {
     executeAt: Date;
     taskQuery: string;
@@ -89,24 +84,20 @@ export interface ParsedScheduledIntent {
     recurrence?: { kind: 'rrule'; value: string };
     chainedStages?: ChainedScheduledStageIntent[];
 }
-
 export interface ChainedScheduledStageIntent {
     delayMsFromPrevious: number;
     taskQuery: string;
     originalTimeExpression: string;
 }
-
 export interface RecoverStaleRunningOptions {
     now?: Date;
     timeoutMs: number;
     errorMessage?: string;
 }
-
 function normalizeRecords(raw: unknown): ScheduledTaskRecord[] {
     if (!Array.isArray(raw)) {
         return [];
     }
-
     return raw
         .filter((entry): entry is ScheduledTaskRecord => {
             if (!entry || typeof entry !== 'object') return false;
@@ -141,7 +132,6 @@ function normalizeRecords(raw: unknown): ScheduledTaskRecord[] {
             config: entry.config ? { ...entry.config } : undefined,
         }));
 }
-
 function migrateScheduledTaskRecord(record: ScheduledTaskRecord): {
     record: ScheduledTaskRecord;
     changed: boolean;
@@ -150,7 +140,6 @@ function migrateScheduledTaskRecord(record: ScheduledTaskRecord): {
     if (!frozenWorkRequest) {
         return { record, changed: false };
     }
-
     const currentPresentation = frozenWorkRequest.presentation;
     const uiFormat =
         currentPresentation?.uiFormat === 'table' ||
@@ -167,7 +156,6 @@ function migrateScheduledTaskRecord(record: ScheduledTaskRecord): {
             ? currentPresentation.language
             : 'zh-CN',
     };
-
     const changed =
         !currentPresentation ||
         currentPresentation.ttsMode !== nextPresentation.ttsMode ||
@@ -175,11 +163,9 @@ function migrateScheduledTaskRecord(record: ScheduledTaskRecord): {
         currentPresentation.ttsEnabled !== nextPresentation.ttsEnabled ||
         currentPresentation.language !== nextPresentation.language ||
         currentPresentation.uiFormat !== nextPresentation.uiFormat;
-
     if (!changed) {
         return { record, changed: false };
     }
-
     return {
         changed: true,
         record: {
@@ -191,12 +177,10 @@ function migrateScheduledTaskRecord(record: ScheduledTaskRecord): {
         },
     };
 }
-
 function parseChineseNumber(raw: string): number {
     if (/^\d+$/.test(raw)) {
         return Number(raw);
     }
-
     const normalized = raw.replace(/兩/g, '两').replace(/零/g, '〇');
     const digits: Record<string, number> = {
         '〇': 0,
@@ -211,11 +195,9 @@ function parseChineseNumber(raw: string): number {
         '八': 8,
         '九': 9,
     };
-
     if (normalized === '十') {
         return 10;
     }
-
     const tenIndex = normalized.indexOf('十');
     if (tenIndex >= 0) {
         const tensRaw = normalized.slice(0, tenIndex);
@@ -224,15 +206,12 @@ function parseChineseNumber(raw: string): number {
         const ones = onesRaw ? (digits[onesRaw] ?? 0) : 0;
         return tens * 10 + ones;
     }
-
     return normalized
         .split('')
         .reduce((acc, char) => acc * 10 + (digits[char] ?? 0), 0);
 }
-
 function parseRelativeTimeExpression(expression: string, now: Date): Date | null {
     const lower = expression.trim().toLowerCase();
-
     const englishMatch = lower.match(INLINE_ENGLISH_RELATIVE_TIME_PATTERN);
     if (englishMatch) {
         const amount = Number(englishMatch[1]);
@@ -251,7 +230,6 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
         }
         return result;
     }
-
     const chineseMatch = expression.trim().match(INLINE_CHINESE_RELATIVE_TIME_PATTERN);
     if (chineseMatch) {
         const amount = parseChineseNumber(chineseMatch[1]);
@@ -270,28 +248,23 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
         }
         return result;
     }
-
     if (lower.includes('tomorrow')) {
         const result = new Date(now);
         result.setDate(result.getDate() + 1);
         result.setHours(9, 0, 0, 0);
         return result;
     }
-
     return null;
 }
-
 type RecurrenceSpec = {
     rrule: string;
     intervalMs: number;
 };
-
 type RecurringIntervalParse = {
     amount: number;
     unitRaw: string;
     taskQueryRaw: string;
 };
-
 function stripScheduledTaskPrefix(input: string): string {
     let normalized = input.trim();
     for (const pattern of SCHEDULED_TASK_PREFIX_PATTERNS) {
@@ -299,7 +272,6 @@ function stripScheduledTaskPrefix(input: string): string {
     }
     return normalized;
 }
-
 function parseRecurringAmount(raw: string | undefined): number {
     if (!raw) {
         return 1;
@@ -308,7 +280,6 @@ function parseRecurringAmount(raw: string | undefined): number {
         ? parseChineseNumber(raw)
         : Number(raw);
 }
-
 function normalizeRecurringStartExpression(raw: string): string {
     return raw
         .trim()
@@ -318,7 +289,6 @@ function normalizeRecurringStartExpression(raw: string): string {
         .replace(/^(?:please\s+)?(?:(?:help\s+me|could\s+you)\s+)?/iu, '')
         .trim();
 }
-
 function parseRecurringStartExecuteAt(prefixRaw: string, now: Date): Date | null {
     const normalized = normalizeRecurringStartExpression(prefixRaw);
     if (!normalized || RECURRING_NOW_EXPRESSION_PATTERN.test(normalized)) {
@@ -337,49 +307,41 @@ function parseRecurringStartExecuteAt(prefixRaw: string, now: Date): Date | null
         return null;
     }
 }
-
 function parseRecurringIntervalCandidate(candidate: string): RecurringIntervalParse | null {
     const markerMatch = RECURRING_MARKER_PATTERN.exec(candidate);
     if (!markerMatch || markerMatch.index === undefined) {
         return null;
     }
-
     const markerIndex = markerMatch.index;
     const markerText = markerMatch[0] ?? '';
     const suffix = candidate.slice(markerIndex + markerText.length).trim();
     if (!suffix) {
         return null;
     }
-
     const intervalMatch = suffix.match(RECURRING_INTERVAL_PATTERN);
     if (!intervalMatch) {
         return null;
     }
-
     const amount = parseRecurringAmount(intervalMatch[1]);
     const unitRaw = intervalMatch[2];
     if (!Number.isFinite(amount) || amount <= 0 || !unitRaw) {
         return null;
     }
-
     const afterIntervalRaw = suffix.slice(intervalMatch[0].length);
     const isEnglishUnit = /^[a-z]/i.test(unitRaw);
     if (isEnglishUnit && afterIntervalRaw.length > 0 && !/^[\s,:-]/.test(afterIntervalRaw)) {
         return null;
     }
-
     const taskQueryRaw = afterIntervalRaw.replace(/^[\s,:，、-]+/u, '').trim();
     if (!taskQueryRaw) {
         return null;
     }
-
     return {
         amount,
         unitRaw,
         taskQueryRaw,
     };
 }
-
 function extractLeadingScheduleExpression(candidate: string): {
     originalTimeExpression: string;
     taskQueryRaw: string;
@@ -391,7 +353,6 @@ function extractLeadingScheduleExpression(candidate: string): {
             taskQueryRaw: chineseMatch[2],
         };
     }
-
     const englishMatch = candidate.match(LEADING_ENGLISH_RELATIVE_TIME_PATTERN);
     if (englishMatch?.[1] && englishMatch[2]) {
         return {
@@ -399,10 +360,8 @@ function extractLeadingScheduleExpression(candidate: string): {
             taskQueryRaw: englishMatch[2],
         };
     }
-
     return null;
 }
-
 function buildRecurrenceSpec(
     amount: number,
     unitRaw: string
@@ -410,7 +369,6 @@ function buildRecurrenceSpec(
     if (!Number.isFinite(amount) || amount <= 0) {
         return null;
     }
-
     const unitKind = resolveRelativeUnitKind(unitRaw);
     if (unitKind === 'minute') {
         return {
@@ -430,10 +388,8 @@ function buildRecurrenceSpec(
             intervalMs: amount * 24 * 60 * 60_000,
         };
     }
-
     return null;
 }
-
 function parseRecurringIntent(candidate: string, now: Date): ParsedScheduledIntent | null {
     const markerMatch = RECURRING_MARKER_PATTERN.exec(candidate);
     if (!markerMatch || markerMatch.index === undefined) {
@@ -441,32 +397,26 @@ function parseRecurringIntent(candidate: string, now: Date): ParsedScheduledInte
     }
     const markerIndex = markerMatch.index;
     const markerText = markerMatch[0] ?? '';
-
     const intervalParse = parseRecurringIntervalCandidate(candidate);
     if (!intervalParse) {
         return null;
     }
-
     const recurrence = buildRecurrenceSpec(intervalParse.amount, intervalParse.unitRaw);
     if (!recurrence) {
         return null;
     }
-
     const prefixRaw = candidate.slice(0, markerIndex);
     const executeAt = parseRecurringStartExecuteAt(prefixRaw, now);
     if (!executeAt) {
         return null;
     }
-
     const { taskQuery, speakResult } = stripSpeechDirective(intervalParse.taskQueryRaw);
     if (!taskQuery) {
         return null;
     }
-
     const originalTimeExpression = markerText.startsWith('每')
         ? `每${intervalParse.amount}${intervalParse.unitRaw}`
         : `every ${intervalParse.amount} ${intervalParse.unitRaw}`;
-
     return {
         executeAt,
         taskQuery,
@@ -475,7 +425,6 @@ function parseRecurringIntent(candidate: string, now: Date): ParsedScheduledInte
         recurrence: { kind: 'rrule', value: recurrence.rrule },
     };
 }
-
 function normalizeRelativeExpressionForDuration(raw: string): string {
     const trimmed = raw.trim();
     if (/^in\s+/i.test(trimmed)) {
@@ -486,7 +435,6 @@ function normalizeRelativeExpressionForDuration(raw: string): string {
     }
     return `${trimmed}后`;
 }
-
 function parseRelativeDurationMs(expression: string): number | null {
     const anchor = new Date('2026-01-01T00:00:00.000Z');
     const parsed = parseRelativeTimeExpression(expression, anchor);
@@ -496,14 +444,12 @@ function parseRelativeDurationMs(expression: string): number | null {
     const delayMs = parsed.getTime() - anchor.getTime();
     return delayMs > 0 ? delayMs : null;
 }
-
 function trimTaskSegment(input: string): string {
     return input
         .replace(/^[，,、\s]+/u, '')
         .replace(/[，,、。.!！；;\s]+$/u, '')
         .trim();
 }
-
 function extractChainedScheduledStages(taskQuery: string): {
     primaryTaskQuery: string;
     chainedStages: ChainedScheduledStageIntent[];
@@ -513,7 +459,6 @@ function extractChainedScheduledStages(taskQuery: string): {
         fullMatch: string;
         expression: string;
     }> = [];
-
     const regex = new RegExp(CHAINED_SCHEDULE_PATTERN.source, CHAINED_SCHEDULE_PATTERN.flags);
     let match: RegExpExecArray | null;
     while ((match = regex.exec(taskQuery)) !== null) {
@@ -527,17 +472,14 @@ function extractChainedScheduledStages(taskQuery: string): {
             expression,
         });
     }
-
     if (matches.length === 0) {
         return {
             primaryTaskQuery: taskQuery.trim(),
             chainedStages: [],
         };
     }
-
     const primaryTaskQuery = trimTaskSegment(taskQuery.slice(0, matches[0]!.index));
     const chainedStages: ChainedScheduledStageIntent[] = [];
-
     for (let index = 0; index < matches.length; index += 1) {
         const current = matches[index]!;
         const next = matches[index + 1];
@@ -555,27 +497,23 @@ function extractChainedScheduledStages(taskQuery: string): {
             originalTimeExpression: current.expression.replace(/\s+/g, ''),
         });
     }
-
     if (!primaryTaskQuery || chainedStages.length === 0) {
         return {
             primaryTaskQuery: taskQuery.trim(),
             chainedStages: [],
         };
     }
-
     return {
         primaryTaskQuery,
         chainedStages,
     };
 }
-
 function stripDanglingSpeechTail(input: string): string {
     return input
         .replace(STRIP_DANGLING_SPEECH_TAIL_PATTERN, '')
         .replace(/[，,、\s]+$/u, '')
         .trim();
 }
-
 function cleanupSpeechDirectiveRemoval(input: string): string {
     return input
         .replace(/[，,、]\s*(?=[。.!！；;])/gu, '')
@@ -584,7 +522,6 @@ function cleanupSpeechDirectiveRemoval(input: string): string {
         .replace(/\s{2,}/g, ' ')
         .trim();
 }
-
 function stripSpeechDirective(input: string): { taskQuery: string; speakResult: boolean } {
     let stripped = input;
     let speakResult = false;
@@ -596,38 +533,31 @@ function stripSpeechDirective(input: string): { taskQuery: string; speakResult: 
             speakResult = true;
         }
     }
-
     return {
         taskQuery: stripDanglingSpeechTail(cleanupSpeechDirectiveRemoval(stripped)),
         speakResult: speakResult || SPEECH_FALLBACK_MARKER_PATTERN.test(input),
     };
 }
-
 export function parseScheduledTimeExpression(expression: string, now: Date = new Date()): Date {
     const isoCandidate = new Date(expression);
     if (!Number.isNaN(isoCandidate.getTime()) && /[tT]|:\d{2}/.test(expression)) {
         return isoCandidate;
     }
-
     const relative = parseRelativeTimeExpression(expression, now);
     if (relative) {
         return relative;
     }
-
     throw new Error(`Unable to parse scheduled time expression: "${expression}"`);
 }
-
 export function detectScheduledIntent(query: string, now: Date = new Date()): ParsedScheduledIntent | null {
     const trimmed = query.trim();
     if (!trimmed) return null;
     const trimmedWithoutTaskPrefix = stripScheduledTaskPrefix(trimmed);
     const candidate = trimmedWithoutTaskPrefix || trimmed;
-
     const recurringIntent = parseRecurringIntent(candidate, now);
     if (recurringIntent) {
         return recurringIntent;
     }
-
     const leadingExpression = extractLeadingScheduleExpression(candidate);
     if (leadingExpression) {
         const executeAt = parseScheduledTimeExpression(leadingExpression.originalTimeExpression, now);
@@ -643,10 +573,8 @@ export function detectScheduledIntent(query: string, now: Date = new Date()): Pa
             chainedStages: splitResult.chainedStages.length > 0 ? splitResult.chainedStages : undefined,
         };
     }
-
     return null;
 }
-
 export function getRecurrenceIntervalMs(recurrence?: null | { kind: 'rrule'; value: string }): number | null {
     if (!recurrence || recurrence.kind !== 'rrule') {
         return null;
@@ -681,7 +609,6 @@ export function getRecurrenceIntervalMs(recurrence?: null | { kind: 'rrule'; val
     }
     return null;
 }
-
 export function computeNextRecurringExecuteAt(input: {
     recurrence?: null | { kind: 'rrule'; value: string };
     previousExecuteAt: string;
@@ -695,7 +622,6 @@ export function computeNextRecurringExecuteAt(input: {
     if (!Number.isFinite(previousExecuteAtMs)) {
         return null;
     }
-
     const nowMs = (input.now ?? new Date()).getTime();
     let nextMs = previousExecuteAtMs + intervalMs;
     while (nextMs <= nowMs) {
@@ -703,7 +629,6 @@ export function computeNextRecurringExecuteAt(input: {
     }
     return new Date(nextMs);
 }
-
 export function formatScheduledTime(date: Date): string {
     return new Intl.DateTimeFormat('zh-CN', {
         month: '2-digit',
@@ -714,19 +639,15 @@ export function formatScheduledTime(date: Date): string {
         hour12: false,
     }).format(date);
 }
-
 export class ScheduledTaskStore {
     constructor(private readonly filePath: string) {}
-
     private ensureDirectory(): void {
         fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     }
-
     private write(records: ScheduledTaskRecord[]): void {
         this.ensureDirectory();
         fs.writeFileSync(this.filePath, JSON.stringify(records, null, 2), 'utf-8');
     }
-
     read(): ScheduledTaskRecord[] {
         try {
             if (!fs.existsSync(this.filePath)) {
@@ -748,7 +669,6 @@ export class ScheduledTaskStore {
             return [];
         }
     }
-
     create(input: ScheduledTaskInput): ScheduledTaskRecord {
         const tasks = this.read();
         const record: ScheduledTaskRecord = {
@@ -775,7 +695,6 @@ export class ScheduledTaskStore {
         this.write(tasks);
         return record;
     }
-
     upsert(record: ScheduledTaskRecord): void {
         const tasks = this.read();
         const index = tasks.findIndex((item) => item.id === record.id);
@@ -786,11 +705,9 @@ export class ScheduledTaskStore {
         }
         this.write(tasks);
     }
-
     listDue(now: Date = new Date()): ScheduledTaskRecord[] {
         return this.read().filter((task) => task.status === 'scheduled' && new Date(task.executeAt).getTime() <= now.getTime());
     }
-
     recoverStaleRunning(options: RecoverStaleRunningOptions): ScheduledTaskRecord[] {
         const now = options.now ?? new Date();
         const nowMs = now.getTime();
@@ -798,22 +715,18 @@ export class ScheduledTaskStore {
         const errorMessage =
             options.errorMessage ??
             'Scheduled task exceeded the allowed running time and was auto-marked as failed.';
-
         const tasks = this.read();
         const recovered: ScheduledTaskRecord[] = [];
         let changed = false;
-
         const nextTasks = tasks.map((task) => {
             if (task.status !== 'running') {
                 return task;
             }
-
             const referenceIso = task.startedAt ?? task.executeAt ?? task.createdAt;
             const referenceMs = new Date(referenceIso).getTime();
             if (!Number.isFinite(referenceMs) || nowMs - referenceMs < options.timeoutMs) {
                 return task;
             }
-
             changed = true;
             const recoveredTask: ScheduledTaskRecord = {
                 ...task,
@@ -824,11 +737,9 @@ export class ScheduledTaskStore {
             recovered.push(recoveredTask);
             return recoveredTask;
         });
-
         if (changed) {
             this.write(nextTasks);
         }
-
         return recovered;
     }
 }

@@ -1,17 +1,5 @@
-/**
- * Core Calendar Tools
- *
- * Provides calendar management capabilities (Check, Create Event, Update, Find Free Time).
- * Integrates with Google Calendar API and task system.
- * Part of the OpenClaw-compatible tool architecture.
- */
-
 import { ToolDefinition, ToolContext } from '../standard';
 import { getCalendarManager } from '../../integrations/calendar/calendarManager';
-
-/**
- * calendar_check - Get upcoming calendar events
- */
 export const calendarCheckTool: ToolDefinition = {
     name: 'calendar_check',
     description: 'Get upcoming calendar events. Useful for checking schedule, finding free time, and avoiding conflicts. Returns events with conflict detection.',
@@ -42,8 +30,6 @@ export const calendarCheckTool: ToolDefinition = {
     handler: async (args: any, context: ToolContext) => {
         try {
             const manager = getCalendarManager(context.workspacePath);
-
-            // Check if calendar is configured
             if (!manager.isConfigured()) {
                 return {
                     success: false,
@@ -51,23 +37,17 @@ export const calendarCheckTool: ToolDefinition = {
                     message: 'Calendar integration requires Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.',
                 };
             }
-
-            // Calculate time range
             const { timeMin, timeMax } = calculateTimeRange(
                 args.time_range || 'today',
                 args.start_time,
                 args.end_time
             );
-
             const events = await manager.getEvents({
                 timeMin,
                 timeMax,
                 calendarIds: args.calendar_ids,
             });
-
-            // Detect conflicts
             const conflicts = detectConflicts(events);
-
             return {
                 success: true,
                 count: events.length,
@@ -87,10 +67,6 @@ export const calendarCheckTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * calendar_create_event - Create a new calendar event
- */
 export const calendarCreateEventTool: ToolDefinition = {
     name: 'calendar_create_event',
     description: 'Create a new calendar event or meeting. Can automatically find free time slots if requested. Optionally creates a linked task.',
@@ -127,8 +103,6 @@ export const calendarCreateEventTool: ToolDefinition = {
     handler: async (args: any, context: ToolContext) => {
         try {
             const manager = getCalendarManager(context.workspacePath);
-
-            // Check if calendar is configured
             if (!manager.isConfigured()) {
                 return {
                     success: false,
@@ -136,33 +110,26 @@ export const calendarCreateEventTool: ToolDefinition = {
                     message: 'Calendar integration requires Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.',
                 };
             }
-
-            // Check for conflicts if find_free_slot is enabled
             let finalStartTime = args.start_time;
             let finalEndTime = args.end_time;
-
             if (args.find_free_slot) {
                 const conflictCheck = await manager.getEvents({
                     timeMin: args.start_time,
                     timeMax: args.end_time,
                 });
-
                 if (conflictCheck.length > 0) {
-                    // Find next free slot
                     const duration = new Date(args.end_time).getTime() - new Date(args.start_time).getTime();
                     const freeSlot = await manager.findFreeTime({
                         durationMinutes: duration / (60 * 1000),
                         timeMin: args.start_time,
                         timeMax: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
                     });
-
                     if (freeSlot) {
                         finalStartTime = freeSlot.start;
                         finalEndTime = freeSlot.end;
                     }
                 }
             }
-
             const event = await manager.createEvent({
                 title: args.title,
                 description: args.description,
@@ -172,8 +139,6 @@ export const calendarCreateEventTool: ToolDefinition = {
                 attendees: args.attendees || [],
                 reminders: args.reminders || [10],
             });
-
-            // Create linked task if requested
             let task = null;
             if (args.create_task) {
                 const { taskCreateTool } = await import('./tasks');
@@ -186,11 +151,9 @@ export const calendarCreateEventTool: ToolDefinition = {
                     },
                     context
                 );
-
                 if (taskResult.success) {
                     task = taskResult.task;
-                    // Link task to event
-                    const { createProactiveTaskManager } = await import('../../agent/jarvis/proactiveTaskManager');
+                    const { createProactiveTaskManager } = await import('../../runtime/jarvis/proactiveTaskManager');
                     const path = await import('path');
                     const storagePath = path.default.join(context.workspacePath, '.coworkany', 'jarvis');
                     const taskManager = createProactiveTaskManager(storagePath);
@@ -199,7 +162,6 @@ export const calendarCreateEventTool: ToolDefinition = {
                     });
                 }
             }
-
             return {
                 success: true,
                 event: formatEventForDisplay(event),
@@ -216,10 +178,6 @@ export const calendarCreateEventTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * calendar_update_event - Update an existing calendar event
- */
 export const calendarUpdateEventTool: ToolDefinition = {
     name: 'calendar_update_event',
     description: 'Update an existing calendar event (reschedule, change details, add attendees).',
@@ -243,8 +201,6 @@ export const calendarUpdateEventTool: ToolDefinition = {
     handler: async (args: any, context: ToolContext) => {
         try {
             const manager = getCalendarManager(context.workspacePath);
-
-            // Check if calendar is configured
             if (!manager.isConfigured()) {
                 return {
                     success: false,
@@ -252,16 +208,13 @@ export const calendarUpdateEventTool: ToolDefinition = {
                     message: 'Calendar integration requires Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.',
                 };
             }
-
             const updates: any = {};
             if (args.title) updates.title = args.title;
             if (args.start_time) updates.startTime = args.start_time;
             if (args.end_time) updates.endTime = args.end_time;
             if (args.location) updates.location = args.location;
             if (args.attendees) updates.attendees = args.attendees;
-
             const event = await manager.updateEvent(args.event_id, updates);
-
             return {
                 success: true,
                 event: formatEventForDisplay(event),
@@ -276,10 +229,6 @@ export const calendarUpdateEventTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * calendar_find_free_time - Find available time slots
- */
 export const calendarFindFreeTimeTool: ToolDefinition = {
     name: 'calendar_find_free_time',
     description: 'Find available time slots in calendar. Useful for scheduling meetings and finding focus time blocks.',
@@ -307,8 +256,6 @@ export const calendarFindFreeTimeTool: ToolDefinition = {
     handler: async (args: any, context: ToolContext) => {
         try {
             const manager = getCalendarManager(context.workspacePath);
-
-            // Check if calendar is configured
             if (!manager.isConfigured()) {
                 return {
                     success: false,
@@ -316,19 +263,15 @@ export const calendarFindFreeTimeTool: ToolDefinition = {
                     message: 'Calendar integration requires Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.',
                 };
             }
-
             const { timeMin, timeMax } = calculateTimeRange(args.time_range || 'this_week');
-
             const freeSlots = await manager.findFreeSlots({
                 durationMinutes: args.duration_minutes,
                 timeMin,
                 timeMax,
                 workingHoursOnly: args.working_hours_only !== false,
             });
-
             const maxResults = args.max_results || 5;
             const limitedSlots = freeSlots.slice(0, maxResults);
-
             return {
                 success: true,
                 duration_minutes: args.duration_minutes,
@@ -350,21 +293,12 @@ export const calendarFindFreeTimeTool: ToolDefinition = {
         }
     },
 };
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Calculate time range based on preset or custom times
- */
 function calculateTimeRange(
     timeRange: string,
     customStart?: string,
     customEnd?: string
 ): { timeMin: string; timeMax: string } {
     const now = new Date();
-
     if (timeRange === 'custom') {
         if (!customStart || !customEnd) {
             throw new Error('Custom time range requires start_time and end_time');
@@ -374,7 +308,6 @@ function calculateTimeRange(
             timeMax: customEnd,
         };
     }
-
     const ranges: Record<string, { timeMin: Date; timeMax: Date }> = {
         today: {
             timeMin: new Date(now.setHours(0, 0, 0, 0)),
@@ -393,21 +326,15 @@ function calculateTimeRange(
             timeMax: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
         },
     };
-
     const range = ranges[timeRange];
     if (!range) {
         throw new Error(`Invalid time range: ${timeRange}`);
     }
-
     return {
         timeMin: range.timeMin.toISOString(),
         timeMax: range.timeMax.toISOString(),
     };
 }
-
-/**
- * Format calendar event for display
- */
 function formatEventForDisplay(event: any) {
     return {
         id: event.id,
@@ -421,13 +348,8 @@ function formatEventForDisplay(event: any) {
         status: event.status,
     };
 }
-
-/**
- * Detect scheduling conflicts between events
- */
 function detectConflicts(events: any[]): Array<{ event1: any; event2: any }> {
     const conflicts = [];
-
     for (let i = 0; i < events.length; i++) {
         for (let j = i + 1; j < events.length; j++) {
             if (eventsOverlap(events[i], events[j])) {
@@ -438,18 +360,12 @@ function detectConflicts(events: any[]): Array<{ event1: any; event2: any }> {
             }
         }
     }
-
     return conflicts;
 }
-
-/**
- * Check if two events overlap in time
- */
 function eventsOverlap(event1: any, event2: any): boolean {
     const start1 = new Date(event1.startTime).getTime();
     const end1 = new Date(event1.endTime).getTime();
     const start2 = new Date(event2.startTime).getTime();
     const end2 = new Date(event2.endTime).getTime();
-
     return start1 < end2 && start2 < end1;
 }

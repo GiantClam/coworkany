@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { WorkRequestStore } from '../src/orchestration/workRequestStore';
+import { WorkRequestStore } from '../src/runtime/workRequest/store';
 import {
     buildPlanUpdatedPayload,
     buildClarificationMessage,
@@ -18,7 +18,7 @@ import {
     markWorkRequestReductionStarted,
     prepareWorkRequestContext,
     refreezePreparedWorkRequestForResearch,
-} from '../src/orchestration/workRequestRuntime';
+} from '../src/runtime/workRequest/runtime';
 import { ScheduledTaskStore } from '../src/scheduling/scheduledTasks';
 
 const tempDirs: string[] = [];

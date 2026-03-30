@@ -40,19 +40,47 @@
 - `src/main-mastra.ts` 已统一复用 `src/mastra/runtimeBindings.ts`；并已删除 `src/main-legacy.ts` 与 `src/legacy/` 目录，完成入口层 legacy 清理收口。
 - 新增 `src/mastra/schedulerRuntime.ts`，实现轻量调度运行时：意图解析、任务持久化、到期执行、循环续排、链式续排、取消。
 - 新增 stale-running 故障恢复：轮询前自动回收超时 `running` 任务并标记失败，回流错误事件避免静默挂起。
+- 新增调度幂等防重：同 `sourceTaskId` 短窗口重复下发同一计划时不重复建单，避免连接抖动/重发导致重复定时任务。
+- 新增调度启动即时恢复：`start()` 时立即触发一次轮询并加锁防并发轮询，避免重启后首轮执行额外等待与重入风险。
+- `execution` 目录已清空：会话/隔离存储已迁移到 `src/runtime/taskSessionStore.ts` 与 `src/runtime/taskIsolationPolicyStore.ts`，运行时引用已切换。
+- `agent` 目录已删除：`jarvis / codeQuality / artifactContract / knowledgeUpdater` 运行能力迁移到 `src/runtime/*` 并完成调用方切换。
+- `services` 目录已删除：浏览器能力迁移到 `src/runtime/browser/*`，并同步更新稳定测试入口与断言路径。
+- `llm` 目录已删除：`attachmentContent` 迁移到 `src/runtime/llm/attachmentContent.ts`，运行时引用已切换。
+- `memory` 目录已删除：`ragBridge/vaultManager/isolation` 迁移到 `src/runtime/memory/*`，`builtin/notes/knowledgeUpdater` 调用方已切换。
+- Phase6 指定的 `orchestration` 三个收口文件已从原路径删除并迁移到 `src/runtime/workRequest/*`（`runtime/store/snapshot`），调用方与测试引用已切换。
+- 清理一批零引用旧实现：`src/execution/conversationCompaction.ts`、`src/execution/protocolStateMachine.ts` 与 `src/llm/providers/*`、`src/llm/vercelAdapter.ts`、`src/llm/types.ts`。
 - `main-mastra.ts` 装配 scheduler runtime（后台轮询执行并回流协议事件）。
+- `cancel_task` 已与调度取消联动：取消任务时会同步取消同源未执行定时任务，避免残留计划继续触发。
+- `src` 内测试文件已迁出到 `tests/`（browserService/browserTools/reminder），避免测试代码计入 `sidecar/src` LOC；`test:stable` 已切换到新路径。
+- `src/data/defaults.ts` 的超长内嵌技能文案已外置为 `src/data/builtinSkills.json`，`defaults.ts` 收敛为轻量装配层（行为不变）。
+- `src/protocol/commands.ts` 完成共享 schema 去重（`TaskRuntimeConfigSchema/TaskContextSchema/TaskAckPayloadSchema`）并修复 `IpcResponseSchema` 误包含 `ReloadToolsCommandSchema` 的协议缺陷。
+- `src/protocol/{commands,events,index}.ts` 清理纯注释分隔与冗余空行，保持行为不变并降低协议层文件体量。
+- 本轮继续做“零语义变化”收敛：对高体量文件批量移除纯空行（`runtime/browser/browserService.ts`、`handlers/runtime.ts`、`orchestration/workRequestAnalyzer.ts`、`tools/builtin.ts`、`protocol/commands.ts` 等），行为不变且门禁全绿。
+- 本轮继续做“零语义变化”收敛（第二批）：对 `runtime/browser/browserService.ts`、`storage/skillStore.ts`、`utils/retryWithBackoff.ts`、`protocol/{patches,effects}.ts`、`mcp/gateway/index.ts` 等高占比文件批量移除纯注释行与空行，行为不变且门禁全绿。
+- 本轮补齐单路径故障注入能力（功能项）：`src/mastra/entrypoint.ts` 的 Policy Gate 转发新增“超时单次重试（默认 1 次）+ 传输关闭快速失败”，并在 `src/main-mastra.ts` 关闭流程中调用 `processor.close('stdin_closed')` 主动拒绝挂起转发，避免进程退出阶段额外等待超时。
+- 本轮补齐审批态一致性：`cancel_task/clear_task_history` 会清理该任务挂起审批请求，阻断“任务已取消但旧 `requestId` 仍可恢复执行”的陈旧审批路径。
+- 本轮补齐审批生命周期收口：任务进入终态（`complete/error`）时也会清理该任务挂起审批请求，阻断“任务已完成但旧 `requestId` 仍可恢复执行”的陈旧审批路径。
+- 构建链路已补齐：`bun run build` 与 `bun run build:release` 均通过（release 构建脚本已适配 `main-mastra` 单路径与新 bridge 路径）。
 - 新增回归：
-  - `tests/mastra-entrypoint.test.ts`（18 通过）
+  - `tests/mastra-entrypoint.test.ts`（25 通过，含 `cancel_task` 调度取消联动、故障注入与审批态一致性/生命周期回归）
   - `tests/mastra-additional-commands.test.ts`（3 通过）
   - `tests/mastra-bridge.test.ts`（4 通过）
-  - `tests/mastra-scheduler-runtime.test.ts`（6 通过，含 stale-running 恢复）
-  - `tests/phase6-final-validation.test.ts` 已更新单路径断言（无 legacy/compat 启动别名）。
+  - `tests/mastra-scheduler-runtime.test.ts`（9 通过，含 stale-running 恢复 / 重复命令抑制 / 启动即时恢复）
+  - `tests/phase6-final-validation.test.ts` 已补强（无 legacy/compat 启动别名 + `agent/execution/llm/memory/services` 删除断言 + orchestration 原路径删除断言 + 零 `@ts-ignore/@ts-expect-error` 断言）。
+- 本轮新增 `tests/mastra-entrypoint.test.ts` 故障注入覆盖：
+  - `read_file` 转发超时后重试一次成功；
+  - `read_file` 超时重试耗尽返回 `policy_gate_unavailable`；
+  - `processor.close()` 时挂起转发请求快速失败（不等待默认 30s 超时）。
+- 本轮新增 `tests/mastra-entrypoint.test.ts` 审批态一致性覆盖：`cancel_task` 后再上报旧 `requestId` 将返回 `approval_request_not_found`，不再恢复已取消任务执行。
+- 本轮新增 `tests/mastra-entrypoint.test.ts` 审批生命周期覆盖：任务 `complete` 后再上报旧 `requestId` 将返回 `approval_request_not_found`，不再恢复已结束任务执行。
 - 门禁全绿：
   - `bun run typecheck`
+  - `bun run build`
+  - `bun run build:release`
   - `bun run test:mastra:phases`
   - `bun test tests/ipc-*.test.ts`
   - `bun run test:stable`
 
 ## 下一步（第二类）
-- 补齐“调度 / 记忆”真实 Sidecar↔Desktop 端到端故障注入（重启恢复、连接抖动、重复命令抑制）并固化回归。
-- 在单路径默认已收敛基础上，推进 legacy 删除清单与 LOC 收口。
+- 补齐“调度 / 记忆”真实 Sidecar↔Desktop 端到端故障注入（连接抖动 + 审批中的重连恢复）并固化回归。
+- 在单路径默认已收敛基础上，继续推进代码量与复杂度收敛（当前 `sidecar/src` 约 41.8K LOC，目标 `<8K`）与 `as any` 清零门禁。

@@ -1,38 +1,13 @@
-/**
- * Retry with Exponential Backoff
- *
- * Provides a robust fetch wrapper that:
- *   - Detects retryable HTTP status codes (429, 500, 502, 503)
- *   - Implements true exponential backoff: baseDelay * 2^attempt
- *   - Respects Retry-After header from rate limit responses
- *   - Caps maximum delay at maxDelay
- *   - Supports timeout per request via AbortController
- *   - Reports rate limit events to callers via callback
- */
-
 import { applyInsecureTlsToRequestInit } from './tls';
-
-// ============================================================================
-// Types
-// ============================================================================
-
 export interface FetchWithBackoffOptions {
-    /** Timeout per individual request in ms (default: 60000) */
     timeout?: number;
-    /** Maximum retry attempts (default: 5) */
     maxRetries?: number;
-    /** Base delay in ms (default: 1000) */
     baseDelay?: number;
-    /** Maximum delay in ms (default: 30000) */
     maxDelay?: number;
-    /** HTTP status codes to retry on (default: [429, 500, 502, 503]) */
     retryOnStatus?: number[];
-    /** Callback when a retry is about to happen */
     onRetry?: (info: RetryInfo) => void;
-    /** Disable TLS certificate verification (unsafe, opt-in only) */
     allowInsecureTls?: boolean;
 }
-
 export interface RetryInfo {
     attempt: number;
     maxRetries: number;
@@ -40,11 +15,6 @@ export interface RetryInfo {
     delay: number;
     retryAfter: number | null;
 }
-
-// ============================================================================
-// Default config
-// ============================================================================
-
 const RETRYABLE_STATUS_CODES = [429, 500, 502, 503];
 const NON_RETRYABLE_ERRORS = ['missing_api_key', 'missing_base_url', 'invalid_api_key'];
 const PROXY_ENV_KEYS = [
@@ -58,7 +28,6 @@ const PROXY_ENV_KEYS = [
     'GLOBAL_AGENT_HTTPS_PROXY',
     'GLOBAL_AGENT_HTTP_PROXY',
 ] as const;
-
 let proxyFetchCache:
     | {
         proxyUrl: string;
@@ -86,7 +55,6 @@ let nodeReadableToWeb:
     | ((stream: NodeJS.ReadableStream) => ReadableStream<Uint8Array>)
     | null
     | undefined;
-
 function formatErrorDetails(error: Error): string {
     const details: string[] = [];
     const unknownError = error as Error & {
@@ -95,7 +63,6 @@ function formatErrorDetails(error: Error): string {
         syscall?: string;
         cause?: unknown;
     };
-
     if (unknownError.name && unknownError.name !== 'Error') {
         details.push(`name=${unknownError.name}`);
     }
@@ -108,7 +75,6 @@ function formatErrorDetails(error: Error): string {
     if (unknownError.syscall) {
         details.push(`syscall=${unknownError.syscall}`);
     }
-
     let currentCause = unknownError.cause;
     let depth = 0;
     while (currentCause && depth < 3) {
@@ -122,14 +88,11 @@ function formatErrorDetails(error: Error): string {
         }
         depth += 1;
     }
-
     return details.length > 0 ? ` (${details.join(', ')})` : '';
 }
-
 function canUseNodeProxyBridge(): boolean {
     return typeof process !== 'undefined' && !!process.versions?.node;
 }
-
 function firstNonEmptyEnv(keys: readonly string[]): string | undefined {
     for (const key of keys) {
         const value = process.env[key]?.trim();
@@ -139,28 +102,23 @@ function firstNonEmptyEnv(keys: readonly string[]): string | undefined {
     }
     return undefined;
 }
-
 function sanitizeProxyForLog(proxyUrl: string): string {
     const atPos = proxyUrl.lastIndexOf('@');
     if (atPos === -1) {
         return proxyUrl;
     }
-
     const schemeEnd = proxyUrl.indexOf('://');
     if (schemeEnd >= 0) {
         return `${proxyUrl.slice(0, schemeEnd + 3)}***@${proxyUrl.slice(atPos + 1)}`;
     }
     return `***@${proxyUrl.slice(atPos + 1)}`;
 }
-
 function hostMatchesNoProxyRule(hostname: string, rule: string): boolean {
     const normalizedRule = rule.trim().toLowerCase();
     if (!normalizedRule) return false;
     if (normalizedRule === '*') return true;
-
     const hostnameOnly = hostname.toLowerCase();
     const ruleWithoutPort = normalizedRule.replace(/:\d+$/, '');
-
     if (ruleWithoutPort.startsWith('*.')) {
         return hostnameOnly.endsWith(ruleWithoutPort.slice(1));
     }
@@ -169,25 +127,21 @@ function hostMatchesNoProxyRule(hostname: string, rule: string): boolean {
     }
     return hostnameOnly === ruleWithoutPort;
 }
-
 function shouldBypassProxy(url: string): boolean {
     const noProxyRaw = firstNonEmptyEnv(['NO_PROXY', 'no_proxy']);
     if (!noProxyRaw) return false;
-
     let hostname = '';
     try {
         hostname = new URL(url).hostname;
     } catch {
         return false;
     }
-
     return noProxyRaw
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean)
         .some((rule) => hostMatchesNoProxyRule(hostname, rule));
 }
-
 function isIpv4Address(value: string): boolean {
     const parts = value.split('.');
     if (parts.length !== 4) {
@@ -199,7 +153,6 @@ function isIpv4Address(value: string): boolean {
         return n >= 0 && n <= 255;
     });
 }
-
 function isTlsDisconnectError(error: unknown): boolean {
     if (!(error instanceof Error)) {
         return false;
@@ -211,7 +164,6 @@ function isTlsDisconnectError(error: unknown): boolean {
         || message.includes('unable to get issuer certificate')
         || message.includes('unable_to_get_issuer_cert');
 }
-
 function toUrl(input: string | URL | Request): URL | null {
     try {
         if (typeof input === 'string') return new URL(input);
@@ -223,7 +175,6 @@ function toUrl(input: string | URL | Request): URL | null {
         return null;
     }
 }
-
 function getProxyRouteState(hostname: string, now: number): ProxyRouteState {
     if (proxyRouteStateByHost.size > 128) {
         for (const [host, state] of proxyRouteStateByHost.entries()) {
@@ -244,7 +195,6 @@ function getProxyRouteState(hostname: string, now: number): ProxyRouteState {
     proxyRouteStateByHost.set(hostname, initial);
     return initial;
 }
-
 function markHostDohPreferred(hostname: string, now: number, preferredIp?: string): void {
     const current = getProxyRouteState(hostname, now);
     const nextState: ProxyRouteState = {
@@ -262,7 +212,6 @@ function markHostDohPreferred(hostname: string, now: number, preferredIp?: strin
         );
     }
 }
-
 function markHostProxyPreferred(hostname: string, now: number): void {
     const current = getProxyRouteState(hostname, now);
     proxyRouteStateByHost.set(hostname, {
@@ -274,7 +223,6 @@ function markHostProxyPreferred(hostname: string, now: number): void {
         console.error(`[Proxy] Host ${hostname} recovered via proxy route; exiting DoH fallback mode.`);
     }
 }
-
 function noteHostDohSuccess(hostname: string, now: number, ip?: string): void {
     const current = getProxyRouteState(hostname, now);
     proxyRouteStateByHost.set(hostname, {
@@ -284,11 +232,9 @@ function noteHostDohSuccess(hostname: string, now: number, ip?: string): void {
         preferredDohIp: ip || current.preferredDohIp,
     });
 }
-
 function shouldPreferDohRoute(state: ProxyRouteState, now: number): boolean {
     return state.mode === 'doh' && now < state.nextProxyProbeAt;
 }
-
 function isLikelyReplayableBody(body: unknown): boolean {
     if (body === null || body === undefined) return true;
     if (typeof body === 'string') return true;
@@ -299,7 +245,6 @@ function isLikelyReplayableBody(body: unknown): boolean {
     if (typeof FormData !== 'undefined' && body instanceof FormData) return true;
     return false;
 }
-
 async function resolvePublicARecordsViaDoh(
     hostname: string,
     nodeFetch: (input: any, init?: any) => Promise<any>,
@@ -310,7 +255,6 @@ async function resolvePublicARecordsViaDoh(
     if (cached && cached.expiresAt > now) {
         return cached.ips;
     }
-
     const response = await nodeFetch(
         `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=A`,
         {
@@ -319,23 +263,19 @@ async function resolvePublicARecordsViaDoh(
             signal: AbortSignal.timeout(15000),
         }
     );
-
     if (!response?.ok) {
         return [];
     }
-
     const payload = await response.json() as { Answer?: Array<{ data?: string }> };
     const ips = (Array.isArray(payload.Answer) ? payload.Answer : [])
         .map((record) => (record?.data ?? '').trim())
         .filter((ip) => isIpv4Address(ip));
-
     dohCache.set(hostname, {
         ips,
         expiresAt: now + DOH_CACHE_TTL_MS,
     });
     return ips;
 }
-
 async function tryFetchViaDohFallback(
     requestUrl: URL,
     init: RequestInit,
@@ -349,29 +289,23 @@ async function tryFetchViaDohFallback(
     } catch {
         fallbackIps = [];
     }
-
     if (fallbackIps.length === 0) {
         return null;
     }
-
     const orderedIps = preferredIp && fallbackIps.includes(preferredIp)
         ? [preferredIp, ...fallbackIps.filter((ip) => ip !== preferredIp)]
         : fallbackIps;
-
     for (const ip of orderedIps) {
         try {
             const fallbackUrl = new URL(requestUrl.toString());
             fallbackUrl.hostname = ip;
-
             const headers = new Headers(init.headers);
             headers.set('host', requestUrl.hostname);
-
             const fallbackResponse = await nodeFetch(fallbackUrl.toString(), {
                 ...(init as Record<string, unknown>),
                 headers,
                 servername: requestUrl.hostname,
             });
-
             return {
                 response: await ensureWebReadableResponse(fallbackResponse),
                 ip,
@@ -380,29 +314,23 @@ async function tryFetchViaDohFallback(
             continue;
         }
     }
-
     return null;
 }
-
 async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
     if (!rawResponse) {
         throw new Error('empty_response_object');
     }
-
     const rawBody = rawResponse.body;
     const hasWebReader = rawBody && typeof rawBody.getReader === 'function';
-
     if (hasWebReader) {
         return rawResponse as Response;
     }
-
     const headers = new Headers();
     if (rawResponse.headers && typeof rawResponse.headers.forEach === 'function') {
         rawResponse.headers.forEach((value: string, key: string) => {
             headers.set(key, value);
         });
     }
-
     let body: unknown = null;
     if (!rawBody) {
         body = null;
@@ -417,7 +345,6 @@ async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
                 nodeReadableToWeb = null;
             }
         }
-
         if (nodeReadableToWeb) {
             body = nodeReadableToWeb(rawBody as NodeJS.ReadableStream);
         } else {
@@ -426,7 +353,6 @@ async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
     } else {
         body = await rawResponse.arrayBuffer();
     }
-
     const responseBody = body as unknown as ReadableStream<Uint8Array> | ArrayBuffer | string | null;
     return new Response(responseBody, {
         status: Number(rawResponse.status) || 200,
@@ -434,25 +360,18 @@ async function ensureWebReadableResponse(rawResponse: any): Promise<Response> {
         headers,
     });
 }
-
 async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | null> {
-    // We intentionally allow this bridge in Bun as well.
-    // Bun's env-proxy path can fail on specific domains (TLS handshake reset),
-    // while node-fetch + https-proxy-agent supports our DoH IP fallback path.
     if (!canUseNodeProxyBridge()) {
         return null;
     }
-
     if (proxyFetchCache?.proxyUrl === proxyUrl) {
         return proxyFetchCache.fetchImpl;
     }
-
     try {
         const [{ default: nodeFetch }, { HttpsProxyAgent }] = await Promise.all([
             import('node-fetch'),
             import('https-proxy-agent'),
         ]);
-
         const agent = new HttpsProxyAgent(proxyUrl);
         const proxyFetch = (async (
             input: string | URL | Request,
@@ -473,7 +392,6 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                 ? getProxyRouteState(requestUrl.hostname, Date.now())
                 : null;
             const preferDohRoute = Boolean(routeState && shouldPreferDohRoute(routeState, Date.now()));
-
             if (preferDohRoute && requestUrl && routeState) {
                 const dohRouteResult = await tryFetchViaDohFallback(
                     requestUrl,
@@ -490,7 +408,6 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                     `[Proxy] DoH-preferred route failed for ${requestUrl.hostname}; retrying proxy route.`
                 );
             }
-
             try {
                 const nodeFetchInput: string | URL =
                     input instanceof Request ? input.url : input;
@@ -506,11 +423,9 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                 if (!supportsDohFallback || !requestUrl) {
                     throw error;
                 }
-
                 console.warn(
                     `[Proxy] TLS handshake failed for ${requestUrl.hostname}. Trying DoH A-record fallback route.`
                 );
-
                 const fallbackResult = await tryFetchViaDohFallback(
                     requestUrl,
                     requestInit,
@@ -525,23 +440,19 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
                     markHostDohPreferred(requestUrl.hostname, Date.now(), fallbackResult.ip);
                     return fallbackResult.response;
                 }
-
                 throw error;
             }
         }) as typeof fetch;
-
         proxyFetchCache = {
             proxyUrl,
             fetchImpl: proxyFetch,
         };
-
         if (proxyBridgeLogSignature !== proxyUrl) {
             proxyBridgeLogSignature = proxyUrl;
             console.error(
                 `[Proxy] Using explicit Node proxy bridge for fetch: ${sanitizeProxyForLog(proxyUrl)}`
             );
         }
-
         return proxyFetch;
     } catch (error) {
         if (!proxyBridgeLoadFailed) {
@@ -555,7 +466,6 @@ async function createNodeProxyFetch(proxyUrl: string): Promise<typeof fetch | nu
         return null;
     }
 }
-
 async function createNodeDirectFetchBridge(): Promise<typeof fetch | null> {
     if (!canUseNodeProxyBridge()) {
         return null;
@@ -591,7 +501,6 @@ async function createNodeDirectFetchBridge(): Promise<typeof fetch | null> {
         return null;
     }
 }
-
 async function tryFetchWithDirectDohFallback(
     url: string,
     init: RequestInit,
@@ -600,33 +509,27 @@ async function tryFetchWithDirectDohFallback(
     if (!isTlsDisconnectError(error)) {
         return null;
     }
-
     const requestUrl = toUrl(url);
     if (!requestUrl || requestUrl.protocol !== 'https:' || isIpv4Address(requestUrl.hostname)) {
         return null;
     }
-
     const proxyUrl = firstNonEmptyEnv(PROXY_ENV_KEYS);
     if (proxyUrl && !shouldBypassProxy(url)) {
         return null;
     }
-
     const directFetch = await createNodeDirectFetchBridge();
     if (!directFetch) {
         return null;
     }
-
     const fallbackResult = await tryFetchViaDohFallback(
         requestUrl,
         init,
         directFetch,
         undefined
     );
-
     if (!fallbackResult) {
         return null;
     }
-
     const now = Date.now();
     noteHostDohSuccess(requestUrl.hostname, now, fallbackResult.ip);
     console.warn(
@@ -634,25 +537,17 @@ async function tryFetchWithDirectDohFallback(
     );
     return fallbackResult.response;
 }
-
 async function fetchWithProxySupport(url: string, init: RequestInit): Promise<Response> {
     const proxyUrl = firstNonEmptyEnv(PROXY_ENV_KEYS);
     if (!proxyUrl || shouldBypassProxy(url)) {
         return fetch(url, init);
     }
-
     const proxyFetch = await createNodeProxyFetch(proxyUrl);
     if (!proxyFetch) {
         return fetch(url, init);
     }
-
     return proxyFetch(url, init);
 }
-
-// ============================================================================
-// Main function
-// ============================================================================
-
 export async function fetchWithBackoff(
     url: string,
     options: RequestInit,
@@ -667,7 +562,6 @@ export async function fetchWithBackoff(
         onRetry,
         allowInsecureTls = false,
     } = opts;
-
     let lastError: Error | null = null;
     let lastResponse: Response | null = null;
     const retryTarget = (() => {
@@ -677,57 +571,42 @@ export async function fetchWithBackoff(
             return url;
         }
     })();
-
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         let requestInitForAttempt: RequestInit | null = null;
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeout);
-
             const requestInit = applyInsecureTlsToRequestInit({
                 ...options,
                 signal: controller.signal,
             }, allowInsecureTls);
             requestInitForAttempt = requestInit;
             const response = await fetchWithProxySupport(url, requestInit);
-
             clearTimeout(timeoutId);
-
-            // Success or non-retryable status
             if (response.ok || !retryOnStatus.includes(response.status)) {
                 return response;
             }
-
-            // Retryable status code
             lastResponse = response;
-
             if (attempt >= maxRetries) {
-                // Max retries exhausted — return the last response (let caller handle)
                 return response;
             }
-
-            // Calculate delay
             const retryAfterHeader = response.headers.get('Retry-After');
             let retryAfterMs: number | null = null;
-
             if (retryAfterHeader) {
                 const seconds = parseInt(retryAfterHeader, 10);
                 if (!isNaN(seconds)) {
                     retryAfterMs = seconds * 1000;
                 } else {
-                    // HTTP-date format
                     const date = new Date(retryAfterHeader);
                     if (!isNaN(date.getTime())) {
                         retryAfterMs = Math.max(0, date.getTime() - Date.now());
                     }
                 }
             }
-
             const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
             const delay = retryAfterMs !== null
                 ? Math.min(retryAfterMs, maxDelay)
                 : exponentialDelay;
-
             const retryInfo: RetryInfo = {
                 attempt: attempt + 1,
                 maxRetries,
@@ -735,23 +614,18 @@ export async function fetchWithBackoff(
                 delay,
                 retryAfter: retryAfterMs,
             };
-
             console.warn(
                 `[Retry] HTTP ${response.status} on attempt ${attempt + 1}/${maxRetries + 1} (${retryTarget}). ` +
                 `Retrying in ${Math.round(delay / 1000)}s` +
                 (retryAfterMs !== null ? ` (Retry-After: ${retryAfterHeader})` : ' (exponential backoff)')
             );
-
             if (onRetry) {
                 onRetry(retryInfo);
             }
-
             await new Promise(resolve => setTimeout(resolve, delay));
-
         } catch (error) {
             lastError = error instanceof Error ? error : new Error(String(error));
             const msg = lastError.message;
-
             if (requestInitForAttempt) {
                 try {
                     const dohRecoveredResponse = await tryFetchWithDirectDohFallback(
@@ -770,13 +644,9 @@ export async function fetchWithBackoff(
                     );
                 }
             }
-
-            // Don't retry on certain errors
             if (NON_RETRYABLE_ERRORS.some(e => msg.includes(e))) {
                 throw lastError;
             }
-
-            // Abort = timeout
             if (msg.includes('abort') || msg.includes('AbortError')) {
                 if (attempt >= maxRetries) {
                     throw new Error(`Request timed out after ${maxRetries + 1} attempts (${timeout}ms each)`);
@@ -794,8 +664,6 @@ export async function fetchWithBackoff(
             }
         }
     }
-
-    // Should not reach here, but just in case
     if (lastResponse) return lastResponse;
     throw lastError ?? new Error('fetchWithBackoff exhausted retries');
 }

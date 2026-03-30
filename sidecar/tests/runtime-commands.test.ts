@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { handleRuntimeCommand, handleRuntimeResponse, type RuntimeCommandDeps, type RuntimeResponseDeps } from '../src/handlers/runtime';
-import { setTaskIsolationPolicy } from '../src/execution/taskIsolationPolicyStore';
+import { setTaskIsolationPolicy } from '../src/runtime/taskIsolationPolicyStore';
 import { IpcResponseSchema } from '../src/protocol';
 
 function createRuntimeCommandDeps(overrides: Partial<RuntimeCommandDeps> = {}): RuntimeCommandDeps {

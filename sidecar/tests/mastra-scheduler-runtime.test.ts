@@ -84,6 +84,63 @@ describe('mastra scheduler runtime', () => {
         expect(records[0]?.taskQuery).toBe('提醒我喝水');
     });
 
+    test('scheduleIfNeeded suppresses duplicated schedule commands in short reconnect windows', async () => {
+        const harness = createHarness({
+            now: new Date('2026-03-30T02:00:00.000Z'),
+        });
+
+        const firstDecision = await harness.runtime.scheduleIfNeeded({
+            sourceTaskId: 'task-idempotent',
+            title: '喝水提醒',
+            message: '10 分钟后提醒我喝水',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        harness.setNow(new Date('2026-03-30T02:00:20.000Z'));
+        const duplicateDecision = await harness.runtime.scheduleIfNeeded({
+            sourceTaskId: 'task-idempotent',
+            title: '喝水提醒',
+            message: '10 分钟后提醒我喝水',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        const records = harness.readRecords();
+        expect(firstDecision.scheduled).toBe(true);
+        expect(duplicateDecision.scheduled).toBe(true);
+        expect(duplicateDecision.summary).toContain('重复');
+        expect(duplicateDecision.taskId).toBe(firstDecision.taskId);
+        expect(records).toHaveLength(1);
+    });
+
+    test('scheduleIfNeeded still creates a new schedule outside idempotency window', async () => {
+        const harness = createHarness({
+            now: new Date('2026-03-30T02:00:00.000Z'),
+        });
+
+        await harness.runtime.scheduleIfNeeded({
+            sourceTaskId: 'task-idempotent-window',
+            title: '喝水提醒',
+            message: '10 分钟后提醒我喝水',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        harness.setNow(new Date('2026-03-30T02:03:00.000Z'));
+        await harness.runtime.scheduleIfNeeded({
+            sourceTaskId: 'task-idempotent-window',
+            title: '喝水提醒',
+            message: '10 分钟后提醒我喝水',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        const records = harness.readRecords();
+        expect(records).toHaveLength(2);
+        expect(records.every((record) => record.status === 'scheduled')).toBe(true);
+    });
+
     test('pollDueTasks executes due task and marks it completed', async () => {
         const harness = createHarness();
 
@@ -182,6 +239,29 @@ describe('mastra scheduler runtime', () => {
 
         const records = harness.readRecords();
         expect(records.every((item) => item.status === 'cancelled')).toBe(true);
+    });
+
+    test('start triggers immediate poll and executes overdue task without waiting for first interval tick', async () => {
+        const harness = createHarness({
+            now: new Date('2026-03-30T02:00:00.000Z'),
+        });
+
+        await harness.runtime.scheduleIfNeeded({
+            sourceTaskId: 'task-start-immediate',
+            title: '立即恢复',
+            message: '1 分钟后整理日报',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        harness.setNow(new Date('2026-03-30T02:02:00.000Z'));
+        harness.runtime.start();
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        harness.runtime.stop();
+
+        expect(harness.handleCalls).toHaveLength(1);
+        const records = harness.readRecords();
+        expect(records[0]?.status).toBe('completed');
     });
 
     test('pollDueTasks recovers stale running tasks and emits failure event', async () => {

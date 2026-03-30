@@ -1,5 +1,4 @@
 import { ToolDefinition } from '../standard';
-
 type NewsApiArticle = {
     title?: string;
     description?: string;
@@ -9,7 +8,6 @@ type NewsApiArticle = {
     publishedAt?: string;
     urlToImage?: string;
 };
-
 type NewsApiResponse = {
     status?: string;
     message?: string;
@@ -17,17 +15,10 @@ type NewsApiResponse = {
     totalResults?: number;
     articles?: NewsApiArticle[];
 };
-
 function isNewsRssFallbackEnabled(): boolean {
     const value = process.env.ENABLE_NEWS_RSS_FALLBACK?.trim().toLowerCase();
     return value === '1' || value === 'true' || value === 'yes';
 }
-
-/**
- * News Query Tool - Uses NewsAPI with RSS fallback
- *
- * Provides latest news articles on topics or from specific sources
- */
 export const getNewsTool: ToolDefinition = {
     name: 'get_news',
     description: 'Get latest news on a topic, category, or from specific sources. Use when user asks about news, current events, or latest updates.',
@@ -75,8 +66,6 @@ export const getNewsTool: ToolDefinition = {
         const { query, category, country = 'us', max_results = 5 } = args;
         const apiKey = process.env.NEWS_API_KEY;
         const allowRssFallback = isNewsRssFallbackEnabled();
-
-        // If no API key, fallback to RSS
         if (!apiKey) {
             if (!allowRssFallback) {
                 console.error('[News] API key not found and RSS fallback is disabled');
@@ -85,7 +74,6 @@ export const getNewsTool: ToolDefinition = {
                     error: 'NEWS_API_KEY is not configured and RSS fallback is disabled. Set NEWS_API_KEY, or explicitly enable fallback with ENABLE_NEWS_RSS_FALLBACK=1.',
                 };
             }
-
             console.error('[News] API key not found, using RSS fallback (ENABLE_NEWS_RSS_FALLBACK=1)');
             return await fetchFromRSS({
                 query,
@@ -94,18 +82,15 @@ export const getNewsTool: ToolDefinition = {
                 maxResults: max_results,
             });
         }
-
         try {
             const endpoint = query
                 ? 'https://newsapi.org/v2/everything'
                 : 'https://newsapi.org/v2/top-headlines';
-
             const params = new URLSearchParams({
                 apiKey,
                 pageSize: String(max_results),
                 language: 'en',
             });
-
             if (query) {
                 params.set('q', query);
                 params.set('sortBy', 'publishedAt');
@@ -113,19 +98,14 @@ export const getNewsTool: ToolDefinition = {
                 if (category) params.set('category', category);
                 if (country) params.set('country', country);
             }
-
             console.error(
                 `[News] Fetching ${query ? `articles for "${query}"` : `${category || 'top'} headlines`}`
             );
-
             const response = await fetch(`${endpoint}?${params}`);
             const json = await response.json();
             const data = (json && typeof json === 'object' ? json : {}) as NewsApiResponse;
-
             if (data.status !== 'ok') {
                 console.error('[News] API error:', data.message);
-
-                // Fallback to RSS if API fails
                 if (data.code === 'rateLimited' || data.code === 'apiKeyInvalid') {
                     if (allowRssFallback) {
                         console.error('[News] Falling back to RSS (ENABLE_NEWS_RSS_FALLBACK=1)');
@@ -136,24 +116,20 @@ export const getNewsTool: ToolDefinition = {
                             maxResults: max_results,
                         });
                     }
-
                     return {
                         success: false,
                         error: `News API failed (${data.code || 'unknown'}) and RSS fallback is disabled.`,
                         code: data.code,
                     };
                 }
-
                 return {
                     success: false,
                     error: data.message || 'News API error',
                     code: data.code,
                 };
             }
-
             const articles = Array.isArray(data.articles) ? data.articles : [];
             console.error(`[News] Found ${data.totalResults ?? 0} articles, returning ${articles.length}`);
-
             return {
                 success: true,
                 total_results: data.totalResults ?? 0,
@@ -170,8 +146,6 @@ export const getNewsTool: ToolDefinition = {
             };
         } catch (error) {
             console.error('[News] Error:', error);
-
-            // Fallback to RSS on network error
             if (allowRssFallback) {
                 console.error('[News] Network error, falling back to RSS (ENABLE_NEWS_RSS_FALLBACK=1)');
                 return await fetchFromRSS({
@@ -181,7 +155,6 @@ export const getNewsTool: ToolDefinition = {
                     maxResults: max_results,
                 });
             }
-
             return {
                 success: false,
                 error: `News API request failed and RSS fallback is disabled: ${error instanceof Error ? error.message : String(error)}`,
@@ -189,17 +162,12 @@ export const getNewsTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * RSS Fallback - Fetches news from Google News RSS feeds
- */
 type RSSFetchOptions = {
     query?: string;
     category: string;
     country?: string;
     maxResults: number;
 };
-
 type RSSQualitySummary = {
     totalArticles: number;
     untitledCount: number;
@@ -208,7 +176,6 @@ type RSSQualitySummary = {
     unknownSourceRatio: number;
     degraded: boolean;
 };
-
 async function fetchFromRSS(
     options: RSSFetchOptions
 ): Promise<{
@@ -221,39 +188,31 @@ async function fetchFromRSS(
     error?: string;
 }> {
     const { query, category, country = 'us', maxResults } = options;
-
     const rssUrl = buildGoogleNewsRssUrl({
         query,
         category,
         country,
     });
-
     try {
         const queryLabel = query?.trim() ? `query="${query.trim()}"` : `category="${category}"`;
         console.error(`[News RSS] Fetching from Google News RSS: ${queryLabel}`);
-
         const response = await fetch(rssUrl, {
             headers: {
                 'User-Agent': 'CoworkAny-Desktop/1.0 (News Reader)',
             },
         });
-
         if (!response.ok) {
             return {
                 success: false,
                 error: `RSS fetch failed: ${response.status}`,
             };
         }
-
         const xml = await response.text();
         const { articles, quality } = parseRSSFeed(xml, maxResults);
-
         console.error(`[News RSS] Parsed ${articles.length} articles from RSS`);
-
         const warning = quality.degraded
             ? 'RSS results are degraded (many entries are missing title/source). Prefer search_web with explicit ticker/exchange for market-sensitive analysis.'
             : undefined;
-
         return {
             success: articles.length > 0,
             source: 'Google News RSS',
@@ -269,33 +228,23 @@ async function fetchFromRSS(
         };
     }
 }
-
-/**
- * Simple RSS Feed Parser
- */
 function parseRSSFeed(xml: string, maxResults: number): {
     articles: any[];
     quality: RSSQualitySummary;
 } {
     const articles: any[] = [];
-
-    // Simple regex-based parsing (good enough for Google News RSS)
     const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-
     let match;
     while ((match = itemRegex.exec(xml)) !== null && articles.length < maxResults) {
         const itemXml = match[1];
-
         const rawTitle = extractTagText(itemXml, 'title');
         const rawSource = extractTagText(itemXml, 'source');
         const rawDescription = extractTagText(itemXml, 'description');
         const link = extractTagText(itemXml, 'link');
         const pubDate = extractTagText(itemXml, 'pubDate');
-
         const { title, inferredSource } = normalizeGoogleNewsTitle(rawTitle || 'No title');
         const source = rawSource || inferredSource || 'Unknown';
         const cleanedDescription = stripHtml(rawDescription || '').trim();
-
         articles.push({
             title: title.trim() || 'No title',
             description: truncateText(cleanedDescription, 200),
@@ -304,13 +253,11 @@ function parseRSSFeed(xml: string, maxResults: number): {
             published_at: pubDate,
         });
     }
-
     return {
         articles,
         quality: summarizeArticleQuality(articles),
     };
 }
-
 function buildGoogleNewsRssUrl(input: {
     query?: string;
     category: string;
@@ -322,7 +269,6 @@ function buildGoogleNewsRssUrl(input: {
         const encodedQuery = encodeURIComponent(trimmedQuery);
         return `https://news.google.com/rss/search?q=${encodedQuery}&hl=en-US&gl=US&ceid=US:en`;
     }
-
     const rssSources: Record<string, string> = {
         technology:
             'https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGRqTVhZU0FtVnVHZ0pWVXlnQVAB',
@@ -338,15 +284,12 @@ function buildGoogleNewsRssUrl(input: {
             'https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNREpxYW5RU0FtVnVHZ0pWVXlnQVAB',
         general: 'https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en',
     };
-
     if (category === 'general') {
         const normalizedCountry = /^[a-z]{2}$/i.test(country) ? country.toUpperCase() : 'US';
         return `https://news.google.com/rss?hl=en-US&gl=${normalizedCountry}&ceid=${normalizedCountry}:en`;
     }
-
     return rssSources[category] || rssSources.technology;
 }
-
 function extractTagText(xml: string, tagName: string): string {
     const pattern = new RegExp(
         `<${tagName}(?:\\s[^>]*)?>\\s*(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([\\s\\S]*?))\\s*<\\/${tagName}>`,
@@ -358,7 +301,6 @@ function extractTagText(xml: string, tagName: string): string {
         .replace(/\]\]>$/i, '');
     return decodeHtmlEntities(raw).trim();
 }
-
 function decodeHtmlEntities(value: string): string {
     return value
         .replace(/&amp;/g, '&')
@@ -368,14 +310,12 @@ function decodeHtmlEntities(value: string): string {
         .replace(/&#39;/g, "'")
         .replace(/&nbsp;/g, ' ');
 }
-
 function stripHtml(value: string): string {
     return value
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
-
 function truncateText(value: string, maxLength: number): string {
     if (!value) {
         return '...';
@@ -385,14 +325,11 @@ function truncateText(value: string, maxLength: number): string {
     }
     return `${value.slice(0, maxLength).trim()}...`;
 }
-
 function normalizeGoogleNewsTitle(rawTitle: string): { title: string; inferredSource?: string } {
     const normalized = rawTitle.trim();
     if (!normalized || normalized === 'No title') {
         return { title: 'No title' };
     }
-
-    // Google News titles often look like: "<headline> - <source>"
     const titleParts = normalized.split(' - ').map((segment) => segment.trim()).filter(Boolean);
     if (titleParts.length >= 2) {
         const inferredSource = titleParts[titleParts.length - 1];
@@ -401,10 +338,8 @@ function normalizeGoogleNewsTitle(rawTitle: string): { title: string; inferredSo
             return { title, inferredSource };
         }
     }
-
     return { title: normalized };
 }
-
 function summarizeArticleQuality(articles: Array<{ title?: string; source?: string }>): RSSQualitySummary {
     const totalArticles = articles.length;
     if (totalArticles === 0) {
@@ -417,21 +352,17 @@ function summarizeArticleQuality(articles: Array<{ title?: string; source?: stri
             degraded: true,
         };
     }
-
     const untitledCount = articles.filter((article) => {
         const title = (article.title || '').trim().toLowerCase();
         return !title || title === 'no title';
     }).length;
-
     const unknownSourceCount = articles.filter((article) => {
         const source = (article.source || '').trim().toLowerCase();
         return !source || source === 'unknown';
     }).length;
-
     const untitledRatio = untitledCount / totalArticles;
     const unknownSourceRatio = unknownSourceCount / totalArticles;
     const degraded = totalArticles >= 3 && (untitledRatio >= 0.4 || unknownSourceRatio >= 0.7);
-
     return {
         totalArticles,
         untitledCount,

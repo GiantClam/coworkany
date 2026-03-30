@@ -53,6 +53,8 @@ function createHarness(overrides?: {
         cancelledCount: number;
         cancelledTitles: string[];
     }>;
+    policyGateResponseTimeoutMs?: number;
+    policyGateTimeoutRetryCount?: number;
 }) {
     const outgoing: Array<Record<string, unknown>> = [];
     const userMessageCalls: UserMessageCall[] = [];
@@ -138,6 +140,8 @@ function createHarness(overrides?: {
         },
         getNowIso: () => '2026-03-30T00:00:00.000Z',
         createId: () => 'req-fixed',
+        policyGateResponseTimeoutMs: overrides?.policyGateResponseTimeoutMs,
+        policyGateTimeoutRetryCount: overrides?.policyGateTimeoutRetryCount,
     });
 
     const emit = (message: Record<string, unknown>) => {
@@ -153,6 +157,9 @@ function createHarness(overrides?: {
         outgoing,
         userMessageCalls,
         approvalCalls,
+        close: (reason?: string) => {
+            processor.close(reason);
+        },
         process: async (command: Record<string, unknown>) => {
             await processor.processMessage(command, emit);
         },
@@ -316,6 +323,162 @@ describe('mastra entrypoint processor', () => {
             type: 'report_effect_result',
             payload: {
                 requestId: 'missing',
+                success: true,
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+        const response = harness.outgoing.find((message) => message.type === 'report_effect_result_response');
+        expect(response).toBeDefined();
+        const payload = response?.payload as Record<string, unknown>;
+        expect(payload.success).toBe(false);
+        expect(payload.error).toBe('approval_request_not_found');
+    });
+
+    test('cancel_task clears pending approvals for the task to prevent stale approval resume', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-stale-approval',
+                    toolCallId: 'tool-stale-1',
+                    toolName: 'bash_approval',
+                    args: { command: 'rm -rf /tmp/stale' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-stale-approval' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-stale-approval-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-stale-approval',
+                userQuery: 'needs approval',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-stale-approval-cancel',
+            type: 'cancel_task',
+            payload: {
+                taskId: 'task-stale-approval',
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-stale-approval-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
+                success: true,
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+        const response = harness.outgoing.find((message) => message.type === 'report_effect_result_response');
+        expect(response).toBeDefined();
+        const payload = response?.payload as Record<string, unknown>;
+        expect(payload.success).toBe(false);
+        expect(payload.error).toBe('approval_request_not_found');
+    });
+
+    test('terminal completion clears pending approvals for the task', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-complete-clear',
+                    toolCallId: 'tool-complete-clear',
+                    toolName: 'bash_approval',
+                    args: { command: 'touch /tmp/demo' },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-complete-clear',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-complete-clear' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-complete-clear-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-complete-clear',
+                userQuery: 'do something',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-complete-clear-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
+                success: true,
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+        const response = harness.outgoing.find((message) => message.type === 'report_effect_result_response');
+        expect(response).toBeDefined();
+        const payload = response?.payload as Record<string, unknown>;
+        expect(payload.success).toBe(false);
+        expect(payload.error).toBe('approval_request_not_found');
+    });
+
+    test('clear_task_history clears pending approvals for the task', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-clear-history',
+                    toolCallId: 'tool-clear-history',
+                    toolName: 'bash_approval',
+                    args: { command: 'echo demo' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-clear-history' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-clear-history-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-clear-history',
+                userQuery: 'needs approval',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-clear-history',
+            type: 'clear_task_history',
+            payload: {
+                taskId: 'task-clear-history',
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-clear-history-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
                 success: true,
             },
         });
@@ -513,6 +676,36 @@ describe('mastra entrypoint processor', () => {
         expect(summaryDelta).toBeDefined();
     });
 
+    test('cancel_task also cancels scheduled tasks for the same source task', async () => {
+        let cancelledInput: { sourceTaskId: string; userMessage: string } | null = null;
+        const harness = createHarness({
+            onCancelScheduledTasksForSourceTask: async (input) => {
+                cancelledInput = input;
+                return {
+                    success: true,
+                    cancelledCount: 1,
+                    cancelledTitles: ['提醒喝水'],
+                };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-cancel-task',
+            type: 'cancel_task',
+            payload: {
+                taskId: 'task-cancel',
+            },
+        });
+
+        expect(cancelledInput).toEqual({
+            sourceTaskId: 'task-cancel',
+            userMessage: 'cancel_task',
+        });
+        const response = harness.outgoing.find((message) => message.type === 'cancel_task_response');
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect((response?.payload as Record<string, unknown>)?.cancelledScheduledCount).toBe(1);
+    });
+
     test('uses bootstrap runtime resourceId as memory scope fallback', async () => {
         const harness = createHarness();
         await harness.process({
@@ -707,6 +900,99 @@ describe('mastra entrypoint processor', () => {
         expect(response?.commandId).toBe('cmd-read-file');
         expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
         expect((response?.payload as Record<string, unknown>)?.content).toBe('hello');
+    });
+
+    test('retries forwarded read_file once on timeout and succeeds', async () => {
+        let attempts = 0;
+        const harness = createHarness({
+            policyGateResponseTimeoutMs: 5,
+            policyGateTimeoutRetryCount: 1,
+            onOutgoing: async (message, injectIncoming) => {
+                if (message.type !== 'read_file') {
+                    return;
+                }
+                attempts += 1;
+                if (attempts === 1) {
+                    return;
+                }
+                await injectIncoming({
+                    type: 'read_file_response',
+                    commandId: message.id,
+                    payload: {
+                        success: true,
+                        content: 'retry-ok',
+                    },
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-read-file-retry',
+            type: 'read_file',
+            payload: {
+                path: '/tmp/retry.txt',
+            },
+        });
+
+        expect(attempts).toBe(2);
+        const response = harness.outgoing.find((message) => message.type === 'read_file_response');
+        expect(response).toBeDefined();
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect((response?.payload as Record<string, unknown>)?.content).toBe('retry-ok');
+    });
+
+    test('returns policy_gate_unavailable after forwarded read_file timeout retries are exhausted', async () => {
+        let attempts = 0;
+        const harness = createHarness({
+            policyGateResponseTimeoutMs: 5,
+            policyGateTimeoutRetryCount: 1,
+            onOutgoing: (message) => {
+                if (message.type === 'read_file') {
+                    attempts += 1;
+                }
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-read-file-timeout',
+            type: 'read_file',
+            payload: {
+                path: '/tmp/timeout.txt',
+            },
+        });
+
+        expect(attempts).toBe(2);
+        const response = harness.outgoing.find((message) => message.type === 'read_file_response');
+        expect(response).toBeDefined();
+        const payload = response?.payload as Record<string, unknown>;
+        expect(payload.success).toBe(false);
+        expect(payload.error).toContain('policy_gate_unavailable:IPC response timeout for read_file');
+    });
+
+    test('closing processor rejects pending forwarded command without waiting for timeout', async () => {
+        const harness = createHarness({
+            policyGateResponseTimeoutMs: 10_000,
+            onOutgoing: () => {
+            },
+        });
+
+        const processing = harness.process({
+            id: 'cmd-read-file-close',
+            type: 'read_file',
+            payload: {
+                path: '/tmp/close.txt',
+            },
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        harness.close('ipc_transport_closed');
+        await processing;
+
+        const response = harness.outgoing.find((message) => message.type === 'read_file_response');
+        expect(response).toBeDefined();
+        const payload = response?.payload as Record<string, unknown>;
+        expect(payload.success).toBe(false);
+        expect(payload.error).toContain('policy_gate_unavailable:ipc_transport_closed');
     });
 
     test('returns policy_gate_invalid_response when forwarded type mismatches', async () => {

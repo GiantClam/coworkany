@@ -106,6 +106,7 @@ async function run(): Promise<void> {
             }
         }
     } finally {
+        processor.close('stdin_closed');
         schedulerRuntime.stop();
     }
 

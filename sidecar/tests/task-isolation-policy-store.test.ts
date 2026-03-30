@@ -4,7 +4,7 @@ import {
     buildMemoryMetadataFilters,
     resolveAllowedMemoryWriteScope,
     setTaskIsolationPolicy,
-} from '../src/execution/taskIsolationPolicyStore';
+} from '../src/runtime/taskIsolationPolicyStore';
 
 describe('task isolation policy store', () => {
     test('denies workspace overrides for frozen task sessions', () => {

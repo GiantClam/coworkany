@@ -9,7 +9,7 @@ import { ToolDefinition, ToolContext } from '../standard';
 import {
     createVoiceInterface,
     type VoicePlaybackState,
-} from '../../agent/jarvis/voiceInterface';
+} from '../../runtime/jarvis/voiceInterface';
 import type { StoredSkill } from '../../storage/skillStore';
 import { globalToolRegistry } from '../registry';
 import { invokeCustomTtsProvider, type VoiceProviderMode } from './speechProviders';

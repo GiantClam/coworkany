@@ -1,29 +1,15 @@
-/**
- * GitHub Downloader
- *
- * Utility to download folders from GitHub repositories.
- * Supports both public repositories and authenticated access.
- */
-
 import * as fs from 'fs';
 import * as path from 'path';
-
-// ============================================================================
-// Types
-// ============================================================================
-
 export interface GitHubDownloadOptions {
     branch?: string;
     token?: string; // For private repos
 }
-
 export interface GitHubDownloadResult {
     success: boolean;
     path: string;
     filesDownloaded: number;
     error?: string;
 }
-
 interface GitHubContent {
     name: string;
     path: string;
@@ -31,24 +17,12 @@ interface GitHubContent {
     download_url: string | null;
     url: string;
 }
-
-// ============================================================================
-// Parser
-// ============================================================================
-
-/**
- * Parse GitHub source string into components
- * Formats:
- * - github:user/repo/path/to/folder
- * - https://github.com/user/repo/tree/branch/path/to/folder
- */
 export function parseGitHubSource(source: string): {
     owner: string;
     repo: string;
     path: string;
     branch: string;
 } | null {
-    // Format: github:user/repo/path
     if (source.startsWith('github:')) {
         const parts = source.slice(7).split('/');
         if (parts.length < 2) return null;
@@ -59,8 +33,6 @@ export function parseGitHubSource(source: string): {
             branch: 'main',
         };
     }
-
-    // Format: https://github.com/user/repo/tree/branch/path
     const match = source.match(
         /github\.com\/([^\/]+)\/([^\/]+)\/tree\/([^\/]+)\/?(.*)/
     );
@@ -72,8 +44,6 @@ export function parseGitHubSource(source: string): {
             path: match[4] || '',
         };
     }
-
-    // Format: https://github.com/user/repo (root)
     const rootMatch = source.match(/github\.com\/([^\/]+)\/([^\/]+)\/?$/);
     if (rootMatch) {
         return {
@@ -83,17 +53,8 @@ export function parseGitHubSource(source: string): {
             branch: 'main',
         };
     }
-
     return null;
 }
-
-// ============================================================================
-// Downloader
-// ============================================================================
-
-/**
- * Download a folder from GitHub to local directory
- */
 export async function downloadFromGitHub(
     source: string,
     targetDir: string,
@@ -108,19 +69,13 @@ export async function downloadFromGitHub(
             error: `Invalid GitHub source format: ${source}`,
         };
     }
-
     const { owner, repo, path: repoPath, branch } = parsed;
     const actualBranch = options.branch || branch;
-
     console.log(`[GitHubDownloader] Downloading ${owner}/${repo}/${repoPath} (${actualBranch}) to ${targetDir}`);
-
     try {
-        // Create target directory
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
-
-        // Download recursively
         const filesDownloaded = await downloadDirectory(
             owner,
             repo,
@@ -129,7 +84,6 @@ export async function downloadFromGitHub(
             targetDir,
             options.token
         );
-
         return {
             success: true,
             path: targetDir,
@@ -146,10 +100,6 @@ export async function downloadFromGitHub(
         };
     }
 }
-
-/**
- * Download a directory recursively from GitHub
- */
 async function downloadDirectory(
     owner: string,
     repo: string,
@@ -159,7 +109,6 @@ async function downloadDirectory(
     token?: string
 ): Promise<number> {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${repoPath}?ref=${branch}`;
-
     const headers: Record<string, string> = {
         'Accept': 'application/vnd.github.v3+json',
         'User-Agent': 'CoworkAny-Desktop',
@@ -167,9 +116,7 @@ async function downloadDirectory(
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
     }
-
     const response = await fetch(url, { headers });
-
     if (!response.ok) {
         if (response.status === 404) {
             throw new Error(`Path not found: ${repoPath}`);
@@ -182,10 +129,7 @@ async function downloadDirectory(
         }
         throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
     }
-
     const contents = await response.json() as GitHubContent | GitHubContent[];
-
-    // Handle single file case
     if (!Array.isArray(contents)) {
         if (contents.type === 'file' && contents.download_url) {
             await downloadFile(contents.download_url, path.join(localDir, contents.name), token);
@@ -193,12 +137,9 @@ async function downloadDirectory(
         }
         return 0;
     }
-
     let count = 0;
-
     for (const item of contents) {
         const localPath = path.join(localDir, item.name);
-
         if (item.type === 'file' && item.download_url) {
             await downloadFile(item.download_url, localPath, token);
             count++;
@@ -209,13 +150,8 @@ async function downloadDirectory(
             count += await downloadDirectory(owner, repo, item.path, branch, localPath, token);
         }
     }
-
     return count;
 }
-
-/**
- * Download a single file
- */
 async function downloadFile(url: string, localPath: string, token?: string): Promise<void> {
     const headers: Record<string, string> = {
         'User-Agent': 'CoworkAny-Desktop',
@@ -223,12 +159,10 @@ async function downloadFile(url: string, localPath: string, token?: string): Pro
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
     }
-
     const response = await fetch(url, { headers });
     if (!response.ok) {
         throw new Error(`Failed to download ${url}: ${response.status}`);
     }
-
     const content = await response.arrayBuffer();
     const dir = path.dirname(localPath);
     if (!fs.existsSync(dir)) {
@@ -237,10 +171,6 @@ async function downloadFile(url: string, localPath: string, token?: string): Pro
     fs.writeFileSync(localPath, Buffer.from(content));
     console.log(`[GitHubDownloader] Downloaded: ${path.basename(localPath)}`);
 }
-
-/**
- * Download skill from GitHub
- */
 export async function downloadSkillFromGitHub(
     source: string,
     workspacePath: string,
@@ -255,17 +185,10 @@ export async function downloadSkillFromGitHub(
             error: `Invalid GitHub source: ${source}`,
         };
     }
-
-    // Extract skill name from path
     const skillName = parsed.path.split('/').pop() || parsed.repo;
     const targetDir = path.join(workspacePath, '.coworkany', 'skills', skillName);
-
     return downloadFromGitHub(source, targetDir, options);
 }
-
-/**
- * Download MCP server from GitHub
- */
 export async function downloadMcpFromGitHub(
     source: string,
     workspacePath: string,
@@ -280,10 +203,7 @@ export async function downloadMcpFromGitHub(
             error: `Invalid GitHub source: ${source}`,
         };
     }
-
-    // Extract MCP name from path
     const mcpName = parsed.path.split('/').pop() || parsed.repo;
     const targetDir = path.join(workspacePath, '.coworkany', 'mcp', mcpName);
-
     return downloadFromGitHub(source, targetDir, options);
 }

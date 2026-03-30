@@ -7,7 +7,7 @@ import {
     type HandlerResult,
 } from './identity_security';
 import * as path from 'path';
-import { createProactiveTaskManager } from '../agent/jarvis/proactiveTaskManager';
+import { createProactiveTaskManager } from '../runtime/jarvis/proactiveTaskManager';
 
 function getTaskManager(workspacePath: string) {
     const storagePath = path.join(workspacePath, '.coworkany', 'jarvis');

@@ -9,7 +9,7 @@ import { SkillStore } from '../storage';
 import { BUILTIN_TOOLS, BROWSER_TOOLS } from '../tools/builtin';
 import { STANDARD_TOOLS } from '../tools/standard';
 import { CODE_EXECUTION_TOOLS } from '../tools/codeExecution';
-import { KNOWLEDGE_TOOLS } from '../agent/knowledgeUpdater';
+import { KNOWLEDGE_TOOLS } from '../runtime/knowledge/knowledgeUpdater';
 import type { ToolDefinition } from '../tools/standard';
 import { webSearchTool } from '../tools/websearch';
 import { STUB_TOOLS } from '../tools/stubs';

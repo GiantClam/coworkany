@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseInlineAttachmentContent } from '../src/llm/attachmentContent';
+import { parseInlineAttachmentContent } from '../src/runtime/llm/attachmentContent';
 import { toOpenAIUserContent } from '../src/llm/openaiMessageContent';
 
 describe('parseInlineAttachmentContent', () => {

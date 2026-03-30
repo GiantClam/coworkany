@@ -1,0 +1,544 @@
+[
+  {
+    "id": "coding-standards",
+    "name": "coding-standards",
+    "version": "1.0.0",
+    "description": "Common coding standards and readability guidelines.",
+    "directory": "",
+    "content": "---\nname: coding-standards\ndescription: Common coding standards and readability guidelines.\n---\n\n# Coding Standards\n\n## Overview\nFollow consistent coding standards to improve readability and maintainability.\n\n## Key Principles\n1. **Naming**: Use descriptive, intention-revealing names.\n2. **Functions**: Keep functions small (< 20 lines). Single responsibility.\n3. **Comments**: Code should be self-documenting. Comment \"why\", not \"what\".\n4. **Formatting**: Consistent indentation. Logical grouping.\n5. **Error Handling**: Handle errors explicitly. Don't swallow exceptions.\n\n## Language-Specific\n- **TypeScript**: Prefer strict mode. Use types, avoid `any`.\n- **Python**: Follow PEP 8. Use type hints.\n- **Rust**: Use clippy. Handle Result/Option explicitly.\n",
+    "tags": [
+      "builtin",
+      "core"
+    ],
+    "allowedTools": []
+  },
+  {
+    "id": "frontend-patterns",
+    "name": "frontend-patterns",
+    "version": "1.0.0",
+    "description": "Common patterns for React and Next.js frontend development.",
+    "directory": "",
+    "content": "---\nname: frontend-patterns\ndescription: Common patterns for React and Next.js frontend development.\n---\n\n# Frontend Patterns\n\n## React Best Practices\n1. **Components**: Small, focused, reusable.\n2. **State**: Lift state up. Use context sparingly.\n3. **Effects**: Cleanup side effects. Avoid memory leaks.\n4. **Props**: Destructure early. Validate with TypeScript.\n\n## Next.js Patterns\n1. **App Router**: Use server components by default.\n2. **Data Fetching**: Fetch on server. Use `use` for client.\n3. **Routing**: File-based. Use dynamic segments.\n4. **API Routes**: Keep thin. Delegate to services.\n",
+    "tags": [
+      "builtin",
+      "frontend"
+    ],
+    "allowedTools": []
+  },
+  {
+    "id": "backend-patterns",
+    "name": "backend-patterns",
+    "version": "1.0.0",
+    "description": "Common patterns for API, DB, and Caching backend development.",
+    "directory": "",
+    "content": "---\nname: backend-patterns\ndescription: Common patterns for API, DB, and Caching backend development.\n---\n\n# Backend Patterns\n\n## API Design\n1. **REST**: Resource-oriented. Use HTTP methods correctly.\n2. **Error Responses**: Structured. Include error codes.\n3. **Validation**: Validate input at boundaries.\n4. **Pagination**: Cursor-based for large datasets.\n\n## Database\n1. **Queries**: Use parameterized queries. Avoid N+1.\n2. **Transactions**: Explicit boundaries. Handle rollback.\n3. **Migrations**: Version controlled. Reversible.\n\n## Caching\n1. **Strategy**: Cache expensive operations.\n2. **Invalidation**: Time-based or event-driven.\n3. **Keys**: Consistent naming scheme.\n",
+    "tags": [
+      "builtin",
+      "backend"
+    ],
+    "allowedTools": []
+  },
+  {
+    "id": "tdd-workflow",
+    "name": "tdd-workflow",
+    "version": "1.0.0",
+    "description": "Use when implementing any feature or bugfix, before writing implementation code. Enforces RED-GREEN-REFACTOR cycle.",
+    "directory": "",
+    "content": "---\nname: tdd-workflow\ndescription: Use when implementing any feature or bugfix, before writing implementation code. Enforces RED-GREEN-REFACTOR cycle.\ntriggers:\n  - 实现功能\n  - 修复bug\n  - fix bug\n  - implement\n  - new feature\n  - bugfix\n  - 写代码\n---\n\n# Test-Driven Development (TDD)\n\n## The Iron Law\n```\nNO PRODUCTION CODE WITHOUT A FAILING TEST FIRST\n```\n\nWrite code before the test? **Delete it. Start over.**\n- Don't keep it as \"reference\"\n- Don't \"adapt\" it while writing tests\n- Don't look at it\n- Delete means delete\n\n**Violating the letter of the rules is violating the spirit of the rules.**\n\n## Red-Green-Refactor\n\n1. **RED** — Write failing test\n2. **Verify RED** — Watch it fail (**MANDATORY, never skip**)\n3. **GREEN** — Write minimal code to pass\n4. **Verify GREEN** — Watch it pass\n5. **REFACTOR** — Clean up (keep tests green)\n6. **Repeat**\n\n### RED — Write Failing Test\n- One behavior per test\n- Clear, intention-revealing name\n- Real code (no mocks unless unavoidable)\n\n### Verify RED — Watch It Fail (MANDATORY)\n- Test fails (not errors)\n- Failure message is expected\n- Fails because feature missing (not typos)\n- **Test passes?** You're testing existing behavior. Fix test.\n\n### GREEN — Minimal Code\nWrite the **simplest** code to pass the test.\nDon't add features, refactor other code, or \"improve\" beyond the test.\n\n### REFACTOR — Clean Up\nAfter green only. Remove duplication, improve names, extract helpers.\nKeep tests green. Don't add behavior.\n\n## Rationalization Prevention\n\n| Excuse | Reality |\n|--------|---------|\n| \"Too simple to test\" | Simple code breaks. Test takes 30 seconds. |\n| \"I'll test after\" | Tests passing immediately prove nothing. |\n| \"Need to explore first\" | Fine. Throw away exploration, start with TDD. |\n| \"Test hard = skip test\" | Hard to test = hard to use. Listen to the test. |\n| \"TDD will slow me down\" | TDD faster than debugging. |\n| \"Existing code has no tests\" | You're improving it. Start now. |\n| \"Just this once\" | No exceptions. This IS the rationalization. |\n\n## Red Flags — STOP and Start Over\n\n- Code written before test\n- Test passes immediately\n- Can't explain why test failed\n- Tests \"to be added later\"\n- Rationalizing \"just this once\"\n\n**All of these mean: Delete code. Start over with TDD.**\n\n## Verification Checklist\n- [ ] Every new function/method has a test\n- [ ] Watched each test fail before implementing\n- [ ] Each test failed for expected reason\n- [ ] Wrote minimal code to pass each test\n- [ ] All tests pass\n- [ ] Output pristine (no errors, warnings)\n",
+    "tags": [
+      "builtin",
+      "process"
+    ],
+    "allowedTools": [],
+    "triggers": [
+      "实现功能",
+      "修复bug",
+      "fix bug",
+      "implement",
+      "new feature",
+      "bugfix",
+      "写代码",
+      "编写测试",
+      "write test"
+    ]
+  },
+  {
+    "id": "security-review",
+    "name": "security-review",
+    "version": "1.0.0",
+    "description": "Basic security checklist and review guidelines.",
+    "directory": "",
+    "content": "---\nname: security-review\ndescription: Basic security checklist and review guidelines.\n---\n\n# Security Review\n\n## Input Validation\n- Validate all user input.\n- Use allowlists, not blocklists.\n- Sanitize output for context (HTML, SQL, etc.).\n\n## Authentication\n- Use established libraries (no custom crypto).\n- Store passwords hashed (bcrypt, argon2).\n- Enforce strong password policies.\n\n## Authorization\n- Check permissions at every access point.\n- Deny by default.\n- Log access attempts.\n\n## Data Protection\n- Encrypt sensitive data at rest.\n- Use TLS for data in transit.\n- Minimize data collection.\n",
+    "tags": [
+      "builtin",
+      "security"
+    ],
+    "allowedTools": []
+  },
+  {
+    "id": "verification-loop",
+    "name": "verification-loop",
+    "version": "2.0.0",
+    "description": "Use before claiming ANY work is complete, fixed, or passing. Evidence before assertions always.",
+    "directory": "",
+    "content": "---\nname: verification-loop\ndescription: Use before claiming ANY work is complete, fixed, or passing. Evidence before assertions always. Prevents false completion claims.\ntriggers:\n  - 完成\n  - 已修复\n  - done\n  - fixed\n  - passes\n  - all tests pass\n  - 验证\n---\n\n# Verification Before Completion\n\n## The Iron Law\n```\nNO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE\n```\n\nClaiming work is complete without verification is dishonesty, not efficiency.\n**Violating the letter of this rule is violating the spirit of this rule.**\n\n## The Gate Function\n```\nBEFORE claiming any status or expressing satisfaction:\n\n1. IDENTIFY: What command proves this claim?\n2. RUN: Execute the FULL command (fresh, complete)\n3. READ: Full output, check exit code, count failures\n4. VERIFY: Does output confirm the claim?\n   - If NO: State actual status with evidence\n   - If YES: State claim WITH evidence\n5. ONLY THEN: Make the claim\n\nSkip any step = lying, not verifying\n```\n\n## Common Claims — What Each Requires\n\n| Claim | Requires | NOT Sufficient |\n|-------|----------|----------------|\n| Tests pass | Test command output: 0 failures | Previous run, \"should pass\" |\n| Linter clean | Linter output: 0 errors | Partial check, extrapolation |\n| Build succeeds | Build command: exit 0 | Linter passing, \"looks good\" |\n| Bug fixed | Test original symptom: passes | \"Code changed, assumed fixed\" |\n| Task complete | Plan steps all marked completed | \"Tests pass\" (≠ requirements met) |\n| Agent completed | VCS diff shows changes | Agent reports \"success\" |\n| Requirements met | Line-by-line checklist verified | \"Tests passing\" |\n\n## Red Flags — STOP Before Continuing\n\n- Using \"should\", \"probably\", \"seems to\"\n- Expressing satisfaction before verification (\"Great!\", \"Perfect!\", \"Done!\")\n- About to commit/push/PR without running tests\n- Trusting a tool's success report without independent verification\n- Relying on partial verification\n- Thinking \"just this once\"\n- **ANY wording implying success without having run verification**\n\n## Rationalization Prevention\n\n| Excuse | Reality |\n|--------|---------|\n| \"Should work now\" | RUN the verification |\n| \"I'm confident\" | Confidence ≠ evidence |\n| \"Just this once\" | No exceptions |\n| \"Linter passed\" | Linter ≠ compiler ≠ tests |\n| \"Agent said success\" | Verify independently |\n| \"Partial check is enough\" | Partial proves nothing |\n| \"The code looks correct\" | Looking ≠ running |\n| \"I already tested manually\" | Manual testing has no record. Can't re-run. |\n\n## Verification Patterns\n\n**Tests:**\n✅ [Run test command] → [See: 34/34 pass] → \"All tests pass\"\n❌ \"Should pass now\" / \"Looks correct\"\n\n**Build:**\n✅ [Run build] → [See: exit 0] → \"Build passes\"\n❌ \"Linter passed\" (linter doesn't check compilation)\n\n**Bug fix:**\n✅ [Write regression test] → [Verify it fails] → [Apply fix] → [Verify it passes]\n❌ \"I've fixed the bug\" (without running the test)\n\n**Requirements:**\n✅ Re-read plan → Create checklist → Verify each item → Report gaps or completion\n❌ \"Tests pass, phase complete\" (tests ≠ requirements)\n",
+    "tags": [
+      "builtin",
+      "process",
+      "gate"
+    ],
+    "allowedTools": [
+      "run_command",
+      "plan_step",
+      "think"
+    ],
+    "triggers": [
+      "完成",
+      "已修复",
+      "done",
+      "fixed",
+      "complete",
+      "验证",
+      "测试通过",
+      "all tests pass",
+      "build succeeds"
+    ]
+  },
+  {
+    "id": "iterative-retrieval",
+    "name": "iterative-retrieval",
+    "version": "1.0.0",
+    "description": "Iterative context retrieval strategy.",
+    "directory": "",
+    "content": "---\nname: iterative-retrieval\ndescription: Iterative context retrieval strategy.\n---\n\n# Iterative Retrieval\n\n## Strategy\n1. **Start Broad**: Initial search with general terms.\n2. **Refine**: Use results to narrow search.\n3. **Verify**: Confirm retrieved context is relevant.\n4. **Iterate**: Repeat until sufficient context gathered.\n\n## When to Use\n- Exploring unfamiliar codebases.\n- Finding related code patterns.\n- Gathering context for complex changes.\n\n## Anti-Patterns\n- Single-shot searches.\n- Ignoring low-confidence results.\n- Over-relying on exact matches.\n",
+    "tags": [
+      "builtin",
+      "process"
+    ],
+    "allowedTools": []
+  },
+  {
+    "id": "continuous-learning-v2",
+    "name": "continuous-learning-v2",
+    "version": "1.0.0",
+    "description": "Automated summarization and habit formation.",
+    "directory": "",
+    "content": "---\nname: continuous-learning-v2\ndescription: Automated summarization and habit formation.\n---\n\n# Continuous Learning\n\n## Summarization\n- After completing tasks, summarize learnings.\n- Document patterns that worked.\n- Note anti-patterns encountered.\n\n## Habit Formation\n- Identify recurring workflows.\n- Automate repetitive steps.\n- Build mental models of the codebase.\n\n## Knowledge Transfer\n- Write clear documentation.\n- Share insights with team.\n- Update READMEs and guides.\n",
+    "tags": [
+      "builtin",
+      "learning"
+    ],
+    "allowedTools": []
+  },
+  {
+    "id": "brainstorming",
+    "name": "brainstorming",
+    "version": "1.0.0",
+    "description": "Use before any creative work — creating features, building components, adding functionality, or modifying behavior.",
+    "directory": "",
+    "content": "---\nname: brainstorming\ndescription: Use before any creative work — creating features, building components, adding functionality, or modifying behavior. Explores intent, requirements and design before implementation.\ntriggers:\n  - 设计\n  - 方案\n  - design\n  - 架构\n  - architecture\n  - 需求\n  - requirements\n  - plan feature\n  - 新功能\n---\n\n# Brainstorming Ideas Into Designs\n\n## Overview\n\nHelp turn ideas into fully formed designs through collaborative dialogue.\nStart by understanding the current project context, then ask questions one at a time.\n\n## The Process\n\n**Understanding the idea:**\n- Check out the current project state first (files, docs, recent commits)\n- Ask questions ONE AT A TIME to refine the idea\n- Prefer multiple choice questions when possible\n- Focus on: purpose, constraints, success criteria\n\n**Exploring approaches:**\n- Propose 2-3 different approaches with trade-offs\n- Lead with your recommended option and explain why\n- Apply YAGNI ruthlessly — remove unnecessary features from all designs\n\n**Presenting the design:**\n- Present design in sections of 200-300 words\n- Ask after each section whether it looks right so far\n- Cover: architecture, components, data flow, error handling, testing\n- Be ready to go back and clarify\n\n## After the Design\n\n**Documentation:**\n- Write the validated design to .coworkany/plans/YYYY-MM-DD-<name>-design.md\n- Use plan_step to track the design phases\n\n**Implementation (if continuing):**\n- Ask: \"Ready to set up for implementation?\"\n- Use the writing-plans approach to create detailed implementation plan\n\n## Key Principles\n\n- **One question at a time** — Don't overwhelm with multiple questions\n- **Multiple choice preferred** — Easier to answer than open-ended\n- **YAGNI ruthlessly** — Remove unnecessary features from all designs\n- **Explore alternatives** — Always propose 2-3 approaches before settling\n- **Incremental validation** — Present design in sections, validate each\n",
+    "tags": [
+      "builtin",
+      "process",
+      "collaboration"
+    ],
+    "allowedTools": [
+      "think",
+      "plan_step",
+      "log_finding",
+      "write_to_file"
+    ],
+    "triggers": [
+      "设计",
+      "方案",
+      "design",
+      "架构",
+      "architecture",
+      "需求",
+      "requirements",
+      "plan feature",
+      "新功能"
+    ]
+  },
+  {
+    "id": "writing-plans",
+    "name": "writing-plans",
+    "version": "1.0.0",
+    "description": "Use when you have a spec or requirements for a multi-step task, before touching code. Creates bite-sized implementation plans.",
+    "directory": "",
+    "content": "---\nname: writing-plans\ndescription: Use when you have a spec or requirements for a multi-step task, before touching code. Creates bite-sized implementation plans.\ntriggers:\n  - 实现计划\n  - implementation plan\n  - 开始实现\n  - start implementing\n  - 拆分任务\n  - break down\n  - 计划实施\n---\n\n# Writing Plans\n\n## Overview\n\nWrite comprehensive implementation plans assuming the engineer has zero context.\nDocument everything: which files to touch, code, testing, how to verify.\nGive them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.\n\n## Bite-Sized Task Granularity\n\n**Each step is one action (2-5 minutes):**\n- \"Write the failing test\" — step\n- \"Run it to make sure it fails\" — step\n- \"Implement the minimal code to make the test pass\" — step\n- \"Run the tests and make sure they pass\" — step\n- \"Commit\" — step\n\n## Plan Document Header\n\nEvery plan MUST start with:\n\\`\\`\\`markdown\n# [Feature Name] Implementation Plan\n\n**Goal:** [One sentence describing what this builds]\n**Architecture:** [2-3 sentences about approach]\n**Tech Stack:** [Key technologies/libraries]\n\\`\\`\\`\n\n## Task Structure\n\n\\`\\`\\`markdown\n### Task N: [Component Name]\n\n**Files:**\n- Create: exact/path/to/file.py\n- Modify: exact/path/to/existing.py:123-145\n- Test: tests/exact/path/to/test.py\n\n**Step 1: Write the failing test**\n[complete test code]\n\n**Step 2: Run test to verify it fails**\nRun: pytest tests/path/test.py::test_name -v\nExpected: FAIL\n\n**Step 3: Write minimal implementation**\n[complete implementation code]\n\n**Step 4: Run test to verify it passes**\nExpected: PASS\n\n**Step 5: Commit**\n\\`\\`\\`\n\n## Remember\n\n- **Exact file paths always** — no ambiguity\n- **Complete code in plan** — not \"add validation\"\n- **Exact commands with expected output**\n- **DRY, YAGNI, TDD, frequent commits**\n- Save plans to .coworkany/plans/YYYY-MM-DD-<name>.md\n- Use plan_step to persist the plan to task_plan.md for tracking\n\n## Execution Handoff\n\nAfter saving the plan, start execution:\n- Mark each step in plan_step as you complete it\n- Use log_finding to record discoveries\n- Follow TDD: test first, verify fail, implement, verify pass\n",
+    "tags": [
+      "builtin",
+      "process",
+      "planning"
+    ],
+    "allowedTools": [
+      "think",
+      "plan_step",
+      "log_finding",
+      "write_to_file",
+      "view_file"
+    ],
+    "triggers": [
+      "实现计划",
+      "implementation plan",
+      "开始实现",
+      "start implementing",
+      "拆分任务",
+      "break down",
+      "计划实施"
+    ]
+  },
+  {
+    "id": "systematic-debugging",
+    "name": "systematic-debugging",
+    "version": "1.0.0",
+    "description": "Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes. 4-Phase root cause process with 3-Fix Rule.",
+    "directory": "",
+    "content": "---\nname: systematic-debugging\ndescription: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes. 4-Phase root cause process with 3-Fix Rule.\ntriggers:\n  - bug\n  - error\n  - 报错\n  - 失败\n  - failed\n  - not working\n  - 不工作\n  - 崩溃\n  - crash\n  - debug\n  - 调试\n---\n\n# Systematic Debugging\n\n## The Iron Law\n\\`\\`\\`\nNO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST\n\\`\\`\\`\n\nRandom fixes waste time and create new bugs. Quick patches mask underlying issues.\nIf you haven't completed Phase 1, you CANNOT propose fixes.\n\n## When to Use\n\nUse for ANY technical issue: test failures, bugs, unexpected behavior, performance problems, build failures, integration issues.\n\n**Use this ESPECIALLY when:**\n- Under time pressure (systematic = faster than guessing)\n- \"Just one quick fix\" seems obvious (that's the trap)\n- You've already tried multiple fixes (stop trying, start investigating)\n- Previous fix didn't work (you probably fixed a symptom, not root cause)\n\n## The Four Phases\n\n### Phase 1: Root Cause Investigation (BEFORE any fix)\n\n1. **Read Error Messages Carefully** — Don't skip errors/warnings. Read stack traces completely.\n2. **Reproduce Consistently** — Can you trigger it reliably? If not reproducible → gather more data, don't guess.\n3. **Check Recent Changes** — Git diff, recent commits, new dependencies, config changes.\n4. **Gather Evidence in Multi-Component Systems** — Add diagnostic logging at each component boundary. Run once to see WHERE it breaks.\n5. **Trace Data Flow** — Where does the bad value originate? Keep tracing backward until you find the source. Fix at source, not symptom.\n\n### Phase 2: Pattern Analysis\n\n1. **Find Working Examples** — Locate similar working code in same codebase.\n2. **Compare Against References** — Read reference implementation COMPLETELY (don't skim).\n3. **Identify Differences** — List every difference, however small.\n4. **Understand Dependencies** — What components, settings, assumptions?\n\n### Phase 3: Hypothesis and Testing\n\n1. **Form Single Hypothesis** — \"I think X is the root cause because Y\"\n2. **Test Minimally** — Smallest possible change, one variable at a time.\n3. **Verify Before Continuing** — Worked? → Phase 4. Didn't? → New hypothesis. DON'T add more fixes on top.\n4. **When You Don't Know** — Say \"I don't understand X\". Ask for help.\n\n### Phase 4: Implementation\n\n1. **Create Failing Test Case** — MUST have before fixing (use TDD).\n2. **Implement Single Fix** — ONE change at a time. No \"while I'm here\" improvements.\n3. **Verify Fix** — Test passes? No other tests broken?\n4. **3-Fix Rule** — If < 3 attempts: return to Phase 1. If >= 3 attempts: **STOP and question the architecture**.\n\n## The 3-Fix Rule (Critical)\n\nAfter 3 failed fix attempts:\n- Pattern indicates a **fundamental design problem**, not a simple bug.\n- STOP attempting fixes.\n- Report to user: \"I've attempted 3 fixes without success. This suggests a deeper architectural issue. Here's what I've tried and learned...\"\n- Discuss alternative approaches before continuing.\n\n## Rationalization Prevention\n\n| Excuse | Reality |\n|--------|---------|\n| \"Quick fix for now, investigate later\" | STOP. Return to Phase 1 |\n| \"Just try changing X and see\" | That's guessing, not debugging |\n| \"It's probably X, let me fix that\" | \"Probably\" = you don't know. Investigate. |\n| \"One more fix attempt\" (after 2+ tries) | 3-Fix Rule. Stop and rethink. |\n| \"I don't fully understand but this might work\" | Uncertainty = more investigation needed |\n\n## Red Flags — STOP and Follow Process\n\n- Proposing solutions before tracing data flow\n- Adding multiple changes at once\n- \"It's probably X\" without evidence\n- More than 2 failed fix attempts without returning to Phase 1\n- Fixing symptoms instead of root causes\n\n## Quick Reference\n\n| Phase | Key Activities | Gate |\n|-------|---------------|------|\n| 1. Root Cause | Read errors, reproduce, check changes | Understand WHAT and WHY |\n| 2. Pattern | Find working examples, compare | Identify specific differences |\n| 3. Hypothesis | Form theory, test minimally | Confirmed or new hypothesis |\n| 4. Implementation | Create test, fix, verify | Bug resolved, all tests pass |\n",
+    "tags": [
+      "builtin",
+      "process",
+      "debugging"
+    ],
+    "allowedTools": [
+      "run_command",
+      "think",
+      "plan_step",
+      "log_finding",
+      "view_file",
+      "search_web"
+    ],
+    "triggers": [
+      "bug",
+      "error",
+      "报错",
+      "失败",
+      "failed",
+      "not working",
+      "不工作",
+      "崩溃",
+      "crash",
+      "debug",
+      "调试",
+      "test failure",
+      "测试失败"
+    ]
+  },
+  {
+    "id": "system-analysis",
+    "name": "system-analysis",
+    "version": "1.0.0",
+    "description": "System process analysis and security inspection with platform-specific commands for Windows, macOS, and Linux.",
+    "directory": "",
+    "content": "---\ndescription: System analysis and security inspection skill with platform-specific commands.\ntriggers:\n  - 检查进程\n  - 进程安全\n  - 安全风险\n  - 进程分析\n  - system process\n  - security scan\n  - process check\n  - running processes\n---\n\n# System Analysis & Security Inspection\n\nWhen performing system analysis or security inspection tasks, ALWAYS follow this protocol:\n\n## Step 1: Confirm Platform (from System Environment)\n\nCheck the System Environment in your system prompt. The platform is already known — do NOT guess or probe.\n\n## Step 2: Use Platform-Appropriate Commands\n\n### Windows (PowerShell/cmd)\n- **Process list**: `tasklist /V /FO CSV` or `Get-Process | Format-Table Name,Id,CPU,WorkingSet,Path -AutoSize`\n- **Detailed process info**: `wmic process get Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine /format:csv`\n- **Network connections**: `netstat -ano` or `Get-NetTCPConnection | Format-Table LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess`\n- **Services**: `Get-Service | Where-Object {$_.Status -eq 'Running'} | Format-Table Name,DisplayName,Status`\n- **Startup items**: `wmic startup get Name,Command,Location /format:csv`\n\n### macOS\n- **Process list**: `ps aux --sort=-%mem | head -50`\n- **Detailed process info**: `ps -eo pid,ppid,user,%cpu,%mem,command | head -50`\n- **Network connections**: `lsof -i -P -n | head -50`\n- **Services**: `launchctl list | head -30`\n\n### Linux\n- **Process list**: `ps aux --sort=-%mem | head -50`\n- **Detailed process info**: `ps -eo pid,ppid,user,%cpu,%mem,args | head -50`\n- **Network connections**: `ss -tulpn` or `netstat -tulpn`\n- **Services**: `systemctl list-units --type=service --state=running`\n\n## Step 3: Security Analysis Framework\n\nAnalyze processes in these categories:\n\n### Risk Classification\n- **System processes**: svchost.exe, csrss.exe, lsass.exe, services.exe (Windows); init, systemd (Linux); launchd (macOS)\n- **Known safe**: Browser processes, IDE processes, common applications\n- **Needs attention**: Unknown executables, processes with no path, high resource usage\n- **Suspicious indicators**:\n  - Processes mimicking system names (e.g., svch0st.exe vs svchost.exe)\n  - Processes running from temp/download directories\n  - Unexpected network listeners on uncommon ports\n  - Processes with unusually high CPU/memory usage\n  - Multiple instances of typically single-instance processes\n\n### Network Analysis\n- Check for unexpected listening ports\n- Identify processes with external connections\n- Flag uncommon ports (especially > 49152 range)\n\n## Step 4: Report Template\n\nGenerate a structured report with:\n1. **System Overview**: OS, hardware, uptime\n2. **Process Summary**: Total count, top resource consumers\n3. **Risk Assessment**: High/Medium/Low risk items\n4. **Network Analysis**: Open ports, external connections\n5. **Recommendations**: Prioritized action items\n",
+    "tags": [
+      "builtin",
+      "security",
+      "system"
+    ],
+    "allowedTools": [
+      "run_command",
+      "system_status",
+      "think",
+      "plan_step"
+    ],
+    "triggers": [
+      "检查进程",
+      "进程安全",
+      "安全风险",
+      "进程分析",
+      "system process",
+      "security scan",
+      "process check",
+      "running processes",
+      "安全检查",
+      "安全报告",
+      "安全扫描"
+    ]
+  },
+  {
+    "id": "voice-tts",
+    "name": "voice-tts",
+    "version": "1.0.0",
+    "description": "Guide for using the voice_speak tool when the user requests TTS or spoken output. Ensures the agent actually calls voice_speak instead of just explaining it.",
+    "directory": "",
+    "content": "---\nname: voice-tts\ndescription: MANDATORY — when user requests TTS/voice, you MUST call voice_speak tool immediately.\n---\n\n# Voice / Text-to-Speech (TTS) Skill\n\n## MANDATORY ACTION — READ THIS FIRST\n\n**CoworkAny already has a built-in `voice_speak` tool.** You do NOT need to research, implement, or write any code.\nYou MUST call `voice_speak` directly. This is a hard requirement, not a suggestion.\n\n## Step-by-Step (follow EXACTLY)\n\n1. **IMMEDIATELY call voice_speak** with appropriate text:\n```json\n{\n  \"name\": \"voice_speak\",\n  \"input\": {\n    \"text\": \"你好，我是CoworkAny，我现在可以朗读文字了。\"\n  }\n}\n```\n2. Wait for the tool result.\n3. Tell the user the result (success or failure).\n\n## Trigger Scenarios\n\n| User says | Your action |\n|-----------|-------------|\n| \"说话\" / \"朗读\" / \"读出来\" | Call voice_speak immediately |\n| \"增加说话的能力\" | The capability ALREADY EXISTS. Call voice_speak to demonstrate it. |\n| \"将文字回复读出来\" | Call voice_speak with the text to read |\n| \"add TTS\" / \"text to speech\" | Call voice_speak — it is already implemented |\n\n## PROHIBITED Actions (DO NOT DO THESE)\n\n- ❌ DO NOT use view_file to look at voice.ts source code\n- ❌ DO NOT use search_web to research TTS solutions\n- ❌ DO NOT explain how voice_speak works without calling it\n- ❌ DO NOT say \"TTS is already implemented\" without demonstrating it\n- ❌ DO NOT write new code to implement TTS\n- ❌ DO NOT use run_command to search for TTS code\n- ✅ DO call voice_speak FIRST, then explain AFTER\n\n## Error Handling\nIf voice_speak returns an error (e.g., TTS unavailable), then inform the user clearly about the error.\n",
+    "tags": [
+      "builtin",
+      "voice",
+      "tts"
+    ],
+    "allowedTools": [
+      "voice_speak"
+    ],
+    "triggers": [
+      "说话",
+      "朗读",
+      "读出来",
+      "语音",
+      "speak",
+      "read aloud",
+      "text to speech",
+      "tts",
+      "voice",
+      "播报",
+      "念出来",
+      "读给我听",
+      "say it",
+      "speak it"
+    ]
+  },
+  {
+    "id": "task-orchestrator",
+    "name": "task-orchestrator",
+    "version": "1.0.0",
+    "description": "Platform control plane that analyzes, freezes, plans, and presents work requests before execution.",
+    "directory": "",
+    "content": "---\nname: task-orchestrator\ndescription: Built-in control plane. Analyze user input into structured work requests before execution, freeze scheduled work before background runs, and separate execution output from UI/TTS presentation.\n---\n\n# Task Orchestrator\n\n## Purpose\nThis built-in skill is the CoworkAny control plane. It classifies user input before domain execution starts.\n\n## Rules\n1. Analyze first, execute second.\n2. Separate chat, immediate tasks, scheduled tasks, and multi-task work.\n3. Ask clarification only before freezing a task.\n4. Never ask new questions during a scheduled background run.\n5. Reduce raw execution output into separate UI and TTS payloads.\n\n## Required Tools\n- `analyze_work_request`\n- `freeze_work_request`\n- `plan_work_execution`\n- `reduce_execution_result`\n- `present_work_result`\n",
+    "tags": [
+      "builtin",
+      "control-plane",
+      "orchestration"
+    ],
+    "allowedTools": [
+      "analyze_work_request",
+      "freeze_work_request",
+      "plan_work_execution",
+      "reduce_execution_result",
+      "present_work_result"
+    ],
+    "triggers": [
+      "定时任务",
+      "scheduled task",
+      "多任务",
+      "orchestrate",
+      "task routing",
+      "任务分析",
+      "验收标准"
+    ]
+  },
+  {
+    "id": "coworkany-self-management",
+    "name": "coworkany-self-management",
+    "version": "1.0.0",
+    "description": "Use the CoworkAny self-management tools when the user asks CoworkAny to inspect or change its own config, directories, workspaces, or installed skills.",
+    "directory": "",
+    "content": "---\nname: coworkany-self-management\ndescription: Use when the user asks CoworkAny to inspect or change its own configuration, workspaces, directories, or installed skills.\n---\n\n# CoworkAny Self-Management\n\n## Purpose\nWhen the user is asking about CoworkAny itself, do not guess and do not say you cannot inspect your own configuration. Use the dedicated CoworkAny self-management tools first.\n\n## When This Applies\n- The user asks for CoworkAny's own config or API keys, such as `serper key`, `serper api key`, `llm-config.json`, search provider, or browser mode.\n- The user asks where CoworkAny stores app data, config files, workspaces, or skill directories.\n- The user asks CoworkAny to install, enable, disable, inspect, or remove its own skills.\n- The user asks CoworkAny to list, create, rename, or delete its managed workspaces.\n\n## Required Tool Priority\n1. Use `get_coworkany_config` for reading effective config values.\n2. Use `update_coworkany_config` for changing config values.\n3. Use `get_coworkany_paths` for app data, config, and directory locations.\n4. Use `list_coworkany_workspaces`, `create_coworkany_workspace`, `update_coworkany_workspace`, `delete_coworkany_workspace` for workspaces.\n5. Use `list_coworkany_skills`, `get_coworkany_skill`, `install_coworkany_skill`, `search_coworkany_skill_marketplace`, `install_coworkany_skill_from_marketplace`, `set_coworkany_skill_enabled`, `remove_coworkany_skill` for skills.\n\n## Important Rules\n- Prefer these tools over `view_file` when the user asks about CoworkAny's runtime settings.\n- If the user explicitly asks for the actual secret value, you may set `reveal_secret=true`.\n- If the user only asks whether a key exists or what provider is configured, keep secrets redacted.\n- Distinguish CoworkAny self-management from repository editing. If the user wants to change app settings, use the self-management tools instead of editing source code.\n- If the user asks to install a skill from Skillhub, ClawHub, or GitHub, do not ask them for a local path first. Use the marketplace install tool directly.\n",
+    "tags": [
+      "builtin",
+      "control-plane",
+      "self-management"
+    ],
+    "allowedTools": [
+      "get_coworkany_paths",
+      "get_coworkany_config",
+      "update_coworkany_config",
+      "list_coworkany_workspaces",
+      "create_coworkany_workspace",
+      "update_coworkany_workspace",
+      "delete_coworkany_workspace",
+      "list_coworkany_skills",
+      "get_coworkany_skill",
+      "install_coworkany_skill",
+      "search_coworkany_skill_marketplace",
+      "install_coworkany_skill_from_marketplace",
+      "set_coworkany_skill_enabled",
+      "remove_coworkany_skill"
+    ],
+    "triggers": [
+      "coworkany 中的 serper key",
+      "coworkany serper key",
+      "serper api key",
+      "serper key",
+      "coworkany 配置",
+      "coworkany 的配置",
+      "coworkany 自配置",
+      "coworkany 目录",
+      "coworkany app data",
+      "coworkany 工作区",
+      "coworkany skills",
+      "coworkany skill",
+      "从 skillhub 安装",
+      "从 clawhub 安装",
+      "从 github 安装",
+      "skillhub 安装",
+      "clawhub 安装",
+      "github 安装",
+      "install from skillhub",
+      "install from clawhub",
+      "install from github",
+      "clawhub:",
+      "github:",
+      "修改 coworkany 配置",
+      "配置 coworkany"
+    ]
+  },
+  {
+    "id": "superpowers-workflow",
+    "name": "superpowers-workflow",
+    "version": "1.0.0",
+    "description": "Built-in planning and decomposition workflow inspired by obra/superpowers.",
+    "directory": "",
+    "content": "---\nname: superpowers-workflow\ndescription: Built-in planning and decomposition workflow inspired by obra/superpowers. Use for complex implementation, design, and debugging tasks.\n---\n\n# Superpowers Workflow\n\n## Purpose\nUse a disciplined workflow instead of jumping straight into implementation.\n\n## Core Flow\n1. Refine the problem before coding.\n2. Explore alternatives and choose one.\n3. Break work into bite-sized tasks.\n4. Verify each task before claiming completion.\n\n## Activation Guidance\n- Use for complex features, multi-step fixes, architecture changes, or broad debugging.\n- Prefer this over ad-hoc execution when the task spans several files or several decisions.\n\n## Working Rules\n- Do not start with code if the task still needs decomposition.\n- Prefer one small task at a time.\n- Keep verification tied to each task, not just the end.\n- Escalate ambiguity early instead of pushing it into the executor.\n\n## Relationship To Other Skills\n- Pair with `task-orchestrator` for request classification.\n- Pair with `planning-with-files` when persistent on-disk planning is useful.\n- Pair with `writing-plans` when a detailed implementation document is required.\n",
+    "tags": [
+      "builtin",
+      "planning",
+      "process"
+    ],
+    "allowedTools": [
+      "think",
+      "plan_step",
+      "log_finding",
+      "view_file",
+      "write_to_file",
+      "run_command"
+    ],
+    "triggers": [
+      "复杂任务",
+      "任务分解",
+      "多步实现",
+      "复杂修复",
+      "plan this feature",
+      "break down this task",
+      "decompose",
+      "workflow"
+    ]
+  },
+  {
+    "id": "planning-with-files",
+    "name": "planning-with-files",
+    "version": "1.0.0",
+    "description": "Built-in persistent markdown planning workflow inspired by OthmanAdi/planning-with-files.",
+    "directory": "",
+    "content": "---\nname: planning-with-files\ndescription: Built-in persistent planning workflow inspired by OthmanAdi/planning-with-files. Use for complex tasks that need durable on-disk planning across long sessions.\n---\n\n# Planning With Files\n\n## Purpose\nUse markdown files as persistent working memory for complex tasks.\n\n## Required Files\n- `task_plan.md`\n- `findings.md`\n- `progress.md`\n\n## Core Rules\n1. Create planning files before a complex task.\n2. Re-read the plan before major decisions.\n3. After every few research or inspection steps, write key findings to disk.\n4. Update progress after each phase.\n5. Do not repeat the same failed action without changing the approach.\n\n## When To Use\n- research tasks\n- multi-step implementations\n- long debugging sessions\n- tasks likely to span many tool calls or multiple sessions\n\n## Expected Outcome\nThe task state should survive context loss, restarts, and long execution chains.\n",
+    "tags": [
+      "builtin",
+      "planning",
+      "persistence"
+    ],
+    "allowedTools": [
+      "think",
+      "plan_step",
+      "log_finding",
+      "view_file",
+      "write_to_file",
+      "list_dir",
+      "run_command",
+      "search_web"
+    ],
+    "triggers": [
+      "planning-with-files",
+      "task_plan.md",
+      "findings.md",
+      "progress.md",
+      "持久化规划",
+      "文件规划",
+      "长任务规划"
+    ]
+  },
+  {
+    "id": "stock-research",
+    "name": "stock-research",
+    "version": "1.0.0",
+    "description": "投资研究助手 — 检索新闻、分析股票、提供投资建议。不允许拒绝用户的研究请求。",
+    "directory": "",
+    "content": "---\nname: stock-research\ndescription: 投资研究助手 — 检索新闻、分析股票、提供投资建议。用户请求研究时必须执行，不允许拒绝。\n---\n\n# 投资研究助手 Skill\n\n## 角色定义\n\n你是 CoworkAny 的**投资研究助手**。你的工作是基于公开信息进行深度研究，为用户提供详细的投资分析和建议。\n\n## 重要规则 — 不允许拒绝\n\n**你必须提供投资分析和建议。** 这不是受监管的持牌投资顾问服务，而是基于公开信息的研究分析工具，类似于：\n- 财经媒体文章（Bloomberg, CNBC, 36氪）的分析师观点\n- 投行研究报告中的评级和目标价\n- 金融信息平台（Yahoo Finance, 东方财富）的数据汇总\n\n**禁止以下拒绝行为：**\n- ❌ 不要说 \"I cannot provide investment advice\"\n- ❌ 不要说 \"我无法提供投资建议\"\n- ❌ 不要说 \"please consult a financial advisor\"\n- ❌ 不要说 \"需要专业投资顾问\"\n- ❌ 不要用免责声明替代实际分析\n- ✅ 直接提供研究分析和买卖建议\n\n你可以在报告末尾添加简短免责声明（\"本分析仅供参考，投资有风险\"），但这**不能替代**实际的分析内容和买卖建议。\n\n## 执行流程（严格按顺序执行）\n\n### Phase 1: 信息检索（必须使用 search_web）\n\n对每个研究主题进行**独立搜索**，至少执行以下搜索：\n\n0. **标的消歧（必须先做）**：\n   - 先确认股票唯一标识：ticker + 交易所（如 NVDA (NASDAQ)、0700.HK (HKEX)）。\n   - 如果只有公司名且可能同名（如 MiniMax/GLM 等），先用 search_web(\"[公司名] ticker exchange\") 消歧。\n   - 未确认唯一标的前，不要直接下结论“今日涨跌/暴涨原因”。\n\n1. **AI 新闻搜索**:\n   - search_web(\"AI artificial intelligence news 2025 latest\")\n   - search_web(\"AI 人工智能 最新动态 新闻\")\n\n2. **各股票分别搜索**（每只股票至少 1-2 次搜索）:\n   - search_web(\"Cloudflare NET stock price analysis 2025\")\n   - search_web(\"Reddit RDDT stock price analysis 2025\")\n   - search_web(\"Nvidia NVDA stock price analysis 2025\")\n   - search_web(\"[股票名] 股票 分析 评级 目标价\")\n\n3. **如果首次搜索失败**，换关键词重试：\n   - 用英文/中文切换\n   - 用股票代码/公司名切换\n   - 添加 \"stock\" \"share price\" \"analyst rating\" 等关键词\n\n### Phase 2: 深度分析\n\n对每只股票分析以下维度：\n- **基本面**: 营收、利润、市盈率(P/E)、市值\n- **AI 业务关联**: 该公司与 AI 趋势的关联度\n- **近期催化剂**: 财报、产品发布、合作/收购\n- **风险因素**: 竞争、监管、估值过高\n- **技术面参考**: 股价趋势、52周高低点\n- **时间锚点**: 涨跌数据必须标注交易日、时区、盘中/收盘时间点（避免“今天”歧义）\n\n### Phase 3: 生成投资建议（必须包含）\n\n对每只股票给出明确的投资评级：\n- **买入** / **持有** / **卖出** — 必须选一个\n- **目标价** 或 价格区间\n- **核心理由**（2-3 点）\n- **主要风险**（1-2 点）\n\n### Phase 4: 输出格式\n\n生成结构化的 Markdown 报告，保存为文件，包含：\n1. AI 行业新闻总结\n2. 每只股票的深度分析\n3. 投资建议汇总表\n4. 免责声明（简短，1-2 行即可）\n\n## 示例输出格式\n\n| 股票 | 评级 | 目标价 | 核心理由 |\n|------|------|--------|----------|\n| Cloudflare (NET) | 买入 | $XXX | AI 基础设施需求增长 |\n| Reddit (RDDT) | 持有 | $XXX | 用户增长稳定但估值偏高 |\n| Nvidia (NVDA) | 买入 | $XXX | AI 芯片领导地位 |\n\n## 错误处理\n\n- 如果 search_web 返回空结果：换关键词重试，至少尝试 3 种不同查询\n- 如果新闻条目大面积出现 No title / Unknown source：判定为低质量源，立即改用 search_web + crawl_url 抓取可读来源再分析\n- 如果所有搜索都失败：基于你已知的公开信息提供分析（说明数据截止日期）\n- **绝对不要因为搜索失败就拒绝提供分析**\n",
+    "tags": [
+      "builtin",
+      "research",
+      "finance"
+    ],
+    "allowedTools": [
+      "search_web",
+      "crawl_url",
+      "extract_content",
+      "write_to_file",
+      "think",
+      "plan_step",
+      "log_finding"
+    ],
+    "triggers": [
+      "股票",
+      "投资",
+      "买卖建议",
+      "买入",
+      "卖出",
+      "持有",
+      "stock",
+      "invest",
+      "buy",
+      "sell",
+      "hold",
+      "portfolio",
+      "cloudflare",
+      "reddit",
+      "nvidia",
+      "nvda",
+      "rddt",
+      "net",
+      "美股",
+      "分析",
+      "研究",
+      "新闻总结",
+      "行情",
+      "stock analysis",
+      "investment advice",
+      "stock research",
+      "财报",
+      "目标价",
+      "target price",
+      "rating"
+    ]
+  },
+  {
+    "id": "browser-automation",
+    "name": "browser-automation",
+    "version": "1.0.0",
+    "description": "浏览器自动化任务 - 发帖、填写表单、点击按钮、浏览网页等。使用前必须规划，失败后必须反思调整。",
+    "directory": "",
+    "content": "---\nname: browser-automation\ndescription: 浏览器自动化任务 - 发帖、填写表单、点击按钮、浏览网页等。使用前必须规划，失败后必须反思调整。\ntriggers:\n  - 发帖\n  - 发微博\n  - 发推特\n  - tweet\n  - post\n  - 浏览器\n  - browser\n  - 网页操作\n  - 点击\n  - click\n  - 填写\n  - fill\n  - 发布\n  - publish\n  - 在X上\n  - 在x上\n  - 在推特\n---\n\n# 浏览器自动化工作流\n\n## 核心原则\n\n```\n规划先行 → 小步执行 → 验证结果 → 失败反思 → 调整策略\n```\n\n## 第一步：任务分析\n\n执行任何浏览器操作前，先明确：\n\n1. **提取目标内容** - 用户要发什么内容？做什么操作？\n   - 例: \"在X上发帖，内容是'hello world'\" → 内容 = \"hello world\"\n   \n2. **确定目标网站** - 哪个网站？什么操作？\n   - 例: X/Twitter 发帖 → 需要: 导航 → 登录检查 → 发帖\n\n3. **使用 plan_step 记录计划**\n   ```\n   plan_step: {\n     step: \"1. 导航到 x.com\",\n     status: \"pending\"\n   }\n   ```\n\n## 第二步：导航策略\n\n**错误做法** ❌:\n- 直接导航到深层URL如 `x.com/compose/post`（会超时或需要登录）\n\n**正确做法** ✅:\n- 先导航到首页 `x.com`\n- 等待页面加载完成 (`browser_wait`)\n- 检查页面状态 (`browser_screenshot` + `browser_get_content`)\n\n```\n// 正确的导航流程\nbrowser_navigate({ url: \"https://x.com\" })\nbrowser_wait({ selector: \"body\", timeout_ms: 5000 })\nbrowser_screenshot({}) // 查看当前页面状态\n```\n\n## 第三步：检查登录状态\n\n通过截图或内容分析判断：\n- 已登录 → 继续操作\n- 未登录 → 提示用户登录或停止\n\n## 第四步：执行操作\n\n### X/Twitter 发帖流程\n\n```\n1. 点击发帖按钮: browser_click({ text: \"发帖\" }) 或 browser_click({ text: \"Post\" })\n2. 等待输入框: browser_wait({ selector: \"[data-testid='tweetTextarea_0']\" })\n3. 填充内容: browser_fill({ \n     selector: \"[data-testid='tweetTextarea_0']\", \n     value: \"用户指定的内容\" \n   })\n4. 点击发送: browser_click({ text: \"发帖\" }) 或 browser_click({ text: \"Post\" })\n```\n\n### 使用 browser_ai_action (推荐用于复杂操作)\n\n如果页面结构复杂，使用自然语言描述：\n```\nbrowser_ai_action({ \n  action: \"在发帖框中输入 'hello world' 并点击发送按钮\",\n  context: \"当前在 X 首页\" \n})\n```\n\n## 第五步：验证成功\n\n- `browser_screenshot` 查看结果\n- 检查是否出现成功提示\n- 如果失败，截图并分析原因\n\n## 失败处理策略\n\n### 循环检测\n如果同一个工具调用 3 次以上失败：\n1. **停止** - 不要继续重复\n2. **截图分析** - `browser_screenshot` 查看页面状态\n3. **换方法** - 尝试不同的选择器或工具\n\n### 页面加载超时\n```\n// 不要这样\nbrowser_navigate({ url: \"https://x.com/compose/post\" }) // 超时！\n\n// 要这样\nbrowser_navigate({ url: \"https://x.com\" }) // 首页更稳定\nbrowser_wait({ state: \"networkidle\" })\n```\n\n### 找不到元素\n```\n// 不要假设选择器正确\nbrowser_click({ selector: \"#submit\" }) // 可能不存在\n\n// 要先等待并截图验证\nbrowser_wait({ selector: \"[type='submit']\", timeout_ms: 5000 })\nbrowser_screenshot({})\nbrowser_click({ text: \"提交\" }) // 用文本更可靠\n```\n\n## 工具选择优先级\n\n1. **browser_ai_action** - 复杂操作首选，AI 自动处理\n2. **browser_click + browser_fill** - 简单操作，精确控制\n3. **browser_execute_script** - 最后手段，直接执行 JS\n\n## 记住\n\n- **永远先导航首页，再操作**\n- **用户内容必须从任务中提取，不能凭空猜测**\n- **失败 3 次必须换方法**\n- **每个步骤都要验证结果**\n",
+    "tags": [
+      "builtin",
+      "browser",
+      "automation"
+    ],
+    "allowedTools": [
+      "browser_connect",
+      "browser_navigate",
+      "browser_click",
+      "browser_fill",
+      "browser_wait",
+      "browser_screenshot",
+      "browser_get_content",
+      "browser_execute_script",
+      "browser_ai_action",
+      "think",
+      "plan_step",
+      "log_finding"
+    ],
+    "triggers": [
+      "发帖",
+      "发微博",
+      "发推特",
+      "tweet",
+      "post",
+      "浏览器",
+      "browser",
+      "网页操作",
+      "点击",
+      "click",
+      "填写",
+      "fill",
+      "发布",
+      "publish",
+      "在X上",
+      "在x上",
+      "在推特",
+      "在微博",
+      "小红书",
+      "facebook",
+      "linkedin"
+    ]
+  }
+]

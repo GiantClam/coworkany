@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { KnowledgeUpdater } from '../src/agent/knowledgeUpdater';
+import { KnowledgeUpdater } from '../src/runtime/knowledge/knowledgeUpdater';
 import { ReActController } from '../src/agent/reactLoop';
 import { AutonomousAgentController } from '../src/agent/autonomousAgent';
-import { setTaskIsolationPolicy } from '../src/execution/taskIsolationPolicyStore';
+import { setTaskIsolationPolicy } from '../src/runtime/taskIsolationPolicyStore';
 
 describe('agent memory isolation', () => {
     test('knowledge updater writes memories into the allowed task scope', async () => {

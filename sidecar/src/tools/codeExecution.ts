@@ -1,25 +1,10 @@
-/**
- * CoworkAny - Sandboxed Code Execution
- *
- * Provides isolated Python/JavaScript code execution with automatic
- * dependency installation and error analysis.
- *
- * OpenClaw-style "Code as Tool" implementation.
- */
-
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { spawn, type ChildProcess, SpawnOptions } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { ToolDefinition, ToolContext, ToolEffect } from './standard';
-
-// ============================================================================
-// Types
-// ============================================================================
-
 export type SupportedLanguage = 'python' | 'javascript' | 'shell';
-
 export interface CodeExecutionRequest {
     language: SupportedLanguage;
     code: string;
@@ -30,7 +15,6 @@ export interface CodeExecutionRequest {
     env?: Record<string, string>;
     onCancel?: (waiter: (reason: string) => void) => (() => void);
 }
-
 export interface ErrorAnalysis {
     errorType:
         | 'python_syntax'
@@ -59,7 +43,6 @@ export interface ErrorAnalysis {
         alternativeCommands?: string[];  // For command not found errors
     };
 }
-
 export interface CodeExecutionResult {
     success: boolean;
     stdout: string;
@@ -70,16 +53,9 @@ export interface CodeExecutionResult {
     installed_deps?: string[];
     error_analysis?: ErrorAnalysis;
 }
-
-// ============================================================================
-// Constants
-// ============================================================================
-
 const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds
 const MAX_TIMEOUT_MS = 300000; // 5 minutes
 const SANDBOX_BASE_DIR = '.coworkany/sandbox';
-
-// Common module name mappings (pip package name differs from import name)
 const MODULE_TO_PACKAGE: Record<string, string> = {
     cv2: 'opencv-python',
     PIL: 'Pillow',
@@ -88,12 +64,10 @@ const MODULE_TO_PACKAGE: Record<string, string> = {
     bs4: 'beautifulsoup4',
     dotenv: 'python-dotenv',
 };
-
 function terminateChildProcessTree(child: ChildProcess): void {
     if (!child.pid) {
         return;
     }
-
     if (process.platform === 'win32') {
         try {
             const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
@@ -105,39 +79,26 @@ function terminateChildProcessTree(child: ChildProcess): void {
             try {
                 child.kill('SIGKILL');
             } catch {
-                // Ignore cleanup failures during cancellation.
             }
         }
         return;
     }
-
     try {
         process.kill(-child.pid, 'SIGKILL');
     } catch {
         try {
             child.kill('SIGKILL');
         } catch {
-            // Ignore cleanup failures during cancellation.
         }
     }
 }
-
-// ============================================================================
-// Sandbox Manager
-// ============================================================================
-
 export class SandboxManager {
     private baseDir: string;
-
     constructor(workspacePath?: string) {
         this.baseDir = workspacePath
             ? path.join(workspacePath, SANDBOX_BASE_DIR)
             : path.join(os.homedir(), SANDBOX_BASE_DIR);
     }
-
-    /**
-     * Ensure sandbox directories exist
-     */
     async ensureSandboxDirs(): Promise<void> {
         const dirs = [
             this.baseDir,
@@ -147,15 +108,10 @@ export class SandboxManager {
             path.join(this.baseDir, 'nodejs', 'workspace'),
             path.join(this.baseDir, 'temp'),
         ];
-
         for (const dir of dirs) {
             await fs.promises.mkdir(dir, { recursive: true });
         }
     }
-
-    /**
-     * Get sandbox path for a language
-     */
     getSandboxPath(language: SupportedLanguage): string {
         switch (language) {
             case 'python':
@@ -166,17 +122,9 @@ export class SandboxManager {
                 return path.join(this.baseDir, 'temp');
         }
     }
-
-    /**
-     * Get Python virtual environment path
-     */
     getPythonVenvPath(): string {
         return path.join(this.baseDir, 'python', 'venv');
     }
-
-    /**
-     * Check if Python venv exists
-     */
     async hasPythonVenv(): Promise<boolean> {
         const venvPath = this.getPythonVenvPath();
         const activatePath =
@@ -190,22 +138,16 @@ export class SandboxManager {
             return false;
         }
     }
-
-    /**
-     * Create Python virtual environment
-     */
     async createPythonVenv(
         onCancel?: (waiter: (reason: string) => void) => (() => void)
     ): Promise<{ success: boolean; error?: string }> {
         const venvPath = this.getPythonVenvPath();
-
         return new Promise((resolve) => {
             const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
             const child = spawn(pythonCmd, ['-m', 'venv', venvPath], {
                 shell: true,
                 detached: process.platform !== 'win32',
             });
-
             let stderr = '';
             let settled = false;
             const finalize = (result: { success: boolean; error?: string }) => {
@@ -216,16 +158,13 @@ export class SandboxManager {
                 disposeCancellation?.();
                 resolve(result);
             };
-
             const disposeCancellation = onCancel?.((reason) => {
                 terminateChildProcessTree(child);
                 finalize({ success: false, error: reason || 'Task cancelled by user' });
             });
-
             child.stderr?.on('data', (data) => {
                 stderr += data.toString();
             });
-
             child.on('close', (code) => {
                 if (code === 0) {
                     finalize({ success: true });
@@ -233,23 +172,17 @@ export class SandboxManager {
                     finalize({ success: false, error: stderr || 'Failed to create venv' });
                 }
             });
-
             child.on('error', (err) => {
                 finalize({ success: false, error: err.message });
             });
         });
     }
-
-    /**
-     * Get Python executable path (from venv or system)
-     */
     async getPythonExecutable(): Promise<string> {
         const venvPath = this.getPythonVenvPath();
         const venvPython =
             process.platform === 'win32'
                 ? path.join(venvPath, 'Scripts', 'python.exe')
                 : path.join(venvPath, 'bin', 'python');
-
         try {
             await fs.promises.access(venvPython);
             return venvPython;
@@ -257,17 +190,12 @@ export class SandboxManager {
             return process.platform === 'win32' ? 'python' : 'python3';
         }
     }
-
-    /**
-     * Get pip executable path
-     */
     async getPipExecutable(): Promise<string> {
         const venvPath = this.getPythonVenvPath();
         const venvPip =
             process.platform === 'win32'
                 ? path.join(venvPath, 'Scripts', 'pip.exe')
                 : path.join(venvPath, 'bin', 'pip');
-
         try {
             await fs.promises.access(venvPip);
             return venvPip;
@@ -275,10 +203,6 @@ export class SandboxManager {
             return process.platform === 'win32' ? 'pip' : 'pip3';
         }
     }
-
-    /**
-     * Clean up temporary files
-     */
     async cleanupTemp(): Promise<void> {
         const tempDir = path.join(this.baseDir, 'temp');
         try {
@@ -286,31 +210,18 @@ export class SandboxManager {
             for (const file of files) {
                 const filePath = path.join(tempDir, file);
                 const stat = await fs.promises.stat(filePath);
-                // Remove files older than 1 hour
                 if (Date.now() - stat.mtimeMs > 3600000) {
                     await fs.promises.unlink(filePath);
                 }
             }
         } catch {
-            // Ignore cleanup errors
         }
     }
 }
-
-// ============================================================================
-// Error Analysis Engine
-// ============================================================================
-
 export class ErrorAnalyzer {
-    /**
-     * Analyze error output and provide suggestions
-     */
     analyze(stderr: string, code: string, language: SupportedLanguage): ErrorAnalysis {
         const lowerStderr = stderr.toLowerCase();
-
-        // Python-specific errors
         if (language === 'python') {
-            // Missing module
             const moduleMatch = stderr.match(/ModuleNotFoundError: No module named ['"]([^'"]+)['"]/);
             if (moduleMatch) {
                 const moduleName = moduleMatch[1].split('.')[0];
@@ -326,8 +237,6 @@ export class ErrorAnalyzer {
                     },
                 };
             }
-
-            // Import error (similar to module not found)
             const importMatch = stderr.match(/ImportError: cannot import name ['"]([^'"]+)['"]/);
             if (importMatch) {
                 return {
@@ -338,8 +247,6 @@ export class ErrorAnalyzer {
                     canAutoRetry: false,
                 };
             }
-
-            // Syntax error
             const syntaxMatch = stderr.match(/SyntaxError: (.+)/);
             if (syntaxMatch) {
                 const lineMatch = stderr.match(/line (\d+)/);
@@ -353,8 +260,6 @@ export class ErrorAnalyzer {
                     canAutoRetry: false,
                 };
             }
-
-            // File not found
             if (stderr.includes('FileNotFoundError') || stderr.includes('No such file or directory')) {
                 const fileMatch = stderr.match(/['"]([^'"]+)['"]/);
                 return {
@@ -367,8 +272,6 @@ export class ErrorAnalyzer {
                     canAutoRetry: false,
                 };
             }
-
-            // Permission error
             if (stderr.includes('PermissionError')) {
                 return {
                     errorType: 'permission_denied',
@@ -379,10 +282,7 @@ export class ErrorAnalyzer {
                 };
             }
         }
-
-        // Shell-specific errors
         if (language === 'shell') {
-            // Command not found
             const cmdMatch = stderr.match(/(.+): command not found/);
             if (cmdMatch || lowerStderr.includes('is not recognized')) {
                 const cmd = cmdMatch ? cmdMatch[1] : 'Unknown command';
@@ -395,8 +295,6 @@ export class ErrorAnalyzer {
                 };
             }
         }
-
-        // Timeout
         if (lowerStderr.includes('timeout') || lowerStderr.includes('timed out')) {
             return {
                 errorType: 'timeout',
@@ -409,8 +307,6 @@ export class ErrorAnalyzer {
                 },
             };
         }
-
-        // Network errors
         if (
             lowerStderr.includes('connection refused') ||
             lowerStderr.includes('network unreachable') ||
@@ -424,8 +320,6 @@ export class ErrorAnalyzer {
                 canAutoRetry: true,
             };
         }
-
-        // Unknown error
         return {
             errorType: 'unknown',
             originalError: stderr,
@@ -435,48 +329,32 @@ export class ErrorAnalyzer {
         };
     }
 }
-
-// ============================================================================
-// Code Executor
-// ============================================================================
-
 export class CodeExecutor {
     private sandboxManager: SandboxManager;
     private errorAnalyzer: ErrorAnalyzer;
-
     constructor(workspacePath?: string) {
         this.sandboxManager = new SandboxManager(workspacePath);
         this.errorAnalyzer = new ErrorAnalyzer();
     }
-
-    /**
-     * Install Python packages
-     */
     async installPythonPackages(
         packages: string[],
         onCancel?: (waiter: (reason: string) => void) => (() => void)
     ): Promise<{ success: boolean; error?: string }> {
         if (packages.length === 0) return { success: true };
-
         await this.sandboxManager.ensureSandboxDirs();
-
-        // Ensure venv exists
         if (!(await this.sandboxManager.hasPythonVenv())) {
             const venvResult = await this.sandboxManager.createPythonVenv(onCancel);
             if (!venvResult.success) {
                 return { success: false, error: `Failed to create venv: ${venvResult.error}` };
             }
         }
-
         const pip = await this.sandboxManager.getPipExecutable();
-
         return new Promise((resolve) => {
             const child = spawn(pip, ['install', ...packages], {
                 shell: true,
                 timeout: 120000, // 2 minutes for installation
                 detached: process.platform !== 'win32',
             });
-
             let stderr = '';
             let settled = false;
             const finalize = (result: { success: boolean; error?: string }) => {
@@ -487,16 +365,13 @@ export class CodeExecutor {
                 disposeCancellation?.();
                 resolve(result);
             };
-
             const disposeCancellation = onCancel?.((reason) => {
                 terminateChildProcessTree(child);
                 finalize({ success: false, error: reason || 'Task cancelled by user' });
             });
-
             child.stderr?.on('data', (data) => {
                 stderr += data.toString();
             });
-
             child.on('close', (code) => {
                 if (code === 0) {
                     finalize({ success: true });
@@ -504,24 +379,16 @@ export class CodeExecutor {
                     finalize({ success: false, error: stderr || 'pip install failed' });
                 }
             });
-
             child.on('error', (err) => {
                 finalize({ success: false, error: err.message });
             });
         });
     }
-
-    /**
-     * Execute Python code
-     */
     async executePython(request: CodeExecutionRequest): Promise<CodeExecutionResult> {
         const startTime = Date.now();
         const sandboxId = request.sandbox_id || randomUUID();
         const installedDeps: string[] = [];
-
         await this.sandboxManager.ensureSandboxDirs();
-
-        // Install dependencies if specified
         if (request.dependencies && request.dependencies.length > 0) {
             const installResult = await this.installPythonPackages(request.dependencies, request.onCancel);
             if (installResult.success) {
@@ -544,27 +411,21 @@ export class CodeExecutor {
                 };
             }
         }
-
-        // Write code to temp file
         const workDir = request.working_dir || this.sandboxManager.getSandboxPath('python');
         const scriptPath = path.join(workDir, `script_${sandboxId}.py`);
         await fs.promises.writeFile(scriptPath, request.code, 'utf-8');
-
         const python = await this.sandboxManager.getPythonExecutable();
         const timeout = Math.min(request.timeout_ms || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
             let timedOut = false;
-
             const child = spawn(python, [scriptPath], {
                 cwd: workDir,
                 env: { ...process.env, ...request.env },
                 shell: true,
                 detached: process.platform !== 'win32',
             });
-
             let settled = false;
             const finalize = async (result: CodeExecutionResult) => {
                 if (settled) {
@@ -573,16 +434,12 @@ export class CodeExecutor {
                 settled = true;
                 clearTimeout(timer);
                 disposeCancellation?.();
-
                 try {
                     await fs.promises.unlink(scriptPath);
                 } catch {
-                    // Ignore cleanup errors
                 }
-
                 resolve(result);
             };
-
             const disposeCancellation = request.onCancel?.((reason) => {
                 void (async () => {
                     terminateChildProcessTree(child);
@@ -604,29 +461,23 @@ export class CodeExecutor {
                     });
                 })();
             });
-
             const timer = setTimeout(() => {
                 timedOut = true;
                 terminateChildProcessTree(child);
             }, timeout);
-
             child.stdout?.on('data', (data) => {
                 stdout += data.toString();
             });
-
             child.stderr?.on('data', (data) => {
                 stderr += data.toString();
             });
-
             child.on('close', async (code) => {
                 if (settled) {
                     return;
                 }
-
                 const duration = Date.now() - startTime;
                 const exitCode = timedOut ? -1 : code ?? 0;
                 const success = !timedOut && code === 0;
-
                 let errorAnalysis: ErrorAnalysis | undefined;
                 if (!success && stderr) {
                     errorAnalysis = this.errorAnalyzer.analyze(stderr, request.code, 'python');
@@ -639,7 +490,6 @@ export class CodeExecutor {
                         canAutoRetry: true,
                     };
                 }
-
                 await finalize({
                     success,
                     stdout: stdout.trim(),
@@ -651,7 +501,6 @@ export class CodeExecutor {
                     error_analysis: errorAnalysis,
                 });
             });
-
             child.on('error', (err) => {
                 void finalize({
                     success: false,
@@ -671,38 +520,25 @@ export class CodeExecutor {
             });
         });
     }
-
-    /**
-     * Execute JavaScript code
-     */
     async executeJavaScript(request: CodeExecutionRequest): Promise<CodeExecutionResult> {
         const startTime = Date.now();
         const sandboxId = request.sandbox_id || randomUUID();
-
         await this.sandboxManager.ensureSandboxDirs();
-
-        // Write code to temp file
         const workDir = request.working_dir || this.sandboxManager.getSandboxPath('javascript');
         const scriptPath = path.join(workDir, `script_${sandboxId}.js`);
         await fs.promises.writeFile(scriptPath, request.code, 'utf-8');
-
         const timeout = Math.min(request.timeout_ms || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-
-        // Try bun first, then node
         const runtime = process.env.BUN_INSTALL ? 'bun' : 'node';
-
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
             let timedOut = false;
-
             const child = spawn(runtime, [scriptPath], {
                 cwd: workDir,
                 env: { ...process.env, ...request.env },
                 shell: true,
                 detached: process.platform !== 'win32',
             });
-
             let settled = false;
             const finalize = async (result: CodeExecutionResult) => {
                 if (settled) {
@@ -711,16 +547,12 @@ export class CodeExecutor {
                 settled = true;
                 clearTimeout(timer);
                 disposeCancellation?.();
-
                 try {
                     await fs.promises.unlink(scriptPath);
                 } catch {
-                    // Ignore cleanup errors
                 }
-
                 resolve(result);
             };
-
             const disposeCancellation = request.onCancel?.((reason) => {
                 void (async () => {
                     terminateChildProcessTree(child);
@@ -741,29 +573,23 @@ export class CodeExecutor {
                     });
                 })();
             });
-
             const timer = setTimeout(() => {
                 timedOut = true;
                 terminateChildProcessTree(child);
             }, timeout);
-
             child.stdout?.on('data', (data) => {
                 stdout += data.toString();
             });
-
             child.stderr?.on('data', (data) => {
                 stderr += data.toString();
             });
-
             child.on('close', async (code) => {
                 if (settled) {
                     return;
                 }
-
                 const duration = Date.now() - startTime;
                 const exitCode = timedOut ? -1 : code ?? 0;
                 const success = !timedOut && code === 0;
-
                 let errorAnalysis: ErrorAnalysis | undefined;
                 if (!success && stderr) {
                     errorAnalysis = this.errorAnalyzer.analyze(stderr, request.code, 'javascript');
@@ -776,7 +602,6 @@ export class CodeExecutor {
                         canAutoRetry: true,
                     };
                 }
-
                 await finalize({
                     success,
                     stdout: stdout.trim(),
@@ -787,7 +612,6 @@ export class CodeExecutor {
                     error_analysis: errorAnalysis,
                 });
             });
-
             child.on('error', (err) => {
                 void finalize({
                     success: false,
@@ -807,10 +631,6 @@ export class CodeExecutor {
             });
         });
     }
-
-    /**
-     * Execute code based on language
-     */
     async execute(request: CodeExecutionRequest): Promise<CodeExecutionResult> {
         switch (request.language) {
             case 'python':
@@ -836,14 +656,6 @@ export class CodeExecutor {
         }
     }
 }
-
-// ============================================================================
-// Tool Definitions
-// ============================================================================
-
-/**
- * Execute Python code with automatic dependency installation
- */
 export const executePythonTool: ToolDefinition = {
     name: 'execute_python',
     description:
@@ -880,10 +692,7 @@ export const executePythonTool: ToolDefinition = {
             timeout_ms: args.timeout_ms,
             onCancel: context.onCancel,
         });
-
-        // Format result for AI consumption
         let output = '';
-
         if (result.success) {
             output = `Execution successful (${result.duration_ms}ms)\n`;
             if (result.installed_deps?.length) {
@@ -893,26 +702,19 @@ export const executePythonTool: ToolDefinition = {
         } else {
             output = `Execution failed (exit code: ${result.exit_code})\n`;
             output += `\nError:\n${result.stderr}`;
-
             if (result.error_analysis) {
                 output += `\n\n[Self-Correction Hint]\n`;
                 output += `Error Type: ${result.error_analysis.errorType}\n`;
                 output += `Suggestion: ${result.error_analysis.suggestedFix}\n`;
                 output += `Can Auto-Retry: ${result.error_analysis.canAutoRetry}\n`;
-
                 if (result.error_analysis.retryStrategy?.additionalDeps) {
                     output += `Missing Dependencies: ${result.error_analysis.retryStrategy.additionalDeps.join(', ')}\n`;
                 }
             }
         }
-
         return output;
     },
 };
-
-/**
- * Execute JavaScript code
- */
 export const executeJavaScriptTool: ToolDefinition = {
     name: 'execute_javascript',
     description:
@@ -940,31 +742,22 @@ export const executeJavaScriptTool: ToolDefinition = {
             timeout_ms: args.timeout_ms,
             onCancel: context.onCancel,
         });
-
-        // Format result for AI consumption
         let output = '';
-
         if (result.success) {
             output = `Execution successful (${result.duration_ms}ms)\n`;
             output += `\nOutput:\n${result.stdout || '(no output)'}`;
         } else {
             output = `Execution failed (exit code: ${result.exit_code})\n`;
             output += `\nError:\n${result.stderr}`;
-
             if (result.error_analysis) {
                 output += `\n\n[Self-Correction Hint]\n`;
                 output += `Error Type: ${result.error_analysis.errorType}\n`;
                 output += `Suggestion: ${result.error_analysis.suggestedFix}\n`;
             }
         }
-
         return output;
     },
 };
-
-/**
- * Install Python packages
- */
 export const installPackagesTool: ToolDefinition = {
     name: 'install_packages',
     description:
@@ -984,7 +777,6 @@ export const installPackagesTool: ToolDefinition = {
     handler: async (args: { packages: string[] }, context: ToolContext) => {
         const executor = new CodeExecutor(context.workspacePath);
         const result = await executor.installPythonPackages(args.packages, context.onCancel);
-
         if (result.success) {
             return `Successfully installed packages: ${args.packages.join(', ')}`;
         } else {
@@ -992,15 +784,8 @@ export const installPackagesTool: ToolDefinition = {
         }
     },
 };
-
-// ============================================================================
-// Export
-// ============================================================================
-
 export const CODE_EXECUTION_TOOLS: ToolDefinition[] = [
     executePythonTool,
     executeJavaScriptTool,
     installPackagesTool,
 ];
-
-// Classes are already exported at definition

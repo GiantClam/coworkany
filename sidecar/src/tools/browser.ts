@@ -1,19 +1,6 @@
-/**
- * Browser Automation Tools
- *
- * Provides browser automation capabilities with hybrid architecture:
- * - Precise mode (Playwright): CSS selectors, direct DOM manipulation
- * - Smart mode (browser-use): AI vision, natural language actions
- * - Auto mode: Try precise first, fallback to smart
- *
- * These tools allow the AI to interact with web pages,
- * reusing the user's existing Chrome browser and login sessions.
- */
-
 import { ToolDefinition, type ToolContext } from './standard';
-import { browserService } from '../services/browserService';
-import type { BrowserMode } from '../services/browserService';
-
+import { browserService } from '../runtime/browser/browserService';
+import type { BrowserMode } from '../runtime/browser/browserService';
 function createCancellationSignal(context?: ToolContext): { signal?: AbortSignal; cleanup: () => void } {
     if (!context?.onCancel) {
         return {
@@ -21,36 +8,24 @@ function createCancellationSignal(context?: ToolContext): { signal?: AbortSignal
             cleanup: () => {},
         };
     }
-
     const controller = new AbortController();
     const unsubscribe = context.onCancel((reason) => {
         controller.abort(reason || 'Browser task cancelled');
     });
-
     return {
         signal: controller.signal,
         cleanup: () => unsubscribe(),
     };
 }
-
 async function ensureBrowserConnected(signal?: AbortSignal): Promise<void> {
     const connectionInfo = browserService.getConnectionInfo();
     if (connectionInfo.connected) {
         return;
     }
-
     const connection = await browserService.connect({ signal });
     const mode = connection.isUserProfile ? 'CDP (system Chrome)' : 'Playwright Chromium (persistent profile)';
     console.error(`[BrowserTools] Auto-connected browser via ${mode}`);
 }
-
-// ============================================================================
-// Session Management Tools
-// ============================================================================
-
-/**
- * Connect to browser with user's Chrome profile
- */
 export const browserConnectTool: ToolDefinition = {
     name: 'browser_connect',
     description: `Connect to the user's Chrome browser to use existing login sessions.
@@ -87,10 +62,8 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
                 requireUserProfile: args.require_user_profile,
                 signal,
             });
-
             const profiles = await browserService.getAvailableProfiles();
             const mode = connection.isUserProfile ? 'CDP (system Chrome)' : 'Playwright Chromium (persistent profile)';
-
             return {
                 success: true,
                 message: `Connected to browser via ${mode}`,
@@ -116,10 +89,6 @@ WARNING: This tool controls the user's real browser - use responsibly.`,
         }
     },
 };
-
-/**
- * Disconnect from browser
- */
 export const browserDisconnectTool: ToolDefinition = {
     name: 'browser_disconnect',
     description: 'Close the browser connection. Call this when done with browser automation.',
@@ -146,10 +115,6 @@ export const browserDisconnectTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * List available Chrome profiles
- */
 export const browserGetSessionsTool: ToolDefinition = {
     name: 'browser_get_sessions',
     description: 'List available Chrome profiles that can be used for browser automation.',
@@ -162,7 +127,6 @@ export const browserGetSessionsTool: ToolDefinition = {
         try {
             const profiles = await browserService.getAvailableProfiles();
             const userDataDir = browserService.getChromeUserDataDir();
-
             return {
                 success: true,
                 profiles,
@@ -177,14 +141,6 @@ export const browserGetSessionsTool: ToolDefinition = {
         }
     },
 };
-
-// ============================================================================
-// Navigation Tools
-// ============================================================================
-
-/**
- * Navigate to a URL
- */
 export const browserNavigateTool: ToolDefinition = {
     name: 'browser_navigate',
     description: 'Navigate the browser to a URL. Auto-connects browser if needed.',
@@ -221,7 +177,6 @@ export const browserNavigateTool: ToolDefinition = {
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: true,
                 ...result,
@@ -237,10 +192,6 @@ export const browserNavigateTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * Take a screenshot
- */
 export const browserScreenshotTool: ToolDefinition = {
     name: 'browser_screenshot',
     description: 'Take a screenshot of the current page or a specific element. Returns base64 encoded image.',
@@ -268,7 +219,6 @@ export const browserScreenshotTool: ToolDefinition = {
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: true,
                 imageBase64: result.base64,
@@ -286,10 +236,6 @@ export const browserScreenshotTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * Get page content
- */
 export const browserGetContentTool: ToolDefinition = {
     name: 'browser_get_content',
     description: 'Get the text content or HTML of the current page.',
@@ -308,7 +254,6 @@ export const browserGetContentTool: ToolDefinition = {
         try {
             await ensureBrowserConnected(signal);
             const result = await browserService.getContent(!args.as_html, { signal, taskId: context?.taskId });
-
             return {
                 success: true,
                 ...result,
@@ -323,14 +268,6 @@ export const browserGetContentTool: ToolDefinition = {
         }
     },
 };
-
-// ============================================================================
-// Interaction Tools
-// ============================================================================
-
-/**
- * Click on an element
- */
 export const browserClickTool: ToolDefinition = {
     name: 'browser_click',
     description: 'Click on an element in the page. Can target by CSS selector or visible text.',
@@ -362,7 +299,6 @@ export const browserClickTool: ToolDefinition = {
                 error: 'Either selector or text must be provided',
             };
         }
-
         const { signal, cleanup } = createCancellationSignal(context);
         try {
             await ensureBrowserConnected(signal);
@@ -373,7 +309,6 @@ export const browserClickTool: ToolDefinition = {
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: true,
                 ...result,
@@ -389,10 +324,6 @@ export const browserClickTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * Fill a form field
- */
 export const browserFillTool: ToolDefinition = {
     name: 'browser_fill',
     description: 'Fill a form field with text. Clears existing content by default.',
@@ -429,7 +360,6 @@ export const browserFillTool: ToolDefinition = {
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: true,
                 ...result,
@@ -445,10 +375,6 @@ export const browserFillTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * Wait for an element
- */
 export const browserWaitTool: ToolDefinition = {
     name: 'browser_wait',
     description: 'Wait for an element to appear or reach a certain state.',
@@ -486,7 +412,6 @@ export const browserWaitTool: ToolDefinition = {
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: result.found,
                 ...result,
@@ -501,14 +426,6 @@ export const browserWaitTool: ToolDefinition = {
         }
     },
 };
-
-// ============================================================================
-// Advanced Tools
-// ============================================================================
-
-/**
- * Execute JavaScript in page context
- */
 export const browserExecuteScriptTool: ToolDefinition = {
     name: 'browser_execute_script',
     description: 'Execute JavaScript code in the page context. Use with caution.',
@@ -528,7 +445,6 @@ export const browserExecuteScriptTool: ToolDefinition = {
         try {
             await ensureBrowserConnected(signal);
             const result = await browserService.executeScript(args.script, { signal, taskId: context?.taskId });
-
             return {
                 success: true,
                 result,
@@ -543,14 +459,6 @@ export const browserExecuteScriptTool: ToolDefinition = {
         }
     },
 };
-
-// ============================================================================
-// Hybrid Browser Tools (new)
-// ============================================================================
-
-/**
- * Upload a file through a file input element on the page
- */
 export const browserUploadFileTool: ToolDefinition = {
     name: 'browser_upload_file',
     description: `Upload a file through a file input element on the page.
@@ -590,7 +498,6 @@ In auto mode: tries precise first, then falls back to smart.`,
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: result.success,
                 message: result.message,
@@ -607,10 +514,6 @@ In auto mode: tries precise first, then falls back to smart.`,
         }
     },
 };
-
-/**
- * Set browser automation mode
- */
 export const browserSetModeTool: ToolDefinition = {
     name: 'browser_set_mode',
     description: `Set the browser automation mode.
@@ -633,7 +536,6 @@ export const browserSetModeTool: ToolDefinition = {
         try {
             const previousMode = browserService.mode;
             browserService.setMode(args.mode);
-
             let smartAvailable: boolean | undefined;
             let smartUnavailableReason: string | undefined;
             let sharedCdpUrl: string | undefined;
@@ -643,7 +545,6 @@ export const browserSetModeTool: ToolDefinition = {
                 smartUnavailableReason = status.reason;
                 sharedCdpUrl = status.sharedCdpUrl;
             }
-
             return {
                 success: true,
                 previousMode,
@@ -662,10 +563,6 @@ export const browserSetModeTool: ToolDefinition = {
         }
     },
 };
-
-/**
- * Perform a browser action described in natural language using AI vision
- */
 export const browserAiActionTool: ToolDefinition = {
     name: 'browser_ai_action',
     description: `Perform a browser action described in natural language using AI vision.
@@ -673,7 +570,6 @@ Uses the browser-use service to understand the page visually and execute the act
 Best for: unknown page structures, dynamically rendered content, complex interactions
 that are hard to express with CSS selectors.
 Requires browser-use-service (auto-started when enabled).
-
 Examples:
 - "click the publish button"
 - "scroll down and find the comment box, then type 'Hello'"
@@ -703,7 +599,6 @@ Examples:
                 signal,
                 taskId: context?.taskId,
             });
-
             return {
                 success: result.success,
                 result: result.result,
@@ -721,27 +616,17 @@ Examples:
         }
     },
 };
-
-// ============================================================================
-// Export
-// ============================================================================
-
 export const BROWSER_TOOLS: ToolDefinition[] = [
-    // Session Management
     browserConnectTool,
     browserDisconnectTool,
     browserGetSessionsTool,
-    // Navigation
     browserNavigateTool,
     browserScreenshotTool,
     browserGetContentTool,
-    // Interaction
     browserClickTool,
     browserFillTool,
     browserWaitTool,
-    // Advanced
     browserExecuteScriptTool,
-    // Hybrid Browser (new)
     browserUploadFileTool,
     browserSetModeTool,
     browserAiActionTool,

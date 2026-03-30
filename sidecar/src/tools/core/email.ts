@@ -175,7 +175,7 @@ export const emailSendTool: ToolDefinition = {
                 if (taskResult.success) {
                     task = taskResult.task;
                     // Link email to task
-                    const { createProactiveTaskManager } = await import('../../agent/jarvis/proactiveTaskManager');
+                    const { createProactiveTaskManager } = await import('../../runtime/jarvis/proactiveTaskManager');
                     const path = await import('path');
                     const storagePath = path.default.join(context.workspacePath, '.coworkany', 'jarvis');
                     const taskManager = createProactiveTaskManager(storagePath);

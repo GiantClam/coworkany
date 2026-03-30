@@ -11,10 +11,11 @@ const binaryName = isWindows ? 'coworkany-sidecar.exe' : 'coworkany-sidecar';
 const binaryPath = path.join(distDir, binaryName);
 const nodeEntryName = 'coworkany-sidecar-node.mjs';
 const nodeEntryPath = path.join(distDir, nodeEntryName);
-const bridgeSource = path.join(sidecarDir, 'src', 'services', 'playwright-bridge.cjs');
+const sidecarEntry = 'src/main-mastra.ts';
+const bridgeSource = path.join(sidecarDir, 'src', 'runtime', 'browser', 'playwright-bridge.cjs');
 const bridgeTarget = path.join(distDir, 'playwright-bridge.cjs');
 const distNodeModulesDir = path.join(distDir, 'node_modules');
-const runtimeNodeModules = ['playwright', 'playwright-core'];
+const runtimeNodeModules = ['playwright', 'playwright-core', '@mastra/fastembed'];
 const distNodeBinDir = path.join(distDir, 'node', 'bin');
 const bundledNodePath = path.join(distNodeBinDir, isWindows ? 'node.exe' : 'node');
 
@@ -37,7 +38,11 @@ const buildArgs = [
   'playwright-core',
   '-e',
   'playwright-core/*',
-  'src/main.ts',
+  '-e',
+  '@mastra/fastembed',
+  '-e',
+  '@mastra/fastembed/*',
+  sidecarEntry,
   `--outfile=${binaryPath}`,
 ];
 
@@ -70,7 +75,11 @@ const nodeBundleArgs = [
   'playwright-core',
   '-e',
   'playwright-core/*',
-  'src/main.ts',
+  '-e',
+  '@mastra/fastembed',
+  '-e',
+  '@mastra/fastembed/*',
+  sidecarEntry,
   `--outfile=${nodeEntryPath}`,
 ];
 

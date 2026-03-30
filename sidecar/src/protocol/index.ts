@@ -1,36 +1,13 @@
-/**
- * CoworkAny Protocol
- * 
- * Type-safe IPC protocol between Sidecar (Bun) and Desktop (Rust/Tauri).
- * 
- * Architecture:
- * - Sidecar: Agent orchestration, model routing, tool execution
- * - Rust: Policy Gate, system effects, atomic file operations, audit
- *
- * Capability model:
- * - Toolpacks (MCP tool servers): "what the system can do" (tools and effects)
- * - Claude Skills (Agent Skills packs): "how to do it" (workflows and assets)
- *
- * Sidecar bridges both through the Skills Adapter layer
- * (`sidecar/src/claude_skills`), keeping policy enforcement in the Rust
- * Policy Gate for all effects regardless of origin.
- * 
- * All cross-boundary communication uses this schema for type safety.
- */
 
-// Effects - Side effect permission system
 export {
-    // Types
     EffectTypeSchema,
     EffectSourceSchema,
     ConfirmationPolicySchema,
     EffectScopeSchema,
     EffectRequestSchema,
     EffectResponseSchema,
-    // Values
     DEFAULT_EFFECT_POLICIES,
     EFFECT_RISK_LEVELS,
-    // TypeScript types
     type EffectType,
     type EffectSource,
     type ConfirmationPolicy,
@@ -39,9 +16,7 @@ export {
     type EffectResponse,
 } from './effects';
 
-// Events - Task lifecycle and visualization
 export {
-    // Event schemas
     TaskEventSchema,
     TaskStartedEventSchema,
     PlanUpdatedEventSchema,
@@ -70,7 +45,6 @@ export {
     RuntimeSecurityAlertEventSchema,
     TextDeltaEventSchema,
     ThinkingDeltaEventSchema,
-    // Autonomous Task Events (OpenClaw-style)
     AutonomousTaskDecomposedEventSchema,
     AutonomousSubtaskStartedEventSchema,
     AutonomousSubtaskCompletedEventSchema,
@@ -78,7 +52,6 @@ export {
     AutonomousMemoryExtractedEventSchema,
     AutonomousMemorySavedEventSchema,
     AutonomousUserInputRequiredEventSchema,
-    // TypeScript types
     type TaskEvent,
     type TaskStartedEvent,
     type PlanUpdatedEvent,
@@ -107,7 +80,6 @@ export {
     type RuntimeSecurityAlertEvent,
     type TextDeltaEvent,
     type ThinkingDeltaEvent,
-    // Autonomous Task Event Types (OpenClaw-style)
     type AutonomousTaskDecomposedEvent,
     type AutonomousSubtaskStartedEvent,
     type AutonomousSubtaskCompletedEvent,
@@ -117,9 +89,7 @@ export {
     type AutonomousUserInputRequiredEvent,
 } from './events';
 
-// Patches - Non-destructive code editing
 export {
-    // Schemas
     PatchOperationSchema,
     DiffHunkSchema,
     FilePatchSchema,
@@ -127,10 +97,8 @@ export {
     ShadowFileSchema,
     PatchApplyRequestSchema,
     PatchApplyResultSchema,
-    // Helpers
     createDiffHeader,
     calculatePatchStats,
-    // TypeScript types
     type PatchOperation,
     type DiffHunk,
     type FilePatch,
@@ -140,7 +108,6 @@ export {
     type PatchApplyResult,
 } from './patches';
 
-// Identity and Security - Shared schemas
 export {
     AgentIdentitySchema,
     AgentDelegationSchema,
@@ -152,9 +119,7 @@ export {
     type RuntimeSecurityAlert,
 } from './security';
 
-// Commands - IPC request/response protocol
 export {
-    // Command schemas
     IpcCommandSchema,
     IpcResponseSchema,
     StartTaskCommandSchema,
@@ -231,7 +196,6 @@ export {
     ValidateGitHubUrlResponseSchema,
     ScanDefaultReposCommandSchema,
     ScanDefaultReposResponseSchema,
-    // TypeScript types
     type IpcCommand,
     type IpcResponse,
     type PlatformRuntimeContext,
@@ -352,7 +316,6 @@ export {
     type GetRuntimeSnapshotResponse,
 } from './commands';
 
-// Canonical stream - transport-agnostic message model
 export {
     CanonicalMessageRoleSchema,
     CanonicalStatusPartSchema,
@@ -381,31 +344,13 @@ export {
     type CanonicalStreamEvent,
 } from './canonicalStream';
 
-// ============================================================================
-// Protocol Version
-// ============================================================================
-
 export const PROTOCOL_VERSION = '1.0.0';
 
-// ============================================================================
-// Utility Types
-// ============================================================================
-
-// Import types for use in utility type definitions (re-exported above)
 import type { TaskEvent } from './events';
 import type { IpcCommand, IpcResponse } from './commands';
 
-/**
- * Extract event type from TaskEvent union.
- */
 export type EventOfType<T extends TaskEvent['type']> = Extract<TaskEvent, { type: T }>;
 
-/**
- * Extract command type from IpcCommand union.
- */
 export type CommandOfType<T extends IpcCommand['type']> = Extract<IpcCommand, { type: T }>;
 
-/**
- * Extract response type from IpcResponse union.
- */
 export type IpcResponseOfType<T extends IpcResponse['type']> = Extract<IpcResponse, { type: T }>;

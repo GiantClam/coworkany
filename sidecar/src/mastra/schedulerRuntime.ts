@@ -55,6 +55,19 @@ const envStaleTimeoutParsed = typeof envStaleTimeoutRaw === 'string'
 const STALE_RUNNING_TIMEOUT_MS = Number.isFinite(envStaleTimeoutParsed) && envStaleTimeoutParsed > 0
     ? envStaleTimeoutParsed
     : DEFAULT_STALE_RUNNING_TIMEOUT_MS;
+const DEFAULT_SCHEDULED_IDEMPOTENCY_WINDOW_MS = 45_000;
+const envIdempotencyWindowRaw = process.env.COWORKANY_MASTRA_SCHEDULED_IDEMPOTENCY_WINDOW_MS;
+const envIdempotencyWindowParsed = typeof envIdempotencyWindowRaw === 'string'
+    ? Number(envIdempotencyWindowRaw)
+    : Number.NaN;
+const SCHEDULED_IDEMPOTENCY_WINDOW_MS = Number.isFinite(envIdempotencyWindowParsed) && envIdempotencyWindowParsed >= 0
+    ? envIdempotencyWindowParsed
+    : DEFAULT_SCHEDULED_IDEMPOTENCY_WINDOW_MS;
+const IDEMPOTENT_STATUSES = new Set<ScheduledTaskRecord['status']>([
+    'scheduled',
+    'running',
+    'suspended_waiting_user',
+]);
 
 function pickString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
@@ -120,6 +133,83 @@ function setSchedulerMeta(config: ScheduledTaskConfigWithMeta, meta: SchedulerMe
             chainedStages: meta.chainedStages,
         },
     };
+}
+
+function isSameRecurrence(
+    left: SchedulerMeta['recurrence'],
+    right: SchedulerMeta['recurrence'],
+): boolean {
+    if (!left && !right) {
+        return true;
+    }
+    if (!left || !right) {
+        return false;
+    }
+    return left.kind === right.kind && left.value === right.value;
+}
+
+function isSameChainedStages(
+    left: SchedulerMeta['chainedStages'],
+    right: SchedulerMeta['chainedStages'],
+): boolean {
+    const leftStages = left ?? [];
+    const rightStages = right ?? [];
+    if (leftStages.length !== rightStages.length) {
+        return false;
+    }
+    for (let index = 0; index < leftStages.length; index += 1) {
+        const leftStage = leftStages[index];
+        const rightStage = rightStages[index];
+        if (!leftStage || !rightStage) {
+            return false;
+        }
+        if (
+            leftStage.delayMsFromPrevious !== rightStage.delayMsFromPrevious
+            || leftStage.taskQuery !== rightStage.taskQuery
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function isDuplicateScheduledRequest(input: {
+    record: ScheduledTaskRecord;
+    sourceTaskId: string;
+    taskQuery: string;
+    executeAt: Date;
+    speakResult: boolean;
+    workspacePath: string;
+    meta: SchedulerMeta;
+}): boolean {
+    const { record } = input;
+    if (!IDEMPOTENT_STATUSES.has(record.status)) {
+        return false;
+    }
+    if (record.sourceTaskId !== input.sourceTaskId) {
+        return false;
+    }
+    if (record.taskQuery !== input.taskQuery || record.workspacePath !== input.workspacePath) {
+        return false;
+    }
+    if (record.speakResult !== input.speakResult) {
+        return false;
+    }
+
+    const recordExecuteAt = new Date(record.executeAt).getTime();
+    const nextExecuteAt = input.executeAt.getTime();
+    if (!Number.isFinite(recordExecuteAt) || !Number.isFinite(nextExecuteAt)) {
+        return false;
+    }
+    if (Math.abs(recordExecuteAt - nextExecuteAt) > SCHEDULED_IDEMPOTENCY_WINDOW_MS) {
+        return false;
+    }
+
+    const existingMeta = getSchedulerMeta(record);
+    return (
+        isSameRecurrence(existingMeta.recurrence, input.meta.recurrence)
+        && isSameChainedStages(existingMeta.chainedStages, input.meta.chainedStages)
+    );
 }
 
 function buildTaskTitle(taskQuery: string, fallback?: string): string {
@@ -202,6 +292,7 @@ export function createMastraSchedulerRuntime(input: {
     const getNow = input.deps.getNow ?? (() => new Date());
     const runningRecords = new Set<string>();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let pollInFlight: Promise<void> | null = null;
 
     const scheduleIfNeeded = async (args: {
         sourceTaskId: string;
@@ -220,6 +311,23 @@ export function createMastraSchedulerRuntime(input: {
             recurrence: parsed.recurrence,
             chainedStages: parsed.chainedStages,
         };
+        const duplicate = scheduledTaskStore.read().find((record) => isDuplicateScheduledRequest({
+            record,
+            sourceTaskId: args.sourceTaskId,
+            taskQuery: parsed.taskQuery,
+            executeAt: parsed.executeAt,
+            speakResult: parsed.speakResult,
+            workspacePath: args.workspacePath,
+            meta,
+        }));
+        if (duplicate) {
+            return {
+                scheduled: true,
+                summary: `检测到重复的定时创建请求，保持已有任务不重复创建。\n${buildScheduledConfirmationMessage(duplicate, getSchedulerMeta(duplicate))}`,
+                taskId: duplicate.id,
+                executeAt: duplicate.executeAt,
+            };
+        }
 
         const totalStages = (parsed.chainedStages?.length ?? 0) + 1;
         const firstRecord = scheduledTaskStore.create({
@@ -461,12 +569,29 @@ export function createMastraSchedulerRuntime(input: {
         }
     };
 
+    const pollDueTasksWithLock = async (): Promise<void> => {
+        if (pollInFlight) {
+            return pollInFlight;
+        }
+        pollInFlight = (async () => {
+            try {
+                await pollDueTasks();
+            } catch (error) {
+                console.error('[MastraSchedulerRuntime] pollDueTasks failed:', error);
+            } finally {
+                pollInFlight = null;
+            }
+        })();
+        return pollInFlight;
+    };
+
     const start = (): void => {
         if (pollTimer) {
             return;
         }
+        void pollDueTasksWithLock();
         pollTimer = setInterval(() => {
-            void pollDueTasks();
+            void pollDueTasksWithLock();
         }, 2_000);
     };
 

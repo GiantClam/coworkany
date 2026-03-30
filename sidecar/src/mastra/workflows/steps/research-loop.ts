@@ -1,7 +1,7 @@
 import path from 'path';
 import { runPreFreezeResearchLoop } from '../../../orchestration/researchLoop';
 import type { NormalizedWorkRequest, ResearchEvidence } from '../../../orchestration/workRequestSchema';
-import { WorkRequestStore } from '../../../orchestration/workRequestStore';
+import { WorkRequestStore } from '../../../runtime/workRequest/store';
 
 export interface ResearchLoopInput {
     normalized: NormalizedWorkRequest;

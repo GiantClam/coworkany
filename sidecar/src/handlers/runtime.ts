@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { ConfirmationPolicy, IpcCommand, IpcResponse, PlatformRuntimeContext } from '../protocol';
 import { DEFAULT_EFFECT_POLICIES } from '../protocol';
-import type { ArtifactContract } from '../agent/artifactContract';
+import type { ArtifactContract } from '../runtime/contracts/artifactContract';
 import type {
     CapabilityReviewState,
     CheckpointContract,
@@ -24,9 +24,9 @@ import {
     snapshotFrozenWorkRequest,
     type FrozenWorkRequestSnapshot,
     type SupersededContractTombstone,
-} from '../orchestration/workRequestSnapshot';
-import { assertWorkspaceOverrideAllowed } from '../execution/taskIsolationPolicyStore';
-import { parseInlineAttachmentContent } from '../llm/attachmentContent';
+} from '../runtime/workRequest/snapshot';
+import { assertWorkspaceOverrideAllowed } from '../runtime/taskIsolationPolicyStore';
+import { parseInlineAttachmentContent } from '../runtime/llm/attachmentContent';
 import {
     deriveActiveHardness,
     deriveBlockingReason,
@@ -38,8 +38,7 @@ import {
     getBlockingCheckpoint,
     getBlockingUserAction,
     type PreparedWorkRequestContext,
-} from '../orchestration/workRequestRuntime';
-
+} from '../runtime/workRequest/runtime';
 function respond(commandId: string, type: string, payload: Record<string, unknown>): IpcResponse {
     return {
         commandId,
@@ -48,22 +47,17 @@ function respond(commandId: string, type: string, payload: Record<string, unknow
         payload,
     } as IpcResponse;
 }
-
 function validateWorkspaceOverride(taskId: string, payloadConfig: unknown): string | null {
     if (!payloadConfig || typeof payloadConfig !== 'object') {
         return null;
     }
-
     const candidateWorkspacePath = (payloadConfig as { workspacePath?: unknown }).workspacePath;
     if (typeof candidateWorkspacePath !== 'string' || candidateWorkspacePath.trim().length === 0) {
         return null;
     }
-
     return assertWorkspaceOverrideAllowed(taskId, candidateWorkspacePath);
 }
-
 const MAX_SUPERSEDED_CONTRACT_TOMBSTONES = 20;
-
 function snapshotsMatch(
     left?: FrozenWorkRequestSnapshot,
     right?: FrozenWorkRequestSnapshot,
@@ -73,12 +67,10 @@ function snapshotsMatch(
     }
     return JSON.stringify(left) === JSON.stringify(right);
 }
-
 function coerceSupersededContractTombstones(value: unknown): SupersededContractTombstone[] {
     if (!Array.isArray(value)) {
         return [];
     }
-
     return value.flatMap((entry) => {
         if (!entry || typeof entry !== 'object') {
             return [];
@@ -92,7 +84,6 @@ function coerceSupersededContractTombstones(value: unknown): SupersededContractT
         ) {
             return [];
         }
-
         return [{
             reason: 'contract_refreeze' as const,
             supersededAt: candidate.supersededAt,
@@ -100,7 +91,6 @@ function coerceSupersededContractTombstones(value: unknown): SupersededContractT
         }];
     });
 }
-
 function appendSupersededContractTombstone(
     config: Record<string, unknown>,
     previousSnapshot: FrozenWorkRequestSnapshot | undefined,
@@ -115,7 +105,6 @@ function appendSupersededContractTombstone(
             }
             : config;
     }
-
     return {
         ...config,
         supersededContractTombstones: [
@@ -128,7 +117,6 @@ function appendSupersededContractTombstone(
         ].slice(-MAX_SUPERSEDED_CONTRACT_TOMBSTONES),
     };
 }
-
 export type RuntimeCommandDeps = {
     emit: (message: Record<string, unknown>) => void;
     onBootstrapRuntimeContext: (runtimeContext: unknown) => void;
@@ -476,7 +464,6 @@ export type RuntimeCommandDeps = {
         }) => Promise<{ success: boolean }>;
     };
 };
-
 type MastraRuntimeEvent =
     | { type: 'text_delta'; content: string; runId?: string }
     | { type: 'tool_call'; runId?: string; toolName: string; args: unknown }
@@ -498,24 +485,20 @@ type MastraRuntimeEvent =
     }
     | { type: 'complete'; runId?: string; finishReason?: string }
     | { type: 'error'; runId?: string; message: string };
-
 type MastraApprovalContext = {
     taskId: string;
     runId?: string;
     toolCallId: string;
     toolName: string;
 };
-
 type MastraTaskState = {
     workspacePath: string;
     resourceId: string;
     lastRunId?: string;
     lastUserMessage?: string;
 };
-
 const mastraPendingApprovals = new Map<string, MastraApprovalContext>();
 const mastraTaskStateByTaskId = new Map<string, MastraTaskState>();
-
 function clearMastraTaskState(taskId: string): void {
     mastraTaskStateByTaskId.delete(taskId);
     for (const [requestId, context] of mastraPendingApprovals.entries()) {
@@ -524,7 +507,6 @@ function clearMastraTaskState(taskId: string): void {
         }
     }
 }
-
 function getMastraResourceId(taskId: string): string {
     const configured = process.env.COWORKANY_MASTRA_RESOURCE_ID;
     if (typeof configured === 'string' && configured.trim().length > 0) {
@@ -532,25 +514,20 @@ function getMastraResourceId(taskId: string): string {
     }
     return `employee-${taskId}`;
 }
-
 function isMastraRuntimeEnabled(deps: RuntimeCommandDeps): boolean {
     return deps.mastraRuntime?.enabled === true;
 }
-
 function coerceRecord(value: unknown): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return {};
     }
     return value as Record<string, unknown>;
 }
-
 const POLICY_GATE_FORWARD_TIMEOUT_RETRY_COUNT = 1;
-
 function isIpcTimeoutError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return message.includes('IPC response timeout');
 }
-
 async function forwardPolicyGateCommand(
     deps: RuntimeCommandDeps,
     type: string,
@@ -559,7 +536,6 @@ async function forwardPolicyGateCommand(
     if (!deps.sendIpcCommandAndWait) {
         throw new Error('policy_gate_required');
     }
-
     let lastError: unknown;
     for (let attempt = 0; attempt <= POLICY_GATE_FORWARD_TIMEOUT_RETRY_COUNT; attempt += 1) {
         try {
@@ -574,10 +550,8 @@ async function forwardPolicyGateCommand(
             }
         }
     }
-
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
-
 function forwardMastraEventToTaskTimeline(
     taskId: string,
     deps: RuntimeCommandDeps,
@@ -599,7 +573,6 @@ function forwardMastraEventToTaskTimeline(
         }
         return;
     }
-
     if (event.type === 'tool_call') {
         if (deps.createToolCallEvent) {
             deps.emit(
@@ -612,7 +585,6 @@ function forwardMastraEventToTaskTimeline(
         }
         return;
     }
-
     if (event.type === 'tool_result') {
         if (deps.createToolResultEvent) {
             deps.emit(
@@ -626,7 +598,6 @@ function forwardMastraEventToTaskTimeline(
         }
         return;
     }
-
     if (event.type === 'approval_required') {
         const requestId = randomUUID();
         const knownRunId =
@@ -642,7 +613,6 @@ function forwardMastraEventToTaskTimeline(
         const blockingReason = `Waiting for approval: ${event.toolName}`;
         runtimeState.suspended = true;
         runtimeState.suspendReason = blockingReason;
-
         deps.taskEventBus.emitRaw(taskId, 'EFFECT_REQUESTED', {
             request: {
                 id: requestId,
@@ -669,7 +639,6 @@ function forwardMastraEventToTaskTimeline(
         });
         return;
     }
-
     if (event.type === 'suspended') {
         const suspendReason = (() => {
             const payload = event.payload;
@@ -693,7 +662,6 @@ function forwardMastraEventToTaskTimeline(
         });
         return;
     }
-
     if (event.type === 'token_usage') {
         deps.taskEventBus.emitRaw(taskId, 'TOKEN_USAGE', {
             inputTokens: event.usage.inputTokens,
@@ -703,7 +671,6 @@ function forwardMastraEventToTaskTimeline(
         });
         return;
     }
-
     if (event.type === 'error') {
         runtimeState.hasError = true;
         runtimeState.errorMessage = event.message || 'Mastra runtime error';
@@ -716,7 +683,6 @@ function forwardMastraEventToTaskTimeline(
         );
     }
 }
-
 function finalizeMastraTurn(
     taskId: string,
     deps: RuntimeCommandDeps,
@@ -736,7 +702,6 @@ function finalizeMastraTurn(
             }),
         );
     }
-
     deps.emit(
         deps.createTaskFinishedEvent(taskId, {
             summary: assistantText || fallbackSummary,
@@ -744,7 +709,6 @@ function finalizeMastraTurn(
         }),
     );
 }
-
 async function executeMastraTurn(input: {
     deps: RuntimeCommandDeps;
     taskId: string;
@@ -759,21 +723,18 @@ async function executeMastraTurn(input: {
     if (!runtime || !runtime.enabled) {
         return { success: false, error: 'mastra_runtime_disabled' };
     }
-
     const state = mastraTaskStateByTaskId.get(taskId);
     const resourceId = state?.resourceId || getMastraResourceId(taskId);
     const assistantChunks: string[] = [];
     const runtimeState: { hasError: boolean; errorMessage?: string; suspended?: boolean; suspendReason?: string } = {
         hasError: false,
     };
-
     deps.taskSessionStore.setHistoryLimit(taskId, 20);
     deps.ensureTaskRuntimePersistence({
         taskId,
         title: input.titleForPersistence || taskId,
         workspacePath,
     });
-
     if (input.emitStartedEvent) {
         deps.taskEventBus.emitStarted(taskId, {
             title: input.titleForPersistence || taskId,
@@ -784,15 +745,12 @@ async function executeMastraTurn(input: {
             },
         });
     }
-
     deps.taskEventBus.emitStatus(taskId, {
         status: 'running',
         activeHardness: 'trivial',
         blockingReason: undefined,
     });
-
     deps.pushConversationMessage(taskId, { role: 'user', content: message });
-
     try {
         const result = await runtime.sendMessage({
             message,
@@ -810,27 +768,22 @@ async function executeMastraTurn(input: {
                 );
             },
         });
-
         if (runtimeState.hasError) {
             return {
                 success: false,
                 error: runtimeState.errorMessage || 'mastra_runtime_error',
             };
         }
-
         mastraTaskStateByTaskId.set(taskId, {
             workspacePath,
             resourceId,
             lastRunId: result.runId,
             lastUserMessage: message,
         });
-
         if (runtimeState.suspended) {
             return { success: true };
         }
-
         finalizeMastraTurn(taskId, deps, assistantChunks, 'Mastra execution finished.');
-
         return { success: true };
     } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error);
@@ -844,16 +797,13 @@ async function executeMastraTurn(input: {
         return { success: false, error: messageText };
     }
 }
-
 function extractMessageText(content: unknown): string {
     if (typeof content === 'string') {
         return content.trim();
     }
-
     if (!Array.isArray(content)) {
         return '';
     }
-
     return content
         .map((block: any) => {
             if (typeof block?.text === 'string') {
@@ -867,14 +817,12 @@ function extractMessageText(content: unknown): string {
         .join(' ')
         .trim();
 }
-
 function isResumeControlMessage(text: string): boolean {
     return text.startsWith('[System Notification]') ||
         text.startsWith('[RESUMED]') ||
         text.startsWith('[SUSPENDED]') ||
         text.startsWith('[RESUME_REQUESTED]');
 }
-
 function getLatestMeaningfulUserMessage(
     conversation: Array<{ role?: string; content?: unknown }>
 ): string {
@@ -883,18 +831,14 @@ function getLatestMeaningfulUserMessage(
         if (message?.role !== 'user') {
             continue;
         }
-
         const text = extractMessageText(message.content);
         if (!text || isResumeControlMessage(text)) {
             continue;
         }
-
         return text;
     }
-
     return '';
 }
-
 function getLatestSubstantialUserMessage(
     conversation: Array<{ role?: string; content?: unknown }>
 ): string {
@@ -903,20 +847,16 @@ function getLatestSubstantialUserMessage(
         if (message?.role !== 'user') {
             continue;
         }
-
         const text = extractMessageText(message.content);
         if (!text || isResumeControlMessage(text)) {
             continue;
         }
-
         if (text.trim().length >= 8) {
             return text;
         }
     }
-
     return '';
 }
-
 function getLatestMeaningfulAssistantMessage(
     conversation: Array<{ role?: string; content?: unknown }>
 ): string {
@@ -925,34 +865,27 @@ function getLatestMeaningfulAssistantMessage(
         if (message?.role !== 'assistant') {
             continue;
         }
-
         const text = extractMessageText(message.content);
         if (!text) {
             continue;
         }
-
         return text;
     }
-
     return '';
 }
-
 function buildRecentFollowUpMessages(
     conversation: Array<{ role?: string; content?: unknown }>
 ): NonNullable<WorkRequestFollowUpContext['recentMessages']> {
     const messages: NonNullable<WorkRequestFollowUpContext['recentMessages']> = [];
-
     for (let index = conversation.length - 1; index >= 0; index -= 1) {
         const message = conversation[index];
         if (message?.role !== 'user' && message?.role !== 'assistant') {
             continue;
         }
-
         const text = extractMessageText(message.content).trim();
         if (!text || (message.role === 'user' && isResumeControlMessage(text))) {
             continue;
         }
-
         messages.unshift({
             role: message.role,
             content: text,
@@ -961,14 +894,11 @@ function buildRecentFollowUpMessages(
             break;
         }
     }
-
     return messages;
 }
-
 function isSyntheticObjective(text: string): boolean {
     return text.trim().startsWith('[SYSTEM]');
 }
-
 function buildFollowUpContext(input: {
     conversation: Array<{ role?: string; content?: unknown }>;
     previousSnapshot?: FrozenWorkRequestSnapshot;
@@ -984,18 +914,15 @@ function buildFollowUpContext(input: {
         : anchoredObjective || getLatestSubstantialUserMessage(input.conversation);
     const latestAssistantMessage = getLatestMeaningfulAssistantMessage(input.conversation);
     const recentMessages = buildRecentFollowUpMessages(input.conversation);
-
     if (!baseObjective && !latestAssistantMessage && recentMessages.length === 0) {
         return undefined;
     }
-
     return {
         baseObjective: baseObjective || undefined,
         latestAssistantMessage: latestAssistantMessage || undefined,
         recentMessages,
     };
 }
-
 function shouldAugmentFollowUpPrompt(input: {
     promptText: string;
     previousUserMessage: string;
@@ -1005,31 +932,24 @@ function shouldAugmentFollowUpPrompt(input: {
     if (!trimmed || trimmed.length >= 8) {
         return false;
     }
-
     if (!input.previousUserMessage || !input.latestAssistantMessage) {
         return false;
     }
-
     if (/^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i.test(trimmed)) {
         return false;
     }
-
     const looksLikeCompactIdentifier = /^[A-Za-z0-9][A-Za-z0-9._\-\/]{0,31}$/.test(trimmed);
     const assistantAskedForMoreInput =
         /(请|provide|specify|exact|继续|补充|发我|给我|代码|code|ticker|symbol|which|what|股票|港股)/i
             .test(input.latestAssistantMessage);
-
     return looksLikeCompactIdentifier || assistantAskedForMoreInput;
 }
-
 function detectFollowUpLanguage(text: string): 'zh' | 'en' {
     return /[\u4e00-\u9fff]/.test(text) ? 'zh' : 'en';
 }
-
 const UUID_V4_TOKEN_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const GENERIC_OPAQUE_TOKEN_REGEX = /^[a-z0-9][a-z0-9._:-]{11,}$/i;
 const CONTROL_REPLY_WITH_TOKEN_REGEX = /^(确认|确认发布|同意|同意执行|批准|批准执行|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|继续处理|继续吧|继续|接着|往下|好的|ok|okay|yes|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|continue|go on|carry on|keep going)\s*[（(]([^()（）]+)[）)]\s*([.!?？。!]*)$/i;
-
 function isOpaqueControlToken(value: string): boolean {
     const token = value.trim();
     if (!token || /\s/.test(token)) {
@@ -1043,101 +963,81 @@ function isOpaqueControlToken(value: string): boolean {
     }
     return /\d/.test(token) || token.includes('-') || token.includes('_');
 }
-
 function normalizeFollowUpControlText(text: string): string {
     const trimmed = text.trim();
     if (!trimmed) {
         return '';
     }
-
     const match = trimmed.match(CONTROL_REPLY_WITH_TOKEN_REGEX);
     if (!match) {
         return trimmed;
     }
-
     const [, command, token, punctuation = ''] = match;
     if (!isOpaqueControlToken(token)) {
         return trimmed;
     }
-
     return `${command}${punctuation}`.trim();
 }
-
 function isPlanApprovalReply(text: string): boolean {
     return /^(?:确认|确认发布|同意|同意执行|批准|批准执行|继续执行|开始执行|按这个方案继续|按该方案继续|就按这个方案|可以执行了|go ahead|proceed|approve|approved?|looks good(?:,?\s*continue)?|ship it|yes|ok|okay|好的)[.!?？。!]*$/i
         .test(text.trim());
 }
-
 function isCompactApprovalSelectionReply(text: string): boolean {
     return /^(?:(?:选项?\s*)?[1-9]|[1-9][.)、]|[A-Ca-c][.)]?|选[一二三])[.!?？。!]*$/
         .test(text.trim());
 }
-
 function isGenericContinueReply(text: string): boolean {
     return /^(?:继续|继续处理|继续执行|接着|往下|继续吧|continue|go on|carry on|keep going)[.!?？。!]*$/i
         .test(text.trim());
 }
-
 function isScheduledCancellationRequest(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
         return false;
     }
-
     const chineseExplicitCancel = /(?:取消|停止|终止|结束|关闭|关掉|停掉).*(?:提醒|定时|任务|闹钟|计划|上述|这个|该)/u;
     if (chineseExplicitCancel.test(trimmed)) {
         return true;
     }
-
     const chineseShortCancel = /^(?:取消|停止|终止|结束)(?:上述|这个|该)?任务$/u;
     if (chineseShortCancel.test(trimmed)) {
         return true;
     }
-
     if (/\b(cancel|stop|abort|terminate)\b/i.test(trimmed) && /\b(reminder|scheduled?|task)\b/i.test(trimmed)) {
         return true;
     }
-
     return false;
 }
-
 function isTaskHistoryClearRequest(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
         return false;
     }
-
     const chineseClearHistory = /(?:清空|清除|删除|重置).*(?:任务|会话|对话)?(?:历史|记录|上下文)/u;
     if (chineseClearHistory.test(trimmed)) {
         return true;
     }
-
     const chineseCompactClearHistory = /^(?:清空|清除|删除|重置)(?:当前|这个|该)?(?:任务)?(?:历史|记录|上下文)$/u;
     if (chineseCompactClearHistory.test(trimmed)) {
         return true;
     }
-
     const englishClearHistory = /\b(clear|reset|wipe|delete)\b/i.test(trimmed)
         && /\b(task|chat|conversation|history|context)\b/i.test(trimmed);
     if (englishClearHistory) {
         return true;
     }
-
     return false;
 }
-
 function isResumeInterruptedTaskRequest(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
         return false;
     }
-
     const chineseResumeInterrupted =
         /(?:恢复|继续|接着).*(?:中断|暂停|上次|之前|刚才).*(?:任务|执行|工作)|(?:恢复|继续)(?:中断|暂停)(?:任务|执行)?/u;
     if (chineseResumeInterrupted.test(trimmed)) {
         return true;
     }
-
     const englishResumeInterrupted =
         /\b(resume|continue)\b/i.test(trimmed)
         && /\b(interrupted|paused|previous|last)\b/i.test(trimmed)
@@ -1145,53 +1045,43 @@ function isResumeInterruptedTaskRequest(text: string): boolean {
     if (englishResumeInterrupted) {
         return true;
     }
-
     return false;
 }
-
 function extractAutonomousStartIntent(text: string): { query: string } | null {
     const trimmed = text.trim();
     if (!trimmed) {
         return null;
     }
-
     const chineseMatch = trimmed.match(/^(?:请|帮我)?(?:开始|启动|进入)?(?:自主|自治)(?:模式)?(?:执行|完成)?[：:，,\s-]*(.*)$/u);
     if (chineseMatch) {
         const query = (chineseMatch[1] || '').trim();
         return { query: query.length > 0 ? query : trimmed };
     }
-
     const englishMatch = trimmed.match(/^(?:please\s+)?(?:start|run|enter|use)\s+autonomous(?:\s+mode)?(?:\s+to)?[,:;\s-]*(.*)$/i);
     if (englishMatch) {
         const query = (englishMatch[1] || '').trim();
         return { query: query.length > 0 ? query : trimmed };
     }
-
     return null;
 }
-
 function assistantPromptedForPlanApproval(text: string): boolean {
     return /(confirm whether coworkany should proceed|reply with approval to continue|requires explicit approval|confirm the execution plan|final authorization|authorization token|confirm publish|please reply.*(?:confirm|approve|go ahead)|确认是否.*(?:继续|执行|发布)|请直接回复.*(?:确认|批准|授权|同意|继续执行)|回复.*(?:确认|批准|approval|授权|同意|继续执行)|显式批准|最终授权|授权口令|确认发布|如果你要我继续代执行.*回复.*同意执行|要我(?:现在(?:就)?|这就|就)?按.*(?:设置|执行|开始).*(?:吗|\?|？)|要不要我(?:现在(?:就)?|这就|就)?.*(?:设置|执行|开始))/i
         .test(text);
 }
-
 function isExecutionMetaQuestion(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
         return false;
     }
-
     const chineseMetaQuestion =
         /^(?:为什么|为何|怎么|凭什么|能不能|可不可以).*(?:直接|拉起|调用|执行|运行).*(?:shell|终端|命令|脚本|工具|权限|授权)/u;
     if (chineseMetaQuestion.test(trimmed)) {
         return true;
     }
-
     const englishMetaQuestion =
         /^(?:why|how|can)\b.*\b(?:directly|just)\b.*\b(?:run|execute|launch|call)\b.*\b(?:shell|terminal|command|script|permission|approval|authorize)\b/i;
     return englishMetaQuestion.test(trimmed);
 }
-
 function buildApprovalFollowUpSourceText(input: {
     promptText: string;
     baseObjective: string;
@@ -1200,20 +1090,17 @@ function buildApprovalFollowUpSourceText(input: {
     const objective = input.baseObjective
         .trim()
         .replace(/^(?:原始任务|original task)\s*[:：]\s*/i, '');
-
     if (language === 'zh') {
         return [
             `原始任务：${objective}`,
             '用户确认：继续执行',
         ].join('\n');
     }
-
     return [
         `Original task: ${objective}`,
         'User approval: proceed with execution.',
     ].join('\n');
 }
-
 function buildCorrectionFollowUpSourceText(input: {
     promptText: string;
     previousContextText: string;
@@ -1223,7 +1110,6 @@ function buildCorrectionFollowUpSourceText(input: {
     if (!previousContextText || !promptText) {
         return input.promptText;
     }
-
     const language = detectFollowUpLanguage(`${previousContextText}\n${promptText}`);
     if (language === 'zh') {
         return [
@@ -1231,20 +1117,17 @@ function buildCorrectionFollowUpSourceText(input: {
             `用户更正：${promptText}`,
         ].join('\n');
     }
-
     return [
         `Original task: ${previousContextText}`,
         `User correction: ${promptText}`,
     ].join('\n');
 }
-
 const ROUTE_CHAT_TOKEN = '__route_chat__';
 const ROUTE_TASK_TOKEN = '__route_task__';
 const TASK_DRAFT_CONFIRM_TOKEN = '__task_draft_confirm__';
 const TASK_DRAFT_CHAT_TOKEN = '__task_draft_chat__';
 const TASK_DRAFT_EDIT_CREATE_PREFIX = '__task_draft_edit_create__:';
 const AUTH_OPEN_PAGE_PREFIX = '__auth_open_page__:';
-
 function extractAuthOpenPageUrl(text: string): string | null {
     const trimmed = text.trim();
     if (!trimmed || !trimmed.startsWith(AUTH_OPEN_PAGE_PREFIX)) {
@@ -1264,7 +1147,6 @@ function extractAuthOpenPageUrl(text: string): string | null {
         return null;
     }
 }
-
 function buildFollowUpSourceText(input: {
     promptText: string;
     conversation: Array<{ role?: string; content?: unknown }>;
@@ -1325,7 +1207,6 @@ function buildFollowUpSourceText(input: {
             baseObjective: approvalBaseObjective,
         });
     }
-
     if (
         approvalBaseObjective &&
         isGenericContinueReply(normalizedPromptText) &&
@@ -1336,7 +1217,6 @@ function buildFollowUpSourceText(input: {
             baseObjective: approvalBaseObjective,
         });
     }
-
     if (
         approvalBaseObjective &&
         normalizedPromptText.trim() === TASK_DRAFT_CONFIRM_TOKEN
@@ -1346,7 +1226,6 @@ function buildFollowUpSourceText(input: {
             baseObjective: approvalBaseObjective,
         });
     }
-
     if (
         normalizedPromptText.trim().startsWith(TASK_DRAFT_EDIT_CREATE_PREFIX)
     ) {
@@ -1362,14 +1241,12 @@ function buildFollowUpSourceText(input: {
             });
         }
     }
-
     if (hasCorrectionCue(normalizedPromptText) && previousContextText) {
         return buildCorrectionFollowUpSourceText({
             promptText: normalizedPromptText,
             previousContextText,
         });
     }
-
     if (!shouldAugmentFollowUpPrompt({
         promptText: normalizedPromptText,
         previousUserMessage,
@@ -1377,14 +1254,12 @@ function buildFollowUpSourceText(input: {
     })) {
         return normalizedPromptText;
     }
-
     return [
         `原始任务：${previousUserMessage}`,
         `需要补充：${latestAssistantMessage}`,
         `用户补充：${normalizedPromptText.trim()}`,
     ].join('\n');
 }
-
 function buildExecutionQueryFromFrozenWorkRequest(request: {
     tasks?: Array<{
         objective?: string;
@@ -1406,7 +1281,6 @@ function buildExecutionQueryFromFrozenWorkRequest(request: {
         .filter(Boolean)
         .join('\n\n');
 }
-
 function buildTaskPlanReadyPayload(frozenWorkRequest: {
     mode?: 'chat' | 'immediate_task' | 'scheduled_task' | 'scheduled_multi_task';
     intentRouting?: IntentRouting;
@@ -1481,7 +1355,6 @@ function buildTaskPlanReadyPayload(frozenWorkRequest: {
         resumeStrategy: frozenWorkRequest.resumeStrategy,
     };
 }
-
 function toCapabilityReviewState(
     review: {
         learnedEntityId?: string;
@@ -1493,7 +1366,6 @@ function toCapabilityReviewState(
     if (!review) {
         return undefined;
     }
-
     return {
         status: review.approved ? 'approved' : 'pending',
         summary: review.summary,
@@ -1501,7 +1373,6 @@ function toCapabilityReviewState(
         updatedAt: review.updatedAt,
     };
 }
-
 function emitCapabilityReplayReadinessBlock(input: {
     deps: RuntimeCommandDeps;
     taskId: string;
@@ -1522,7 +1393,6 @@ function emitCapabilityReplayReadinessBlock(input: {
             : undefined,
         status: 'idle',
     });
-
     if (input.readiness.blockerType === 'external_auth') {
         input.deps.emit(input.deps.createTaskUserActionRequiredEvent(input.taskId, {
             actionId: `capability-replay-auth-${input.taskId}`,
@@ -1553,14 +1423,12 @@ function emitCapabilityReplayReadinessBlock(input: {
             blockingReason: input.readiness.summary,
         }));
     }
-
     input.deps.emit(input.deps.createTaskStatusEvent(input.taskId, {
         status: 'idle',
         activeHardness,
         blockingReason: input.readiness.summary,
     }));
 }
-
 function buildTaskResearchUpdatedPayload(frozenWorkRequest: {
     researchQueries?: FrozenWorkRequest['researchQueries'];
     uncertaintyRegistry?: FrozenWorkRequest['uncertaintyRegistry'];
@@ -1575,7 +1443,6 @@ function buildTaskResearchUpdatedPayload(frozenWorkRequest: {
 } {
     return buildResearchUpdatedPayload(frozenWorkRequest);
 }
-
 function emitBlockingCollaborationEvents(
     taskId: string,
     frozenWorkRequest: FrozenWorkRequest,
@@ -1600,7 +1467,6 @@ function emitBlockingCollaborationEvents(
         }
         return fallbackBlocking;
     };
-
     const blockingCheckpoint = getBlockingCheckpoint(frozenWorkRequest);
     if (blockingCheckpoint) {
         deps.emit(deps.createTaskCheckpointReachedEvent(taskId, {
@@ -1623,7 +1489,6 @@ function emitBlockingCollaborationEvents(
             }),
         }));
     }
-
     const preferredActionKind = frozenWorkRequest.clarification.required ? 'clarify_input' : undefined;
     const blockingUserActionsFromPlan = (frozenWorkRequest.userActionsRequired ?? [])
         .filter((action) => action.kind !== 'confirm_plan')
@@ -1655,7 +1520,6 @@ function emitBlockingCollaborationEvents(
             }
             : undefined;
     const blockingUserAction = blockingUserActionFromPlan ?? synthesizedBlockingUnknownAction;
-
     const emittedActionIds = new Set<string>();
     const emitUserActionRequired = (action: UserActionRequest): void => {
         if (emittedActionIds.has(action.id)) {
@@ -1683,21 +1547,18 @@ function emitBlockingCollaborationEvents(
             }),
         }));
     };
-
     if (blockingUserAction) {
         emitUserActionRequired(blockingUserAction);
     }
     for (const action of blockingUserActionsFromPlan) {
         emitUserActionRequired(action);
     }
-
     if (frozenWorkRequest.clarification.required) {
         return {
             blocked: true,
             blockingUserAction,
         };
     }
-
     if (blockingUserAction && isBlockingPolicy(blockingUserAction.executionPolicy, blockingUserAction.blocking)) {
         deps.emit(deps.createChatMessageEvent(taskId, {
             role: 'assistant',
@@ -1722,13 +1583,11 @@ function emitBlockingCollaborationEvents(
             blockingUserAction,
         };
     }
-
     return {
         blocked: false,
         blockingUserAction,
     };
 }
-
 function normalizeComparisonValue(value: string | undefined): string {
     return (value || '')
         .trim()
@@ -1737,7 +1596,6 @@ function normalizeComparisonValue(value: string | undefined): string {
         .replace(/\s+/g, ' ')
         .toLowerCase();
 }
-
 function buildDeliverableFingerprint(request: FrozenWorkRequestSnapshot): string[] {
     return request.deliverables
         .map((deliverable) => [
@@ -1747,19 +1605,15 @@ function buildDeliverableFingerprint(request: FrozenWorkRequestSnapshot): string
         ].join(':'))
         .sort();
 }
-
 function buildResolvedTargetFingerprint(request: FrozenWorkRequestSnapshot): string[] {
     return request.resolvedTargets;
 }
-
 function buildWorkflowFingerprint(request: FrozenWorkRequestSnapshot): string[] {
     return request.preferredWorkflows;
 }
-
 function hasCorrectionCue(promptText: string): boolean {
     return /(不是|改成|改为|更正|纠正|我指的是|actually|instead|correction|i meant|rather than|not .* but)/i.test(promptText);
 }
-
 function detectFollowUpContractReopen(input: {
     promptText: string;
     previous?: FrozenWorkRequestSnapshot;
@@ -1781,7 +1635,6 @@ function detectFollowUpContractReopen(input: {
     if (!input.previous) {
         return null;
     }
-
     const reasons: string[] = [];
     const diff: {
         changedFields: Array<'mode' | 'objective' | 'deliverables' | 'execution_targets' | 'workflow'>;
@@ -1801,7 +1654,6 @@ function detectFollowUpContractReopen(input: {
     const nextTargets = buildResolvedTargetFingerprint(input.next);
     const previousWorkflows = buildWorkflowFingerprint(input.previous);
     const nextWorkflows = buildWorkflowFingerprint(input.next);
-
     if (input.previous.mode !== input.next.mode) {
         reasons.push(`task mode changed from ${input.previous.mode} to ${input.next.mode}`);
         diff.changedFields.push('mode');
@@ -1845,18 +1697,15 @@ function detectFollowUpContractReopen(input: {
             after: input.next.primaryObjective || input.next.sourceText,
         };
     }
-
     if (reasons.length === 0) {
         return null;
     }
-
     const trigger = hasCorrectionCue(input.promptText)
         ? 'contradictory_evidence'
         : 'new_scope_signal';
     const reasonPrefix = trigger === 'contradictory_evidence'
         ? 'User follow-up corrected the previous contract'
         : 'User follow-up introduced a new task scope';
-
     return {
         summary: `${reasonPrefix}: ${reasons[0]}.`,
         reason: `${reasonPrefix}: ${reasons.join('; ')}.`,
@@ -1865,7 +1714,6 @@ function detectFollowUpContractReopen(input: {
         diff,
     };
 }
-
 export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCommandDeps): Promise<boolean> {
     switch (command.type) {
         case 'bootstrap_runtime_context': {
@@ -1876,7 +1724,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'get_runtime_snapshot': {
             try {
                 deps.emit(respond(command.id, 'get_runtime_snapshot_response', {
@@ -1896,7 +1743,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }
             return true;
         }
-
         case 'doctor_preflight': {
             const payload = (command.payload as {
                 startupProfile?: string;
@@ -1905,7 +1751,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 incidentLogPaths?: string[];
                 outputDir?: string;
             } | undefined) ?? {};
-
             try {
                 const result = deps.runDoctorPreflight(payload);
                 deps.emit(respond(command.id, 'doctor_preflight_response', {
@@ -1923,7 +1768,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }
             return true;
         }
-
         case 'start_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -1942,7 +1786,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 success: true,
                 taskId,
             }));
-
             if (isMastraRuntimeEnabled(deps)) {
                 const workspacePath = payload.context?.workspacePath || deps.workspaceRoot;
                 const result = await executeMastraTurn({
@@ -1957,7 +1800,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 void result;
                 return true;
             }
-
             await deps.executeFreshTask({
                 taskId,
                 title: payload.title,
@@ -1974,7 +1816,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             });
             return true;
         }
-
         case 'cancel_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -2000,7 +1841,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             await deps.cancelTaskExecution(payload.taskId, payload.reason);
             deps.emit(respond(command.id, 'cancel_task_response', {
                 success: true,
@@ -2008,7 +1848,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'clear_task_history': {
             const payload = (command.payload as {
                 taskId: string;
@@ -2038,7 +1877,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             const cancellation = await deps.cancelTaskExecution(
                 payload.taskId,
                 'Task cleared by user'
@@ -2064,7 +1902,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'send_task_message': {
             const payload = (command.payload as {
                 taskId: string;
@@ -2078,7 +1915,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             } | undefined) ?? { taskId: '', content: '' };
             const taskId = payload.taskId;
             const content = payload.content;
-
             if (isMastraRuntimeEnabled(deps)) {
                 deps.emit(respond(command.id, 'send_task_message_response', {
                     success: true,
@@ -2100,14 +1936,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 void result;
                 return true;
             }
-
             const parsedUserInput = parseInlineAttachmentContent(content);
             const promptText = parsedUserInput.promptText || content;
             const environmentContext = payload.environmentContext;
             const authOpenPageUrl = extractAuthOpenPageUrl(promptText);
             const normalizedPromptText = normalizeFollowUpControlText(promptText);
             const conversationContent = parsedUserInput.conversationContent;
-
             if (deps.suspendResumeManager.isSuspended(taskId)) {
                 if (authOpenPageUrl) {
                     const opener = deps.openAuthPageForSuspendedTask;
@@ -2119,7 +1953,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         }));
                         return true;
                     }
-
                     const openResult = await opener({
                         taskId,
                         url: authOpenPageUrl,
@@ -2131,7 +1964,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     }));
                     return true;
                 }
-
                 const suspendedTask = deps.suspendResumeManager.getSuspendedTask?.(taskId);
                 const restoredFromPersistence = Boolean(suspendedTask?.context?.restoredFromPersistence);
                 if (!restoredFromPersistence) {
@@ -2146,7 +1978,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     }));
                     return true;
                 }
-
                 // For runtime suspensions inside an active loop, keep historical behavior:
                 // resume + queue replay happens in the loop listener.
                 // For persisted suspended tasks restored after sidecar restart, there is no
@@ -2159,7 +1990,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     return true;
                 }
             }
-
             const chatContentForEvent =
                 parsedUserInput.imageCount === 0
                 && parsedUserInput.fileCount === 0
@@ -2170,7 +2000,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 role: 'user',
                 content: chatContentForEvent,
             });
-
             const taskConfig = deps.getTaskConfig(taskId);
             let effectiveTaskConfig = taskConfig;
             const currentExecutionProfile =
@@ -2210,12 +2039,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 });
                 effectiveTaskConfig = deps.getTaskConfig(taskId);
             }
-
             const workspacePath =
                 (effectiveTaskConfig?.workspacePath as string | undefined) ||
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
-
             if (isTaskHistoryClearRequest(normalizedPromptText)) {
                 const cancellation = await deps.cancelTaskExecution(
                     taskId,
@@ -2242,7 +2069,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
                 return true;
             }
-
             if (isResumeInterruptedTaskRequest(normalizedPromptText)) {
                 await handleRuntimeCommand({
                     ...command,
@@ -2255,7 +2081,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 } as IpcCommand, deps);
                 return true;
             }
-
             const autonomousIntent = extractAutonomousStartIntent(normalizedPromptText);
             if (autonomousIntent) {
                 await handleRuntimeCommand({
@@ -2271,7 +2096,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 } as IpcCommand, deps);
                 return true;
             }
-
             if (isScheduledCancellationRequest(normalizedPromptText)) {
                 const cancellation = await deps.cancelScheduledTasksForSourceTask({
                     sourceTaskId: taskId,
@@ -2299,7 +2123,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     return true;
                 }
             }
-
             const existingConversation = deps.taskSessionStore.getConversation(taskId);
             const activePreparedWorkRequest = deps.getActivePreparedWorkRequest?.(taskId);
             const previousFrozenSnapshot =
@@ -2317,7 +2140,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const approvalReply = (
                 isPlanApprovalReply(normalizedPromptText) || isGenericContinueReply(normalizedPromptText)
             ) && assistantPromptedForPlanApproval(latestAssistantMessage);
-
             if (approvalReply && previousExecutionAnchor?.analysisSourceText) {
                 deps.ensureTaskRuntimePersistence({
                     taskId,
@@ -2340,7 +2162,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 });
                 return true;
             }
-
             const followUpContext = buildFollowUpContext({
                 conversation: existingConversation as Array<{ role?: string; content?: unknown }>,
                 previousSnapshot: previousFrozenSnapshot,
@@ -2352,14 +2173,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 previousSnapshot: previousFrozenSnapshot,
                 previousExecutionAnchor,
             });
-
             deps.ensureTaskRuntimePersistence({
                 taskId,
                 title: (normalizedPromptText || content).trim().slice(0, 80) || 'Follow-up task',
                 workspacePath,
             });
             deps.loadLlmConfig(workspacePath);
-
             const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: sourceTextForAnalysis,
                 workspacePath,
@@ -2420,7 +2239,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 capabilityReview: toCapabilityReviewState(effectiveTaskConfig?.pendingCapabilityReview),
             })));
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
-
             if (frozenWorkRequest.intentRouting?.needsDisambiguation) {
                 const disambiguationMessage = '我可以直接回答，也可以帮你创建可跟踪任务。请选择一种：直接回答 / 创建任务。';
                 deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
@@ -2473,7 +2291,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             const needsTaskDraftConfirmation =
                 frozenWorkRequest.taskDraftRequired
                 && frozenWorkRequest.mode !== 'scheduled_task'
@@ -2530,16 +2347,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             const artifactContract = deps.buildArtifactContract(
                 preparedWorkRequest.executionQuery || normalizedPromptText,
                 frozenWorkRequest.deliverables
             );
-
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
-
             const collaborationGate = emitBlockingCollaborationEvents(taskId, frozenWorkRequest, deps);
-
             if (frozenWorkRequest.clarification.required) {
                 const clarificationMessage = deps.buildClarificationMessage(frozenWorkRequest);
                 deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
@@ -2582,7 +2395,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
                 return true;
             }
-
             if (collaborationGate.blocked && collaborationGate.blockingUserAction?.kind === 'confirm_plan') {
                 const confirmationMessage = buildBlockingUserActionMessage(collaborationGate.blockingUserAction);
                 deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
@@ -2609,7 +2421,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
                 return true;
             }
-
             deps.taskEventBus.emitStatus(taskId, {
                 status: 'running',
                 activeHardness: deriveActiveHardness({
@@ -2667,7 +2478,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             deps.markWorkRequestExecutionStarted(preparedWorkRequest);
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
             const explicitSkillIds =
@@ -2676,7 +2486,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (payload.config?.enabledClaudeSkills as string[] | undefined) ??
                 (payload.config?.enabledSkills as string[] | undefined);
             const conversation = deps.pushConversationMessage(taskId, { role: 'user', content: conversationContent });
-
             await deps.continuePreparedAgentFlow({
                 taskId,
                 userMessage: normalizedPromptText,
@@ -2690,7 +2499,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }, deps.getExecutionRuntimeDeps(taskId));
             return true;
         }
-
         case 'resume_interrupted_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -2711,12 +2519,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     deps.workspaceRoot;
                 const state = mastraTaskStateByTaskId.get(taskId);
                 const resumeQuery = state?.lastUserMessage || 'Continue from the saved task context.';
-
                 deps.emit(respond(command.id, 'resume_interrupted_task_response', {
                     success: true,
                     taskId,
                 }));
-
                 const result = await executeMastraTurn({
                     deps,
                     taskId,
@@ -2729,10 +2535,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 void result;
                 return true;
             }
-
             const existingConversation = deps.taskSessionStore.getConversation(taskId);
             const suppressResponse = payload.suppressResponse === true;
-
             if (existingConversation.length === 0) {
                 if (suppressResponse) {
                     deps.emit(deps.createChatMessageEvent(taskId, {
@@ -2756,7 +2560,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
                 return true;
             }
-
             const taskConfig = deps.getTaskConfig(taskId);
             let effectiveTaskConfig = taskConfig;
             const workspaceOverrideViolation = validateWorkspaceOverride(taskId, payload.config);
@@ -2792,7 +2595,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 });
                 effectiveTaskConfig = deps.getTaskConfig(taskId);
             }
-
             const workspacePath =
                 (effectiveTaskConfig?.workspacePath as string | undefined) ||
                 (taskConfig?.workspacePath as string | undefined) ||
@@ -2801,14 +2603,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const resumeQuery = latestUserMessage || 'Continue from the saved task context.';
             const pendingCapabilityReview = effectiveTaskConfig?.pendingCapabilityReview;
             const activePreparedWorkRequest = deps.getActivePreparedWorkRequest?.(taskId);
-
             deps.ensureTaskRuntimePersistence({
                 taskId,
                 title: '',
                 workspacePath,
             });
             deps.loadLlmConfig(workspacePath);
-
             if (!suppressResponse) {
                 deps.emit(respond(command.id, 'resume_interrupted_task_response', {
                     success: true,
@@ -2826,7 +2626,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 };
                 deps.taskSessionStore.setConfig(taskId, approvedConfig);
                 effectiveTaskConfig = deps.getTaskConfig(taskId) ?? approvedConfig;
-
                 if (activePreparedWorkRequest) {
                     deps.emit(deps.createTaskPlanReadyEvent(taskId, buildTaskPlanReadyPayload({
                         ...activePreparedWorkRequest.frozenWorkRequest,
@@ -2861,14 +2660,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     }));
                     deps.markWorkRequestExecutionStarted(activePreparedWorkRequest);
                     deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(activePreparedWorkRequest)));
-
                     const conversation = deps.pushConversationMessage(taskId, {
                         role: 'user',
                         content:
                             `[CAPABILITY_REVIEW_APPROVED] The generated capability was reviewed and approved. ` +
                             `Continue the original task using the approved capability without re-planning from scratch.`,
                     });
-
                     await deps.continuePreparedAgentFlow({
                         taskId,
                         userMessage: resumeQuery,
@@ -2894,14 +2691,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 resumeReason: 'interrupted_recovery',
                 suspendDurationMs: 0,
             }));
-
             const conversation = deps.pushConversationMessage(taskId, {
                 role: 'user',
                 content:
                     `[RESUME_REQUESTED] The previous task execution was interrupted by a sidecar restart. ` +
                     `Resume from the saved context, preserve completed work, and continue the original task without restarting from scratch.`,
             });
-
             const preparedWorkRequest = await deps.prepareWorkRequestContext({
                 sourceText: resumeQuery,
                 workspacePath,
@@ -2941,7 +2736,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 )
             );
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
-
             if (preparedWorkRequest.frozenWorkRequest.intentRouting?.needsDisambiguation) {
                 const disambiguationMessage = '我可以直接回答，也可以帮你创建可跟踪任务。请选择一种：直接回答 / 创建任务。';
                 deps.pushConversationMessage(taskId, {
@@ -2998,7 +2792,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             const needsTaskDraftConfirmation =
                 preparedWorkRequest.frozenWorkRequest.taskDraftRequired
                 && preparedWorkRequest.frozenWorkRequest.mode !== 'scheduled_task'
@@ -3059,15 +2852,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             const artifactContract = deps.buildArtifactContract(
                 preparedWorkRequest.executionQuery || resumeQuery,
                 preparedWorkRequest.frozenWorkRequest?.deliverables
             );
             deps.taskSessionStore.setArtifactContract(taskId, artifactContract);
-
             const collaborationGate = emitBlockingCollaborationEvents(taskId, preparedWorkRequest.frozenWorkRequest, deps);
-
             if (preparedWorkRequest.frozenWorkRequest.clarification.required) {
                 const clarificationMessage = deps.buildClarificationMessage(preparedWorkRequest.frozenWorkRequest);
                 deps.pushConversationMessage(taskId, {
@@ -3106,7 +2896,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             if (collaborationGate.blocked && collaborationGate.blockingUserAction?.kind === 'confirm_plan') {
                 const confirmationMessage = buildBlockingUserActionMessage(collaborationGate.blockingUserAction);
                 deps.pushConversationMessage(taskId, {
@@ -3124,7 +2913,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }
                 return true;
             }
-
             deps.markWorkRequestExecutionStarted(preparedWorkRequest);
             deps.emit(deps.createPlanUpdatedEvent(taskId, buildPlanUpdatedPayload(preparedWorkRequest)));
             const explicitSkillIds =
@@ -3132,7 +2920,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 (effectiveTaskConfig?.enabledSkills as string[] | undefined) ??
                 (payload.config?.enabledClaudeSkills as string[] | undefined) ??
                 (payload.config?.enabledSkills as string[] | undefined);
-
             await deps.continuePreparedAgentFlow({
                 taskId,
                 userMessage: resumeQuery,
@@ -3146,25 +2933,20 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }, deps.getExecutionRuntimeDeps(taskId));
             return true;
         }
-
         case 'report_effect_result': {
             const payload = command.payload as {
                 requestId: string;
                 success: boolean;
                 error?: string;
             };
-
             if (!isMastraRuntimeEnabled(deps)) {
                 return true;
             }
-
             const approval = mastraPendingApprovals.get(payload.requestId);
             if (!approval) {
                 return true;
             }
-
             mastraPendingApprovals.delete(payload.requestId);
-
             if (payload.success) {
                 deps.taskEventBus.emitRaw(approval.taskId, 'EFFECT_APPROVED', {
                     response: {
@@ -3187,7 +2969,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     deniedBy: 'user',
                 });
             }
-
             try {
                 if (!approval.runId || approval.runId.trim().length === 0) {
                     deps.emit(
@@ -3239,10 +3020,8 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     }),
                 );
             }
-
             return true;
         }
-
         case 'request_effect': {
             const effectPayload = (command.payload as {
                 taskId?: string;
@@ -3269,7 +3048,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     }
                 }
             }
-
             deps.emit(respond(command.id, 'request_effect_response', {
                 response: {
                     approved: false,
@@ -3278,7 +3056,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'propose_patch': {
             const payload = (command.payload as {
                 patch?: {
@@ -3349,12 +3126,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     return true;
                 }
             }
-
             const patchId = typeof patch?.id === 'string' && patch.id.length > 0
                 ? patch.id
                 : randomUUID();
             const shadowPath = `${deps.workspaceRoot}/.coworkany/shadow/${patchId}`;
-
             deps.taskEventBus.emitRaw(taskId, 'PATCH_PROPOSED', {
                 patch: {
                     id: patchId,
@@ -3366,14 +3141,12 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     description: typeof patch?.description === 'string' ? patch.description : undefined,
                 },
             });
-
             deps.emit(respond(command.id, 'propose_patch_response', {
                 patchId,
                 shadowPath,
             }));
             return true;
         }
-
         case 'reject_patch': {
             const payload = (command.payload as {
                 patchId?: string;
@@ -3416,7 +3189,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'apply_patch':
         case 'read_file':
         case 'list_dir':
@@ -3434,7 +3206,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                         deps.emit(respond(command.id, expectedResponseType, coerceRecord(forwarded.payload)));
                         return true;
                     }
-
                     deps.emit(respond(command.id, expectedResponseType, {
                         success: false,
                         error: `policy_gate_invalid_response:${forwarded.type}`,
@@ -3459,7 +3230,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     return true;
                 }
             }
-
             console.error(`[STUB] Command type "${command.type}" should be forwarded to Rust Policy Gate`);
             if (command.type === 'apply_patch') {
                 const payload = (command.payload as { patchId?: string } | undefined) ?? {};
@@ -3471,7 +3241,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             if (command.type === 'read_file') {
                 deps.emit(respond(command.id, 'read_file_response', {
                     success: false,
@@ -3479,7 +3248,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             if (command.type === 'list_dir') {
                 deps.emit(respond(command.id, 'list_dir_response', {
                     success: false,
@@ -3487,7 +3255,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             if (command.type === 'exec_shell') {
                 deps.emit(respond(command.id, 'exec_shell_response', {
                     success: false,
@@ -3495,13 +3262,11 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 }));
                 return true;
             }
-
             deps.emit(respond(command.id, 'capture_screen_response', {
                 success: false,
                 error: 'policy_gate_required',
             }));
             return true;
-
         case 'get_policy_config':
             if (deps.sendIpcCommandAndWait) {
                 try {
@@ -3518,7 +3283,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     // fall through to compatibility defaults when policy gate is unavailable
                 }
             }
-
             deps.emit(respond(command.id, 'get_policy_config_response', {
                 defaultPolicies: DEFAULT_EFFECT_POLICIES,
                 allowlists: {
@@ -3533,7 +3297,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                 },
             }));
             return true;
-
         case 'start_autonomous_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -3562,7 +3325,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             const workspacePath =
                 (taskConfig?.workspacePath as string | undefined) ||
                 deps.workspaceRoot;
-
             deps.taskEventBus.emitStarted(payload.taskId, {
                 title: 'Autonomous Task',
                 description: payload.query,
@@ -3571,7 +3333,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     userQuery: payload.query,
                 },
             });
-
             if (!suppressResponse) {
                 deps.emit(respond(command.id, 'start_autonomous_task_response', {
                     success: true,
@@ -3579,7 +3340,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
                     message: 'Autonomous task started',
                 }));
             }
-
             try {
                 const task = await agent.startTask(payload.query, {
                     autoSaveMemory: payload.autoSaveMemory ?? true,
@@ -3601,7 +3361,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }
             return true;
         }
-
         case 'get_autonomous_task_status': {
             const payload = (command.payload as {
                 taskId: string;
@@ -3631,7 +3390,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'get_voice_state': {
             deps.emit(respond(command.id, 'get_voice_state_response', {
                 success: true,
@@ -3639,7 +3397,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'stop_voice': {
             const stopped = await deps.stopVoicePlayback('user_requested');
             deps.emit(respond(command.id, 'stop_voice_response', {
@@ -3649,7 +3406,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'get_voice_provider_status': {
             const payload = command.payload as { providerMode?: 'auto' | 'system' | 'custom' };
             deps.emit(respond(command.id, 'get_voice_provider_status_response', {
@@ -3658,7 +3414,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'transcribe_voice': {
             const payload = command.payload as {
                 audioBase64: string;
@@ -3670,7 +3425,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             deps.emit(respond(command.id, 'transcribe_voice_response', result as Record<string, unknown>));
             return true;
         }
-
         case 'pause_autonomous_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -3691,7 +3445,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         case 'resume_autonomous_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -3719,7 +3472,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             });
             return true;
         }
-
         case 'cancel_autonomous_task': {
             const payload = (command.payload as {
                 taskId: string;
@@ -3747,7 +3499,6 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }
             return true;
         }
-
         case 'list_autonomous_tasks': {
             if (isMastraRuntimeEnabled(deps)) {
                 deps.emit(respond(command.id, 'list_autonomous_tasks_response', {
@@ -3774,12 +3525,10 @@ export async function handleRuntimeCommand(command: IpcCommand, deps: RuntimeCom
             }));
             return true;
         }
-
         default:
             return false;
     }
 }
-
 export type RuntimeResponseDeps = {
     taskEventBus: {
         emitRaw: (taskId: string, type: string, payload: unknown) => void;
@@ -3793,7 +3542,6 @@ export type RuntimeResponseDeps = {
         handleDenial: (requestId: string, reason?: string) => void;
     };
 };
-
 export async function handleRuntimeResponse(response: IpcResponse, deps: RuntimeResponseDeps): Promise<boolean> {
     switch (response.type) {
         case 'request_effect_response': {
@@ -3811,7 +3559,6 @@ export async function handleRuntimeResponse(response: IpcResponse, deps: Runtime
             const approvalType = typeof effectResponse.approvalType === 'string'
                 ? effectResponse.approvalType as ConfirmationPolicy
                 : undefined;
-
             if (requestId) {
                 if (approved) {
                     deps.policyBridge?.handleConfirmation(
@@ -3823,7 +3570,6 @@ export async function handleRuntimeResponse(response: IpcResponse, deps: Runtime
                     deps.policyBridge?.handleDenial(requestId, denialReason);
                 }
             }
-
             if (approved) {
                 deps.taskEventBus.emitRaw('global', 'EFFECT_APPROVED', {
                     response: effectResponse,

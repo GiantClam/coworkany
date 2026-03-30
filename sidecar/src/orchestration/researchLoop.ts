@@ -7,7 +7,7 @@ import {
     type ResearchQuery,
     type UncertaintyItem,
 } from './workRequestSchema';
-import { WorkRequestStore } from './workRequestStore';
+import { WorkRequestStore } from '../runtime/workRequest/store';
 
 export type ResearchLoopResolvers = {
     webSearch?: (query: string) => Promise<{

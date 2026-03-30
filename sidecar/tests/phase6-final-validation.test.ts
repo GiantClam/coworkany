@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -46,6 +47,30 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         expect(fs.existsSync(legacyDirPath)).toBe(false);
     });
 
+    test('legacy runtime module directories are removed from sidecar source tree', () => {
+        const removedDirs = [
+            path.join(SRC_ROOT, 'agent'),
+            path.join(SRC_ROOT, 'execution'),
+            path.join(SRC_ROOT, 'llm'),
+            path.join(SRC_ROOT, 'memory'),
+            path.join(SRC_ROOT, 'services'),
+        ];
+        for (const directoryPath of removedDirs) {
+            expect(fs.existsSync(directoryPath)).toBe(false);
+        }
+    });
+
+    test('phase6 planned orchestration files are removed from original paths', () => {
+        const removedFiles = [
+            path.join(SRC_ROOT, 'orchestration', 'workRequestRuntime.ts'),
+            path.join(SRC_ROOT, 'orchestration', 'workRequestStore.ts'),
+            path.join(SRC_ROOT, 'orchestration', 'workRequestSnapshot.ts'),
+        ];
+        for (const filePath of removedFiles) {
+            expect(fs.existsSync(filePath)).toBe(false);
+        }
+    });
+
     test('legacy python sidecar service files are removed from repository tree', () => {
         const removedFiles = [
             path.resolve(SIDECAR_ROOT, '..', 'browser-use-service', 'main.py'),
@@ -69,5 +94,18 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         expect(pkg.scripts?.['dev:legacy']).toBeUndefined();
         expect(pkg.scripts?.['start:mastra:compat']).toBeUndefined();
         expect(pkg.scripts?.['dev:mastra:compat']).toBeUndefined();
+        expect(pkg.scripts?.build).toBeDefined();
+    });
+
+    test('sidecar src has zero @ts-ignore/@ts-expect-error markers', () => {
+        const command = `grep -r "@ts-ignore\\|@ts-expect-error" "${SRC_ROOT}" --include="*.ts" --include="*.tsx" -l || true`;
+        const result = execSync(command, { encoding: 'utf-8' }).trim();
+        expect(result).toBe('');
+    });
+
+    test('sidecar src has zero as any assertions', () => {
+        const command = `rg -n "\\\\bas any\\\\b" "${SRC_ROOT}" --glob "*.ts" --glob "*.tsx" || true`;
+        const result = execSync(command, { encoding: 'utf-8' }).trim();
+        expect(result).toBe('');
     });
 });

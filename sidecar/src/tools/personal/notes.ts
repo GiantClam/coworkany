@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext } from '../standard';
-import { resolveMemoryWriteTarget } from '../../memory/isolation';
+import { resolveMemoryWriteTarget } from '../../runtime/memory/isolation';
 
 /**
  * Quick Note Tool - Integrated with Vault System
@@ -53,7 +53,7 @@ export const quickNoteTool: ToolDefinition = {
             console.error(`[QuickNote] Saving note: "${autoTitle}"`);
 
             // Use existing Vault system (from builtin.ts)
-            const { getVaultManager } = await import('../../memory');
+            const { getVaultManager } = await import('../../runtime/memory');
 
             const vault = getVaultManager();
             const writeTarget = resolveMemoryWriteTarget({

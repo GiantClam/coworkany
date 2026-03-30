@@ -1,25 +1,15 @@
 import { ToolDefinition, ToolContext } from '../standard';
-
-/**
- * Reminder Tool - bound to scheduled task runtime
- *
- * The runtime-bound version (`createSetReminderTool`) delegates to `schedule_task`
- * so reminders survive restarts and are executed by the scheduler heartbeat.
- */
 const notImplementedHandler = async (args: Record<string, unknown>) => ({
     success: false,
     error: 'Scheduler not initialized. set_reminder requires runtime binding in main.ts.',
     args,
 });
-
 type ReminderRecurring = 'none' | 'daily' | 'weekly' | 'monthly';
-
 type SetReminderArgs = {
     message: string;
     time: string;
     recurring?: ReminderRecurring;
 };
-
 export interface SetReminderToolHandlers {
     scheduleTask: (args: {
         task_query: string;
@@ -28,7 +18,6 @@ export interface SetReminderToolHandlers {
         title?: string;
     }, context: ToolContext) => Promise<unknown>;
 }
-
 export const setReminderTool: ToolDefinition = {
     name: 'set_reminder',
     description: 'Set a reminder for a specific time. Runtime-bound mode schedules via scheduler so reminders continue after restarts.',
@@ -55,7 +44,6 @@ export const setReminderTool: ToolDefinition = {
     },
     handler: notImplementedHandler,
 };
-
 function normalizeReminderQuery(message: string): string {
     const trimmed = message.trim();
     if (!trimmed) {
@@ -88,7 +76,6 @@ function normalizeReminderQuery(message: string): string {
     }
     return `提醒你${trimmed}`;
 }
-
 function buildReminderTitle(message: string): string {
     const normalized = normalizeReminderQuery(message)
         .replace(/^提醒你/u, '')
@@ -100,7 +87,6 @@ function buildReminderTitle(message: string): string {
     const title = `提醒：${normalized}`;
     return title.length > 60 ? `${title.slice(0, 60)}...` : title;
 }
-
 function buildRecurringScheduleQuery(input: {
     message: string;
     recurring: ReminderRecurring;
@@ -110,7 +96,6 @@ function buildRecurringScheduleQuery(input: {
     const normalizedQuery = normalizeReminderQuery(input.message);
     const { recurring, executeAtIso } = input;
     const relativeInterval = parseRelativeIntervalExpression(input.originalTimeExpression);
-
     if (recurring === 'daily') {
         if (relativeInterval && relativeInterval.unit !== 'day') {
             const unitLabel = relativeInterval.amount === 1
@@ -125,26 +110,22 @@ function buildRecurringScheduleQuery(input: {
             taskQuery: `${executeAtIso} every day ${normalizedQuery}`,
         };
     }
-
     if (recurring === 'weekly') {
         return {
             taskQuery: `${executeAtIso} every 7 days ${normalizedQuery}`,
             recurringNote: 'weekly reminders are approximated as every 7 days',
         };
     }
-
     if (recurring === 'monthly') {
         return {
             taskQuery: `${executeAtIso} every 30 days ${normalizedQuery}`,
             recurringNote: 'monthly reminders are approximated as every 30 days',
         };
     }
-
     return {
         taskQuery: normalizedQuery,
     };
 }
-
 function parseRelativeIntervalExpression(raw: string): { amount: number; unit: 'minute' | 'hour' | 'day' } | null {
     const match = raw.trim().toLowerCase().match(/^in\s+(\d+)\s+(minute|hour|day)s?$/);
     if (!match) {
@@ -157,13 +138,11 @@ function parseRelativeIntervalExpression(raw: string): { amount: number; unit: '
     }
     return { amount, unit };
 }
-
 export function createSetReminderTool(handlers: SetReminderToolHandlers): ToolDefinition {
     return {
         ...setReminderTool,
         handler: async (args: SetReminderArgs, context: ToolContext) => {
             const { message, time, recurring = 'none' } = args;
-
             try {
                 const reminderTime = parseTimeExpression(time);
                 const executeAtIso = reminderTime.toISOString();
@@ -173,7 +152,6 @@ export function createSetReminderTool(handlers: SetReminderToolHandlers): ToolDe
                     executeAtIso,
                     originalTimeExpression: time,
                 });
-
                 const scheduleResult = await handlers.scheduleTask({
                     task_query: recurringPlan.taskQuery,
                     time: executeAtIso,
@@ -185,18 +163,15 @@ export function createSetReminderTool(handlers: SetReminderToolHandlers): ToolDe
                     scheduledTaskId?: string;
                     scheduledAt?: string;
                 };
-
                 if (!scheduleResult?.success) {
                     return {
                         success: false,
                         error: `Failed to schedule reminder: ${scheduleResult?.error || 'unknown scheduler error'}`,
                     };
                 }
-
                 const scheduledAt = typeof scheduleResult.scheduledAt === 'string'
                     ? scheduleResult.scheduledAt
                     : executeAtIso;
-
                 return {
                     success: true,
                     reminder_id: scheduleResult.scheduledTaskId,
@@ -218,28 +193,18 @@ export function createSetReminderTool(handlers: SetReminderToolHandlers): ToolDe
         },
     };
 }
-
-/**
- * Parse time expressions (natural language and ISO 8601)
- */
 function parseTimeExpression(expr: string): Date {
-    // Try parsing ISO 8601 first
     const isoDate = new Date(expr);
     if (!isNaN(isoDate.getTime()) && expr.includes('T')) {
         return isoDate;
     }
-
-    // Natural language parsing
     const now = new Date();
     const lower = expr.toLowerCase().trim();
-
-    // Relative time: "in X minutes/hours/days"
     const relativeMatch = lower.match(/in\s+(\d+)\s+(minute|hour|day)s?/);
     if (relativeMatch) {
         const amount = parseInt(relativeMatch[1]);
         const unit = relativeMatch[2];
         const result = new Date(now);
-
         switch (unit) {
             case 'minute':
                 result.setMinutes(result.getMinutes() + amount);
@@ -253,12 +218,9 @@ function parseTimeExpression(expr: string): Date {
         }
         return result;
     }
-
-    // Tomorrow with optional time
     if (lower.includes('tomorrow')) {
         const tomorrow = new Date(now);
         tomorrow.setDate(tomorrow.getDate() + 1);
-
         const timeMatch = lower.match(/(\d{1,2})\s*(am|pm|:)/);
         if (timeMatch) {
             const parsedTime = parseTimeOfDay(lower);
@@ -272,101 +234,71 @@ function parseTimeExpression(expr: string): Date {
         }
         return tomorrow;
     }
-
-    // Today with time
     if (lower.includes('today') || lower.match(/\d{1,2}\s*(am|pm)/)) {
         const parsedTime = parseTimeOfDay(lower);
         if (parsedTime) {
             const result = new Date(now);
             result.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
-
-            // If time is in the past, set for tomorrow
             if (result < now) {
                 result.setDate(result.getDate() + 1);
             }
             return result;
         }
     }
-
-    // Next week
     if (lower.includes('next week')) {
         const nextWeek = new Date(now);
         nextWeek.setDate(nextWeek.getDate() + 7);
         nextWeek.setHours(9, 0, 0, 0);
         return nextWeek;
     }
-
-    // Day of week (e.g., "Monday", "next Friday")
     const dayOfWeekMatch = lower.match(/(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/);
     if (dayOfWeekMatch) {
         const targetDay = dayOfWeekMatch[1];
         const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const targetDayIndex = dayNames.indexOf(targetDay);
         const currentDayIndex = now.getDay();
-
         let daysToAdd = targetDayIndex - currentDayIndex;
         if (daysToAdd <= 0 || lower.includes('next')) {
             daysToAdd += 7;
         }
-
         const targetDate = new Date(now);
         targetDate.setDate(targetDate.getDate() + daysToAdd);
-
         const parsedTime = parseTimeOfDay(lower);
         if (parsedTime) {
             targetDate.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
         } else {
             targetDate.setHours(9, 0, 0, 0);
         }
-
         return targetDate;
     }
-
     throw new Error(
         `Unable to parse time expression: "${expr}". ` +
             'Examples: "tomorrow 3pm", "in 2 hours", "Monday 10am", "2026-02-12T15:00:00Z"'
     );
 }
-
-/**
- * Parse time of day from text (e.g., "3pm", "10:30am")
- */
 function parseTimeOfDay(text: string): { hours: number; minutes: number } | null {
-    // Match formats: "3pm", "10am", "3:30pm", "10:30am", "15:00"
     const timeMatch = text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
     if (!timeMatch) return null;
-
     let hours = parseInt(timeMatch[1]);
     const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
     const meridiem = timeMatch[3];
-
     if (meridiem) {
-        // 12-hour format
         if (meridiem === 'pm' && hours < 12) hours += 12;
         if (meridiem === 'am' && hours === 12) hours = 0;
     }
-
-    // Validate
     if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
         return null;
     }
-
     return { hours, minutes };
 }
-
-/**
- * Format reminder time for human-readable display
- */
 function formatReminderTime(date: Date): string {
     const now = new Date();
     const diff = date.getTime() - now.getTime();
     const diffMinutes = Math.floor(diff / 60000);
     const diffHours = Math.floor(diffMinutes / 60);
     const diffDays = Math.floor(diffHours / 24);
-
     const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dateStr = date.toLocaleDateString();
-
     if (diffMinutes < 60) {
         return `in ${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} (${timeStr})`;
     } else if (diffHours < 24) {

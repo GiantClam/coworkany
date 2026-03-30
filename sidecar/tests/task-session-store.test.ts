@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { TaskSessionStore } from '../src/execution/taskSessionStore';
+import { TaskSessionStore } from '../src/runtime/taskSessionStore';
 
 type Message = {
     role: 'user' | 'assistant';

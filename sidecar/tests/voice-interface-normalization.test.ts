@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { normalizeMacOSTextForSpeech } from '../src/agent/jarvis/voiceInterface';
+import { normalizeMacOSTextForSpeech } from '../src/runtime/jarvis/voiceInterface';
 
 describe('normalizeMacOSTextForSpeech', () => {
     test('removes apostrophes inside English contractions for mixed-language speech', () => {

@@ -1,6 +1,6 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { EventEmitter } from 'events';
-import { BrowserUseServiceBootstrap } from '../src/services/browserUseServiceBootstrap';
+import { BrowserUseServiceBootstrap } from '../src/runtime/browser/browserUseServiceBootstrap';
 
 function createHealthyResponse(): Response {
     return {

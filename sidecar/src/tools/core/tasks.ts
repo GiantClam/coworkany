@@ -7,7 +7,7 @@
 
 import * as path from 'path';
 import { ToolDefinition, ToolContext } from '../standard';
-import { createProactiveTaskManager } from '../../agent/jarvis/proactiveTaskManager';
+import { createProactiveTaskManager } from '../../runtime/jarvis/proactiveTaskManager';
 
 // Helper to get manager for current workspace context
 function getTaskManager(workspacePath: string) {

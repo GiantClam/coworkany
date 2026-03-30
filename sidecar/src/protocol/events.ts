@@ -1,10 +1,3 @@
-/**
- * CoworkAny Protocol - Task Events Schema
- * 
- * Defines the event model for task lifecycle and visualization.
- * Events flow from Sidecar to UI for real-time task progress display.
- */
-
 import { z } from 'zod';
 import { PlatformRuntimeContextSchema } from './commands';
 import { EffectRequestSchema, EffectResponseSchema } from './effects';
@@ -15,7 +8,6 @@ import {
     McpGatewayDecisionSchema,
     RuntimeSecurityAlertSchema,
 } from './security';
-
 const DeliverableContractSchema = z.object({
     id: z.string(),
     title: z.string(),
@@ -25,7 +17,6 @@ const DeliverableContractSchema = z.object({
     path: z.string().optional(),
     format: z.string().optional(),
 });
-
 const CheckpointContractSchema = z.object({
     id: z.string(),
     title: z.string(),
@@ -37,7 +28,6 @@ const CheckpointContractSchema = z.object({
     requiresUserConfirmation: z.boolean(),
     blocking: z.boolean(),
 });
-
 const UserActionRequestSchema = z.object({
     id: z.string(),
     title: z.string(),
@@ -50,13 +40,11 @@ const UserActionRequestSchema = z.object({
     instructions: z.array(z.string()),
     fulfillsCheckpointId: z.string().optional(),
 });
-
 const HitlPolicySchema = z.object({
     riskTier: z.enum(['low', 'medium', 'high']),
     requiresPlanConfirmation: z.boolean(),
     reasons: z.array(z.string()),
 });
-
 const ExecutionProfileSchema = z.object({
     primaryHardness: z.enum(['trivial', 'bounded', 'multi_step', 'externally_blocked', 'high_risk']),
     requiredCapabilities: z.array(z.enum([
@@ -71,7 +59,6 @@ const ExecutionProfileSchema = z.object({
     executionShape: z.enum(['single_step', 'staged', 'exploratory', 'deterministic_workflow']),
     reasons: z.array(z.string()),
 });
-
 const CapabilityPlanSchema = z.object({
     missingCapability: z.enum([
         'none',
@@ -96,14 +83,12 @@ const CapabilityPlanSchema = z.object({
     }),
     reasons: z.array(z.string()),
 });
-
 const CapabilityReviewStateSchema = z.object({
     status: z.enum(['pending', 'approved']),
     summary: z.string(),
     learnedEntityId: z.string().optional(),
     updatedAt: z.string().optional(),
 });
-
 const RuntimeIsolationPolicySchema = z.object({
     connectorIsolationMode: z.literal('deny_by_default'),
     filesystemMode: z.enum(['workspace_only', 'workspace_plus_resolved_targets']),
@@ -113,7 +98,6 @@ const RuntimeIsolationPolicySchema = z.object({
     allowedDomains: z.array(z.string()),
     notes: z.array(z.string()),
 });
-
 const SessionIsolationPolicySchema = z.object({
     workspaceBindingMode: z.literal('frozen_workspace_only'),
     followUpScope: z.literal('same_task_only'),
@@ -122,7 +106,6 @@ const SessionIsolationPolicySchema = z.object({
     staleEvidenceHandling: z.literal('evict_on_refreeze'),
     notes: z.array(z.string()),
 });
-
 const MemoryIsolationPolicySchema = z.object({
     classificationMode: z.literal('scope_tagged'),
     readScopes: z.array(z.enum(['task', 'workspace', 'user_preference', 'system'])),
@@ -130,7 +113,6 @@ const MemoryIsolationPolicySchema = z.object({
     defaultWriteScope: z.enum(['task', 'workspace', 'user_preference', 'system']),
     notes: z.array(z.string()),
 });
-
 const TenantIsolationPolicySchema = z.object({
     workspaceBoundaryMode: z.literal('same_workspace_only'),
     userBoundaryMode: z.literal('current_local_user_only'),
@@ -139,7 +121,6 @@ const TenantIsolationPolicySchema = z.object({
     allowCrossUserMemory: z.boolean(),
     notes: z.array(z.string()),
 });
-
 const ContractReopenDiffSchema = z.object({
     changedFields: z.array(z.enum(['mode', 'objective', 'deliverables', 'execution_targets', 'workflow'])),
     modeChanged: z.object({
@@ -163,7 +144,6 @@ const ContractReopenDiffSchema = z.object({
         after: z.array(z.string()),
     }).optional(),
 });
-
 const MissingInfoItemSchema = z.object({
     field: z.string(),
     reason: z.string(),
@@ -171,21 +151,18 @@ const MissingInfoItemSchema = z.object({
     question: z.string().optional(),
     defaultValue: z.string().optional(),
 });
-
 const DefaultingPolicySchema = z.object({
     outputLanguage: z.string(),
     uiFormat: z.enum(['chat_message', 'table', 'report', 'artifact']),
     artifactDirectory: z.string(),
     checkpointStrategy: z.enum(['none', 'review_before_completion', 'manual_action']),
 });
-
 const ResumeStrategySchema = z.object({
     mode: z.literal('continue_from_saved_context'),
     preserveDeliverables: z.boolean(),
     preserveCompletedSteps: z.boolean(),
     preserveArtifacts: z.boolean(),
 });
-
 const IntentRoutingSchema = z.object({
     intent: z.enum(['chat', 'immediate_task', 'scheduled_task']),
     confidence: z.number().min(0).max(1),
@@ -193,25 +170,12 @@ const IntentRoutingSchema = z.object({
     needsDisambiguation: z.boolean(),
     forcedByUserSelection: z.boolean().optional(),
 });
-
-// ============================================================================
-// Base Event
-// ============================================================================
-
 const BaseEventSchema = z.object({
     id: z.string().uuid(),
     taskId: z.string().uuid(),
     timestamp: z.string().datetime(),
     sequence: z.number().int().nonnegative(), // Ordering within task
 });
-
-// ============================================================================
-// Task Lifecycle Events
-// ============================================================================
-
-/**
- * Task has started.
- */
 export const TaskStartedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_STARTED'),
     payload: z.object({
@@ -229,10 +193,6 @@ export const TaskStartedEventSchema = BaseEventSchema.extend({
         }),
     }),
 });
-
-/**
- * Task plan updated (high-level intent, not sensitive CoT).
- */
 export const PlanUpdatedEventSchema = BaseEventSchema.extend({
     type: z.literal('PLAN_UPDATED'),
     payload: z.object({
@@ -251,10 +211,6 @@ export const PlanUpdatedEventSchema = BaseEventSchema.extend({
         currentStepId: z.string().optional(),
     }),
 });
-
-/**
- * Pre-freeze research progress emitted while Coworkany gathers and consolidates context.
- */
 export const TaskResearchUpdatedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_RESEARCH_UPDATED'),
     payload: z.object({
@@ -266,10 +222,6 @@ export const TaskResearchUpdatedEventSchema = BaseEventSchema.extend({
         selectedStrategyTitle: z.string().optional(),
     }),
 });
-
-/**
- * Frozen contract was reopened because execution surfaced evidence that requires re-research.
- */
 export const TaskContractReopenedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_CONTRACT_REOPENED'),
     payload: z.object({
@@ -287,10 +239,6 @@ export const TaskContractReopenedEventSchema = BaseEventSchema.extend({
         nextStepId: z.string().optional(),
     }),
 });
-
-/**
- * Frozen execution contract generated by Coworkany before execution starts.
- */
 export const TaskPlanReadyEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_PLAN_READY'),
     payload: z.object({
@@ -320,10 +268,6 @@ export const TaskPlanReadyEventSchema = BaseEventSchema.extend({
         resumeStrategy: ResumeStrategySchema.optional(),
     }),
 });
-
-/**
- * A planned checkpoint has become active and may block progress.
- */
 export const TaskCheckpointReachedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_CHECKPOINT_REACHED'),
     payload: z.object({
@@ -340,10 +284,6 @@ export const TaskCheckpointReachedEventSchema = BaseEventSchema.extend({
         blockingReason: z.string().optional(),
     }),
 });
-
-/**
- * Coworkany needs a concrete user action right now to continue.
- */
 export const TaskUserActionRequiredEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_USER_ACTION_REQUIRED'),
     payload: z.object({
@@ -364,10 +304,6 @@ export const TaskUserActionRequiredEventSchema = BaseEventSchema.extend({
         blockingReason: z.string().optional(),
     }),
 });
-
-/**
- * Task completed successfully.
- */
 export const TaskFinishedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_FINISHED'),
     payload: z.object({
@@ -377,10 +313,6 @@ export const TaskFinishedEventSchema = BaseEventSchema.extend({
         duration: z.number(), // milliseconds
     }),
 });
-
-/**
- * Task failed.
- */
 export const TaskFailedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_FAILED'),
     payload: z.object({
@@ -390,10 +322,6 @@ export const TaskFailedEventSchema = BaseEventSchema.extend({
         suggestion: z.string().optional(),
     }),
 });
-
-/**
- * Task status updated (e.g., streaming state for multi-turn).
- */
 export const TaskStatusEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_STATUS'),
     payload: z.object({
@@ -402,10 +330,6 @@ export const TaskStatusEventSchema = BaseEventSchema.extend({
         blockingReason: z.string().optional(),
     }),
 });
-
-/**
- * Task requires additional user input before execution can continue.
- */
 export const TaskClarificationRequiredEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_CLARIFICATION_REQUIRED'),
     payload: z.object({
@@ -423,20 +347,12 @@ export const TaskClarificationRequiredEventSchema = BaseEventSchema.extend({
         blockingReason: z.string().optional(),
     }),
 });
-
-/**
- * Task history was cleared.
- */
 export const TaskHistoryClearedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_HISTORY_CLEARED'),
     payload: z.object({
         reason: z.string().optional(),
     }),
 });
-
-/**
- * Chat message appended to a task session.
- */
 export const ChatMessageEventSchema = BaseEventSchema.extend({
     type: z.literal('CHAT_MESSAGE'),
     payload: z.object({
@@ -444,15 +360,6 @@ export const ChatMessageEventSchema = BaseEventSchema.extend({
         content: z.string(),
     }),
 });
-
-// ============================================================================
-// Tool Events
-// ============================================================================
-
-/**
- * Tool was called by the agent.
- * Input may be redacted for sensitive data.
- */
 export const ToolCalledEventSchema = BaseEventSchema.extend({
     type: z.literal('TOOL_CALLED'),
     payload: z.object({
@@ -464,10 +371,6 @@ export const ToolCalledEventSchema = BaseEventSchema.extend({
         sourceId: z.string().optional(),
     }),
 });
-
-/**
- * Tool returned a result.
- */
 export const ToolResultEventSchema = BaseEventSchema.extend({
     type: z.literal('TOOL_RESULT'),
     payload: z.object({
@@ -483,14 +386,6 @@ export const ToolResultEventSchema = BaseEventSchema.extend({
         duration: z.number(), // milliseconds
     }),
 });
-
-// ============================================================================
-// Effect Events
-// ============================================================================
-
-/**
- * An effect was requested (awaiting Policy Gate decision).
- */
 export const EffectRequestedEventSchema = BaseEventSchema.extend({
     type: z.literal('EFFECT_REQUESTED'),
     payload: z.object({
@@ -499,10 +394,6 @@ export const EffectRequestedEventSchema = BaseEventSchema.extend({
         riskLevel: z.number().min(1).max(10),
     }),
 });
-
-/**
- * Effect was approved.
- */
 export const EffectApprovedEventSchema = BaseEventSchema.extend({
     type: z.literal('EFFECT_APPROVED'),
     payload: z.object({
@@ -510,10 +401,6 @@ export const EffectApprovedEventSchema = BaseEventSchema.extend({
         approvedBy: z.enum(['user', 'policy', 'allowlist']),
     }),
 });
-
-/**
- * Effect was denied.
- */
 export const EffectDeniedEventSchema = BaseEventSchema.extend({
     type: z.literal('EFFECT_DENIED'),
     payload: z.object({
@@ -521,14 +408,6 @@ export const EffectDeniedEventSchema = BaseEventSchema.extend({
         deniedBy: z.enum(['user', 'policy', 'blocklist', 'timeout']),
     }),
 });
-
-// ============================================================================
-// Patch Events
-// ============================================================================
-
-/**
- * A file patch was proposed (Shadow FS).
- */
 export const PatchProposedEventSchema = BaseEventSchema.extend({
     type: z.literal('PATCH_PROPOSED'),
     payload: z.object({
@@ -536,10 +415,6 @@ export const PatchProposedEventSchema = BaseEventSchema.extend({
         previewUrl: z.string().optional(), // Shadow workspace path
     }),
 });
-
-/**
- * A patch was applied (atomic write completed).
- */
 export const PatchAppliedEventSchema = BaseEventSchema.extend({
     type: z.literal('PATCH_APPLIED'),
     payload: z.object({
@@ -549,10 +424,6 @@ export const PatchAppliedEventSchema = BaseEventSchema.extend({
         backupPath: z.string().optional(),
     }),
 });
-
-/**
- * A patch was rejected by user.
- */
 export const PatchRejectedEventSchema = BaseEventSchema.extend({
     type: z.literal('PATCH_REJECTED'),
     payload: z.object({
@@ -560,52 +431,24 @@ export const PatchRejectedEventSchema = BaseEventSchema.extend({
         reason: z.string().optional(),
     }),
 });
-
-// ============================================================================
-// Identity and Security Events
-// ============================================================================
-
-/**
- * Agent identity established for a task/session.
- */
 export const AgentIdentityEstablishedEventSchema = BaseEventSchema.extend({
     type: z.literal('AGENT_IDENTITY_ESTABLISHED'),
     payload: z.object({
         identity: AgentIdentitySchema,
     }),
 });
-
-/**
- * Agent delegation graph edge created.
- */
 export const AgentDelegationEventSchema = BaseEventSchema.extend({
     type: z.literal('AGENT_DELEGATED'),
     payload: AgentDelegationSchema,
 });
-
-/**
- * MCP gateway decision for a tool call.
- */
 export const McpGatewayDecisionEventSchema = BaseEventSchema.extend({
     type: z.literal('MCP_GATEWAY_DECISION'),
     payload: McpGatewayDecisionSchema,
 });
-
-/**
- * Runtime security guard alert.
- */
 export const RuntimeSecurityAlertEventSchema = BaseEventSchema.extend({
     type: z.literal('RUNTIME_SECURITY_ALERT'),
     payload: RuntimeSecurityAlertSchema,
 });
-
-// ============================================================================
-// Autonomous Task Events (OpenClaw-style)
-// ============================================================================
-
-/**
- * Autonomous task decomposed into subtasks.
- */
 export const AutonomousTaskDecomposedEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_TASK_DECOMPOSED'),
     payload: z.object({
@@ -619,10 +462,6 @@ export const AutonomousTaskDecomposedEventSchema = BaseEventSchema.extend({
         })),
     }),
 });
-
-/**
- * Autonomous subtask started.
- */
 export const AutonomousSubtaskStartedEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_SUBTASK_STARTED'),
     payload: z.object({
@@ -632,10 +471,6 @@ export const AutonomousSubtaskStartedEventSchema = BaseEventSchema.extend({
         totalSubtasks: z.number(),
     }),
 });
-
-/**
- * Autonomous subtask completed.
- */
 export const AutonomousSubtaskCompletedEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_SUBTASK_COMPLETED'),
     payload: z.object({
@@ -644,10 +479,6 @@ export const AutonomousSubtaskCompletedEventSchema = BaseEventSchema.extend({
         toolsUsed: z.array(z.string()).optional(),
     }),
 });
-
-/**
- * Autonomous subtask failed.
- */
 export const AutonomousSubtaskFailedEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_SUBTASK_FAILED'),
     payload: z.object({
@@ -655,10 +486,6 @@ export const AutonomousSubtaskFailedEventSchema = BaseEventSchema.extend({
         error: z.string(),
     }),
 });
-
-/**
- * Memory extracted from autonomous task.
- */
 export const AutonomousMemoryExtractedEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_MEMORY_EXTRACTED'),
     payload: z.object({
@@ -670,20 +497,12 @@ export const AutonomousMemoryExtractedEventSchema = BaseEventSchema.extend({
         })).optional(),
     }),
 });
-
-/**
- * Memory saved to vault from autonomous task.
- */
 export const AutonomousMemorySavedEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_MEMORY_SAVED'),
     payload: z.object({
         paths: z.array(z.string()),
     }),
 });
-
-/**
- * Autonomous task requires user input to continue.
- */
 export const AutonomousUserInputRequiredEventSchema = BaseEventSchema.extend({
     type: z.literal('AUTONOMOUS_USER_INPUT_REQUIRED'),
     payload: z.object({
@@ -691,14 +510,6 @@ export const AutonomousUserInputRequiredEventSchema = BaseEventSchema.extend({
         taskId: z.string(),
     }),
 });
-
-// ============================================================================
-// Task Suspend/Resume Events
-// ============================================================================
-
-/**
- * Task suspended, waiting for user action (e.g., manual login).
- */
 export const TaskSuspendedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_SUSPENDED'),
     payload: z.object({
@@ -708,10 +519,6 @@ export const TaskSuspendedEventSchema = BaseEventSchema.extend({
         maxWaitTimeMs: z.number().optional(),
     }),
 });
-
-/**
- * Task resumed after suspension (user action completed).
- */
 export const TaskResumedEventSchema = BaseEventSchema.extend({
     type: z.literal('TASK_RESUMED'),
     payload: z.object({
@@ -719,14 +526,6 @@ export const TaskResumedEventSchema = BaseEventSchema.extend({
         suspendDurationMs: z.number(),
     }),
 });
-
-// ============================================================================
-// Text Streaming Events
-// ============================================================================
-
-/**
- * Streaming text delta from model.
- */
 export const TextDeltaEventSchema = BaseEventSchema.extend({
     type: z.literal('TEXT_DELTA'),
     payload: z.object({
@@ -734,21 +533,12 @@ export const TextDeltaEventSchema = BaseEventSchema.extend({
         role: z.enum(['assistant', 'thinking']),
     }),
 });
-
-/**
- * Streaming thinking delta from model (Extended Thinking).
- */
 export const ThinkingDeltaEventSchema = BaseEventSchema.extend({
     type: z.literal('THINKING_DELTA'),
     payload: z.object({
         delta: z.string(),
     }),
 });
-
-// ============================================================================
-// Union Type
-// ============================================================================
-
 export const TaskEventSchema = z.discriminatedUnion('type', [
     TaskStartedEventSchema,
     PlanUpdatedEventSchema,
@@ -777,10 +567,8 @@ export const TaskEventSchema = z.discriminatedUnion('type', [
     RuntimeSecurityAlertEventSchema,
     TextDeltaEventSchema,
     ThinkingDeltaEventSchema,
-    // Task Suspend/Resume Events
     TaskSuspendedEventSchema,
     TaskResumedEventSchema,
-    // Autonomous Task Events (OpenClaw-style)
     AutonomousTaskDecomposedEventSchema,
     AutonomousSubtaskStartedEventSchema,
     AutonomousSubtaskCompletedEventSchema,
@@ -789,10 +577,7 @@ export const TaskEventSchema = z.discriminatedUnion('type', [
     AutonomousMemorySavedEventSchema,
     AutonomousUserInputRequiredEventSchema,
 ]);
-
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
-
-// Individual event types
 export type TaskStartedEvent = z.infer<typeof TaskStartedEventSchema>;
 export type PlanUpdatedEvent = z.infer<typeof PlanUpdatedEventSchema>;
 export type TaskResearchUpdatedEvent = z.infer<typeof TaskResearchUpdatedEventSchema>;
@@ -822,8 +607,6 @@ export type TextDeltaEvent = z.infer<typeof TextDeltaEventSchema>;
 export type ThinkingDeltaEvent = z.infer<typeof ThinkingDeltaEventSchema>;
 export type TaskSuspendedEvent = z.infer<typeof TaskSuspendedEventSchema>;
 export type TaskResumedEvent = z.infer<typeof TaskResumedEventSchema>;
-
-// Autonomous Task Event Types (OpenClaw-style)
 export type AutonomousTaskDecomposedEvent = z.infer<typeof AutonomousTaskDecomposedEventSchema>;
 export type AutonomousSubtaskStartedEvent = z.infer<typeof AutonomousSubtaskStartedEventSchema>;
 export type AutonomousSubtaskCompletedEvent = z.infer<typeof AutonomousSubtaskCompletedEventSchema>;

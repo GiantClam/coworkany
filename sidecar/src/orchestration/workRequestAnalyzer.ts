@@ -99,48 +99,36 @@ import {
     WEB_ANALYSIS_CUE_PATTERN,
     WEB_FRESHNESS_STATUS_CUE_PATTERN,
 } from './workRequestSemanticRules';
-
 function detectLanguage(text: string): string {
     return LANGUAGE_CHINESE_PATTERN.test(text) ? 'zh-CN' : 'en';
 }
-
 function isPriceSensitiveInvestmentTask(text: string): boolean {
     return PRICE_SENSITIVE_INVESTMENT_PATTERN.test(text);
 }
-
 function isPrecisionSensitiveLookupTask(text: string): boolean {
     const lookupIntent = matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.precisionIntentPatterns);
     const precisionSignal = matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.precisionSubjectPatterns);
     return lookupIntent && precisionSignal;
 }
-
 function isBroadTopicScopeTask(text: string): boolean {
     return matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.broadScopePatterns);
 }
-
 function hasExplicitExecutionTargetIdentifier(text: string): boolean {
     return matchesAnyPattern(text, TARGET_RESOLUTION_RULE_TABLE.explicitIdentifierPatterns);
 }
-
 const EXPLICIT_URL_PATTERN = /\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/ig;
-
 function extractExplicitUrls(text: string): string[] {
     const matches = text.match(EXPLICIT_URL_PATTERN) ?? [];
     return Array.from(new Set(matches.map((value) => value.trim().replace(/[),.;，。；]+$/g, ''))));
 }
-
 const MARKET_TARGET_SUBJECT_PATTERN =
     /(股价|股票|涨跌|尾盘|市值|成交量|price|stock(?:\s+price)?|share price|market cap|volume|intraday|closing price|price surge|rally|plunge)/i;
-
 const MARKET_TARGET_ENTITY_CAPTURE_PATTERN =
     /(?:^|[\s,，。.!?！？;；:：])([A-Za-z][A-Za-z0-9.&\-]{1,31}|[\u4e00-\u9fff]{2,16})\s*(?:\([^)]{1,24}\))?\s*(?:的)?\s*(?:股价|股票|涨跌|尾盘|市值|成交量|price|stock(?:\s+price)?|share price|market cap|volume|intraday|closing price|price surge|rally|plunge)/gi;
-
 const MARKET_ENTITY_PREFIX_PATTERN =
     /^(?:今天|今日|本周|本月|当前|最近|最新|last|today|this\s+week|this\s+month|current|latest|检索|搜索|查询|查找|分析|查看|请)\s*/i;
-
 const MARKET_ENTITY_SUFFIX_PATTERN =
     /(?:的|情况|走势|表现|原因|为何|为什么|最后|分析|解读|趋势)$/i;
-
 const MARKET_ENTITY_STOPWORDS = new Set([
     '今天',
     '今日',
@@ -168,12 +156,10 @@ const MARKET_ENTITY_STOPWORDS = new Set([
     'current',
     'analysis',
 ]);
-
 function hasResolvableMarketEntityCandidate(text: string): boolean {
     if (!MARKET_TARGET_SUBJECT_PATTERN.test(text)) {
         return false;
     }
-
     const matcher = new RegExp(MARKET_TARGET_ENTITY_CAPTURE_PATTERN.source, MARKET_TARGET_ENTITY_CAPTURE_PATTERN.flags);
     for (const match of text.matchAll(matcher)) {
         const rawCandidate = (match[1] ?? '').trim();
@@ -196,10 +182,8 @@ function hasResolvableMarketEntityCandidate(text: string): boolean {
         }
         return true;
     }
-
     return false;
 }
-
 function requiresExecutionTargetIdentifierClarification(text: string): boolean {
     const targetSensitiveTask = isPrecisionSensitiveLookupTask(text) || isPriceSensitiveInvestmentTask(text);
     if (!targetSensitiveTask) {
@@ -216,13 +200,11 @@ function requiresExecutionTargetIdentifierClarification(text: string): boolean {
     }
     return true;
 }
-
 function languageAwareQuestions(language: string): string[] {
     return language.startsWith('zh')
         ? ['请明确你要我继续处理的具体对象、文件、页面或任务目标。']
         : ['Please specify the exact object, file, page, or task you want me to continue with.'];
 }
-
 function isComplexPlanningTask(text: string, mode: NormalizedWorkRequest['mode']): boolean {
     if (mode === 'scheduled_task' || mode === 'scheduled_multi_task') {
         if (text.length > 180) {
@@ -230,38 +212,30 @@ function isComplexPlanningTask(text: string, mode: NormalizedWorkRequest['mode']
         }
         return COMPLEX_PLANNING_SCHEDULED_CUE_PATTERN.test(text);
     }
-
     if (text.length > 120) {
         return true;
     }
-
     return COMPLEX_PLANNING_GENERAL_CUE_PATTERN.test(text);
 }
-
 function hasExplicitWebLookupIntent(text: string): boolean {
     if (text.trim().length === 0) {
         return false;
     }
-
     const hasLookupCue = EXPLICIT_WEB_LOOKUP_CUE_PATTERN.test(text);
     if (hasLookupCue) {
         return true;
     }
-
     const hasAnalysisCue = WEB_ANALYSIS_CUE_PATTERN.test(text);
     const hasFreshnessOrStatusCue = WEB_FRESHNESS_STATUS_CUE_PATTERN.test(text);
     return hasAnalysisCue && hasFreshnessOrStatusCue;
 }
-
 function isLocalSearchScopeText(text: string): boolean {
     return LOCAL_SEARCH_SCOPE_PATTERN.test(text);
 }
-
 function hasStrongLocalScopeSignal(text: string): boolean {
     return /(当前项目|当前仓库|workspace|repo|repository|代码库|本地|目录|文件夹|路径|log|日志|代码|src|package\.json)/i
         .test(text);
 }
-
 function shouldRequireWebDomainResearch(input: {
     text: string;
     mode: NormalizedWorkRequest['mode'];
@@ -272,11 +246,9 @@ function shouldRequireWebDomainResearch(input: {
     }
     const precisionSensitiveTargeting = isPrecisionSensitiveLookupTask(input.text) || isPriceSensitiveInvestmentTask(input.text);
     const strongLocalScope = hasStrongLocalScopeSignal(input.text);
-
     if (precisionSensitiveTargeting && !strongLocalScope) {
         return true;
     }
-
     if (input.taskDefinition.localPlanHint && input.taskDefinition.localPlanHint.intent !== 'unknown') {
         return false;
     }
@@ -285,7 +257,6 @@ function shouldRequireWebDomainResearch(input: {
     }
     return hasExplicitWebLookupIntent(input.text);
 }
-
 function normalizeOutputSlug(text: string): string {
     const normalized = text
         .toLowerCase()
@@ -295,7 +266,6 @@ function normalizeOutputSlug(text: string): string {
     const clipped = normalized.slice(0, 96).replace(/-+$/g, '');
     return clipped || 'task-output';
 }
-
 function inferUiFormat(text: string): PresentationContract['uiFormat'] {
     if (UI_FORMAT_ARTIFACT_CUE_PATTERN.test(text)) {
         return 'artifact';
@@ -308,26 +278,22 @@ function inferUiFormat(text: string): PresentationContract['uiFormat'] {
     }
     return 'chat_message';
 }
-
 function inferArtifactDirectory(text: string): string {
     if (UI_FORMAT_REPORT_CUE_PATTERN.test(text)) {
         return 'reports';
     }
     return 'artifacts';
 }
-
 const EXPLICIT_OUTPUT_PATH_PATTERNS: RegExp[] = [
     /(?:保存到|写入到|写到|输出到|导出到|导出为|生成到)\s*[:："]?\s*([A-Za-z0-9_./~:\\\-\u4e00-\u9fa5]+\.[A-Za-z0-9]+)/ig,
     /(?:save(?: it)? to|write(?: it)? to|output(?: it)? to|export(?: it)? to|export as)\s*[:"]?\s*([A-Za-z0-9_./~:\\\-\u4e00-\u9fa5]+\.[A-Za-z0-9]+)/ig,
 ];
-
 function sanitizeExplicitOutputPath(value: string): string {
     return value
         .trim()
         .replace(/^['"]+|['"]+$/g, '')
         .replace(/[，。；;,]+$/g, '');
 }
-
 function extractExplicitOutputTargetPath(text: string): string | null {
     let matchedPath: string | null = null;
     for (const pattern of EXPLICIT_OUTPUT_PATH_PATTERNS) {
@@ -340,12 +306,10 @@ function extractExplicitOutputTargetPath(text: string): string | null {
     }
     return matchedPath;
 }
-
 function inferFormatFromPath(filePath: string): string {
     const extension = path.extname(filePath).replace(/^\./, '').toLowerCase();
     return extension || 'md';
 }
-
 function inferArtifactFormat(text: string): string {
     const explicitOutputTargetPath = extractExplicitOutputTargetPath(text);
     if (explicitOutputTargetPath) {
@@ -359,26 +323,21 @@ function inferArtifactFormat(text: string): string {
     }
     return 'md';
 }
-
 function hasExplicitArtifactOutputIntent(text: string): boolean {
     if (extractExplicitOutputTargetPath(text)) {
         return true;
     }
-
     if (EXPLICIT_ARTIFACT_OUTPUT_INTENT_PATTERN.test(text)) {
         return true;
     }
     return false;
 }
-
 function isCodeChangeTask(text: string): boolean {
     if (CODE_CHANGE_EXCLUSION_PATTERN.test(text) && !CODE_CHANGE_PRIMARY_PATTERN.test(text)) {
         return false;
     }
-
     return CODE_CHANGE_POSITIVE_PATTERN.test(text);
 }
-
 const SOCIAL_PLATFORM_CUE_PATTERN =
     /(x\.com|twitter|推特|小红书|xiaohongshu|rednote|xhs|微信公众号|公众号|微信公众平台|mp\.weixin|reddit|facebook|instagram|linkedin|社交平台|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i;
 const SOCIAL_PUBLISH_CUE_PATTERN =
@@ -393,11 +352,9 @@ const BROWSER_UI_CUE_PATTERN =
     /(browser|playwright|网页|网站|页面|点击|填写|登录|timeline|时间线|click|form|navigate|导航)/i;
 const EXPLICIT_MANUAL_ACTION_PATTERN =
     /(登录|login|sign in|验证码|2fa|upload|上传|approve|审批|人工操作|手动操作|confirm plan|确认方案|授权)/i;
-
 function isLikelySocialPublishingTask(text: string): boolean {
     return SOCIAL_PLATFORM_CUE_PATTERN.test(text) && SOCIAL_PUBLISH_CUE_PATTERN.test(text);
 }
-
 function detectSocialPublishPlatform(text: string): PublishIntent['platform'] | null {
     if (/(?:x\.com|twitter|推特|在\s*x\s*上|到\s*x\s*上|发布到\s*x\b)/i.test(text)) {
         return 'x';
@@ -425,19 +382,16 @@ function detectSocialPublishPlatform(text: string): PublishIntent['platform'] | 
     }
     return null;
 }
-
 function buildPublishIntent(text: string): PublishIntent | undefined {
     if (!isLikelySocialPublishingTask(text)) {
         return undefined;
     }
-
     const platform = detectSocialPublishPlatform(text) ?? 'generic_social';
     const executionMode = SOCIAL_PUBLISH_DRAFT_ONLY_CUE_PATTERN.test(text)
         ? 'draft_only'
         : SOCIAL_PUBLISH_PREVIEW_CUE_PATTERN.test(text)
             ? 'preview_then_publish'
             : 'direct_publish';
-
     return {
         action: 'publish_social_post',
         platform,
@@ -445,19 +399,15 @@ function buildPublishIntent(text: string): PublishIntent | undefined {
         requiresSideEffect: executionMode !== 'draft_only',
     };
 }
-
 function hasExplicitManualActionSignal(text: string): boolean {
     return EXPLICIT_MANUAL_ACTION_PATTERN.test(text);
 }
-
 function hasExplicitAuthSignal(text: string): boolean {
     return /(登录|login|sign in|验证码|2fa|授权|oauth|auth)/i.test(text);
 }
-
 function requiresExternalAuthOrManualAction(text: string): boolean {
     return hasExplicitManualActionSignal(text);
 }
-
 function requiresVerifiedBrowserExecution(text: string): boolean {
     const publishIntent = buildPublishIntent(text);
     if (publishIntent?.requiresSideEffect) {
@@ -465,7 +415,6 @@ function requiresVerifiedBrowserExecution(text: string): boolean {
     }
     return requiresBrowserAutomationSkill(text) && EXTERNAL_SIDE_EFFECT_CUE_PATTERN.test(text);
 }
-
 function buildDefaultingPolicy(input: {
     text: string;
     language: string;
@@ -483,11 +432,9 @@ function buildDefaultingPolicy(input: {
                 : 'none',
     };
 }
-
 function hasPlanApprovalCue(text: string): boolean {
     return PLAN_APPROVAL_CUE_PATTERN.test(text);
 }
-
 function buildHitlPolicy(input: {
     text: string;
     taskDefinition: TaskDefinition;
@@ -503,53 +450,43 @@ function buildHitlPolicy(input: {
     const hostAccessReadOnly = requiresHostAccessGrant
         && hostAccessOperations.length > 0
         && hostAccessOperations.every((operation) => operation === 'read');
-
     if (input.hasManualAction) {
         reasons.push('Execution depends on a manual or authentication-gated step.');
         riskTier = 'high';
     }
-
     if (requiresHostAccessGrant) {
         reasons.push('Execution needs host-folder access outside the workspace sandbox.');
         riskTier = 'high';
     }
-
     if (codeChangeTask) {
         reasons.push('Execution is expected to modify code or workspace state.');
         riskTier = 'high';
     }
-
     if (selfManagementTask) {
         reasons.push('Execution changes Coworkany-managed configuration or extensions.');
         riskTier = 'high';
     }
-
     if (riskTier === 'low' && requiresBrowserAutomationSkill(input.text)) {
         reasons.push('Execution likely involves browser navigation or UI interaction.');
         riskTier = 'medium';
     }
-
     const hostAccessOnlyReview =
         hostAccessReadOnly &&
         !input.hasManualAction &&
         !codeChangeTask &&
         !selfManagementTask;
-
     const requiresPlanConfirmation = false;
-
     return {
         riskTier,
         requiresPlanConfirmation,
         reasons,
     };
 }
-
 const HITL_RISK_SCORE: Record<HitlPolicy['riskTier'], number> = {
     low: 0,
     medium: 1,
     high: 2,
 };
-
 function mergeHitlPolicies(policies: HitlPolicy[]): HitlPolicy {
     if (policies.length === 0) {
         return {
@@ -558,25 +495,21 @@ function mergeHitlPolicies(policies: HitlPolicy[]): HitlPolicy {
             reasons: [],
         };
     }
-
     let selected = policies[0]!;
     for (const policy of policies.slice(1)) {
         if (HITL_RISK_SCORE[policy.riskTier] > HITL_RISK_SCORE[selected.riskTier]) {
             selected = policy;
         }
     }
-
     return {
         riskTier: selected.riskTier,
         requiresPlanConfirmation: policies.some((policy) => policy.requiresPlanConfirmation),
         reasons: Array.from(new Set(policies.flatMap((policy) => policy.reasons))),
     };
 }
-
 function dedupePaths(paths: Array<string | undefined>): string[] {
     return Array.from(new Set(paths.filter((value): value is string => typeof value === 'string' && value.length > 0)));
 }
-
 function buildRuntimeIsolationPolicy(input: {
     workspacePath: string;
     text: string;
@@ -589,27 +522,22 @@ function buildRuntimeIsolationPolicy(input: {
         input.workspacePath,
         ...resolvedTargets,
     ]);
-
     const writableWorkspacePaths = input.taskDefinition.localPlanHint?.requiredAccess?.some((access) =>
         access === 'write' || access === 'move' || access === 'delete'
     ) || isCodeChangeTask(input.text)
         ? allowedWorkspacePaths
         : [input.workspacePath];
-
     const notes = [
         'Connector/toolpack access is denied by default unless explicitly enabled for the task session.',
     ];
-
     if (includesExternalTargets) {
         notes.push('Filesystem access is restricted to the workspace plus the explicitly resolved host targets in the frozen contract.');
     } else {
         notes.push('Filesystem access is restricted to the current workspace by default.');
     }
-
     if (input.goalFrame.taskCategory === 'research' || input.goalFrame.taskCategory === 'browser' || input.goalFrame.taskCategory === 'mixed') {
         notes.push('External network connectors require explicit domain allowlisting before MCP toolpacks can reach them.');
     }
-
     return {
         connectorIsolationMode: 'deny_by_default',
         filesystemMode: includesExternalTargets ? 'workspace_plus_resolved_targets' : 'workspace_only',
@@ -623,18 +551,15 @@ function buildRuntimeIsolationPolicy(input: {
         notes,
     };
 }
-
 function isPreferencePersistenceTask(text: string): boolean {
     return PREFERENCE_PERSISTENCE_PATTERN.test(text);
 }
-
 function isWorkspaceMemoryTask(goalFrame: GoalFrame): boolean {
     return goalFrame.taskCategory === 'workspace'
         || goalFrame.taskCategory === 'coding'
         || goalFrame.taskCategory === 'research'
         || goalFrame.taskCategory === 'mixed';
 }
-
 function buildSessionIsolationPolicy(): SessionIsolationPolicy {
     return {
         workspaceBindingMode: 'frozen_workspace_only',
@@ -649,7 +574,6 @@ function buildSessionIsolationPolicy(): SessionIsolationPolicy {
         ],
     };
 }
-
 function buildMemoryIsolationPolicy(input: {
     text: string;
     goalFrame: GoalFrame;
@@ -661,7 +585,6 @@ function buildMemoryIsolationPolicy(input: {
     if (input.goalFrame.taskCategory === 'app_management') {
         readScopes.push('system');
     }
-
     const writeScopes: MemoryIsolationPolicy['writeScopes'] = ['task'];
     if (isWorkspaceMemoryTask(input.goalFrame)) {
         writeScopes.push('workspace');
@@ -669,13 +592,11 @@ function buildMemoryIsolationPolicy(input: {
     if (isPreferencePersistenceTask(input.text)) {
         writeScopes.push('user_preference');
     }
-
     const defaultWriteScope: MemoryIsolationPolicy['defaultWriteScope'] = isPreferencePersistenceTask(input.text)
         ? 'user_preference'
         : isWorkspaceMemoryTask(input.goalFrame)
             ? 'workspace'
             : 'task';
-
     return {
         classificationMode: 'scope_tagged',
         readScopes: Array.from(new Set(readScopes)),
@@ -688,7 +609,6 @@ function buildMemoryIsolationPolicy(input: {
         ],
     };
 }
-
 function buildTenantIsolationPolicy(): TenantIsolationPolicy {
     return {
         workspaceBoundaryMode: 'same_workspace_only',
@@ -703,7 +623,6 @@ function buildTenantIsolationPolicy(): TenantIsolationPolicy {
         ],
     };
 }
-
 function buildMissingInfo(clarification: ClarificationDecision): MissingInfoItem[] {
     return clarification.missingFields.map((field, index) => ({
         field,
@@ -712,7 +631,6 @@ function buildMissingInfo(clarification: ClarificationDecision): MissingInfoItem
         question: clarification.questions[index] || clarification.questions[0],
     }));
 }
-
 function buildDeliverables(input: {
     text: string;
     workspacePath: string;
@@ -725,7 +643,6 @@ function buildDeliverables(input: {
     const artifactDir = inferArtifactDirectory(input.text);
     const explicitOutputTargetPath = extractExplicitOutputTargetPath(input.text);
     const explicitArtifactOutputIntent = hasExplicitArtifactOutputIntent(input.text);
-
     if (
         input.localPlanWorkflow &&
         LOCAL_PLAN_WRITE_WORKFLOW_PATTERN.test(input.localPlanWorkflow) &&
@@ -740,7 +657,6 @@ function buildDeliverables(input: {
             required: true,
         });
     }
-
     if (isCodeChangeTask(input.text)) {
         deliverables.push({
             id: randomUUID(),
@@ -750,7 +666,6 @@ function buildDeliverables(input: {
             required: true,
         });
     }
-
     if (explicitOutputTargetPath) {
         const format = inferFormatFromPath(explicitOutputTargetPath);
         const type = format === 'md' ? 'report_file' : 'artifact_file';
@@ -776,7 +691,6 @@ function buildDeliverables(input: {
             format,
         });
     }
-
     if (
         deliverables.length === 0 &&
         isComplexPlanningTask(input.text, 'immediate_task') &&
@@ -792,7 +706,6 @@ function buildDeliverables(input: {
             format: 'md',
         });
     }
-
     if (deliverables.length === 0) {
         deliverables.push({
             id: randomUUID(),
@@ -803,10 +716,8 @@ function buildDeliverables(input: {
             format: input.presentation.uiFormat,
         });
     }
-
     return deliverables;
 }
-
 function buildResumeStrategy(): ResumeStrategy {
     return {
         mode: 'continue_from_saved_context',
@@ -815,13 +726,11 @@ function buildResumeStrategy(): ResumeStrategy {
         preserveArtifacts: true,
     };
 }
-
 function detectTaskCategory(input: {
     text: string;
     taskDefinition: TaskDefinition;
 }): GoalFrame['taskCategory'] {
     const { text, taskDefinition } = input;
-
     if (taskDefinition.localPlanHint) {
         return 'workspace';
     }
@@ -842,10 +751,8 @@ function detectTaskCategory(input: {
     }
     return 'mixed';
 }
-
 function extractPreferences(text: string): string[] {
     const preferences: string[] = [];
-
     if (PREFERENCE_BEST_PRACTICE_PATTERN.test(text)) {
         preferences.push('Prefer best-practice or high-quality approaches.');
     }
@@ -858,17 +765,14 @@ function extractPreferences(text: string): string[] {
     if (PREFERENCE_CHINESE_PATTERN.test(text)) {
         preferences.push('Prefer Chinese output.');
     }
-
     return preferences;
 }
-
 function buildContextSignals(input: {
     text: string;
     mode: NormalizedWorkRequest['mode'];
     taskDefinition: TaskDefinition;
 }): string[] {
     const signals = new Set<string>([`mode:${input.mode}`]);
-
     if (CONTEXT_CURRENT_PROJECT_PATTERN.test(input.text)) {
         signals.add('references_current_project');
     }
@@ -881,10 +785,8 @@ function buildContextSignals(input: {
     if (input.taskDefinition.preferredWorkflow) {
         signals.add(`workflow:${input.taskDefinition.preferredWorkflow}`);
     }
-
     return Array.from(signals);
 }
-
 function buildGoalFrame(input: {
     text: string;
     mode: NormalizedWorkRequest['mode'];
@@ -903,7 +805,6 @@ function buildGoalFrame(input: {
         }),
     };
 }
-
 function appendResearchQuery(
     queries: ResearchQuery[],
     seen: Set<string>,
@@ -919,7 +820,6 @@ function appendResearchQuery(
         ...query,
     });
 }
-
 function buildResearchQueries(input: {
     text: string;
     mode: NormalizedWorkRequest['mode'];
@@ -929,7 +829,6 @@ function buildResearchQueries(input: {
     const queries: ResearchQuery[] = [];
     const seen = new Set<string>();
     const normalizedText = input.text.trim();
-
     if (CONTEXT_CURRENT_PROJECT_PATTERN.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'context_research',
@@ -939,7 +838,6 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     if (CONTEXT_FOLLOW_UP_EXTENDED_PATTERN.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'context_research',
@@ -956,9 +854,7 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     const directUrls = input.taskDefinition.sourceUrls ?? [];
-
     if (shouldRequireWebDomainResearch({
         text: normalizedText,
         mode: input.mode,
@@ -975,7 +871,6 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     if (isComplexPlanningTask(normalizedText, input.mode) || RESEARCH_BEST_PRACTICE_CUE_PATTERN.test(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'domain_research',
@@ -992,7 +887,6 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     if (isPriceSensitiveInvestmentTask(normalizedText)) {
         appendResearchQuery(queries, seen, {
             kind: 'domain_research',
@@ -1002,7 +896,6 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     if (input.taskDefinition.localPlanHint) {
         appendResearchQuery(queries, seen, {
             kind: 'feasibility_research',
@@ -1012,7 +905,6 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     if (input.hasManualAction) {
         appendResearchQuery(queries, seen, {
             kind: 'feasibility_research',
@@ -1022,7 +914,6 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     if (queries.length === 0 && input.mode === 'immediate_task') {
         appendResearchQuery(queries, seen, {
             kind: 'context_research',
@@ -1032,10 +923,8 @@ function buildResearchQueries(input: {
             status: 'pending',
         });
     }
-
     return queries;
 }
-
 function buildResearchEvidence(input: {
     sourceText: string;
     taskDefinition: TaskDefinition;
@@ -1061,7 +950,6 @@ function buildResearchEvidence(input: {
             collectedAt,
         },
     ];
-
     if (input.taskDefinition.localPlanHint?.targetFolder) {
         evidence.push({
             id: randomUUID(),
@@ -1072,7 +960,6 @@ function buildResearchEvidence(input: {
             collectedAt,
         });
     }
-
     if ((input.taskDefinition.sourceUrls?.length ?? 0) > 0) {
         evidence.push({
             id: randomUUID(),
@@ -1083,10 +970,8 @@ function buildResearchEvidence(input: {
             collectedAt,
         });
     }
-
     return evidence;
 }
-
 function buildUncertaintyRegistry(input: {
     clarification: ClarificationDecision;
     taskDefinition: TaskDefinition;
@@ -1104,7 +989,6 @@ function buildUncertaintyRegistry(input: {
         question: input.clarification.questions[index] || input.clarification.questions[0],
         supportingEvidenceIds: evidenceIds,
     }));
-
     registry.push({
         id: randomUUID(),
         topic: 'output_language',
@@ -1114,7 +998,6 @@ function buildUncertaintyRegistry(input: {
         defaultValue: input.defaultingPolicy.outputLanguage,
         supportingEvidenceIds: evidenceIds,
     });
-
     registry.push({
         id: randomUUID(),
         topic: 'ui_format',
@@ -1124,7 +1007,6 @@ function buildUncertaintyRegistry(input: {
         defaultValue: input.defaultingPolicy.uiFormat,
         supportingEvidenceIds: evidenceIds,
     });
-
     registry.push({
         id: randomUUID(),
         topic: 'artifact_directory',
@@ -1134,7 +1016,6 @@ function buildUncertaintyRegistry(input: {
         defaultValue: input.defaultingPolicy.artifactDirectory,
         supportingEvidenceIds: evidenceIds,
     });
-
     if (input.taskDefinition.localPlanHint?.targetFolder) {
         registry.push({
             id: randomUUID(),
@@ -1145,7 +1026,6 @@ function buildUncertaintyRegistry(input: {
             supportingEvidenceIds: evidenceIds,
         });
     }
-
     if (input.hasManualAction) {
         registry.push({
             id: randomUUID(),
@@ -1156,10 +1036,8 @@ function buildUncertaintyRegistry(input: {
             supportingEvidenceIds: evidenceIds,
         });
     }
-
     return registry;
 }
-
 function buildStrategyOptions(input: {
     text: string;
     taskDefinition: TaskDefinition;
@@ -1168,7 +1046,6 @@ function buildStrategyOptions(input: {
 }): { strategyOptions: StrategyOption[]; selectedStrategyId: string } {
     const evidenceIds = input.evidence.map((item) => item.id);
     const strategyOptions: StrategyOption[] = [];
-
     if (input.taskDefinition.localPlanHint?.preferredWorkflow) {
         const selectedId = randomUUID();
         strategyOptions.push({
@@ -1194,7 +1071,6 @@ function buildStrategyOptions(input: {
         });
         return { strategyOptions, selectedStrategyId: selectedId };
     }
-
     if (isDirectSystemShellActionTask(input.text)) {
         const selectedId = randomUUID();
         strategyOptions.push({
@@ -1220,7 +1096,6 @@ function buildStrategyOptions(input: {
         });
         return { strategyOptions, selectedStrategyId: selectedId };
     }
-
     if (isCodeChangeTask(input.text)) {
         const selectedId = randomUUID();
         strategyOptions.push({
@@ -1246,7 +1121,6 @@ function buildStrategyOptions(input: {
         });
         return { strategyOptions, selectedStrategyId: selectedId };
     }
-
     if (input.deliverables.some((deliverable) => deliverable.type === 'report_file' || deliverable.type === 'artifact_file')) {
         const selectedId = randomUUID();
         strategyOptions.push({
@@ -1272,7 +1146,6 @@ function buildStrategyOptions(input: {
         });
         return { strategyOptions, selectedStrategyId: selectedId };
     }
-
     const selectedId = randomUUID();
     strategyOptions.push({
         id: selectedId,
@@ -1295,10 +1168,8 @@ function buildStrategyOptions(input: {
         selected: false,
         rejectionReason: 'Direct execution is sufficient for the current task shape.',
     });
-
     return { strategyOptions, selectedStrategyId: selectedId };
 }
-
 function buildKnownRisks(input: {
     clarification: ClarificationDecision;
     taskDefinition: TaskDefinition;
@@ -1306,7 +1177,6 @@ function buildKnownRisks(input: {
     researchQueries: ResearchQuery[];
 }): string[] {
     const risks: string[] = [];
-
     if (input.clarification.required) {
         risks.push('Blocking task details are still unresolved.');
     }
@@ -1319,10 +1189,8 @@ function buildKnownRisks(input: {
     if (input.researchQueries.some((query) => query.kind === 'domain_research')) {
         risks.push('Best-practice assumptions may change after deeper domain research is performed.');
     }
-
     return risks;
 }
-
 function buildReplanPolicy(): ReplanPolicy {
     return {
         allowReturnToResearch: true,
@@ -1335,16 +1203,13 @@ function buildReplanPolicy(): ReplanPolicy {
         ],
     };
 }
-
 function isCoworkanySelfManagementTask(text: string): boolean {
     return COWORKANY_SELF_MANAGEMENT_DOMAIN_PATTERN.test(text)
         && COWORKANY_SELF_MANAGEMENT_ACTION_PATTERN.test(text);
 }
-
 function requiresBrowserAutomationSkill(text: string): boolean {
     return BROWSER_UI_CUE_PATTERN.test(text) || isLikelySocialPublishingTask(text);
 }
-
 function isDirectSystemShellActionTask(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -1355,7 +1220,6 @@ function isDirectSystemShellActionTask(text: string): boolean {
     }
     return !SYSTEM_SHELL_ACTION_EXPLANATION_PATTERN.test(trimmed);
 }
-
 function inferExecutionRequirements(text: string): TaskDefinition['executionRequirements'] {
     const requirements: NonNullable<TaskDefinition['executionRequirements']> = [];
     if (isDirectSystemShellActionTask(text)) {
@@ -1378,7 +1242,6 @@ function inferExecutionRequirements(text: string): TaskDefinition['executionRequ
     }
     return requirements.length > 0 ? requirements : undefined;
 }
-
 function inferPreferredTools(
     text: string,
     baseTools: string[],
@@ -1411,7 +1274,6 @@ function inferPreferredTools(
     }
     return Array.from(merged);
 }
-
 function inferPreferredSkills(text: string, mode: NormalizedWorkRequest['mode']): string[] {
     const skills = ['task-orchestrator'];
     if (isDirectSystemShellActionTask(text)) {
@@ -1428,25 +1290,21 @@ function inferPreferredSkills(text: string, mode: NormalizedWorkRequest['mode'])
     }
     return Array.from(new Set(skills));
 }
-
 function isLikelyChat(text: string): boolean {
     const trimmed = text.trim().toLowerCase();
     if (!trimmed) return true;
     return CHAT_ACK_PATTERN.test(trimmed);
 }
-
 type ForcedIntentHint = {
     intent: IntentRouting['intent'];
     reasonCode: string;
     forcedByUserSelection: boolean;
 };
-
 function extractForcedIntentHint(text: string): ForcedIntentHint | undefined {
     const trimmed = text.trim();
     if (!trimmed) {
         return undefined;
     }
-
     const routedFollowUpMatch = trimmed.match(ROUTED_FOLLOW_UP_PATTERN);
     if (routedFollowUpMatch?.[1]) {
         const intent = resolveUserRouteIntent(routedFollowUpMatch[1]);
@@ -1458,7 +1316,6 @@ function extractForcedIntentHint(text: string): ForcedIntentHint | undefined {
             };
         }
     }
-
     const routeTokenMatch = trimmed.match(ROUTE_TOKEN_PATTERN);
     if (routeTokenMatch?.[1]) {
         const intent = resolveUserRouteIntent(routeTokenMatch[1]);
@@ -1470,7 +1327,6 @@ function extractForcedIntentHint(text: string): ForcedIntentHint | undefined {
             };
         }
     }
-
     for (const command of EXPLICIT_INTENT_COMMANDS) {
         if (command.pattern.test(trimmed)) {
             return {
@@ -1480,10 +1336,8 @@ function extractForcedIntentHint(text: string): ForcedIntentHint | undefined {
             };
         }
     }
-
     return undefined;
 }
-
 function resolveWorkRequestMode(input: {
     scheduledIntent: ParsedScheduledIntent | null;
     chainedScheduledStages: ChainedScheduledStageIntent[];
@@ -1495,7 +1349,6 @@ function resolveWorkRequestMode(input: {
             ? 'scheduled_multi_task'
             : 'scheduled_task';
     }
-
     if (input.forcedIntentHint?.intent === 'scheduled_task') {
         return 'scheduled_task';
     }
@@ -1511,10 +1364,8 @@ function resolveWorkRequestMode(input: {
     if (input.forcedIntentHint?.intent === 'immediate_task') {
         return 'immediate_task';
     }
-
     return isLikelyChat(input.executableText) ? 'chat' : 'immediate_task';
 }
-
 function buildIntentRouting(input: {
     sourceText: string;
     executableText: string;
@@ -1530,7 +1381,6 @@ function buildIntentRouting(input: {
             : input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task'
                 ? 'scheduled_task'
                 : 'immediate_task';
-
     if (
         input.forcedIntentHint?.intent === 'chat'
         && isDirectSystemShellActionTask(input.executableText)
@@ -1542,7 +1392,6 @@ function buildIntentRouting(input: {
             needsDisambiguation: false,
         };
     }
-
     if (input.forcedIntentHint?.reasonCode === 'explicit_command') {
         return {
             intent: input.forcedIntentHint.intent,
@@ -1552,7 +1401,6 @@ function buildIntentRouting(input: {
             forcedByUserSelection: input.forcedIntentHint.forcedByUserSelection,
         };
     }
-
     if (input.scheduledIntentDetected) {
         return {
             intent: 'scheduled_task',
@@ -1561,7 +1409,6 @@ function buildIntentRouting(input: {
             needsDisambiguation: false,
         };
     }
-
     if (input.forcedIntentHint) {
         return {
             intent: input.forcedIntentHint.intent,
@@ -1571,7 +1418,6 @@ function buildIntentRouting(input: {
             forcedByUserSelection: input.forcedIntentHint.forcedByUserSelection,
         };
     }
-
     if (intent === 'chat') {
         return {
             intent: 'chat',
@@ -1580,7 +1426,6 @@ function buildIntentRouting(input: {
             needsDisambiguation: false,
         };
     }
-
     const reasonCodes: string[] = [];
     if (isCodeChangeTask(input.sourceText)) {
         reasonCodes.push('code_change_cue');
@@ -1597,14 +1442,11 @@ function buildIntentRouting(input: {
     if (requiresBrowserAutomationSkill(input.executableText)) {
         reasonCodes.push('browser_ui_cue');
     }
-
     if (reasonCodes.length === 0) {
         reasonCodes.push('mixed_or_ambiguous');
     }
-
     const confidence = reasonCodes.includes('mixed_or_ambiguous') ? 0.62 : 0.84;
     const needsDisambiguation = false;
-
     return {
         intent,
         confidence,
@@ -1612,7 +1454,6 @@ function buildIntentRouting(input: {
         needsDisambiguation,
     };
 }
-
 function buildTaskDraftRequired(input: {
     mode: NormalizedWorkRequest['mode'];
     planAlreadyApproved: boolean;
@@ -1628,12 +1469,10 @@ function buildTaskDraftRequired(input: {
     if (input.clarification.required || input.intentRouting.needsDisambiguation) {
         return false;
     }
-
     const isScheduled = input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task';
     if (isScheduled || input.hasManualAction || hasExplicitArtifactOutputIntent(input.sourceText)) {
         return false;
     }
-
     const hasStateChangingDeliverable = input.deliverables.some((deliverable) =>
         deliverable.type === 'report_file'
         || deliverable.type === 'artifact_file'
@@ -1643,10 +1482,8 @@ function buildTaskDraftRequired(input: {
     if (hasStateChangingDeliverable && isComplexPlanningTask(input.sourceText, 'immediate_task')) {
         return false;
     }
-
     return false;
 }
-
 function buildClarificationDecision(input: {
     sourceText: string;
     executableText: string;
@@ -1661,7 +1498,6 @@ function buildClarificationDecision(input: {
             assumptions: [],
         };
     }
-
     const trimmed = input.executableText.trim();
     const language = detectLanguage(input.sourceText);
     const directSystemShellAction = isDirectSystemShellActionTask(trimmed);
@@ -1669,7 +1505,6 @@ function buildClarificationDecision(input: {
         !directSystemShellAction && isAmbiguousReferenceRequest(trimmed);
     const tooShortToAct = !directSystemShellAction && trimmed.length > 0 && trimmed.length < 8;
     const missingExecutionTargetIdentifier = requiresExecutionTargetIdentifierClarification(trimmed);
-
     if (missingExecutionTargetIdentifier) {
         return {
             required: true,
@@ -1684,7 +1519,6 @@ function buildClarificationDecision(input: {
             assumptions: [],
         };
     }
-
     if (ambiguousReference || tooShortToAct) {
         return {
             required: true,
@@ -1697,7 +1531,6 @@ function buildClarificationDecision(input: {
             assumptions: [],
         };
     }
-
     return {
         required: false,
         questions: [],
@@ -1706,23 +1539,19 @@ function buildClarificationDecision(input: {
         assumptions: [],
     };
 }
-
 function splitSegments(text: string): string[] {
     return text
         .split(/[\n。！？!?]+/)
         .map((segment) => segment.trim())
         .filter(Boolean);
 }
-
 function isAmbiguousReferenceRequest(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
         return false;
     }
-
     return AMBIGUOUS_REFERENCE_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
-
 function buildTaskDefinition(
     text: string,
     mode: NormalizedWorkRequest['mode'],
@@ -1755,7 +1584,6 @@ function buildTaskDefinition(
                     : 'Provide an explicit buy-price value or buy-price range with currency units.'
             );
         }
-
         const hasTimeAnchorCriterion = acceptanceCriteria.some((criterion) =>
             ACCEPTANCE_CRITERIA_TIME_ANCHOR_PATTERN.test(criterion)
         );
@@ -1786,7 +1614,6 @@ function buildTaskDefinition(
     });
     const executionRequirements = inferExecutionRequirements(text);
     const sourceUrls = extractExplicitUrls(text);
-
     return {
         id: randomUUID(),
         title: objective.slice(0, 60) || 'Task',
@@ -1803,7 +1630,6 @@ function buildTaskDefinition(
         executionRequirements,
     };
 }
-
 function toSystemPlatform(platform?: string): NodeJS.Platform | undefined {
     if (platform === 'macos' || platform === 'darwin') {
         return 'darwin';
@@ -1816,7 +1642,6 @@ function toSystemPlatform(platform?: string): NodeJS.Platform | undefined {
     }
     return undefined;
 }
-
 function buildEffectiveSystemContext(input: {
     environmentContext?: PlatformRuntimeContext;
     systemContext?: SystemFolderResolutionOptions;
@@ -1829,7 +1654,6 @@ function buildEffectiveSystemContext(input: {
         ...(platform ? { platform } : {}),
     };
 }
-
 function buildScheduledTaskDefinitions(input: {
     scheduledIntent: ParsedScheduledIntent;
     mode: NormalizedWorkRequest['mode'];
@@ -1848,10 +1672,8 @@ function buildScheduledTaskDefinitions(input: {
     if (chainedStages.length === 0) {
         return [primaryTask];
     }
-
     const tasks: TaskDefinition[] = [primaryTask];
     let previousTask = primaryTask;
-
     for (const stage of chainedStages) {
         const stagePublishIntent = buildPublishIntent(stage.taskQuery);
         const stageTask = buildTaskDefinition(
@@ -1865,10 +1687,8 @@ function buildScheduledTaskDefinitions(input: {
         tasks.push(stageTask);
         previousTask = stageTask;
     }
-
     return tasks;
 }
-
 function buildScheduledStages(input: {
     scheduledIntent: ParsedScheduledIntent;
     tasks: TaskDefinition[];
@@ -1876,10 +1696,8 @@ function buildScheduledStages(input: {
     if (input.tasks.length === 0) {
         return [];
     }
-
     const chainedStages = input.scheduledIntent.chainedStages ?? [];
     let executeAtMs = input.scheduledIntent.executeAt.getTime();
-
     return input.tasks.map((task, index) => {
         if (index > 0) {
             const chainedStage = chainedStages[index - 1];
@@ -1898,7 +1716,6 @@ function buildScheduledStages(input: {
         };
     });
 }
-
 function buildPresentationContract(text: string, ttsEnabled: boolean): PresentationContract {
     return {
         uiFormat: inferUiFormat(text),
@@ -1908,25 +1725,21 @@ function buildPresentationContract(text: string, ttsEnabled: boolean): Presentat
         language: detectLanguage(text),
     };
 }
-
 function unwrapStructuredFollowUpSourceText(text: string): string {
     const trimmed = text.trim();
     if (!trimmed) {
         return trimmed;
     }
-
     const correctionWrappedMatch = trimmed.match(STRUCTURED_CORRECTION_PATTERN);
     if (correctionWrappedMatch?.[1]) {
         const baseObjective = correctionWrappedMatch[1].trim();
         const correctionText = (correctionWrappedMatch[2] ?? '').trim();
         return [baseObjective, correctionText].filter(Boolean).join('\n').trim();
     }
-
     const approvalWrappedMatch = trimmed.match(STRUCTURED_APPROVAL_PATTERN);
     if (approvalWrappedMatch?.[1]) {
         return approvalWrappedMatch[1].trim();
     }
-
     const routedFollowUpMatch = trimmed.match(STRUCTURED_ROUTE_PATTERN);
     if (routedFollowUpMatch?.[1]) {
         const routeIntent = resolveUserRouteIntent(routedFollowUpMatch[2]);
@@ -1934,15 +1747,12 @@ function unwrapStructuredFollowUpSourceText(text: string): string {
             return routedFollowUpMatch[1].trim();
         }
     }
-
     const baseOnlyWrappedMatch = trimmed.match(STRUCTURED_BASE_ONLY_PATTERN);
     if (baseOnlyWrappedMatch?.[1]) {
         return baseOnlyWrappedMatch[1].trim();
     }
-
     return trimmed;
 }
-
 function hasStructuredApprovalFollowUp(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -1950,16 +1760,13 @@ function hasStructuredApprovalFollowUp(text: string): boolean {
     }
     return STRUCTURED_APPROVAL_PATTERN.test(trimmed);
 }
-
 function isContextRichFollowUp(text: string): boolean {
     const trimmed = text.trim();
     if (!trimmed) {
         return false;
     }
-
     return trimmed.length < 8 || isAmbiguousReferenceRequest(trimmed);
 }
-
 function buildAnalysisSourceText(input: {
     sourceText: string;
     followUpContext?: WorkRequestFollowUpContext;
@@ -1968,12 +1775,10 @@ function buildAnalysisSourceText(input: {
     if (!trimmed || !isContextRichFollowUp(trimmed)) {
         return input.sourceText;
     }
-
     const baseObjective = input.followUpContext?.baseObjective?.trim();
     if (!baseObjective) {
         return input.sourceText;
     }
-
     const latestAssistantMessage = input.followUpContext?.latestAssistantMessage?.trim() || '';
     const recentMessages = (input.followUpContext?.recentMessages ?? [])
         .map((message) => ({
@@ -1988,7 +1793,6 @@ function buildAnalysisSourceText(input: {
         trimmed,
         ...recentMessages.map((message) => message.content),
     ].join('\n'));
-
     const lines = [baseObjective];
     if (latestAssistantMessage) {
         lines.push(
@@ -1997,7 +1801,6 @@ function buildAnalysisSourceText(input: {
                 : `Recent progress: ${latestAssistantMessage}`
         );
     }
-
     for (const message of recentMessages) {
         const prefix = language.startsWith('zh')
             ? (message.role === 'user' ? '用户' : '助手')
@@ -2007,16 +1810,13 @@ function buildAnalysisSourceText(input: {
             lines.push(formatted);
         }
     }
-
     lines.push(
         language.startsWith('zh')
             ? `后续操作：${trimmed}`
             : `Follow-up action: ${trimmed}`
     );
-
     return lines.join('\n');
 }
-
 export function analyzeWorkRequest(input: {
     sourceText: string;
     workspacePath: string;
@@ -2220,14 +2020,12 @@ export function analyzeWorkRequest(input: {
         hasManualAction,
         researchQueries,
     });
-
     const scheduledStages = scheduledIntent
         ? buildScheduledStages({
             scheduledIntent,
             tasks,
         })
         : [];
-
     return {
         schemaVersion: 1,
         mode,
@@ -2281,14 +2079,12 @@ export function analyzeWorkRequest(input: {
         createdAt: new Date().toISOString(),
     };
 }
-
 export function freezeWorkRequest(request: NormalizedWorkRequest): FrozenWorkRequest {
     const selectedStrategy = request.strategyOptions?.find((option) => option.id === request.selectedStrategyId);
     const sourcesChecked = Array.from(new Set((request.researchEvidence ?? []).map((evidence) => evidence.source)));
     const blockingUnknownCount = (request.uncertaintyRegistry ?? [])
         .filter((item) => item.status === 'blocking_unknown')
         .length;
-
     return {
         ...request,
         id: randomUUID(),
@@ -2301,7 +2097,6 @@ export function freezeWorkRequest(request: NormalizedWorkRequest): FrozenWorkReq
         },
     };
 }
-
 export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
     const steps: ExecutionPlan['steps'] = [];
     const goalFramingStepId = randomUUID();
@@ -2312,7 +2107,6 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
         .some((item) => item.status === 'blocking_unknown');
     const completedResearchCount = (request.researchEvidence ?? []).length;
     const researchQueryCount = request.researchQueries?.length ?? 0;
-
     steps.push({
         stepId: goalFramingStepId,
         kind: 'goal_framing',
@@ -2351,7 +2145,6 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
         status: hasBlockingUnknowns ? 'blocked' : 'completed',
         dependencies: [uncertaintyStepId],
     });
-
     const executionDependencies = [contractFreezeStepId];
     const executionSteps = request.tasks.map((task) => ({
         task,
@@ -2373,7 +2166,6 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
             dependencies: [...executionDependencies, ...taskDependencyStepIds],
         });
     }
-
     const reductionStepId = randomUUID();
     steps.push({
         stepId: reductionStepId,
@@ -2383,7 +2175,6 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
         status: hasBlockingUnknowns ? 'blocked' : 'pending',
         dependencies: executionStepIds,
     });
-
     steps.push({
         stepId: randomUUID(),
         kind: 'presentation',
@@ -2392,14 +2183,12 @@ export function buildExecutionPlan(request: FrozenWorkRequest): ExecutionPlan {
         status: hasBlockingUnknowns ? 'blocked' : 'pending',
         dependencies: [reductionStepId],
     });
-
     return {
         workRequestId: request.id,
         runMode: request.tasks.length > 1 ? 'dag' : 'single',
         steps,
     };
 }
-
 export function buildExecutionQueryForTaskIds(
     request: Pick<FrozenWorkRequest, 'tasks' | 'deliverables' | 'checkpoints'>,
     taskIds?: string[],
@@ -2411,7 +2200,6 @@ export function buildExecutionQueryForTaskIds(
     const selectedTasks = taskIds && taskIds.length > 0
         ? request.tasks.filter((task) => taskIds.includes(task.id))
         : request.tasks;
-
     return selectedTasks
         .map((task) => {
             const parts = [task.objective];
@@ -2440,11 +2228,9 @@ export function buildExecutionQueryForTaskIds(
         })
         .join('\n\n');
 }
-
 export function buildExecutionQuery(request: FrozenWorkRequest): string {
     return buildExecutionQueryForTaskIds(request);
 }
-
 export function reduceWorkResult(input: {
     canonicalResult: string;
     request: FrozenWorkRequest;
@@ -2457,7 +2243,6 @@ export function reduceWorkResult(input: {
         input.request.presentation.ttsMode === 'full' || input.request.presentation.ttsMaxChars <= 0
             ? normalizedForSpeech
             : normalizedForSpeech.slice(0, input.request.presentation.ttsMaxChars);
-
     return {
         canonicalResult,
         uiSummary,

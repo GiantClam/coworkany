@@ -4,7 +4,7 @@
  * Type definitions for calendar provider interface and related types
  */
 
-import type { CalendarEvent, CalendarSummary } from '../../agent/jarvis/types';
+import type { CalendarEvent, CalendarSummary } from '../../runtime/jarvis/types';
 
 // ============================================================================
 // Provider Configuration

@@ -7,7 +7,7 @@
 
 import * as os from 'os';
 import { ToolDefinition, ToolContext } from '../standard';
-import { getDaemonService } from '../../agent/jarvis/daemonService';
+import { getDaemonService } from '../../runtime/jarvis/daemonService';
 
 const daemonService = getDaemonService();
 

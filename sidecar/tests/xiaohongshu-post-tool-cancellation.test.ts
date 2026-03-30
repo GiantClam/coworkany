@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { browserService } from '../src/services/browserService';
+import { browserService } from '../src/runtime/browser/browserService';
 import { xiaohongshuPostTool } from '../src/tools/xiaohongshuPost';
 
 const activeSpies: Array<{ mockRestore: () => void }> = [];

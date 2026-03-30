@@ -9,8 +9,8 @@ import {
     freezeWorkRequest,
     reduceWorkResult,
 } from '../src/orchestration/workRequestAnalyzer';
-import { prepareWorkRequestContext } from '../src/orchestration/workRequestRuntime';
-import { WorkRequestStore } from '../src/orchestration/workRequestStore';
+import { prepareWorkRequestContext } from '../src/runtime/workRequest/runtime';
+import { WorkRequestStore } from '../src/runtime/workRequest/store';
 import { ScheduledTaskStore } from '../src/scheduling/scheduledTasks';
 
 const tempDirs: string[] = [];
