@@ -4,6 +4,9 @@ import { listMcpToolsSafe } from '../mcp/clients';
 import { deleteFilesTool, sendEmailTool } from '../tools/approval-tools';
 import { bashTool, bashApprovalTool } from '../tools/bash';
 import { enterpriseTools } from '../tools/enterprise';
+import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
+import { runtimeScorers } from '../scorers/runtime';
+import { getWorkspaceForRequestContext } from '../workspace/runtime';
 const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
 export const coworker = new Agent({
     id: 'coworker',
@@ -28,10 +31,16 @@ export const coworker = new Agent({
             ...mcpTools,
         };
     },
+    workspace: async ({ requestContext }) => {
+        return await getWorkspaceForRequestContext(requestContext);
+    },
     defaultOptions: {
         requireToolApproval: true,
         autoResumeSuspendedTools: true,
         toolCallConcurrency: 1,
         maxSteps: 16,
+        inputProcessors: guardrailInputProcessors,
+        outputProcessors: guardrailOutputProcessors,
+        scorers: runtimeScorers,
     },
 });

@@ -3,6 +3,9 @@ import { coworker } from './coworker';
 import { researcher } from './researcher';
 import { coder } from './coder';
 import { memoryConfig } from '../memory/config';
+import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
+import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runtime';
+import { getWorkspaceForRequestContext } from '../workspace/runtime';
 
 const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
 const UNSAFE_DELEGATION_PATTERNS: RegExp[] = [
@@ -32,11 +35,24 @@ export const supervisor = new Agent({
         researcher,
         coder,
     },
+    workspace: async ({ requestContext }) => {
+        return await getWorkspaceForRequestContext(requestContext);
+    },
     defaultOptions: {
         requireToolApproval: true,
         autoResumeSuspendedTools: true,
         toolCallConcurrency: 1,
         maxSteps: 20,
+        inputProcessors: guardrailInputProcessors,
+        outputProcessors: guardrailOutputProcessors,
+        scorers: runtimeScorers,
+        isTaskComplete: {
+            scorers: supervisorIsTaskCompleteScorers,
+            strategy: 'all',
+            parallel: true,
+            timeout: 1_500,
+            suppressFeedback: true,
+        },
         delegation: {
             onDelegationStart: ({ prompt, primitiveId }) => {
                 if (containsUnsafeDelegationPrompt(prompt)) {

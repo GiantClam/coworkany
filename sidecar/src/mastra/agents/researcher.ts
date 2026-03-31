@@ -1,5 +1,8 @@
 import { Agent } from '@mastra/core/agent';
 import { bashTool } from '../tools/bash';
+import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
+import { runtimeScorers } from '../scorers/runtime';
+import { getWorkspaceForRequestContext } from '../workspace/runtime';
 const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
 export const researcher = new Agent({
     id: 'researcher',
@@ -14,10 +17,16 @@ export const researcher = new Agent({
     tools: {
         bash: bashTool,
     },
+    workspace: async ({ requestContext }) => {
+        return await getWorkspaceForRequestContext(requestContext);
+    },
     defaultOptions: {
         requireToolApproval: true,
         autoResumeSuspendedTools: true,
         toolCallConcurrency: 1,
         maxSteps: 14,
+        inputProcessors: guardrailInputProcessors,
+        outputProcessors: guardrailOutputProcessors,
+        scorers: runtimeScorers,
     },
 });

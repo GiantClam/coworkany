@@ -51,6 +51,7 @@ type TaskRuntimeState = {
     suspended?: boolean;
     suspensionReason?: string;
     lastUserMessage?: string;
+    lastTraceId?: string;
     resourceId: string;
 };
 type ProcessorDeps = {
@@ -90,6 +91,28 @@ type ProcessorDeps = {
         cancelledTitles: string[];
     }>;
     handleAdditionalCommand?: (command: ProtocolCommand) => Promise<OutgoingMessage | null>;
+    replayWorkflowRunTimeTravel?: (input: {
+        workflowId: string;
+        runId: string;
+        steps: string[];
+        taskId?: string;
+        resourceId?: string;
+        threadId?: string;
+        workspacePath?: string;
+        inputData?: unknown;
+        resumeData?: unknown;
+        perStep?: boolean;
+    }) => Promise<{
+        success: boolean;
+        workflowId: string;
+        runId: string;
+        status: string;
+        steps: string[];
+        traceId: string;
+        sampled: boolean;
+        result?: unknown;
+        error?: unknown;
+    }>;
     getNowIso?: () => string;
     createId?: () => string;
     resolveResourceId?: (taskId: string) => string;
@@ -328,6 +351,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const hasSuspended = Object.prototype.hasOwnProperty.call(patch, 'suspended');
         const hasSuspensionReason = Object.prototype.hasOwnProperty.call(patch, 'suspensionReason');
         const hasLastUserMessage = Object.prototype.hasOwnProperty.call(patch, 'lastUserMessage');
+        const hasLastTraceId = Object.prototype.hasOwnProperty.call(patch, 'lastTraceId');
         const next: TaskRuntimeState = {
             taskId,
             conversationThreadId: patch.conversationThreadId ?? existing?.conversationThreadId ?? taskId,
@@ -338,6 +362,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             suspended: hasSuspended ? patch.suspended : existing?.suspended,
             suspensionReason: hasSuspensionReason ? patch.suspensionReason : existing?.suspensionReason,
             lastUserMessage: hasLastUserMessage ? patch.lastUserMessage : existing?.lastUserMessage,
+            lastTraceId: hasLastTraceId ? patch.lastTraceId : existing?.lastTraceId,
             resourceId: patch.resourceId ?? existing?.resourceId ?? resolveResourceId(taskId),
         };
         taskStates.set(taskId, next);
@@ -353,6 +378,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             status: task.status,
             suspended: task.suspended,
             suspensionReason: task.suspensionReason,
+            lastTraceId: task.lastTraceId,
             resourceId: task.resourceId,
         }));
         const activeTaskId = tasks.find((task) => task.status === 'running')?.taskId
@@ -370,6 +396,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         event: DesktopEvent,
         emit: (message: OutgoingMessage) => void,
     ): void => {
+        const traceId = event.traceId ?? null;
+        if (typeof event.traceId === 'string' && event.traceId.length > 0) {
+            upsertTaskState(taskId, {
+                lastTraceId: event.traceId,
+            });
+        }
         if (event.type === 'text_delta') {
             emit({
                 type: 'TEXT_DELTA',
@@ -377,6 +409,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 payload: {
                     delta: event.content,
                     role: 'assistant',
+                    traceId,
                 },
             });
             return;
@@ -405,6 +438,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         context: {
                             taskId,
                             toolName: event.toolName,
+                            traceId,
                         },
                     },
                     requiresUserConfirmation: true,
@@ -431,6 +465,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 payload: {
                     summary: 'Task completed via Mastra runtime.',
                     finishReason: event.finishReason ?? 'stop',
+                    traceId,
                 },
             });
             return;
@@ -448,6 +483,28 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 payload: {
                     error: event.message,
                     errorCode: 'MASTRA_RUNTIME_ERROR',
+                    traceId,
+                },
+            });
+            return;
+        }
+        if (event.type === 'tripwire') {
+            clearPendingApprovalsForTask(taskId);
+            upsertTaskState(taskId, {
+                status: 'failed',
+                suspended: false,
+                suspensionReason: undefined,
+            });
+            emit({
+                type: 'TASK_FAILED',
+                taskId,
+                payload: {
+                    error: event.reason,
+                    errorCode: 'MASTRA_TRIPWIRE_BLOCKED',
+                    processorId: event.processorId ?? null,
+                    retry: event.retry === true,
+                    metadata: event.metadata ?? null,
+                    traceId,
                 },
             });
             return;
@@ -464,6 +521,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 payload: {
                     status: 'idle',
                     blockingReason: 'Waiting for user input to resume Mastra task.',
+                    traceId,
                 },
             });
             return;
@@ -478,6 +536,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     modelId: event.modelId ?? null,
                     provider: event.provider ?? null,
                     usage: event.usage,
+                    traceId,
                 },
             });
             return;
@@ -490,7 +549,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         emit({
             type: 'TASK_EVENT',
             taskId,
-            payload: event,
+            payload: {
+                ...event,
+                traceId,
+            },
         });
     };
     const processLegacySimpleCommand = async (
@@ -880,6 +942,64 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             const unsupportedAutonomous = buildUnsupportedAutonomousResponse(command.type, payload);
             if (unsupportedAutonomous) {
                 emitFor(unsupportedAutonomous.type, unsupportedAutonomous.payload);
+                return;
+            }
+            if (command.type === 'time_travel_workflow_run') {
+                if (!deps.replayWorkflowRunTimeTravel) {
+                    emitCurrent({
+                        success: false,
+                        error: 'unsupported_in_mastra_runtime',
+                    });
+                    return;
+                }
+                const workflowId = getString(payload.workflowId) ?? getString(payload.workflow) ?? '';
+                const runId = getString(payload.runId) ?? '';
+                const steps = Array.isArray(payload.steps)
+                    ? payload.steps.filter((value): value is string => typeof value === 'string' && value.length > 0)
+                    : [];
+                const singleStep = getString(payload.step);
+                const replaySteps = steps.length > 0
+                    ? steps
+                    : (singleStep ? [singleStep] : []);
+                if (!workflowId || !runId || replaySteps.length === 0) {
+                    emitCurrentInvalidPayload({
+                        workflowId,
+                        runId,
+                    });
+                    return;
+                }
+                try {
+                    const replay = await deps.replayWorkflowRunTimeTravel({
+                        workflowId,
+                        runId,
+                        steps: replaySteps,
+                        taskId: getString(payload.taskId) ?? undefined,
+                        resourceId: getString(payload.resourceId) ?? undefined,
+                        threadId: getString(payload.threadId) ?? undefined,
+                        workspacePath: getString(payload.workspacePath) ?? getString(toRecord(payload.context).workspacePath) ?? undefined,
+                        inputData: Object.prototype.hasOwnProperty.call(payload, 'inputData') ? payload.inputData : undefined,
+                        resumeData: Object.prototype.hasOwnProperty.call(payload, 'resumeData') ? payload.resumeData : undefined,
+                        perStep: typeof payload.perStep === 'boolean' ? payload.perStep : undefined,
+                    });
+                    emitCurrent({
+                        success: replay.success,
+                        workflowId: replay.workflowId,
+                        runId: replay.runId,
+                        status: replay.status,
+                        steps: replay.steps,
+                        traceId: replay.traceId,
+                        sampled: replay.sampled,
+                        result: replay.result ?? null,
+                        error: replay.error ?? null,
+                    });
+                } catch (error) {
+                    emitCurrent({
+                        success: false,
+                        workflowId,
+                        runId,
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                }
                 return;
             }
             if (command.type === 'start_task' || command.type === 'send_task_message') {

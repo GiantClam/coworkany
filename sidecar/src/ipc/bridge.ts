@@ -1,12 +1,23 @@
+type DesktopEventBase = {
+    runId?: string;
+    traceId?: string;
+};
+
 export type DesktopEvent =
-    | { type: 'text_delta'; content: string; runId?: string }
-    | { type: 'tool_call'; runId?: string; toolName: string; args: unknown }
-    | { type: 'approval_required'; runId?: string; toolCallId: string; toolName: string; args: unknown; resumeSchema: string }
-    | { type: 'suspended'; runId?: string; toolCallId: string; toolName: string; payload: unknown }
-    | { type: 'tool_result'; runId?: string; toolCallId: string; toolName: string; result: unknown; isError?: boolean }
+    | ({ type: 'text_delta'; content: string } & DesktopEventBase)
+    | ({ type: 'tool_call'; toolName: string; args: unknown } & DesktopEventBase)
+    | ({ type: 'approval_required'; toolCallId: string; toolName: string; args: unknown; resumeSchema: string } & DesktopEventBase)
+    | ({ type: 'suspended'; toolCallId: string; toolName: string; payload: unknown } & DesktopEventBase)
+    | {
+        type: 'tripwire';
+        reason: string;
+        retry?: boolean;
+        processorId?: string;
+        metadata?: Record<string, unknown>;
+    } & DesktopEventBase
+    | ({ type: 'tool_result'; toolCallId: string; toolName: string; result: unknown; isError?: boolean } & DesktopEventBase)
     | {
         type: 'token_usage';
-        runId?: string;
         modelId?: string;
         provider?: string;
         usage: {
@@ -16,9 +27,9 @@ export type DesktopEvent =
             cacheCreationInputTokens?: number;
             cacheReadInputTokens?: number;
         };
-    }
-    | { type: 'complete'; runId?: string; finishReason?: string }
-    | { type: 'error'; runId?: string; message: string };
+    } & DesktopEventBase
+    | ({ type: 'complete'; finishReason?: string } & DesktopEventBase)
+    | ({ type: 'error'; message: string } & DesktopEventBase);
 type TokenUsageData = {
     inputTokens: number;
     outputTokens: number;
@@ -205,6 +216,20 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
                 toolCallId: data.toolCallId,
                 toolName: data.toolName,
                 payload: data.suspendPayload,
+            };
+        }
+        case 'tripwire': {
+            const reason = typeof data.reason === 'string' && data.reason.length > 0
+                ? data.reason
+                : 'tripwire_triggered';
+            const metadata = toRecord(data.metadata) ?? undefined;
+            return {
+                type: 'tripwire',
+                runId,
+                reason,
+                retry: data.retry === true,
+                processorId: typeof data.processorId === 'string' ? data.processorId : undefined,
+                metadata,
             };
         }
         case 'tool-result': {

@@ -2,9 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import { Agent } from '@mastra/core/agent';
 import { MASTRA_RESOURCE_ID_KEY, MASTRA_THREAD_ID_KEY } from '@mastra/core/request-context';
 import { createTool } from '@mastra/core/tools';
+import { WORKSPACE_TOOLS } from '@mastra/core/workspace';
 import { z } from 'zod';
 import { coworker } from '../src/mastra/agents/coworker';
 import { supervisor } from '../src/mastra/agents/supervisor';
+import { getWorkspacePolicySnapshot } from '../src/mastra/workspace/runtime';
+import { resolveTelemetryPolicy } from '../src/mastra/telemetry';
 import {
     handleApprovalResponse,
     handleUserMessage,
@@ -42,8 +45,40 @@ describe('Phase 3: Agent Loop', () => {
         expect(supervisor.id).toBe('supervisor');
     });
 
+    test('supervisor has guardrail processors and task-complete scorers configured', async () => {
+        const options = await supervisor.getDefaultOptions();
+        expect(options).toBeDefined();
+        expect(Array.isArray(options?.inputProcessors)).toBe(true);
+        expect(Array.isArray(options?.outputProcessors)).toBe(true);
+        expect(Array.isArray((options?.isTaskComplete as { scorers?: unknown[] })?.scorers)).toBe(true);
+        expect(
+            ((options?.isTaskComplete as { scorers?: unknown[] })?.scorers?.length ?? 0) >= 3,
+        ).toBe(true);
+        expect(typeof options?.scorers).toBe('object');
+    });
+
     test('supervisor has own memory for propagation', () => {
         expect(supervisor.hasOwnMemory()).toBe(true);
+    });
+
+    test('workspace policy enables approval and read-before-write for mutating tools', () => {
+        const snapshot = getWorkspacePolicySnapshot();
+        expect(snapshot.enabled).toBe(true);
+        expect(snapshot.tools[WORKSPACE_TOOLS.FILESYSTEM.WRITE_FILE]?.requireApproval).toBe(true);
+        expect(snapshot.tools[WORKSPACE_TOOLS.FILESYSTEM.WRITE_FILE]?.requireReadBeforeWrite).toBe(true);
+        expect(snapshot.tools[WORKSPACE_TOOLS.FILESYSTEM.EDIT_FILE]?.requireReadBeforeWrite).toBe(true);
+        expect(snapshot.tools[WORKSPACE_TOOLS.FILESYSTEM.DELETE]?.requireApproval).toBe(true);
+        expect(snapshot.tools[WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]?.requireApproval).toBe(true);
+    });
+
+    test('telemetry policy defaults to always_on outside production and ratio in production', () => {
+        const devPolicy = resolveTelemetryPolicy({ NODE_ENV: 'development' });
+        expect(devPolicy.mode).toBe('always_on');
+        expect(devPolicy.ratio).toBe(1);
+
+        const prodPolicy = resolveTelemetryPolicy({ NODE_ENV: 'production' });
+        expect(prodPolicy.mode).toBe('ratio');
+        expect(prodPolicy.ratio).toBe(0.15);
     });
 
     test('IPC bridge functions exist', () => {
@@ -166,6 +201,12 @@ describe('Phase 3: Agent Loop', () => {
             expect(requestContext.get(MASTRA_THREAD_ID_KEY)).toBe('thread-phase3');
             expect(requestContext.get('taskId')).toBe('task-phase3');
             expect(requestContext.get('workspacePath')).toBe('/tmp/phase3');
+            const tracingOptions = capturedOptions?.tracingOptions as {
+                traceId?: string;
+                tags?: string[];
+            };
+            expect(typeof tracingOptions?.traceId).toBe('string');
+            expect(Array.isArray(tracingOptions?.tags)).toBe(true);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             if (typeof previousModel === 'string') {
@@ -246,6 +287,9 @@ describe('Phase 3: Agent Loop', () => {
             expect(requestContext.get(MASTRA_THREAD_ID_KEY)).toBe('thread-approval');
             expect(requestContext.get('taskId')).toBe('task-approval');
             expect(requestContext.get('workspacePath')).toBe('/tmp/approval');
+            expect(
+                typeof (capturedApproveOptions?.tracingOptions as { traceId?: string })?.traceId,
+            ).toBe('string');
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             (supervisor as unknown as { approveToolCall: typeof supervisor.approveToolCall }).approveToolCall = originalApprove as typeof supervisor.approveToolCall;

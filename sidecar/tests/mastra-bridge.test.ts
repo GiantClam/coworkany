@@ -83,4 +83,29 @@ describe('mastra bridge mapping', () => {
             },
         });
     });
+
+    test('maps tripwire events with reason and processor metadata', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tripwire',
+            payload: {
+                reason: 'prompt_injection_detected',
+                retry: false,
+                processorId: 'prompt-injection-detector',
+                metadata: {
+                    severity: 'high',
+                },
+            },
+        }, 'run-5');
+
+        expect(event).toEqual({
+            type: 'tripwire',
+            runId: 'run-5',
+            reason: 'prompt_injection_detected',
+            retry: false,
+            processorId: 'prompt-injection-detector',
+            metadata: {
+                severity: 'high',
+            },
+        });
+    });
 });

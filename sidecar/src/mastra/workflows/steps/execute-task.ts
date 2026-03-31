@@ -4,6 +4,7 @@ import type {
     FrozenWorkRequest,
 } from '../../../orchestration/workRequestSchema';
 import { createTaskRequestContext } from '../../requestContext';
+import { createTelemetryRunContext } from '../../telemetry';
 export interface ExecuteTaskInput {
     frozen: FrozenWorkRequest;
     executionPlan: ExecutionPlan;
@@ -34,12 +35,24 @@ export async function executeFrozenTask(input: {
         taskId: input.task.frozen.id,
         workspacePath: input.workspacePath,
     });
+    const telemetry = createTelemetryRunContext({
+        taskId: input.task.frozen.id,
+        threadId,
+        resourceId,
+        workspacePath: input.workspacePath,
+    });
     const output = await input.coworker.generate(input.task.executionQuery, {
         memory: {
             thread: threadId,
             resource: resourceId,
         },
         requestContext,
+        tracingOptions: telemetry.tracingOptions
+            ? {
+                ...telemetry.tracingOptions,
+                tags: [...telemetry.tracingOptions.tags, 'workflow:control-plane'],
+            }
+            : undefined,
         requireToolApproval: true,
         autoResumeSuspendedTools: true,
         toolCallConcurrency: 1,

@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { resolveTelemetryPolicy } from '../src/mastra/telemetry';
 
 export type ReleaseStageStatus = 'passed' | 'failed' | 'skipped';
 
@@ -161,6 +162,14 @@ export type ObservabilitySummary = {
         path: string;
         exists: boolean;
         entries: number;
+        warnings: string[];
+    };
+    otel?: {
+        enabled: boolean;
+        mode: string;
+        ratio: number;
+        endpoint?: string;
+        serviceName: string;
         warnings: string[];
     };
 };
@@ -996,6 +1005,15 @@ export function inspectObservability(input: {
     } else {
         artifactWarnings.push('Artifact telemetry file not found.');
     }
+    const telemetryPolicy = resolveTelemetryPolicy();
+    const otelWarnings: string[] = [];
+    const otelEnabled = telemetryPolicy.mode !== 'off';
+    if (otelEnabled && !telemetryPolicy.otelEndpoint) {
+        otelWarnings.push('OTEL sampling enabled but no OTLP endpoint configured (set COWORKANY_OTEL_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT).');
+    }
+    if (telemetryPolicy.mode === 'ratio' && telemetryPolicy.ratio <= 0) {
+        otelWarnings.push('OTEL ratio sampling is configured to 0; no traces will be exported.');
+    }
 
     return {
         startupMetrics: {
@@ -1008,6 +1026,14 @@ export function inspectObservability(input: {
             exists: artifactExists,
             entries: artifactEntries,
             warnings: artifactWarnings,
+        },
+        otel: {
+            enabled: otelEnabled,
+            mode: telemetryPolicy.mode,
+            ratio: telemetryPolicy.ratio,
+            endpoint: telemetryPolicy.otelEndpoint,
+            serviceName: telemetryPolicy.serviceName,
+            warnings: otelWarnings,
         },
     };
 }
@@ -1323,6 +1349,9 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
         lines.push(`- ${warning}`);
     }
     for (const warning of report.observability.artifactTelemetry.warnings) {
+        lines.push(`- ${warning}`);
+    }
+    for (const warning of report.observability.otel?.warnings ?? []) {
         lines.push(`- ${warning}`);
     }
     lines.push('');

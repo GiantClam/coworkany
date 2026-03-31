@@ -10,6 +10,8 @@ import { STANDARD_TOOLS } from './tools/standard';
 import { createMastraAdditionalCommandHandler } from './mastra/additionalCommands';
 import { createMastraSchedulerRuntime } from './mastra/schedulerRuntime';
 import { disconnectMcpSafe } from './mastra/mcp/clients';
+import { replayWorkflowRunTimeTravel } from './mastra/workflowReplay';
+import { destroyWorkspaceRuntime } from './mastra/workspace/runtime';
 const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim()
     || path.join(workspaceRoot, '.coworkany');
@@ -84,6 +86,9 @@ async function run(): Promise<void> {
             return await schedulerRuntime.cancelBySourceTask(input);
         },
         handleAdditionalCommand: additionalCommandRuntime.handler,
+        replayWorkflowRunTimeTravel: async (input) => {
+            return await replayWorkflowRunTimeTravel(input);
+        },
         policyGateResponseTimeoutMs: readBoundedIntEnv(
             'COWORKANY_POLICY_GATE_FORWARD_TIMEOUT_MS',
             30_000,
@@ -136,6 +141,7 @@ async function run(): Promise<void> {
     } finally {
         processor.close('stdin_closed');
         schedulerRuntime.stop();
+        await destroyWorkspaceRuntime();
         await disconnectMcpSafe();
     }
     if (inFlight.size > 0) {

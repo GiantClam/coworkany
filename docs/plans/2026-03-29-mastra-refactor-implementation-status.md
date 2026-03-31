@@ -212,6 +212,27 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - Memory 策略增强：`sidecar/src/mastra/memory/config.ts` 开启 `semanticRecall.scope='resource'`，并通过 `COWORKANY_ENABLE_OBSERVATIONAL_MEMORY` 控制 observational memory。
 - 运行时稳定性补强：`sidecar/src/ipc/streaming.ts` 新增 runContext 有界缓存与终态清理（complete/error/catch），避免长会话 runContext 泄漏。
 - 覆盖测试：`sidecar/tests/phase3-agent-loop.test.ts` 新增 requestContext 与审批恢复上下文回归用例。
+- Guardrails + Tripwire 落地（方案 17.2 安全域）：
+  - 新增 `sidecar/src/mastra/guardrails/processors.ts`，接入 `PromptInjectionDetector + PIIDetector + ModerationProcessor`。
+  - `supervisor/coworker/coder/researcher` 默认启用 guardrail input/output processors。
+  - `ipc/bridge + mastra/entrypoint` 新增 `tripwire` 事件桥接，统一映射 `TASK_FAILED(errorCode=MASTRA_TRIPWIRE_BLOCKED)`。
+- Scorers 落地（方案 17.2 评测域）：
+  - 新增 `sidecar/src/mastra/scorers/runtime.ts`，提供 completion/safety/relevance 三个 runtime scorer。
+  - `supervisor` 默认启用 `isTaskComplete.scorers`（3 项）与 `defaultOptions.scorers`（支持 `ratio/none` 采样）。
+  - 采样率由 `COWORKANY_SCORER_SAMPLING_RATE` 控制（默认 0.15），分数可落库到 `mastra_scorers`。
+- Workspace 隔离执行策略落地（方案 17.2 Workspace 域）：
+  - 新增 `sidecar/src/mastra/workspace/runtime.ts`，基于 `@mastra/core/workspace` 动态按 `requestContext.workspacePath` 构建隔离 workspace。
+  - 对 `WRITE_FILE/EDIT_FILE/AST_EDIT` 启用 `requireApproval + requireReadBeforeWrite`，对 `DELETE/MKDIR/EXECUTE_COMMAND` 启用 `requireApproval`。
+  - `supervisor/coworker/coder/researcher` 均接入动态 workspace 解析，支持多 workspace 会话并在进程退出时统一 `destroy()` 回收。
+- Workflow 故障回放链路落地（方案 17.2 回放域）：
+  - 新增 `sidecar/src/mastra/workflowReplay.ts`，封装 `workflow.createRun({ runId }).timeTravel({ step })` 回放执行能力。
+  - `mastra/entrypoint` 新增 `time_travel_workflow_run` 命令分支，并统一返回 replay status/steps/trace 结果。
+  - `main-mastra` 注入 replay handler，形成“协议命令 -> workflow run.timeTravel”完整链路。
+- OTEL/Telemetry 门禁闭环补齐（方案 17.2 观测域）：
+  - 新增 `sidecar/src/mastra/telemetry.ts`，统一 `always_on/off/ratio` 采样策略，生成 `traceId` 并下发 `tracingOptions`。
+  - `ipc/streaming` 与 `workflow execute-task` 统一接入 telemetry context，审批恢复链路复用同一 `traceId`。
+  - `DesktopEvent` 增加 `traceId` 透传；`entrypoint` 在 `TEXT_DELTA/TASK_EVENT/TASK_FAILED/TASK_FINISHED/TOKEN_USAGE` 中回传 trace 关联信息。
+  - `ops/readiness.inspectObservability` 新增 OTEL 配置检查（endpoint/mode/ratio/serviceName）与告警输出，纳入 release readiness 观测段。
 
 
 ## 2026-03-30 终态核验（方案硬门槛）

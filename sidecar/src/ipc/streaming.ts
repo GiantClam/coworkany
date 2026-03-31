@@ -3,6 +3,7 @@ import type { MastraModelOutput } from '@mastra/core/stream';
 import { supervisor } from '../mastra/agents/supervisor';
 import { listMcpToolsetsSafe } from '../mastra/mcp/clients';
 import { createTaskRequestContext } from '../mastra/requestContext';
+import { createTelemetryRunContext } from '../mastra/telemetry';
 import {
     extractMastraTokenUsageEvent,
     mapMastraChunkToDesktopEvent,
@@ -15,6 +16,8 @@ type RunContext = {
     resourceId: string;
     taskId: string;
     workspacePath?: string;
+    traceId: string;
+    traceSampled: boolean;
 };
 const runContextById = new Map<string, RunContext>();
 const MAX_CACHED_RUN_CONTEXTS = 256;
@@ -70,8 +73,15 @@ function cacheRunContext(runId: string, context: RunContext): void {
 
 function sendWithRunContextCleanup(runId: string, sendToDesktop: SendToDesktop): SendToDesktop {
     return (event) => {
-        sendToDesktop(event);
-        if (event.runId === runId && (event.type === 'complete' || event.type === 'error')) {
+        const runContext = runContextById.get(runId);
+        const withTrace = runContext && event.runId === runId && !event.traceId
+            ? {
+                ...event,
+                traceId: runContext.traceId,
+            }
+            : event;
+        sendToDesktop(withTrace);
+        if (event.runId === runId && (event.type === 'complete' || event.type === 'error' || event.type === 'tripwire')) {
             runContextById.delete(runId);
         }
     };
@@ -108,6 +118,12 @@ export async function handleUserMessage(
         taskId,
         workspacePath: options?.workspacePath,
     });
+    const telemetry = createTelemetryRunContext({
+        taskId,
+        threadId,
+        resourceId,
+        workspacePath: options?.workspacePath,
+    });
     const dynamicToolsets = await listMcpToolsetsSafe();
     const stream = await supervisor.stream(message, {
         memory: {
@@ -115,6 +131,7 @@ export async function handleUserMessage(
             resource: resourceId,
         },
         requestContext,
+        tracingOptions: telemetry.tracingOptions,
         toolsets: Object.keys(dynamicToolsets).length > 0 ? dynamicToolsets : undefined,
         requireToolApproval: options?.requireToolApproval ?? true,
         autoResumeSuspendedTools: options?.autoResumeSuspendedTools ?? true,
@@ -126,6 +143,8 @@ export async function handleUserMessage(
         resourceId,
         taskId,
         workspacePath: options?.workspacePath,
+        traceId: telemetry.traceId,
+        traceSampled: telemetry.sampled,
     });
     try {
         await forwardStream(stream, sendWithRunContextCleanup(stream.runId, sendToDesktop));
@@ -161,6 +180,18 @@ export async function handleApprovalResponse(
             ? {
                 thread: runContext.threadId,
                 resource: runContext.resourceId,
+            }
+            : undefined,
+        tracingOptions: runContext?.traceSampled
+            ? {
+                traceId: runContext.traceId,
+                tags: [
+                    'runtime:desktop-sidecar',
+                    'resume:tool-approval',
+                    `task:${runContext.taskId}`,
+                    `resource:${runContext.resourceId}`,
+                    `thread:${runContext.threadId}`,
+                ],
             }
             : undefined,
     };
