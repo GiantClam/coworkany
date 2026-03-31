@@ -14,8 +14,6 @@ import type {
     TaskSession,
 } from '../../../types';
 import { useTimelineItems } from './hooks/useTimelineItems';
-import { MessageBubble } from './components/MessageBubble';
-import { AssistantTurnBlock } from './components/AssistantTurnBlock';
 import { getPendingTaskStatus } from './pendingTaskStatus';
 import { useCanonicalTaskStreamStore } from '../../../stores/useCanonicalTaskStreamStore';
 import { buildTimelineTurnRoundViewModel } from './viewModels/turnRounds';
@@ -130,6 +128,47 @@ export function buildDisplayItemsWithPendingState(
     return [...visibleItems, pendingTurn];
 }
 
+function hasRenderableAssistantNarrative(turn: AssistantTurnItem): boolean {
+    const hasMessageText = (turn.lead?.trim().length ?? 0) > 0
+        || turn.messages.some((line) => line.trim().length > 0)
+        || (turn.systemEvents?.some((line) => line.trim().length > 0) ?? false);
+    if (hasMessageText) {
+        return true;
+    }
+
+    const result = turn.taskCard?.result;
+    if ((result?.summary?.trim().length ?? 0) > 0) {
+        return true;
+    }
+    if ((result?.error?.trim().length ?? 0) > 0) {
+        return true;
+    }
+    if ((result?.suggestion?.trim().length ?? 0) > 0) {
+        return true;
+    }
+
+    return turn.taskCard?.sections.some((section) => section.lines.some((line) => line.trim().length > 0)) ?? false;
+}
+
+export function resolveAssistantUiPendingLabel(
+    visibleItems: TimelineItemType[],
+    pendingLabel: string,
+): string {
+    if (!pendingLabel) {
+        return '';
+    }
+
+    for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
+        const item = visibleItems[index];
+        if (item.type !== 'assistant_turn') {
+            continue;
+        }
+        return hasRenderableAssistantNarrative(item) ? '' : pendingLabel;
+    }
+
+    return pendingLabel;
+}
+
 const TimelineComponent: React.FC<TimelineProps> = ({
     session,
     onTaskCollaborationSubmit,
@@ -137,7 +176,6 @@ const TimelineComponent: React.FC<TimelineProps> = ({
     const { t } = useTranslation();
     const canonicalMessages = useCanonicalTaskStreamStore((state) => state.sessions.get(session.taskId)?.messages);
     const { items: timelineItems } = useTimelineItems(session, undefined, canonicalMessages);
-    const visibleItems = timelineItems;
     const pendingStatus = React.useMemo(() => getPendingTaskStatus(session), [session]);
     const pendingLabel = React.useMemo(() => {
         switch (pendingStatus?.phase) {
@@ -151,9 +189,13 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 return '';
         }
     }, [pendingStatus, t]);
+    const resolvedPendingLabel = React.useMemo(
+        () => resolveAssistantUiPendingLabel(timelineItems, pendingLabel),
+        [pendingLabel, timelineItems],
+    );
     const displayItems = React.useMemo<TimelineItemType[]>(
-        () => buildDisplayItemsWithPendingState(visibleItems, pendingLabel, session),
-        [pendingLabel, session, visibleItems],
+        () => buildDisplayItemsWithPendingState(timelineItems, resolvedPendingLabel, session),
+        [resolvedPendingLabel, session, timelineItems],
     );
     const turnRoundViewModel = React.useMemo(
         () => buildTimelineTurnRoundViewModel(displayItems),
@@ -172,114 +214,24 @@ const TimelineComponent: React.FC<TimelineProps> = ({
             console.error('[Timeline] Failed to resolve approval action', error);
         }
     }, [onTaskCollaborationSubmit, session.taskId]);
-    const lastAssistantTurnId = React.useMemo(() => {
-        for (let index = displayItems.length - 1; index >= 0; index -= 1) {
-            const item = displayItems[index];
-            if (item?.type === 'assistant_turn') {
-                return item.id;
-            }
-        }
-        return null;
-    }, [displayItems]);
-    const endRef = React.useRef<HTMLDivElement>(null);
-    const containerRef = React.useRef<HTMLDivElement>(null);
-    const [userScrolled, setUserScrolled] = React.useState(false);
-    const scrollTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    // Detect if user manually scrolled up
-    React.useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
-        const handleScroll = () => {
-            const { scrollTop, scrollHeight, clientHeight } = container;
-            const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-            setUserScrolled(!isAtBottom);
-        };
-
-        container.addEventListener('scroll', handleScroll);
-        return () => container.removeEventListener('scroll', handleScroll);
-    }, []);
-
-    // Auto-scroll to bottom with debounce - only if user hasn't scrolled up
-    React.useEffect(() => {
-        if (userScrolled) return;
-
-        // Clear previous timeout
-        if (scrollTimeoutRef.current) {
-            clearTimeout(scrollTimeoutRef.current);
-        }
-
-        // Debounce scroll - wait 100ms after last update
-        scrollTimeoutRef.current = setTimeout(() => {
-            endRef.current?.scrollIntoView({ behavior: 'auto' });
-        }, 100);
-
-        return () => {
-            if (scrollTimeoutRef.current) {
-                clearTimeout(scrollTimeoutRef.current);
-            }
-        };
-    }, [visibleItems.length, userScrolled]);
-
-    // Reset userScrolled when new message starts (items.length changes)
-    React.useEffect(() => {
-        setUserScrolled(false);
-    }, [visibleItems.length]);
-
-    const renderTimelineRound = React.useCallback((index: number): React.ReactNode => {
-        const round = turnRoundViewModel.rounds[index];
-        if (!round) {
-            return null;
-        }
-
-        const parts: React.ReactNode[] = [];
-        if (round.userMessage) {
-            parts.push(
-                <MessageBubble
-                    key={`${round.id}-user`}
-                    item={round.userMessage}
-                    isUser={true}
-                />
-            );
-        }
-        if (round.assistantTurn) {
-            parts.push(
-                <div key={`${round.id}-assistant`} className={styles.assistantThread}>
-                    <AssistantTurnBlock
-                        item={round.assistantTurn}
-                        pendingLabel={round.assistantTurn.id === lastAssistantTurnId ? pendingLabel : undefined}
-                        onTaskCollaborationSubmit={onTaskCollaborationSubmit}
-                    />
-                </div>
-            );
-        }
-
-        if (parts.length === 0) {
-            return null;
-        }
-
-        return (
-            <React.Fragment key={round.id}>
-                {parts}
-            </React.Fragment>
-        );
-    }, [lastAssistantTurnId, onTaskCollaborationSubmit, pendingLabel, turnRoundViewModel.rounds]);
-
-    const timelineContent = (
-        <div className={styles.timeline} ref={containerRef}>
-            {turnRoundViewModel.rounds.map((_, index) => renderTimelineRound(index))}
-            <div ref={endRef} />
+    const runtimeFallback = (
+        <div className={styles.assistantUiLoadingShell} aria-hidden="true">
+            <div className={styles.assistantUiLoadingRail}>
+                <span className={styles.assistantUiLoadingDot} />
+                <span className={styles.assistantUiLoadingLine} />
+            </div>
+            <div className={styles.assistantUiLoadingCard} />
+            <div className={styles.assistantUiLoadingCard} />
         </div>
     );
 
     return (
-        <React.Suspense fallback={timelineContent}>
+        <React.Suspense fallback={runtimeFallback}>
             <LazyAssistantUiRuntimeBridge
                 sessionId={session.taskId}
                 rounds={turnRoundViewModel.rounds}
-                pendingLabel={pendingLabel}
-                isRunning={Boolean(pendingStatus)}
+                pendingLabel={resolvedPendingLabel}
+                isRunning={Boolean(resolvedPendingLabel)}
             >
                 <LazyAssistantUiThreadView onApprovalDecision={handleAssistantUiApprovalDecision} />
             </LazyAssistantUiRuntimeBridge>

@@ -976,7 +976,22 @@ function buildRawConversationTrajectoryItems(session: TaskSession): TimelineItem
     return items;
 }
 
-function extractLatestStructuredAssistantTurn(items: TimelineItemType[]): AssistantTurnItem | null {
+function hasAssistantTurnNarrative(item: AssistantTurnItem): boolean {
+    return (
+        normalizeText(item.lead).length > 0
+        || item.messages.some((message) => normalizeText(message).length > 0)
+        || (item.systemEvents?.some((message) => normalizeText(message).length > 0) ?? false)
+        || (item.taskCard?.result
+            ? (
+                normalizeText(item.taskCard.result.summary).length > 0
+                || normalizeText(item.taskCard.result.error).length > 0
+                || normalizeText(item.taskCard.result.suggestion).length > 0
+            )
+            : false)
+    );
+}
+
+function extractLatestAssistantTurnForTrajectory(items: TimelineItemType[]): AssistantTurnItem | null {
     for (let index = items.length - 1; index >= 0; index -= 1) {
         const item = items[index];
         if (item?.type !== 'assistant_turn') {
@@ -995,7 +1010,8 @@ function extractLatestStructuredAssistantTurn(items: TimelineItemType[]): Assist
             || (item.toolCalls?.length ?? 0) > 0
             || (item.effectRequests?.length ?? 0) > 0
             || (item.patches?.length ?? 0) > 0;
-        if (!hasStructuredArtifacts) {
+        const hasNarrative = hasAssistantTurnNarrative(item);
+        if (!hasStructuredArtifacts && !hasNarrative) {
             continue;
         }
 
@@ -1024,12 +1040,30 @@ function appendLatestStructuredAssistantTurn(
     rawItems: TimelineItemType[],
     standardItems: TimelineItemType[],
 ): TimelineItemType[] {
-    const latestStructuredTurn = extractLatestStructuredAssistantTurn(standardItems);
-    if (!latestStructuredTurn) {
+    const latestTurn = extractLatestAssistantTurnForTrajectory(standardItems);
+    if (!latestTurn) {
         return rawItems;
     }
 
-    return [...rawItems, latestStructuredTurn];
+    const latestRawAssistantTurn = [...rawItems]
+        .reverse()
+        .find((item): item is AssistantTurnItem => item.type === 'assistant_turn');
+
+    if (!latestRawAssistantTurn) {
+        return [...rawItems, latestTurn];
+    }
+
+    const candidateHasStructuredArtifacts = Boolean(
+        latestTurn.taskCard
+        || (latestTurn.toolCalls?.length ?? 0) > 0
+        || (latestTurn.effectRequests?.length ?? 0) > 0
+        || (latestTurn.patches?.length ?? 0) > 0,
+    );
+    if (!candidateHasStructuredArtifacts) {
+        return rawItems;
+    }
+
+    return [...rawItems, latestTurn];
 }
 
 function mergeUniqueTextParts(base: string[], incoming: string[]): string[] {

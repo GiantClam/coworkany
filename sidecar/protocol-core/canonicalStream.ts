@@ -451,10 +451,11 @@ function eventToCanonicalMessageDelta(event: TaskEvent): CanonicalStreamEvent | 
     if (!delta) {
         return undefined;
     }
+    const isReasoning = payload.role === 'thinking';
     return {
         type: 'canonical_message_delta',
         payload: {
-            id: payload.messageId ?? `${event.taskId}-assistant`,
+            id: payload.messageId ?? `${event.taskId}-${isReasoning ? 'thinking' : 'assistant'}`,
             taskId: event.taskId,
             role: 'assistant',
             timestamp: event.timestamp,
@@ -463,7 +464,7 @@ function eventToCanonicalMessageDelta(event: TaskEvent): CanonicalStreamEvent | 
             sourceEventId: event.id,
             sourceEventType: event.type,
             part: {
-                type: 'text',
+                type: isReasoning ? 'reasoning' : 'text',
                 delta,
             },
         },

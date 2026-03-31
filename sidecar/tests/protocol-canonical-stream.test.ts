@@ -73,6 +73,26 @@ describe('taskEventToCanonicalStreamEvents', () => {
         });
     });
 
+    test('maps thinking TEXT_DELTA to reasoning part', () => {
+        const canonicalEvents = taskEventToCanonicalStreamEvents(
+            makeTextDeltaEvent({
+                role: 'thinking',
+                delta: 'let me think',
+            }),
+        );
+
+        expect(canonicalEvents).toHaveLength(1);
+        expect(canonicalEvents[0]).toMatchObject({
+            type: 'canonical_message_delta',
+            payload: {
+                part: {
+                    type: 'reasoning',
+                    delta: 'let me think',
+                },
+            },
+        });
+    });
+
     test('drops empty TEXT_DELTA payloads', () => {
         const canonicalEvents = taskEventToCanonicalStreamEvents(
             makeTextDeltaEvent({ role: 'assistant' }),

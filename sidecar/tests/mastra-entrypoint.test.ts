@@ -195,6 +195,41 @@ function createHarness(overrides?: {
 }
 
 describe('mastra entrypoint processor', () => {
+    test('forwards thinking role in TEXT_DELTA payloads', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-thinking',
+                    role: 'thinking',
+                    content: 'thinking...',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-thinking',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-thinking' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-thinking-role',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-thinking',
+                userQuery: 'hello',
+            },
+        });
+
+        const thinkingDelta = harness.outgoing.find((message) =>
+            message.type === 'TEXT_DELTA'
+            && (message.payload as Record<string, unknown>)?.role === 'thinking',
+        );
+        expect(thinkingDelta).toBeDefined();
+        expect((thinkingDelta?.payload as Record<string, unknown>)?.delta).toBe('thinking...');
+    });
+
     test('start_task maps to handleUserMessage and emits protocol response + task events', async () => {
         const harness = createHarness();
         await harness.process({

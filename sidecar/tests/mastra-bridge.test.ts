@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { extractMastraTokenUsageEvent, mapMastraChunkToDesktopEvent } from '../src/ipc/bridge';
+import {
+    extractMastraFinalAssistantTextEvent,
+    extractMastraTokenUsageEvent,
+    mapMastraChunkToDesktopEvent,
+} from '../src/ipc/bridge';
 
 describe('mastra bridge mapping', () => {
     test('maps payload text-delta events', () => {
@@ -14,6 +18,7 @@ describe('mastra bridge mapping', () => {
             type: 'text_delta',
             runId: 'run-1',
             content: 'hello',
+            role: 'assistant',
         });
     });
 
@@ -27,6 +32,39 @@ describe('mastra bridge mapping', () => {
             type: 'text_delta',
             runId: 'run-2',
             content: 'hi',
+            role: 'assistant',
+        });
+    });
+
+    test('maps textDelta payload fields from ai sdk v6', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'text-delta',
+            payload: {
+                textDelta: 'hello-v6',
+            },
+        }, 'run-2b');
+
+        expect(event).toEqual({
+            type: 'text_delta',
+            runId: 'run-2b',
+            content: 'hello-v6',
+            role: 'assistant',
+        });
+    });
+
+    test('maps reasoning chunks to thinking role', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'reasoning',
+            payload: {
+                textDelta: 'reasoning text',
+            },
+        }, 'run-2c');
+
+        expect(event).toEqual({
+            type: 'text_delta',
+            runId: 'run-2c',
+            content: 'reasoning text',
+            role: 'thinking',
         });
     });
 
@@ -106,6 +144,28 @@ describe('mastra bridge mapping', () => {
             metadata: {
                 severity: 'high',
             },
+        });
+    });
+
+    test('extracts finish response text as fallback assistant event', () => {
+        const event = extractMastraFinalAssistantTextEvent({
+            type: 'finish',
+            payload: {
+                response: {
+                    uiMessages: [
+                        {
+                            parts: [{ text: 'final response from uiMessages' }],
+                        },
+                    ],
+                },
+            },
+        }, 'run-6');
+
+        expect(event).toEqual({
+            type: 'text_delta',
+            runId: 'run-6',
+            role: 'assistant',
+            content: 'final response from uiMessages',
         });
     });
 });

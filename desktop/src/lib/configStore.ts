@@ -65,7 +65,6 @@ async function getStore(): Promise<StoreBackend> {
             console.warn('[configStore] Failed to initialize Tauri Store, falling back to in-memory backend for this session', e);
             _store = createMemoryBackend();
         } else {
-            console.debug('[configStore] Tauri Store unavailable outside Tauri runtime, using localStorage backend');
             _store = createLocalStorageBackend();
         }
     }

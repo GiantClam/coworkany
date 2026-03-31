@@ -4,13 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
 import { useStartTask } from '../../hooks/useStartTask';
-import { useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { getVoiceSettings } from '../../lib/configStore';
+import { isTauri } from '../../lib/tauri';
 import { useWorkspace } from '../../hooks/useWorkspace';
-import { encodeTaskCollaborationMessage } from '../Chat/collaborationMessage';
-import { TaskCardMessage } from '../Chat/Timeline/components/TaskCardMessage';
-import { buildTimelineItems } from '../Chat/Timeline/hooks/useTimelineItems';
 import { useTaskEventStore, type TaskSession } from '../../stores/useTaskEventStore';
 import type { TaskCardItem, TaskStatus } from '../../types';
 import './TaskListView.css';
@@ -178,19 +175,7 @@ function formatUpdatedAt(timestamp: string): string {
 }
 
 function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem {
-    const timeline = buildTimelineItems(session);
     const derivedTasks = deriveTaskListFromEvents(session);
-    const projectedCard = timeline.items.find((item): item is TaskCardItem => item.type === 'task_card');
-    if (projectedCard) {
-        return {
-            ...projectedCard,
-            taskId,
-            tasks: projectedCard.tasks && projectedCard.tasks.length > 0
-                ? projectedCard.tasks
-                : derivedTasks,
-        };
-    }
-
     const description = compactText(deriveUserPrompt(session), 180);
     const result = deriveResult(session);
     const sections: TaskCardItem['sections'] = [];
@@ -266,7 +251,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
     const { skills } = useSkills({ autoRefresh: true });
     const { toolpacks } = useToolpacks({ autoRefresh: true });
     const { startTask, isLoading: isStartingTask, error: startTaskError } = useStartTask();
-    const { sendMessage, error: sendMessageError } = useSendTaskMessage();
     const { voiceState, stopPlayback, isStopping, error: stopVoiceError } = useVoicePlayback();
     const { activeWorkspace } = useWorkspace({ autoLoad: true });
     const sessions = useTaskEventStore((state) => state.sessions);
@@ -280,6 +264,10 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
     const launcherInputRef = React.useRef<HTMLTextAreaElement>(null);
 
     const refreshTasks = React.useCallback(async () => {
+        if (!isTauri()) {
+            return;
+        }
+
         setIsLoading(true);
         setError(null);
         try {
@@ -403,35 +391,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
             launcherInputRef.current?.setSelectionRange(valueLength, valueLength);
         });
     }, []);
-
-    const handleTaskCardCollaborationSubmit = React.useCallback(async (input: {
-        taskId?: string;
-        cardId: string;
-        actionId?: string;
-        value: string;
-    }) => {
-        const taskId = input.taskId || UNKNOWN_TASK_ID;
-        const message = encodeTaskCollaborationMessage({
-            actionId: input.actionId,
-            value: input.value,
-        });
-        if (!message || taskId === UNKNOWN_TASK_ID) {
-            return;
-        }
-
-        setActiveTask(taskId);
-        const voiceSettings = await getVoiceSettings();
-        await sendMessage({
-            taskId,
-            content: message,
-            config: {
-                enabledClaudeSkills: enabledSkills,
-                enabledToolpacks,
-                enabledSkills,
-                voiceProviderMode: voiceSettings.providerMode,
-            },
-        });
-    }, [enabledSkills, enabledToolpacks, sendMessage, setActiveTask]);
 
     const tasks = React.useMemo<BoardTask[]>(() => {
         return buildBoardTasks(sessions.values());
@@ -561,9 +520,9 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
                 </form>
             </section>
 
-            {(stopVoiceError || sendMessageError || launcherError || startTaskError) && (
+            {(stopVoiceError || launcherError || startTaskError) && (
                 <div className="task-list-inline-error" role="alert">
-                    {launcherError || startTaskError || stopVoiceError || sendMessageError}
+                    {launcherError || startTaskError || stopVoiceError}
                 </div>
             )}
 
@@ -587,7 +546,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
                                     onSwitchToChat={onSwitchToChat}
                                     openLabel={t('dashboard.openInChat')}
                                     deleteLabel={t('common.delete')}
-                                    onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
                                 />
                             ))}
                         </div>
@@ -610,7 +568,6 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
                                     onSwitchToChat={onSwitchToChat}
                                     openLabel={t('dashboard.openInChat')}
                                     deleteLabel={t('common.delete')}
-                                    onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
                                 />
                             ))}
                         </div>
@@ -645,13 +602,18 @@ const TaskBoardTaskCard: React.FC<{
     onSwitchToChat?: () => void;
     openLabel: string;
     deleteLabel: string;
-    onTaskCollaborationSubmit: (input: {
-        taskId?: string;
-        cardId: string;
-        actionId?: string;
-        value: string;
-    }) => void;
-}> = ({ task, onSelect, onDelete, onSwitchToChat, openLabel, deleteLabel, onTaskCollaborationSubmit }) => {
+}> = ({ task, onSelect, onDelete, onSwitchToChat, openLabel, deleteLabel }) => {
+    const previewTasks = React.useMemo(
+        () => (task.taskCard.tasks ?? []).slice(0, 4),
+        [task.taskCard.tasks],
+    );
+    const hiddenTaskCount = Math.max(0, (task.taskCard.tasks?.length ?? 0) - previewTasks.length);
+    const previewSections = React.useMemo(
+        () => task.taskCard.sections.slice(0, 3),
+        [task.taskCard.sections],
+    );
+    const resultSummary = compactText(task.taskCard.result?.summary || task.result, 220);
+
     return (
         <div className="task-board-card-shell">
             <div className="task-board-card-toolbar">
@@ -683,11 +645,102 @@ const TaskBoardTaskCard: React.FC<{
                     </button>
                 </div>
             </div>
-            <TaskCardMessage
-                item={task.taskCard}
-                layout="board"
-                onTaskCollaborationSubmit={onTaskCollaborationSubmit}
-            />
+            <article className="task-board-message-card">
+                <header className="task-board-message-header">
+                    <h3 className="task-board-message-title">{task.taskCard.title || task.title}</h3>
+                    {task.taskCard.subtitle ? (
+                        <p className="task-board-message-subtitle">{compactText(task.taskCard.subtitle, 180)}</p>
+                    ) : null}
+                </header>
+
+                {previewTasks.length > 0 ? (
+                    <section className="task-board-message-section">
+                        <span className="task-board-section-label">Plan</span>
+                        <ul className="task-board-task-list">
+                            {previewTasks.map((item) => {
+                                const statusClass = normalizeTaskStepStatusClass(item.status);
+                                return (
+                                    <li key={`${task.id}-${item.id}`} className="task-board-task-item">
+                                        <span className={`task-board-task-dot ${statusClass}`} aria-hidden="true" />
+                                        <span className="task-board-task-title">{item.title}</span>
+                                        <span className={`task-board-task-status ${statusClass}`}>
+                                            {formatTaskStepStatus(item.status)}
+                                        </span>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                        {hiddenTaskCount > 0 ? (
+                            <p className="task-board-truncation-note">+{hiddenTaskCount} more tasks</p>
+                        ) : null}
+                    </section>
+                ) : null}
+
+                {previewSections.map((section) => {
+                    const lines = section.lines
+                        .map((line) => compactText(line, 180))
+                        .filter((line) => line.length > 0)
+                        .slice(0, 2);
+                    if (lines.length === 0) {
+                        return null;
+                    }
+
+                    return (
+                        <section key={`${task.id}-${section.label}`} className="task-board-message-section">
+                            <span className="task-board-section-label">{section.label}</span>
+                            <div className="task-board-section-content">
+                                {lines.map((line, index) => (
+                                    <p key={`${task.id}-${section.label}-${index}`} className="task-board-section-line">{line}</p>
+                                ))}
+                            </div>
+                        </section>
+                    );
+                })}
+
+                {resultSummary ? (
+                    <section className="task-board-message-section">
+                        <span className="task-board-section-label">Outcome</span>
+                        <p className="task-board-section-line">{resultSummary}</p>
+                    </section>
+                ) : null}
+            </article>
         </div>
     );
 };
+
+function normalizeTaskStepStatusClass(status: TaskCardTaskEntry['status']): 'pending' | 'running' | 'done' | 'failed' | 'blocked' {
+    switch (status) {
+        case 'in_progress':
+            return 'running';
+        case 'complete':
+        case 'completed':
+        case 'skipped':
+            return 'done';
+        case 'failed':
+            return 'failed';
+        case 'blocked':
+            return 'blocked';
+        case 'pending':
+        default:
+            return 'pending';
+    }
+}
+
+function formatTaskStepStatus(status: TaskCardTaskEntry['status']): string {
+    switch (status) {
+        case 'in_progress':
+            return 'Running';
+        case 'complete':
+        case 'completed':
+            return 'Done';
+        case 'skipped':
+            return 'Skipped';
+        case 'failed':
+            return 'Failed';
+        case 'blocked':
+            return 'Blocked';
+        case 'pending':
+        default:
+            return 'Pending';
+    }
+}

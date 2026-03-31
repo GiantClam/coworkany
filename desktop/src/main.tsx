@@ -8,6 +8,7 @@ import { isTauri } from './lib/tauri';
 import { initializeTheme } from './stores/themeStore';
 import { hydrateLanguagePreference } from './i18n';
 import { getStartupMeasurementConfig, recordStartupMetric, type StartupMeasurementConfig } from './lib/startupMetrics';
+import { emitBootJsonLog, installMinimalConsoleMode } from './lib/appLog';
 import './i18n';
 import './index.css';
 
@@ -61,8 +62,8 @@ function renderApp() {
     if (isTauri()) {
         try {
             label = getCurrentWindow().label;
-        } catch (error) {
-            console.warn('Failed to get window label, defaulting to main', error);
+        } catch {
+            // Fall back to `main` when label lookup is unavailable.
         }
     }
 
@@ -73,6 +74,11 @@ function renderApp() {
         windowLabel: label,
         startupMeasurement: defaultStartupMeasurement,
     };
+    emitBootJsonLog({
+        runtime: isTauri() ? 'tauri' : 'web',
+        windowLabel: label,
+        startupProfile: defaultStartupMeasurement.profile,
+    });
 
     const isDev = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
     const RootWrapper = isDev ? React.Fragment : React.StrictMode;
@@ -98,6 +104,7 @@ function renderApp() {
 }
 
 void (async () => {
+    installMinimalConsoleMode();
     await Promise.all([
         initializeTheme(),
         hydrateLanguagePreference(),

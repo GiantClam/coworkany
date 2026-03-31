@@ -310,4 +310,35 @@ describe('assistant-ui message adapter', () => {
             },
         });
     });
+
+    test('uses task card result summary as assistant response when turn has no direct assistant text', () => {
+        const rounds: TimelineTurnRound[] = [
+            {
+                id: 'round-task-result-only',
+                assistantTurn: {
+                    type: 'assistant_turn',
+                    id: 'assistant-task-result-only',
+                    timestamp: '2026-03-31T06:00:00.000Z',
+                    lead: '',
+                    steps: [],
+                    messages: [],
+                    taskCard: {
+                        type: 'task_card',
+                        id: 'task-card-result-only',
+                        timestamp: '2026-03-31T06:00:00.000Z',
+                        title: 'Task center',
+                        sections: [],
+                        result: {
+                            summary: 'Execution completed successfully and report is ready.',
+                        },
+                    },
+                },
+            },
+        ];
+
+        const messages = buildAssistantUiExternalMessages(rounds);
+        expect(messages).toHaveLength(1);
+        expect(messages[0]?.role).toBe('assistant');
+        expect(messages[0]?.text).toContain('Execution completed successfully and report is ready.');
+    });
 });

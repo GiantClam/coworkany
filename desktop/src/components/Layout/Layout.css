@@ -49,3 +49,15 @@
     border-radius: 10px;
     box-shadow: none;
 }
+
+@media (max-width: 900px) {
+    .layout-body {
+        padding: 2px;
+        gap: 4px;
+    }
+
+    .layout-sidebar {
+        width: 76px;
+        min-width: 76px;
+    }
+}

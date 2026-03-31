@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
     "test:stable": "bun test tests/token-usage.test.ts tests/command-sandbox.test.ts tests/scheduler-heartbeat.test.ts",
+    "test:assistant-ui-contracts": "bun test tests/ipc-bridge.test.ts tests/mastra-bridge.test.ts tests/protocol-canonical-stream.test.ts tests/mastra-entrypoint.test.ts",
     "test:real-model-smoke": "bun test tests/real-model-smoke.e2e.test.ts",
     "test:ci": "npm run test:stable",
     "test:agent:core": "node scripts/run-tests-sequential.mjs tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",

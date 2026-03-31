@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+    extractMastraFinalAssistantTextEvent,
     extractMastraTokenUsageEvent,
     mapMastraChunkToDesktopEvent,
 } from '../src/ipc/bridge';
@@ -41,6 +42,35 @@ describe('ipc bridge', () => {
             type: 'text_delta',
             content: 'hello',
             runId: 'run-2',
+            role: 'assistant',
+        });
+    });
+
+    test('maps textDelta payloads used by ai sdk v6', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'text-delta',
+            payload: { textDelta: 'hello-v6' },
+        }, 'run-2b');
+
+        expect(event).toEqual({
+            type: 'text_delta',
+            content: 'hello-v6',
+            runId: 'run-2b',
+            role: 'assistant',
+        });
+    });
+
+    test('maps reasoning deltas to thinking role', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'reasoning-delta',
+            payload: { textDelta: 'thinking...' },
+        }, 'run-2c');
+
+        expect(event).toEqual({
+            type: 'text_delta',
+            content: 'thinking...',
+            runId: 'run-2c',
+            role: 'thinking',
         });
     });
 
@@ -75,6 +105,38 @@ describe('ipc bridge', () => {
             type: 'complete',
             runId: 'run-4',
             finishReason: 'stop',
+        });
+    });
+
+    test('does not map step-finish chunks to complete event', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'step-finish',
+            payload: { finishReason: 'stop' },
+        }, 'run-4a');
+
+        expect(event).toBeNull();
+    });
+
+    test('extracts final assistant text from finish chunk response messages', () => {
+        const event = extractMastraFinalAssistantTextEvent({
+            type: 'finish',
+            payload: {
+                response: {
+                    messages: [
+                        {
+                            role: 'assistant',
+                            content: [{ text: 'final answer' }],
+                        },
+                    ],
+                },
+            },
+        }, 'run-4b');
+
+        expect(event).toEqual({
+            type: 'text_delta',
+            role: 'assistant',
+            content: 'final answer',
+            runId: 'run-4b',
         });
     });
 

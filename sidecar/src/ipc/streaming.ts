@@ -5,6 +5,7 @@ import { listMcpToolsetsSafe } from '../mastra/mcp/clients';
 import { createTaskRequestContext } from '../mastra/requestContext';
 import { createTelemetryRunContext } from '../mastra/telemetry';
 import {
+    extractMastraFinalAssistantTextEvent,
     extractMastraTokenUsageEvent,
     mapMastraChunkToDesktopEvent,
     type DesktopEvent,
@@ -48,13 +49,29 @@ export function resolveMissingApiKeyForModel(
 }
 async function forwardStream(stream: MastraModelOutput<unknown>, sendToDesktop: SendToDesktop): Promise<void> {
     const runId = stream.runId;
+    let hasAssistantTextDelta = false;
     for await (const chunk of stream.fullStream) {
         const tokenUsageEvent = extractMastraTokenUsageEvent(chunk as MastraChunkLike, runId);
         if (tokenUsageEvent) {
             sendToDesktop(tokenUsageEvent);
         }
+        if (!hasAssistantTextDelta) {
+            const finalTextEvent = extractMastraFinalAssistantTextEvent(chunk as MastraChunkLike, runId);
+            if (finalTextEvent && finalTextEvent.type === 'text_delta' && finalTextEvent.content) {
+                hasAssistantTextDelta = true;
+                sendToDesktop(finalTextEvent);
+            }
+        }
         const event = mapMastraChunkToDesktopEvent(chunk as MastraChunkLike, runId);
         if (event) {
+            if (
+                event.type === 'text_delta'
+                && event.role !== 'thinking'
+                && typeof event.content === 'string'
+                && event.content.length > 0
+            ) {
+                hasAssistantTextDelta = true;
+            }
             sendToDesktop(event);
         }
     }

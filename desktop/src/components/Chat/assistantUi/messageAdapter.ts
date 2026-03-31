@@ -95,9 +95,24 @@ function buildAssistantTurnText(round: TimelineTurnRound): string {
     ]);
     const runtimeLines = toUniqueLines(turn.systemEvents ?? []);
     const sections: string[] = [];
+    const taskCardResultLines = turn.taskCard
+        ? toUniqueLines([
+            normalizeText(turn.taskCard.result?.summary),
+            normalizeText(turn.taskCard.result?.error),
+            normalizeText(turn.taskCard.result?.suggestion),
+        ])
+        : [];
+    const taskCardSectionLines = turn.taskCard
+        ? toUniqueLines(turn.taskCard.sections.flatMap((section) => section.lines))
+        : [];
 
     if (messageLines.length > 0) {
         sections.push(messageLines.join('\n\n'));
+    }
+    if (taskCardResultLines.length > 0) {
+        sections.push(taskCardResultLines.join('\n\n'));
+    } else if (messageLines.length === 0 && taskCardSectionLines.length > 0) {
+        sections.push(taskCardSectionLines.join('\n\n'));
     }
     if (runtimeLines.length > 0) {
         sections.push(`Runtime:\n${runtimeLines.map((line) => `- ${line}`).join('\n')}`);
@@ -231,7 +246,9 @@ function buildStructuredPayload(
             status: round.assistantTurn.taskCard.status ?? 'idle',
             progress: Array.isArray(round.assistantTurn.taskCard.tasks) && round.assistantTurn.taskCard.tasks.length > 0
                 ? {
-                    completed: round.assistantTurn.taskCard.tasks.filter((entry) => entry.status === 'completed').length,
+                    completed: round.assistantTurn.taskCard.tasks.filter((entry) => (
+                        entry.status === 'completed' || entry.status === 'complete' || entry.status === 'skipped'
+                    )).length,
                     total: round.assistantTurn.taskCard.tasks.length,
                 }
                 : undefined,

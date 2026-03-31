@@ -81,7 +81,6 @@ export function useTauriEvents() {
 
         async function setupListeners() {
             if (!isTauri()) {
-                console.debug('[Tauri] Not running inside Tauri WebView — event listeners skipped');
                 return;
             }
 
@@ -101,7 +100,6 @@ export function useTauriEvents() {
 
             // Listen for sidecar disconnection
             unlistenSidecarDisconnected = await listen('sidecar-disconnected', () => {
-                console.warn('[Tauri] Sidecar disconnected');
                 const { sessions } = useTaskEventStore.getState();
                 const now = new Date().toISOString();
                 const failureEvents = [...sessions.values()]
@@ -126,7 +124,6 @@ export function useTauriEvents() {
             });
 
             unlistenSidecarReconnected = await listen('sidecar-reconnected', () => {
-                console.log('[Tauri] Sidecar reconnected');
                 setSidecarConnected(true);
                 void syncRuntimeState();
             });
@@ -145,8 +142,6 @@ export function useTauriEvents() {
 
             // Hydrate persisted sessions after listeners are ready to avoid startup stalls.
             void syncRuntimeState();
-
-            console.log('[Tauri] Event listeners registered');
         }
 
         setupListeners();
@@ -164,7 +159,6 @@ export function useTauriEvents() {
                 flushFrameRef.current = null;
             }
             flushTaskEvents();
-            console.log('[Tauri] Event listeners cleaned up');
         };
     }, [enqueueTaskEvent, flushTaskEvents, setSidecarConnected, handleIpcResponse, addAuditEvent, addCanonicalEvents, setVoicePlaybackState]);
 }

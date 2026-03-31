@@ -493,3 +493,58 @@
         opacity: 0.45;
     }
 }
+
+@media (max-width: 900px) {
+    .sidebar {
+        padding: 6px;
+        gap: 6px;
+    }
+
+    .sidebar-brand-shell {
+        justify-content: center;
+        padding: 8px;
+    }
+
+    .sidebar-brand-copy {
+        display: none;
+    }
+
+    .task-header,
+    .workspace-header {
+        padding: 0;
+    }
+
+    .section-anchor {
+        min-width: 28px;
+        justify-content: center;
+    }
+
+    .section-anchor span {
+        display: none;
+    }
+
+    .task-list,
+    .workspace-list,
+    .workspace-create-form {
+        display: none;
+    }
+
+    .sidebar-settings-btn {
+        justify-content: center;
+        padding: 0;
+    }
+
+    .sidebar-settings-btn span {
+        display: none;
+    }
+
+    .connection-status {
+        justify-content: center;
+        gap: 6px;
+        padding: 0 4px;
+    }
+
+    .connection-text {
+        display: none;
+    }
+}

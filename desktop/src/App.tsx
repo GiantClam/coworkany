@@ -143,7 +143,6 @@ function App() {
             window.__coworkanyPerf.firstPaint = performance.now();
             const elapsed = window.__coworkanyPerf.firstPaint - window.__coworkanyPerf.appStart;
             const windowLabel = window.__coworkanyPerf.windowLabel ?? 'main';
-            console.info('[perf] app_first_paint_ms', Math.round(elapsed));
             void recordStartupMetric('app_first_paint', elapsed, window.__coworkanyPerf.firstPaint, windowLabel);
         }
     }, []);
@@ -194,24 +193,19 @@ function App() {
             return;
         }
 
+        if (!isTauri()) {
+            return;
+        }
+
         if (!IS_STARTUP_BASELINE && !startupReadySent) {
             return;
         }
 
-        let cancelled = false;
         const runWarmup = () => {
             const starter = IS_STARTUP_BASELINE ? startAllServices : startAllServicesBackground;
             void starter()
-                .then((result) => {
-                    if (!cancelled && !result.success) {
-                        console.warn('[services] warmup failed:', result.message);
-                    }
-                })
-                .catch((err) => {
-                    if (!cancelled) {
-                        console.warn('[services] warmup error:', err);
-                    }
-                });
+                .then(() => undefined)
+                .catch(() => undefined);
         };
 
         let timer: number | null = null;
@@ -231,7 +225,6 @@ function App() {
         }
 
         return () => {
-            cancelled = true;
             if (timer !== null) {
                 window.clearTimeout(timer);
             }
@@ -284,7 +277,6 @@ function App() {
 
             const text = JSON.stringify(payload, null, 2);
             await navigator.clipboard.writeText(text);
-            console.info('[ui-diagnostics]', payload);
             toast.success(t('diagnostics.title'), t('diagnostics.description'));
         } catch {
             toast.error(t('diagnostics.failedTitle'), t('diagnostics.failedDescription'));

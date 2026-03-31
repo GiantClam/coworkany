@@ -11,10 +11,13 @@ import { initReactI18next } from 'react-i18next';
 import en from './locales/en.json';
 import zh from './locales/zh.json';
 import { getConfig, saveConfig } from '../lib/configStore';
+import { installMinimalConsoleMode } from '../lib/appLog';
 
 const LANG_STORAGE_KEY = 'coworkany-lang';
 const LANG_CONFIG_KEY = 'language';
 const DEFAULT_LANGUAGE = 'en';
+
+installMinimalConsoleMode();
 
 i18n.use(initReactI18next).init({
     resources: {

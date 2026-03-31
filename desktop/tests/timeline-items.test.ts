@@ -1720,4 +1720,50 @@ describe('buildTimelineItems', () => {
         expect(turns[0]?.messages).toEqual(['先确认导出权限。']);
         expect(turns[0]?.taskCard?.collaboration?.title).toBe('Grant PDF export access');
     });
+
+    test('keeps latest assistant narrative from canonical events when raw trajectory only has user message', () => {
+        const session = makeSession({
+            status: 'running',
+            taskMode: 'immediate_task',
+            messages: [
+                {
+                    id: 'msg-user-1',
+                    role: 'user',
+                    content: '请完成这个任务',
+                    timestamp: '2026-03-31T11:00:00.000Z',
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'event-user',
+                    sequence: 1,
+                    type: 'CHAT_MESSAGE',
+                    timestamp: '2026-03-31T11:00:00.000Z',
+                    payload: {
+                        role: 'user',
+                        content: '请完成这个任务',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-runtime-final',
+                    sequence: 2,
+                    type: 'CHAT_MESSAGE',
+                    timestamp: '2026-03-31T11:00:02.000Z',
+                    payload: {
+                        role: 'system',
+                        content: '任务已完成，结果：系统返回最终摘要。',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const turns = extractAssistantTurns(result.items);
+
+        expect(result.items.map((item) => item.type)).toEqual([
+            'user_message',
+            'assistant_turn',
+        ]);
+        expect(turns[0]?.systemEvents).toContain('任务已完成，结果：系统返回最终摘要。');
+    });
 });

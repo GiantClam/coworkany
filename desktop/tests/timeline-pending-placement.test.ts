@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildDisplayItemsWithPendingState } from '../src/components/Chat/Timeline/Timeline';
+import { buildDisplayItemsWithPendingState, resolveAssistantUiPendingLabel } from '../src/components/Chat/Timeline/Timeline';
 import type { AssistantTurnItem, TimelineItemType } from '../src/types';
 
 function makeAssistantTurn(id: string, timestamp = '2026-03-31T01:00:00.000Z'): AssistantTurnItem {
@@ -73,5 +73,28 @@ describe('buildDisplayItemsWithPendingState', () => {
         );
 
         expect(displayItems).toEqual(visibleItems);
+    });
+});
+
+describe('resolveAssistantUiPendingLabel', () => {
+    test('clears pending label when latest assistant turn already has response text', () => {
+        const visibleItems: TimelineItemType[] = [
+            makeUserMessage('user-latest', '你好'),
+            {
+                ...makeAssistantTurn('assistant-latest'),
+                messages: ['这是最终回复。'],
+            },
+        ];
+
+        expect(resolveAssistantUiPendingLabel(visibleItems, 'Sent. Thinking...')).toBe('');
+    });
+
+    test('keeps pending label when latest assistant turn has no renderable narrative', () => {
+        const visibleItems: TimelineItemType[] = [
+            makeUserMessage('user-latest', '你好'),
+            makeAssistantTurn('assistant-latest'),
+        ];
+
+        expect(resolveAssistantUiPendingLabel(visibleItems, 'Sent. Thinking...')).toBe('Sent. Thinking...');
     });
 });

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { deleteConfig, saveConfig } from '../lib/configStore';
+import { isTauri } from '../lib/tauri';
 
 // ============================================================================
 // Types
@@ -131,6 +132,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     hasLoaded: false,
 
     loadWorkspaces: async (force = false) => {
+        if (!isTauri()) {
+            set({ hasLoaded: true, isLoading: false, error: null });
+            return get().workspaces;
+        }
+
         const state = get();
         if (!force && state.hasLoaded) {
             return state.workspaces;
@@ -182,6 +188,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
 
     createWorkspace: async (name = '', path = '') => {
+        if (!isTauri()) {
+            return null;
+        }
+
         set({ isLoading: true, error: null });
         try {
             const result = await invoke<IpcResult>('create_workspace', {
@@ -213,6 +223,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
 
     updateWorkspace: async (id: string, updates: { name?: string; path?: string; autoNamed?: boolean }) => {
+        if (!isTauri()) {
+            return false;
+        }
+
         set({ isLoading: true, error: null });
         try {
             const result = await invoke<IpcResult>('update_workspace', {
@@ -245,6 +259,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     },
 
     deleteWorkspace: async (id: string) => {
+        if (!isTauri()) {
+            return false;
+        }
+
         set({ isLoading: true, error: null });
         try {
             const result = await invoke<IpcResult>('delete_workspace', { input: { id } });

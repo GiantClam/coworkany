@@ -40,6 +40,10 @@ jobs:
         working-directory: sidecar
         run: npm run test:ci
 
+      - name: Run sidecar assistant-ui stream contracts
+        working-directory: sidecar
+        run: npm run test:assistant-ui-contracts
+
   test-desktop:
     runs-on: ubuntu-latest
     steps:
@@ -89,6 +93,14 @@ jobs:
       - name: Run desktop e2e smoke (sidecar spawn reuse)
         working-directory: desktop
         run: npm run test:e2e:smoke:sidecar-reuse
+
+      - name: Run desktop assistant-ui e2e regressions
+        working-directory: desktop
+        run: npm run test:e2e:assistant-ui
+
+      - name: Run desktop assistant-ui visual regressions
+        working-directory: desktop
+        run: npm run test:e2e:assistant-ui:visual
 
   build-tauri:
     needs: [lint-and-typecheck, test-desktop, test-desktop-e2e-smoke-macos]

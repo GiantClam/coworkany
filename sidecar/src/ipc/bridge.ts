@@ -2,9 +2,10 @@ type DesktopEventBase = {
     runId?: string;
     traceId?: string;
 };
+type DesktopTextDeltaRole = 'assistant' | 'thinking';
 
 export type DesktopEvent =
-    | ({ type: 'text_delta'; content: string } & DesktopEventBase)
+    | ({ type: 'text_delta'; content: string; role?: DesktopTextDeltaRole } & DesktopEventBase)
     | ({ type: 'tool_call'; toolName: string; args: unknown } & DesktopEventBase)
     | ({ type: 'approval_required'; toolCallId: string; toolName: string; args: unknown; resumeSchema: string } & DesktopEventBase)
     | ({ type: 'suspended'; toolCallId: string; toolName: string; payload: unknown } & DesktopEventBase)
@@ -103,6 +104,128 @@ function resolveChunkData(chunk: MastraChunkLike): Record<string, unknown> | nul
     }
     return toRecord(chunk);
 }
+function normalizeText(value: unknown): string | null {
+    if (typeof value !== 'string') {
+        return null;
+    }
+    return value.length > 0 ? value : null;
+}
+function resolveStreamTextDelta(chunk: MastraChunkLike, data: Record<string, unknown>): string {
+    return normalizeText(data.text)
+        ?? normalizeText(data.textDelta)
+        ?? normalizeText(data.delta)
+        ?? normalizeText(chunk.text)
+        ?? normalizeText(chunk.textDelta)
+        ?? normalizeText(chunk.delta)
+        ?? '';
+}
+function appendUniqueText(target: string[], value: unknown): void {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return;
+    }
+    if (target[target.length - 1] === normalized) {
+        return;
+    }
+    target.push(normalized);
+}
+function collectTextFragmentsFromMessageLike(value: unknown): string[] {
+    const message = toRecord(value);
+    if (!message) {
+        return [];
+    }
+    const fragments: string[] = [];
+    appendUniqueText(fragments, message.text);
+    appendUniqueText(fragments, message.outputText);
+    appendUniqueText(fragments, message.content);
+
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    for (const part of parts) {
+        const record = toRecord(part);
+        if (!record) {
+            continue;
+        }
+        appendUniqueText(fragments, record.text);
+        appendUniqueText(fragments, record.content);
+    }
+
+    const content = Array.isArray(message.content) ? message.content : [];
+    for (const entry of content) {
+        const record = toRecord(entry);
+        if (!record) {
+            continue;
+        }
+        appendUniqueText(fragments, record.text);
+        appendUniqueText(fragments, record.content);
+    }
+
+    return fragments;
+}
+function extractAssistantTextFromFinishChunk(data: Record<string, unknown>): string {
+    const fragments: string[] = [];
+    appendUniqueText(fragments, data.text);
+    appendUniqueText(fragments, data.outputText);
+    appendUniqueText(fragments, data.content);
+
+    const response = toRecord(data.response);
+    if (response) {
+        appendUniqueText(fragments, response.text);
+        appendUniqueText(fragments, response.outputText);
+        appendUniqueText(fragments, response.content);
+
+        const uiMessages = Array.isArray(response.uiMessages) ? response.uiMessages : [];
+        for (const message of uiMessages) {
+            const nested = collectTextFragmentsFromMessageLike(message);
+            for (const text of nested) {
+                appendUniqueText(fragments, text);
+            }
+        }
+
+        const messages = Array.isArray(response.messages) ? response.messages : [];
+        for (const message of messages) {
+            const nested = collectTextFragmentsFromMessageLike(message);
+            for (const text of nested) {
+                appendUniqueText(fragments, text);
+            }
+        }
+    }
+
+    return fragments.join('\n\n').trim();
+}
+function resolveFinishReason(value: unknown): string | undefined {
+    if (typeof value === 'string') {
+        return value;
+    }
+    const record = toRecord(value);
+    if (!record) {
+        return undefined;
+    }
+    return normalizeText(record.unified)
+        ?? normalizeText(record.raw)
+        ?? undefined;
+}
+export function extractMastraFinalAssistantTextEvent(
+    chunk: MastraChunkLike,
+    runId?: string,
+): DesktopEvent | null {
+    if (chunk.type !== 'finish') {
+        return null;
+    }
+    const data = resolveChunkData(chunk);
+    if (!data) {
+        return null;
+    }
+    const text = extractAssistantTextFromFinishChunk(data);
+    if (!text) {
+        return null;
+    }
+    return {
+        type: 'text_delta',
+        role: 'assistant',
+        content: text,
+        runId,
+    };
+}
 function resolveUsageNumbers(record: Record<string, unknown>): TokenUsageData | null {
     const usage = toRecord(record.usage);
     if (!usage) {
@@ -180,13 +303,15 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
     }
     switch (chunk.type) {
         case 'text-delta': {
-            const text = typeof data.text === 'string'
-                ? data.text
-                : typeof chunk.text === 'string'
-                    ? chunk.text
-                    : '';
+            const text = resolveStreamTextDelta(chunk, data);
             if (!text) return null;
-            return { type: 'text_delta', content: text, runId };
+            return { type: 'text_delta', content: text, runId, role: 'assistant' };
+        }
+        case 'reasoning':
+        case 'reasoning-delta': {
+            const text = resolveStreamTextDelta(chunk, data);
+            if (!text) return null;
+            return { type: 'text_delta', content: text, runId, role: 'thinking' };
         }
         case 'tool-call': {
             if (typeof data.toolName !== 'string') return null;
@@ -247,12 +372,14 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
             return {
                 type: 'complete',
                 runId,
-                finishReason: typeof data.finishReason === 'string'
-                    ? data.finishReason
-                    : typeof data.stepResult === 'object' && data.stepResult !== null
+                finishReason: resolveFinishReason(data.finishReason)
+                    ?? resolveFinishReason((toRecord(data.stepResult) ?? {}).reason)
+                    ?? (typeof data.stepResult === 'object' && data.stepResult !== null
                         ? String((data.stepResult as Record<string, unknown>).reason ?? '')
-                        : undefined,
+                        : undefined),
             };
+        case 'step-finish':
+            return null;
         case 'error': {
             const message = extractErrorMessage(data.error)
                 ?? extractErrorMessage(data.message)

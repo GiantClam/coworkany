@@ -101,6 +101,7 @@ export type TextDeltaPayload = {
     delta?: string;
     text?: string;
     content?: string;
+    role?: 'assistant' | 'thinking';
     messageId?: string;
     correlationId?: string;
 };

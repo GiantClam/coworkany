@@ -408,7 +408,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 taskId,
                 payload: {
                     delta: event.content,
-                    role: 'assistant',
+                    role: event.role ?? 'assistant',
                     traceId,
                 },
             });

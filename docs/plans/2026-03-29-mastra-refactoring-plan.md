@@ -26,6 +26,7 @@
 15. [风险与缓解](#15-风险与缓解)
 16. [验收标准](#16-验收标准)
 17. [Mastra 特性拉满增强（社区最佳实践版）](#17-mastra-特性拉满增强社区最佳实践版)
+18. [Claude Code 对齐补强重构（2026-04-01）](#18-claude-code-对齐补强重构2026-04-01)
 
 ---
 
@@ -3335,6 +3336,113 @@ const marketResearch = createWorkflow({
 3. **安全阻断**：tripwire 触发后，LLM 调用与内存写入均被阻断（抽样审计 100% 一致）。
 4. **可观测性**：核心任务链路 100% 可关联 traceId、runId、taskId。
 5. **评测闭环**：关键 Agent/Workflow 至少 3 个 scorer（相关性/安全性/完成度）且有趋势报表。
+
+---
+
+## 18. Claude Code 对齐补强重构（2026-04-01）
+
+> 本节是对第 17 节的补强，目标不是“复制 Claude Code”，而是在 Mastra 单路径架构下引入 Claude Code 已验证的关键控制面能力。  
+> 结论：这些能力大多不是 Mastra 原生特性，需要 CoworkAny 应用层重构实现。
+
+### 18.1 现状差距锚点（CoworkAny）
+
+1. `sidecar/src/mastra/memory/config.ts` 仍是单层 Memory 配置（`lastMessages + semanticRecall + workingMemory`），缺少文件型长期记忆目录与召回编排。
+2. `sidecar/src/mastra/entrypoint.ts` 使用进程内 `taskStates`，缺少会话级持久化与跨重启恢复。
+3. `sidecar/src/mastra/workflows/steps/execute-task.ts` 固定 `resourceId = 'org-coworkany'`，存在跨任务记忆污染风险。
+4. `sidecar/src/ipc/streaming.ts` 为基础流桥接，缺少远程会话、渠道事件注入与稳定重连策略。
+5. `sidecar/src/storage/skillStore.ts` 支持 `findByTrigger`，但技能触发链路与执行编排尚未形成统一控制面。
+6. `sidecar/src/mastra/schedulerRuntime.ts` 已有调度框架，但缺少跨进程租约锁与调度主从抢占语义。
+
+### 18.2 可整合能力矩阵（Claude Code 代码存在 + 可落地）
+
+| 能力域 | Claude Code 参考实现 | CoworkAny 重构落点 |
+|---|---|---|
+| 权限治理中台 | `src/utils/permissions/permissions.ts`、`src/hooks/toolPermission/PermissionContext.ts`、`src/hooks/toolPermission/permissionLogging.ts` | 统一 `PolicyEngine + DecisionLog`，收口 `bash/bash_approval/approval-tools` |
+| Hook 事件总线 | `src/utils/hooks/execPromptHook.ts`、`execHttpHook.ts`、`hooksConfigSnapshot.ts`、`registerSkillHooks.ts` | 构建 Session/Tool/Compact/Task 统一 Hook Runtime |
+| 插件生态（市场/依赖/策略） | `src/services/plugins/PluginInstallationManager.ts`、`src/utils/plugins/pluginLoader.ts`、`dependencyResolver.ts`、`pluginPolicy.ts` | 从 `skills.json` 升级为插件包、依赖闭包、策略封禁与热刷新 |
+| MCP 生命周期治理 | `src/services/mcp/useManageMCPConnections.ts`、`officialRegistry.ts`、`mcpServerApproval.tsx` | 动态连接、重连、资源/提示同步、服务器审批 |
+| 远程会话连续性 | `src/remote/RemoteSessionManager.ts`、`src/remote/SessionsWebSocket.ts` | 远程接入、断线恢复、远程审批事件回传 |
+| Channel 事件注入 | `src/services/mcp/channelPermissions.ts` | 外部告警/IM/CI 事件推入任务控制面 |
+| 调度租约锁 | `src/utils/cronTasksLock.ts` | 多实例下调度 leader 选举与 stale lock 恢复 |
+| 任务系统并发一致性 | `src/utils/tasks.ts` + `Task*Tool` | 任务创建/更新/依赖关系的锁保护与并发安全 |
+| 会话恢复/回溯 | `src/commands/resume/resume.tsx`、`src/commands/rewind/rewind.ts`、`src/utils/sessionStorage.ts` | 增加 resume/rewind 能力与可回放会话历史 |
+| 文件型长期记忆 | `src/memdir/memdir.ts`、`src/memdir/findRelevantMemories.ts` | 引入 `MEMORY.md + topic files` 与选择性召回 |
+| 组织托管配置同步 | `src/services/remoteManagedSettings/*` | 企业策略同步、危险配置变更确认与回滚 |
+
+### 18.3 补强后目标架构（在 Mastra 之上新增控制面）
+
+1. **Session OS 层**：会话持久化、resume/rewind、跨设备连接、跨重启恢复。
+2. **Policy & Hooks 层**：统一权限判定、审批传播、Hook 前后置治理、审计日志。
+3. **Plugin & MCP 控制面**：插件市场与依赖管理、MCP server 生命周期与审批。
+4. **Memory Mesh 层**：向量记忆 + 工作记忆 + 文件记忆（`MEMORY.md`）三轨协同。
+5. **Task & Scheduler 层**：任务依赖图、并发锁、调度租约、长任务断点续跑。
+
+### 18.4 分期实施（补强 6 期）
+
+#### Phase A（会话与状态底座）
+1. 将 `taskStates` 从内存 Map 迁移到持久化会话存储（建议 SQLite + JSONL transcript）。
+2. 增加 `resume_interrupted_task` 的跨重启一致性协议。
+3. 新增 `rewind` 能力与快照回放入口（仅回退状态，不直接回退副作用）。
+
+#### Phase B（权限与 Hook 平台）
+1. 将工具审批、deny/allow 规则、策略来源合并为统一 `PolicyEngine`。
+2. 增加 Hook 事件面：`SessionStart / PreToolUse / PermissionRequest / PostToolUse / PreCompact / PostCompact / TaskCreated / TaskCompleted`。
+3. 所有拒绝/放行决策写入统一审计轨迹。
+
+#### Phase C（插件化技能系统）
+1. 把 `SkillStore` 从“清单持久化”升级为“插件生命周期管理器”。
+2. 支持 marketplace 源、依赖闭包、反向依赖检查、策略封禁。
+3. 将 `findByTrigger` 纳入统一调度链，不再作为孤立能力。
+
+#### Phase D（MCP 与远程控制面）
+1. 建立 `McpConnectionManager`：连接缓存、自动重连、动态工具集更新。
+2. 引入 MCP server 审批与 scope 治理（user/project/managed）。
+3. 打通远程会话与 channel 事件注入，形成“外部事件 -> 当前任务”闭环。
+
+#### Phase E（Memory Mesh 与上下文压缩）
+1. 保留 Mastra Memory（向量/working memory）作为第一层。
+2. 新增 `memdir` 文件记忆（`MEMORY.md` 索引 + topic files）作为第二层。
+3. 上下文压缩升级为三段式：micro 精简 -> 结构化摘要 -> 文件记忆沉淀。
+
+#### Phase F（长任务与调度可靠性）
+1. 调度器引入 lease lock（leader-only 执行）与 stale lock 恢复。
+2. 任务状态机支持 checkpoint / suspend / resume / retry。
+3. 统一幂等窗口与故障注入回归（超时、断链、重复触发、恢复重放）。
+
+### 18.5 验收标准（补强增量）
+
+1. **跨会话记忆一致性**：同 `resourceId` 的会话共享记忆命中率稳定；不同资源无串扰。
+2. **审批可追溯性**：每次审批有 requestId、来源、决策理由、最终结果。
+3. **长任务恢复成功率**：异常退出后可恢复率 >= 99%（测试环境基线）。
+4. **调度单主执行**：多实例并发下同一任务不重复执行。
+5. **插件可治理性**：依赖冲突、策略封禁、热更新可观测且可回滚。
+
+### 18.6 非目标与约束
+
+1. 不直接复用 Claude Code 源码实现，不做二进制级“平替 SDK”搬运。
+2. 本仓库参考的 `claude-code` 为反编译研究仓库，存在缺失模块与 stub。
+3. 采用“能力模式迁移 + CoworkAny 原生实现”策略，保持许可证与工程边界清晰。
+
+### 18.7 参考来源
+
+- 官方文档（能力定义）：
+  - `https://code.claude.com/docs/en/hooks`
+  - `https://code.claude.com/docs/en/plugins`
+  - `https://code.claude.com/docs/en/plugins-reference`
+  - `https://code.claude.com/docs/en/mcp`
+  - `https://code.claude.com/docs/en/sub-agents`
+  - `https://code.claude.com/docs/en/settings`
+  - `https://code.claude.com/docs/en/memory`
+  - `https://code.claude.com/docs/en/remote-control`
+  - `https://code.claude.com/docs/en/channels`
+  - `https://code.claude.com/docs/en/scheduled-tasks`
+- 本地代码参考（存在性验证）：
+  - `../claude-code/src/services/plugins/*`
+  - `../claude-code/src/utils/hooks/*`
+  - `../claude-code/src/services/mcp/*`
+  - `../claude-code/src/remote/*`
+  - `../claude-code/src/utils/{permissions,tasks,cronTasksLock,sessionStorage}.ts`
+  - `../claude-code/src/memdir/*`
 
 ---
 

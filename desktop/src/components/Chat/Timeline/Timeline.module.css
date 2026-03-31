@@ -16,6 +16,49 @@
     box-sizing: border-box;
 }
 
+.assistantUiLoadingShell {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 12px;
+}
+
+.assistantUiLoadingRail {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    width: min(420px, 100%);
+}
+
+.assistantUiLoadingDot {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 80%, var(--bg-panel));
+    flex-shrink: 0;
+}
+
+.assistantUiLoadingLine {
+    display: block;
+    height: 9px;
+    width: min(180px, 42vw);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-element) 82%, var(--bg-panel));
+}
+
+.assistantUiLoadingCard {
+    width: min(880px, 100%);
+    min-height: 86px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-element) 82%, transparent),
+        color-mix(in srgb, var(--bg-panel) 92%, transparent)
+    );
+}
+
 /* ============================================================================
  * Timeline Items
  * ============================================================================ */
