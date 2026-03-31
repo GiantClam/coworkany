@@ -14,9 +14,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::State;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ============================================================================
 // State Types
@@ -191,7 +191,6 @@ pub struct DenyEffectInput {
 pub async fn request_effect(
     request: EffectRequest,
     state: State<'_, PolicyEngineState>,
-    app: AppHandle,
 ) -> Result<EffectResponse, String> {
     info!(
         "Effect request received: {:?} from {:?}",
@@ -222,7 +221,7 @@ pub async fn request_effect(
             Ok(engine.to_response(outcome, true))
         }
 
-        PolicyDecision::RequiresUserConfirmation { policy, .. } => {
+        PolicyDecision::RequiresUserConfirmation { .. } => {
             info!("Effect requires confirmation: {}", request.id);
 
             // Store pending confirmation
@@ -236,12 +235,6 @@ pub async fn request_effect(
                         _requested_at: Utc::now().to_rfc3339(),
                     },
                 );
-            }
-
-            // Emit confirmation request to UI
-            let confirmation_req = ConfirmationRequest::from_request(&request, policy);
-            if let Err(e) = app.emit("effect-confirmation-required", &confirmation_req) {
-                error!("Failed to emit confirmation request: {}", e);
             }
 
             // Return pending response (caller should wait for confirm/deny)
@@ -279,7 +272,6 @@ pub async fn confirm_effect(
     input: ConfirmEffectInput,
     state: State<'_, PolicyEngineState>,
     sidecar_state: State<'_, SidecarState>,
-    app: AppHandle,
 ) -> Result<EffectResponse, String> {
     info!(
         "Effect confirmed by user: {} (remember: {})",
@@ -310,11 +302,6 @@ pub async fn confirm_effect(
     {
         let mut audit = state.audit_sink.lock().await;
         let _ = audit.log(AuditEvent::confirmed(&pending.request, input.remember));
-    }
-
-    // Emit confirmation result
-    if let Err(e) = app.emit("effect-confirmed", &response) {
-        warn!("Failed to emit effect-confirmed: {}", e);
     }
 
     if let Err(e) = forward_effect_response_to_sidecar(&sidecar_state, &response) {
@@ -395,7 +382,6 @@ pub async fn deny_effect(
     input: DenyEffectInput,
     state: State<'_, PolicyEngineState>,
     sidecar_state: State<'_, SidecarState>,
-    app: AppHandle,
 ) -> Result<EffectResponse, String> {
     info!("Effect denied by user: {}", input.request_id);
 
@@ -430,11 +416,6 @@ pub async fn deny_effect(
             &pending.request,
             input.reason.as_deref(),
         ));
-    }
-
-    // Emit denial result
-    if let Err(e) = app.emit("effect-denied", &response) {
-        warn!("Failed to emit effect-denied: {}", e);
     }
 
     if let Err(e) = forward_effect_response_to_sidecar(&sidecar_state, &response) {

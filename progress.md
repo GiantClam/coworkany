@@ -1,5 +1,77 @@
 # Progress Log
 
+## 2026-03-31
+
+- Ran the assistant-ui visual cleanup pass to align message/task rendering with app theme tokens and Manus-like card hierarchy:
+  - rebuilt `desktop/src/components/Chat/assistantUi/AssistantUiThreadView.module.css` as a token-driven surface (removed light fallback colors, added role rail, runtime pulse, and task progress meter styles).
+  - updated `desktop/src/components/Chat/assistantUi/AssistantUiThreadView.tsx` to render assistant/system role metadata, runtime pulse indicator, and inline task progress bar while preserving approval action wiring.
+- Updated chat/task interaction affordances in composer:
+  - `desktop/src/components/Chat/components/InputArea.tsx` now supports explicit per-message route controls (`Chat Mode` / `Task Mode`).
+  - `desktop/src/components/Chat/ChatInterface.tsx` now tracks one-shot explicit routing intent and clears it after successful send/start, while keeping assistant-ui as the only runtime path.
+  - `desktop/src/components/Chat/ChatInterface.css` adds themed route-switch controls.
+- Continued task-surface theme consistency cleanup:
+  - tokenized task-board shell tones in `desktop/src/components/jarvis/TaskListView.css`.
+  - tokenized structured task/tool card status and action colors in `desktop/src/components/Chat/Timeline/Timeline.module.css`.
+  - added/updated locale strings for routing and assistant/system labels in `desktop/src/i18n/locales/en.json` and `desktop/src/i18n/locales/zh.json`.
+- Continued chat/task interaction convergence:
+  - `desktop/src/components/Chat/ChatInterface.tsx` now routes initial `task` mode into mounted `TaskListView` instead of keeping task mode in welcome-only state.
+  - task board now includes an explicit switch-back action to chat mode in `desktop/src/components/jarvis/TaskListView.tsx`.
+  - explicit slash routing (`/ask`, `/task`) now feeds entry routing intent instead of only passing through raw text.
+- Extended explicit route command support and timeline visual token cleanup:
+  - `desktop/src/components/Chat/ChatInterface.tsx` now recognizes `/schedule` as explicit task route intent in the same routing helper path as `/task`.
+  - exported entry-routing helpers and added focused regression coverage in `desktop/tests/chat-entry-routing.test.ts`.
+  - tokenized remaining hardcoded file/preview/pending/status colors in `desktop/src/components/Chat/Timeline/Timeline.module.css` (file cards, html preview, assistant step/status dots).
+- Closed an existing task-board projection regression and dead UI cleanup:
+  - `desktop/src/components/jarvis/TaskListView.tsx` now backfills `taskCard.tasks` from `TASK_PLAN_READY` when timeline projection lacks task list payload.
+  - removed unmounted legacy files: `desktop/src/components/Chat/components/TaskExecutionPanel.tsx`, `desktop/src/components/Chat/components/TaskExecutionPanel.css`, `desktop/src/components/Chat/Timeline/Timeline.css`.
+- Completed the assistant-ui/timeline unification rollout path:
+  - Timeline now renders through assistant-ui runtime as the only path (runtime feature gate removed).
+  - Added `desktop/tests/timeline-assistant-ui-runtime-path.test.tsx` to verify Timeline always routes through assistant-ui after lazy loading.
+- Continued no-fallback refactor cleanup after assistant-ui became the only timeline runtime:
+  - removed the now-dead runtime-gate file `desktop/src/components/Chat/assistantUi/featureGate.ts` and its redundant test `desktop/tests/assistant-ui-feature-gate.test.ts`.
+  - `desktop/src/components/Chat/Timeline/Timeline.tsx` no longer carries inactive history-toggle/runtime-switch branches that were only meaningful before assistant-ui was always-on.
+  - added shared effect approval command helpers in `desktop/src/lib/effectApprovalCommands.ts` and reused them in timeline approval resolution to keep command payloads consistent.
+  - added `desktop/tests/effect-approval-commands.test.ts` for helper-level command payload coverage.
+- Removed legacy modal approval fallback entrypoint:
+  - removed `useEffectConfirmation` and `EffectConfirmationDialog` wiring from `desktop/src/App.tsx`.
+  - deleted dead files `desktop/src/hooks/useEffectConfirmation.ts`, `desktop/src/components/EffectConfirmationDialog.tsx`, `desktop/src/components/EffectConfirmationDialog.css`.
+  - updated protocol/shell authorization regression e2e checks to assert assistant-ui approval cards instead of modal contract.
+- Removed obsolete Rust-side approval UI event broadcasts:
+  - `desktop/src-tauri/src/policy/commands.rs` no longer emits `effect-confirmation-required` / `effect-confirmed` / `effect-denied` window events.
+  - `desktop/src-tauri/src/sidecar.rs` now calls `request_effect` without the removed AppHandle parameter.
+  - approval flow remains intact through `request_effect_response` forwarding to sidecar/runtime state.
+- Closed the assistant-ui approval action e2e verification gap:
+  - `desktop/tests/tauriFixtureNoChrome.ts` now handles `confirm_effect` / `deny_effect` invoke commands in the Darwin no-Chrome mirror harness and emits assertion-friendly log markers.
+  - Added `desktop/tests/timeline-assistant-ui-approval-invoke.e2e.test.ts` to assert Approve/Deny button clicks from assistant-ui timeline trigger `confirm_effect` / `deny_effect`.
+- Completed legacy timeline retirement:
+  - `desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts` now runs canonical-only timeline projection.
+  - Added canonical fallback from `session.messages` when TaskEvent canonical materialization is empty, preserving visibility for older persisted sessions.
+  - Deleted the no-longer-referenced `desktop/src/components/Chat/Timeline/hooks/legacyTimelineBuilder.ts`.
+- Continued bundle/runtime cleanup for assistant-ui adoption:
+  - `desktop/src/components/Chat/Timeline/Timeline.tsx` now lazy-loads assistant-ui runtime components.
+  - `desktop/src/components/Chat/Timeline/components/ToolCard.tsx` removed runtime dependency on `react-syntax-highlighter` in favor of lightweight code block rendering.
+  - Removed `react-syntax-highlighter` and `@types/react-syntax-highlighter` from desktop dependencies.
+  - `desktop/vite.config.ts` now defines focused manual chunks for assistant-ui/markdown/react/tauri vendors.
+- Verification:
+  - `cd desktop && ./node_modules/.bin/tsc --noEmit`
+  - `cd desktop && npm run build`
+  - `cd desktop && bun test tests/assistant-ui-thread-view.test.tsx tests/timeline-assistant-ui-approval-actions.test.ts`
+  - `cd desktop && bun test tests/assistant-ui-message-adapter.test.ts tests/timeline-assistant-ui-runtime-path.test.tsx`
+  - `cd desktop && bun test tests/timeline-assistant-ui-log-replay-regression.test.ts`
+  - `cd desktop && bun test tests/task-list-view.test.ts tests/timeline-assistant-ui-runtime-path.test.tsx`
+  - `cd desktop && bun test tests/chat-entry-routing.test.ts tests/task-list-view.test.ts tests/timeline-assistant-ui-runtime-path.test.tsx tests/assistant-ui-thread-view.test.tsx tests/timeline-assistant-ui-approval-actions.test.ts`
+  - `cd desktop && bun test tests/timeline-assistant-ui-runtime-path.test.tsx tests/assistant-ui-thread-view.test.tsx tests/timeline-assistant-ui-approval-actions.test.ts`
+  - `cd desktop && bun test tests/assistant-ui-thread-view.test.tsx tests/timeline-assistant-ui-approval-actions.test.ts tests/assistant-ui-message-adapter.test.ts tests/timeline-assistant-ui-log-replay-regression.test.ts`
+  - `cd desktop && bun test tests/assistant-ui-message-adapter.test.ts tests/assistant-ui-thread-view.test.tsx tests/timeline-assistant-ui-approval-actions.test.ts tests/timeline-assistant-ui-log-replay-regression.test.ts tests/timeline-assistant-ui-runtime-path.test.tsx`
+  - `cd desktop && bun test tests/effect-approval-commands.test.ts tests/timeline-assistant-ui-approval-actions.test.ts tests/timeline-assistant-ui-runtime-path.test.tsx tests/assistant-ui-thread-view.test.tsx tests/assistant-ui-message-adapter.test.ts`
+  - `cd desktop && npx playwright test tests/timeline-assistant-ui-approval-invoke.e2e.test.ts`
+  - `cd desktop && npx playwright test tests/shell-authorization-ui-regression.e2e.test.ts --grep "assistant-ui approval card contract"`
+  - `cd desktop && npx playwright test tests/desktop-message-protocol-regression.e2e.test.ts --grep "assistant-ui approval card for shell authorization details"`
+  - `cd desktop/src-tauri && cargo check`
+  - `cd desktop && bun test tests/timeline-items.test.ts tests/timeline-turn-rounds-regression.test.ts tests/timeline-user-message-visibility-regression.test.ts tests/timeline-scheduled-rendering.test.ts tests/timeline-text-delta-regression.test.ts tests/timeline-pending-placement.test.ts`
+  - `cd desktop && npm run build`
+  - `cd sidecar && bun test tests/protocol-canonical-stream.test.ts`
+
 ## 2026-03-28
 
 - Added a second capability-acquisition slice so the internal self-learning loop is no longer a black box during task execution:

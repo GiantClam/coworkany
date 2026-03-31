@@ -59,6 +59,51 @@ function getUserMessages(session: TaskSession) {
     return getSessionMessages(session).filter((message) => message.role === 'user' && message.content.trim().length > 0);
 }
 
+type TaskCardTaskEntry = NonNullable<TaskCardItem['tasks']>[number];
+
+function deriveTaskListFromEvents(session: TaskSession): TaskCardItem['tasks'] | undefined {
+    const events = getSessionEvents(session);
+    if (events.length === 0) {
+        return undefined;
+    }
+
+    const tasksById = new Map<string, TaskCardTaskEntry>();
+
+    for (const event of events) {
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        if (event.type === 'TASK_PLAN_READY') {
+            const rawTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+            for (const entry of rawTasks) {
+                if (!entry || typeof entry !== 'object') {
+                    continue;
+                }
+                const item = entry as Record<string, unknown>;
+                const id = typeof item.id === 'string' && item.id.trim().length > 0
+                    ? item.id
+                    : `task-${tasksById.size + 1}`;
+                const title = typeof item.title === 'string' && item.title.trim().length > 0
+                    ? item.title
+                    : (typeof item.objective === 'string' ? item.objective : `Task ${tasksById.size + 1}`);
+                const dependencies = Array.isArray(item.dependencies)
+                    ? item.dependencies.filter((dep): dep is string => typeof dep === 'string')
+                    : [];
+                tasksById.set(id, {
+                    id,
+                    title,
+                    status: 'pending',
+                    dependencies,
+                });
+            }
+        }
+    }
+
+    if (tasksById.size === 0) {
+        return undefined;
+    }
+
+    return Array.from(tasksById.values());
+}
+
 function deriveUserPrompt(session: TaskSession): string {
     const latestUserMessage = [...getUserMessages(session)].pop();
     if (latestUserMessage) {
@@ -134,9 +179,16 @@ function formatUpdatedAt(timestamp: string): string {
 
 function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem {
     const timeline = buildTimelineItems(session);
+    const derivedTasks = deriveTaskListFromEvents(session);
     const projectedCard = timeline.items.find((item): item is TaskCardItem => item.type === 'task_card');
     if (projectedCard) {
-        return { ...projectedCard, taskId };
+        return {
+            ...projectedCard,
+            taskId,
+            tasks: projectedCard.tasks && projectedCard.tasks.length > 0
+                ? projectedCard.tasks
+                : derivedTasks,
+        };
     }
 
     const description = compactText(deriveUserPrompt(session), 180);
@@ -174,6 +226,7 @@ function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem 
         title: deriveTitle(session),
         subtitle: session.capabilityReview?.status === 'pending' ? session.capabilityReview.summary : undefined,
         status: session.status,
+        tasks: derivedTasks,
         sections,
         result: result ? { summary: result } : undefined,
         timestamp: session.updatedAt || session.createdAt || new Date().toISOString(),
@@ -440,6 +493,17 @@ export const TaskListView: React.FC<TaskListViewProps> = ({ onSwitchToChat }) =>
                     )}
                 </div>
                 <div className="task-list-header-actions">
+                    {onSwitchToChat ? (
+                        <button
+                            type="button"
+                            onClick={() => onSwitchToChat()}
+                            className="task-list-switch-chat"
+                            title={t('welcome.chatNow')}
+                            aria-label={t('welcome.chatNow')}
+                        >
+                            {t('welcome.chatNow')}
+                        </button>
+                    ) : null}
                     <button
                         type="button"
                         onClick={() => refreshTasks()}

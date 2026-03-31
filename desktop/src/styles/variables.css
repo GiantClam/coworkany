@@ -111,6 +111,11 @@
     /* Semantic aliases — keep undefined-variable warnings away */
     --bg-elevated: var(--bg-panel);
     --border-default: var(--border-strong);
+    --surface-thread: var(--bg-panel);
+    --surface-message: var(--bg-element);
+    --surface-message-muted: var(--bg-subtle);
+    --surface-card: var(--bg-subtle);
+    --surface-card-strong: var(--bg-element);
 
     /* Accessibility */
     --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-primary);

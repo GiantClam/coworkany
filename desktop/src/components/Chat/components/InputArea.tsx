@@ -19,6 +19,8 @@ interface LlmProfile {
     provider: string;
 }
 
+type InputRouteMode = 'chat' | 'task';
+
 interface InputAreaProps {
     query: string;
     placeholder: string;
@@ -35,6 +37,9 @@ interface InputAreaProps {
     llmProfiles: LlmProfile[];
     activeProfileId?: string;
     onSelectProfile: (id: string) => void;
+    showRouteControls?: boolean;
+    routeMode?: InputRouteMode;
+    onRouteModeChange?: (mode: InputRouteMode) => void;
 }
 
 const InputAreaComponent: React.FC<InputAreaProps> = ({
@@ -53,6 +58,9 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     llmProfiles,
     activeProfileId,
     onSelectProfile,
+    showRouteControls = false,
+    routeMode = 'chat',
+    onRouteModeChange,
 }) => {
     const { t } = useTranslation();
     const voiceInput = useVoiceInput(getCurrentLanguage());
@@ -202,6 +210,30 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
 
     return (
         <div className="input-area" onPaste={handlePasteEvent}>
+            {showRouteControls ? (
+                <div className="input-route-switch" role="tablist" aria-label={t('chat.messageRouting', { defaultValue: 'Message routing' })}>
+                    <button
+                        type="button"
+                        className={`input-route-button${routeMode === 'chat' ? ' active' : ''}`}
+                        onClick={() => onRouteModeChange?.('chat')}
+                        role="tab"
+                        aria-selected={routeMode === 'chat'}
+                        disabled={disabled}
+                    >
+                        {t('welcome.modeChatTitle', { defaultValue: 'Chat Mode' })}
+                    </button>
+                    <button
+                        type="button"
+                        className={`input-route-button${routeMode === 'task' ? ' active' : ''}`}
+                        onClick={() => onRouteModeChange?.('task')}
+                        role="tab"
+                        aria-selected={routeMode === 'task'}
+                        disabled={disabled}
+                    >
+                        {t('welcome.modeTaskTitle', { defaultValue: 'Task Mode' })}
+                    </button>
+                </div>
+            ) : null}
             {voiceStatusText && (
                 <div className="voice-interim">
                     {voiceStatusText}

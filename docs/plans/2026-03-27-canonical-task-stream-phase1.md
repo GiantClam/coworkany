@@ -54,19 +54,19 @@
 
 **Completed follow-on slice:** desktop timeline rendering now prefers canonical messages for `chat`, `immediate_task`, `scheduled_task`, and `scheduled_multi_task` sessions when canonical messages are available, including structured `tool-call`, `tool-result`, `effect`, `patch`, `task`, `collaboration`, `finish`, and `error` parts.
 
-**Current status:** canonical rendering is now the default desktop timeline path for `chat`, `immediate_task`, `scheduled_task`, and `scheduled_multi_task`, and also for event-only sessions whose source events are covered by the local canonical synthesis gate. Legacy event projection remains as a fallback for non-migrated event types only.
+**Current status:** canonical rendering is now the only desktop timeline projection path for `chat`, `immediate_task`, `scheduled_task`, and `scheduled_multi_task`, including event-only sessions via local canonical synthesis. Legacy event projection has been retired from timeline rendering. The legacy runtime gate and App-level modal approval fallback have also been removed; approval actions are handled through assistant-ui timeline cards.
 
-**Next slice:** audit any still-renderable legacy-only events, then retire or heavily slim the legacy event-specific timeline builder now that desktop either consumes store-backed canonical messages or locally synthesizes canonical messages from legacy `TaskEvent`s before rendering.
+**Next slice:** continue polishing task-card information density and remove remaining unused pre-assistant-ui UI artifacts (especially dead task/board variants that no longer mount in the single-surface shell).
 
 **Current desktop event coverage:** all current `TaskEventType` values are now covered by the local canonical safety gate. The final no-op group for timeline rendering is `TASK_SUSPENDED`, `TASK_RESUMED`, `TASK_HISTORY_CLEARED`, `SKILL_RECOMMENDATION`, `AGENT_IDENTITY_ESTABLISHED`, `MCP_GATEWAY_DECISION`, `RUNTIME_SECURITY_ALERT`, and `TOKEN_USAGE`.
 
 **Current code structure:** the desktop timeline code is now split into:
 - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/useTimelineItems.ts`
   canonical-first entrypoint and canonical builder
-- `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/legacyTimelineBuilder.ts`
-  legacy fallback state machine
 - `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/hooks/timelineShared.ts`
-  shared normalization and task-step helpers used by both paths
+  shared normalization and task-step helpers
+- `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/assistantUi/`
+  assistant-ui runtime bridge and thread renderer as the timeline runtime surface
 
 **UI unification status:** the first structured-message UI slice is now in place via `/Users/beihuang/Documents/github/coworkany/desktop/src/components/Chat/Timeline/components/StructuredMessageCard.tsx`.
 - `TaskCardMessage` and `ToolCard` now share the same message-card shell
@@ -86,4 +86,11 @@
   - `onTaskActionClick` is no longer threaded through assistant/task-card components
   - obsolete task/button CSS aliases were pruned now that the new canonical primitives own the UI
 
-**Next UI slice:** run a visual cleanup pass on the now chat-first timeline UX, especially spacing, header density, and tool/runtime differentiation after task-center chrome removal.
+**UI slice status:** completed the first visual cleanup pass on assistant-ui timeline UX:
+- assistant/system/user message layers now share app theme tokens (no light fallback colors on cards/buttons/inputs)
+- assistant messages now expose explicit role metadata and runtime pulse state
+- task structured cards now include progress meters and tighter status semantics
+- composer now supports explicit one-shot `Chat Mode / Task Mode` routing controls and slash route commands (`/ask`, `/task`, `/schedule`) to reduce route ambiguity at entry
+- task mode initial surface now mounts `TaskListView` instead of staying in welcome-only entry mode
+
+**Next UI slice:** collapse duplicate task surfaces and finish consistency pass between sidebar task summaries and assistant-ui timeline cards.

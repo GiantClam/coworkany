@@ -40,8 +40,8 @@
     width: fit-content;
     padding: 0 10px;
     border-radius: 999px;
-    border: 1px solid rgba(96, 165, 250, 0.12);
-    background: rgba(4, 12, 29, 0.54);
+    border: 1px solid var(--border-subtle);
+    background: color-mix(in srgb, var(--bg-element) 86%, var(--bg-panel));
     font-family: var(--font-code);
     font-size: 9px;
     letter-spacing: 0.1em;
@@ -74,8 +74,12 @@
     gap: 10px;
     padding: 10px 12px;
     border-radius: 12px;
-    border: 1px solid rgba(251, 191, 36, 0.16);
-    background: linear-gradient(135deg, rgba(120, 53, 15, 0.28), rgba(69, 26, 3, 0.44));
+    border: 1px solid color-mix(in srgb, var(--status-warning) 25%, var(--border-subtle));
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--status-warning) 24%, var(--bg-element)),
+        color-mix(in srgb, var(--status-warning) 12%, var(--bg-panel))
+    );
 }
 
 .task-list-voice-copy {
@@ -93,7 +97,7 @@
     font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #fde68a;
+    color: color-mix(in srgb, var(--status-warning) 78%, var(--text-primary));
 }
 
 .task-list-voice-label::before {
@@ -101,8 +105,8 @@
     width: 8px;
     height: 8px;
     border-radius: 999px;
-    background: #fbbf24;
-    box-shadow: 0 0 12px rgba(251, 191, 36, 0.4);
+    background: var(--status-warning);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--status-warning) 38%, transparent);
     flex-shrink: 0;
 }
 
@@ -110,7 +114,7 @@
     margin: 0;
     font-size: 13px;
     line-height: 1.6;
-    color: #fff8e8;
+    color: color-mix(in srgb, var(--status-warning) 24%, var(--text-primary));
     overflow-wrap: anywhere;
 }
 
@@ -121,9 +125,9 @@
     min-height: 40px;
     padding: 0 16px;
     border-radius: 14px;
-    border: 1px solid rgba(251, 191, 36, 0.24);
-    background: rgba(120, 53, 15, 0.42);
-    color: #fff4d6;
+    border: 1px solid color-mix(in srgb, var(--status-warning) 28%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-warning) 14%, var(--bg-element));
+    color: color-mix(in srgb, var(--status-warning) 82%, var(--text-primary));
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -132,8 +136,8 @@
 
 .task-list-voice-stop-button:hover:not(:disabled) {
     transform: translateY(-1px);
-    border-color: rgba(251, 191, 36, 0.42);
-    background: rgba(146, 64, 14, 0.58);
+    border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-warning) 20%, var(--bg-element-hover));
 }
 
 .task-list-voice-stop-button:disabled {
@@ -148,9 +152,27 @@
     justify-content: center;
     min-height: 44px;
     border-radius: 14px;
-    border: 1px solid rgba(96, 165, 250, 0.12);
-    background: rgba(4, 12, 29, 0.62);
+    border: 1px solid var(--border-subtle);
+    background: color-mix(in srgb, var(--bg-element) 90%, var(--bg-panel));
     color: var(--text-primary);
+    cursor: pointer;
+    transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.task-list-switch-chat {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border-subtle);
+    background: color-mix(in srgb, var(--bg-element) 90%, var(--bg-panel));
+    color: var(--text-primary);
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     cursor: pointer;
     transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
 }
@@ -168,10 +190,11 @@
 }
 
 .task-list-refresh-icon:hover,
-.task-list-refresh-button:hover {
+.task-list-refresh-button:hover,
+.task-list-switch-chat:hover {
     transform: translateY(-1px);
-    background: rgba(8, 18, 40, 0.82);
-    border-color: rgba(96, 165, 250, 0.2);
+    background: var(--bg-element-hover);
+    border-color: var(--border-strong);
 }
 
 .task-mode-launcher {
@@ -185,7 +208,7 @@
     padding: 10px;
     border-radius: 12px;
     border: 1px solid var(--border-subtle);
-    background: var(--bg-subtle);
+    background: color-mix(in srgb, var(--bg-subtle) 90%, var(--bg-panel));
 }
 
 .task-mode-launcher-input {
@@ -199,7 +222,7 @@
     font-family: var(--font-body);
     font-size: 15px;
     color: var(--text-primary);
-    background: rgba(4, 12, 29, 0.7);
+    background: color-mix(in srgb, var(--bg-element) 84%, var(--bg-panel));
 }
 
 .task-mode-launcher-input::placeholder {
@@ -225,24 +248,28 @@
     min-height: 34px;
     padding: 0 12px;
     border-radius: 999px;
-    border: 1px solid rgba(96, 165, 250, 0.16);
-    background: rgba(4, 12, 29, 0.48);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 80%, var(--bg-panel));
     color: var(--text-secondary);
     font-size: 12px;
 }
 
 .task-mode-chip:hover {
-    border-color: rgba(96, 165, 250, 0.3);
+    border-color: var(--border-strong);
     color: var(--text-primary);
-    background: rgba(10, 24, 49, 0.66);
+    background: var(--bg-element-hover);
 }
 
 .task-mode-submit {
     min-height: 36px;
     padding: 0 14px;
     border-radius: 10px;
-    border: 1px solid rgba(96, 165, 250, 0.22);
-    background: linear-gradient(135deg, rgba(37, 99, 235, 0.9), rgba(59, 130, 246, 0.8));
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, var(--border-subtle));
+    background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--accent-primary) 90%, var(--bg-element)),
+        color-mix(in srgb, var(--accent-hover) 78%, var(--bg-element))
+    );
     color: #fff;
     font-size: 12px;
     font-weight: 600;
@@ -394,8 +421,8 @@
     min-height: 160px;
     padding: 20px;
     border-radius: 24px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
-    background: rgba(7, 17, 36, 0.62);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 74%, var(--bg-panel));
     color: var(--text-secondary);
     text-align: center;
 }
@@ -424,14 +451,14 @@
     width: 34px;
     height: 34px;
     border-radius: 999px;
-    border: 3px solid rgba(96, 165, 250, 0.12);
+    border: 3px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
     border-top-color: var(--accent-primary);
     animation: task-list-spin 0.9s linear infinite;
 }
 
 .task-list-error-title {
     margin: 0;
-    color: #ffd6df;
+    color: color-mix(in srgb, var(--status-error) 75%, var(--text-primary));
     font-weight: 600;
 }
 
@@ -440,20 +467,20 @@
     overflow: auto;
     padding: 10px 12px;
     border-radius: 14px;
-    border: 1px solid rgba(251, 113, 133, 0.2);
-    background: rgba(127, 29, 29, 0.16);
+    border: 1px solid color-mix(in srgb, var(--status-error) 30%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 12%, var(--bg-element));
     font-family: var(--font-code);
     font-size: 11px;
-    color: #ffd6df;
+    color: color-mix(in srgb, var(--status-error) 75%, var(--text-primary));
 }
 
 .task-list-inline-error {
     margin: 14px 22px 0;
     padding: 12px 14px;
     border-radius: 16px;
-    border: 1px solid rgba(251, 113, 133, 0.24);
-    background: rgba(127, 29, 29, 0.16);
-    color: #ffd6df;
+    border: 1px solid color-mix(in srgb, var(--status-error) 32%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 12%, var(--bg-element));
+    color: color-mix(in srgb, var(--status-error) 75%, var(--text-primary));
     font-size: 13px;
     line-height: 1.5;
 }
@@ -560,14 +587,14 @@
 }
 
 .task-priority-pill {
-    border: 1px solid rgba(96, 165, 250, 0.1);
-    background: rgba(4, 12, 29, 0.5);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 84%, var(--bg-panel));
     color: var(--text-secondary);
 }
 
 .task-priority-pill.running {
-    border-color: rgba(59, 130, 246, 0.18);
-    background: rgba(37, 99, 235, 0.12);
+    border-color: color-mix(in srgb, var(--status-info) 35%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-info) 12%, var(--bg-element));
     color: var(--text-primary);
 }
 
@@ -576,15 +603,15 @@
 }
 
 .task-priority-pill.completed {
-    border-color: rgba(52, 211, 153, 0.18);
-    background: rgba(6, 78, 59, 0.18);
-    color: #d1fae5;
+    border-color: color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-success) 12%, var(--bg-element));
+    color: color-mix(in srgb, var(--status-success) 78%, var(--text-primary));
 }
 
 .task-priority-pill.blocked {
-    border-color: rgba(251, 113, 133, 0.22);
-    background: rgba(127, 29, 29, 0.16);
-    color: #ffd6df;
+    border-color: color-mix(in srgb, var(--status-error) 35%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 12%, var(--bg-element));
+    color: color-mix(in srgb, var(--status-error) 75%, var(--text-primary));
 }
 
 .task-card-date {
@@ -616,8 +643,8 @@
 }
 
 .task-tag-pill {
-    border: 1px solid rgba(96, 165, 250, 0.08);
-    background: rgba(4, 12, 29, 0.38);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
     color: var(--text-muted);
 }
 

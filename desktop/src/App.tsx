@@ -3,8 +3,6 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { useTauriEvents } from './hooks/useTauriEvents';
-import { useEffectConfirmation } from './hooks/useEffectConfirmation';
-import { EffectConfirmationDialog } from './components/EffectConfirmationDialog';
 import { ChatInterface } from './components/Chat/ChatInterface';
 import { SectionErrorBoundary } from './components/Common/AppErrorBoundary';
 import { UpdateChecker } from './components/Common/UpdateChecker';
@@ -300,14 +298,6 @@ function App() {
         t,
     ]);
 
-    const {
-        pendingRequest,
-        isDialogOpen,
-        approve,
-        deny,
-        closeDialog,
-    } = useEffectConfirmation();
-
     const commands = useMemo(() => createCommandRegistry(
         t,
         {
@@ -476,14 +466,6 @@ function App() {
                         </div>
                     </Suspense>
                 </ModalDialog>
-
-                <EffectConfirmationDialog
-                    request={pendingRequest}
-                    open={isDialogOpen}
-                    onApprove={approve}
-                    onDeny={deny}
-                    onClose={closeDialog}
-                />
 
                 <OfflineBanner />
                 <UpdateChecker />

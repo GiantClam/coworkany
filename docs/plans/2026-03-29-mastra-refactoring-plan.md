@@ -25,6 +25,7 @@
 14. [长期任务编排方案](#14-长期任务)
 15. [风险与缓解](#15-风险与缓解)
 16. [验收标准](#16-验收标准)
+17. [Mastra 特性拉满增强（社区最佳实践版）](#17-mastra-特性拉满增强社区最佳实践版)
 
 ---
 
@@ -62,11 +63,21 @@
 | fastembed 本地 Embedding | Mastra 官方推荐 | 替代 Python sentence-transformers |
 | WorkingMemory 模板 | Mastra 官方 | 企业员工画像模板 |
 | Supervisor + 子 Agent | Mastra 官方 | 控制平面 Supervisor + 执行 Agent |
+| Supervisor Agents（替代 Agent Networks） | Mastra Agents 文档（2026） | 新增 Supervisor hooks，逐步淘汰已 deprecated 的 `.network()` |
+| Delegation hooks + task completion scoring | Mastra Supervisor 文档 | 接入 `onDelegationStart/onDelegationComplete/onIterationComplete` 与 `isTaskComplete.scorers` |
 | requireApproval 工具审批 | Mastra 官方 | 危险操作审批冒泡到 Desktop |
+| autoResumeSuspendedTools | Mastra Agent Approval 文档 | 对可自然语言恢复的工具启用自动恢复，降低人工 resume 频率 |
 | Workflow Suspend/Resume | Mastra 官方 | 替代自研 UserActionRequest |
+| Workflow retries + bail + timeTravel | Mastra Workflows 文档 | 将重试/快速成功退出/故障回放纳入运行时和演练 |
 | CLI-First 工具策略 | Port of Context 基准 (2026.3) | 1 Bash tool + 少量 MCP |
 | Start Bash, Promote to MCP | systemprompt.io | 高频 Bash 模式才升级为 MCP |
 | resourceId 多租户隔离 | Mastra 官方 | 企业员工 ID 作为 resourceId |
+| RequestContext 保留键隔离 | Mastra Server 文档 | 中间件强制写入 `MASTRA_RESOURCE_ID_KEY/MASTRA_THREAD_ID_KEY` |
+| Observational Memory 压缩 | Mastra Memory 文档 | 长会话自动压缩 observations，降低上下文膨胀 |
+| Guardrails + Tripwire | Mastra Guardrails 文档 | PromptInjection/PII/Moderation + `tripwire` 统一告警与收口 |
+| Workspace 工具策略 | Mastra Workspace 文档 | 写入/执行工具启用 `requireApproval + requireReadBeforeWrite` |
+| Scorers 采样评测 | Mastra Evals 文档 | Agent/Workflow 全链路评测，按环境配置 `sampling.rate` |
+| OTEL telemetry | Mastra Observability 文档 | OTLP 导出 traces，生产环境比率采样 |
 
 ---
 
@@ -3280,6 +3291,53 @@ const marketResearch = createWorkflow({
 
 ---
 
+## 17. Mastra 特性拉满增强（社区最佳实践版）
+
+> 本节为 2026-03-31 增补，目标是把现有“可运行”状态升级为“可观测、可恢复、可评估、可隔离、可扩展”的生产级 Mastra Runtime。
+
+### 17.1 总体升级目标
+
+1. **从“能跑”升级到“可证明稳定”**：每次任务都有 trace、评测分数、审批轨迹、失败回放路径。
+2. **从“单次成功”升级到“长期稳态”**：对 suspend/resume、审批、重试、调度、跨重启恢复给出硬门槛。
+3. **从“功能堆叠”升级到“策略化治理”**：通过 RequestContext、Workspace policy、Guardrails、Scorers 实现多租户与安全治理闭环。
+
+### 17.2 特性拉满落地矩阵
+
+| 能力域 | Mastra 最佳实践 | CoworkAny 落地动作 |
+|---|---|---|
+| 多 Agent 编排 | 使用 **Supervisor Agents**（非 deprecated networks） | `supervisor.ts` 增加 delegation hooks（前置改写、拒绝、反馈注入、迭代终止） |
+| 审批与人工介入 | 同时支持 `requireToolApproval`（请求级）+ `requireApproval`（工具级） | 标准化 `tool-call-approval`/`tool-call-suspended` 事件桥接；统一 `runId + toolCallId` 恢复 |
+| 自动恢复 | 可恢复工具启用 `autoResumeSuspendedTools` | 在同 `resource/thread` 会话内启用自然语言恢复，减少 UI 手动审批点击 |
+| 工作流可靠性 | `retryConfig`、step-level `retries`、`bail()`、`onError` 分层使用 | 控制平面 Workflow 按“外部依赖 step 可重试，业务校验 step 不重试”拆分 |
+| 故障回放 | 使用 `run.timeTravel()` 对指定 step 复跑 | 建立 incident replay 手册：固定输入快照 + 指定 step 重放 + 差异对比 |
+| 记忆策略 | `resource`/`thread` 双键、Observational Memory、Supervisor memory isolation | 个人记忆按 `resource` 聚合、执行会话按 `thread` 隔离；长会话开启 observations 压缩 |
+| Guardrails 安全 | PromptInjection/PII/Moderation processors + tripwire 处理 | 统一 tripwire 事件映射，阻断后不落库并写入审计日志 |
+| Workspace 隔离执行 | 对写/删/命令工具启用 `requireApproval + requireReadBeforeWrite` | 本地开发 `LocalFilesystem + LocalSandbox`，生产优先远程 sandbox（Daytona/E2B） |
+| MCP 治理 | `MCPClient.listToolsets()` 做用户级动态工具集，调用后 `disconnect()` | 多租户密钥不落盘、按请求动态装配 toolsets，连接生命周期明确关闭 |
+| RAG 质量 | 分文档类型 chunking 策略 + metadata filter + rerank + vector query tool | 文档入库按类型策略化切块；查询层引入 filter/rerank；高复杂检索交给 vector query tool |
+| 观测与评测 | OTEL traces + Scorers 采样评测（异步执行） | 生产开启 `ratio` 采样；分数入库 `mastra_scorers`，接入 release readiness 门禁 |
+| 上下文与权限 | RequestContext + 保留键 | 中间件强制 `MASTRA_RESOURCE_ID_KEY`/`MASTRA_THREAD_ID_KEY`，防越权读写线程 |
+
+### 17.3 环境分层建议（Dev / Staging / Prod）
+
+| 配置项 | Dev | Staging | Prod |
+|---|---|---|---|
+| Telemetry sampling | `always_on` | `ratio: 0.5` | `ratio: 0.1~0.2` |
+| Scorers sampling.rate | `1.0` | `0.3~0.5` | `0.05~0.2`（关键链路可提到 `1.0`） |
+| requireToolApproval | 默认关闭，仅危险工具开启 | 按策略开启 | 高风险操作强制开启 |
+| foreach concurrency | 压测上限，观察资源瓶颈 | 拟生产值 | 保守值 + SLO 守护 |
+| timeTravel 演练 | 每周 | 每周 | 每次 P1/P2 事故后必做 |
+
+### 17.4 追加验收门槛（生产级）
+
+1. **审批一致性**：任务终态后旧 `requestId/toolCallId` 100% 不可恢复执行。
+2. **恢复一致性**：`suspend/resume` 跨重启恢复成功率 >= 99.9%（近 30 天）。
+3. **安全阻断**：tripwire 触发后，LLM 调用与内存写入均被阻断（抽样审计 100% 一致）。
+4. **可观测性**：核心任务链路 100% 可关联 traceId、runId、taskId。
+5. **评测闭环**：关键 Agent/Workflow 至少 3 个 scorer（相关性/安全性/完成度）且有趋势报表。
+
+---
+
 ## 附录 A: 时间线总览
 
 ```
@@ -3311,9 +3369,27 @@ Week 8  ┃ Phase 6 完成: 全部验收
 | Mastra GitHub | https://github.com/mastra-ai/mastra |
 | Mastra Agent Approval | https://mastra.ai/docs/agents/agent-approval |
 | Mastra Workflow Suspend | https://mastra.ai/docs/workflows/suspend-and-resume |
+| Mastra Workflows Control Flow | https://mastra.ai/docs/workflows/control-flow |
+| Mastra Workflows Error Handling | https://mastra.ai/docs/workflows/error-handling |
+| Mastra Workflows Time Travel | https://mastra.ai/docs/workflows/time-travel |
+| Mastra Workflows Snapshots | https://mastra.ai/docs/workflows/snapshots |
 | Mastra Memory | https://mastra.ai/docs/memory/overview |
+| Mastra Memory Processors | https://mastra.ai/docs/memory/memory-processors |
+| Mastra Supervisor Agents | https://mastra.ai/docs/agents/supervisor-agents |
+| Mastra Guardrails | https://mastra.ai/docs/agents/guardrails |
+| Mastra Workspace | https://mastra.ai/docs/workspace/overview |
+| Mastra Request Context | https://mastra.ai/docs/server/request-context |
+| Mastra Evals / Scorers | https://mastra.ai/docs/evals/overview |
+| Mastra Observability | https://mastra.ai/docs/observability/overview |
+| Mastra RAG Chunking/Embedding | https://mastra.ai/docs/rag/chunking-and-embedding |
+| Mastra RAG Retrieval | https://mastra.ai/docs/rag/retrieval |
+| Mastra MCP Overview | https://mastra.ai/docs/mcp/overview |
 | LibSQLStore | https://mastra.ai/reference/storage/libsql |
 | LibSQLVector | https://mastra.ai/reference/vectors/libsql |
+| Mastra Workspaces 发布文 | https://mastra.ai/blog/announcing-mastra-workspaces |
+| Mastra Remote Sandboxes 发布文 | https://mastra.ai/blog/announcing-remote-sandboxes |
+| Mastra Tool Approval 发布文 | https://mastra.ai/blog/tool-approval |
+| Mastra Scorers 发布文 | https://mastra.ai/blog/mastra-scorers |
 | Port of Context CLI vs MCP 基准 | https://portofcontext.com/blog/cli-vs-mcp-vs-code-mode |
 | systemprompt.io CLI vs MCP | https://systemprompt.io/guides/mcp-vs-cli-tools |
 | CoworkAny 评估文档 V5 | docs/2026-03-29-architecture-evaluation-sdk-vs-custom.md |

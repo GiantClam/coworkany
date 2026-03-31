@@ -8,7 +8,6 @@ import type {
     TaskEvent,
     TaskFailedPayload,
     TaskFinishedPayload,
-    TaskStartedPayload,
     TaskStatusPayload,
     TextDeltaPayload,
     ToolCalledPayload,
@@ -102,6 +101,10 @@ function asString(value: unknown): string | undefined {
     return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function asBoolean(value: unknown, fallback = false): boolean {
+    return typeof value === 'boolean' ? value : fallback;
+}
+
 function asStringArray(value: unknown): string[] {
     if (!Array.isArray(value)) {
         return [];
@@ -121,6 +124,41 @@ function toStatus(value: unknown, fallback: CanonicalTaskStatus = 'running'): Ca
         : fallback;
 }
 
+function extractOriginalTaskFromRoutedQuery(value: string): string | null {
+    const patterns = [
+        /^\s*原始任务[:：]\s*(.+?)(?:\n|$)/u,
+        /^\s*original task[:：]\s*(.+?)(?:\n|$)/iu,
+    ];
+    for (const pattern of patterns) {
+        const matched = value.match(pattern);
+        const candidate = matched?.[1]?.trim();
+        if (candidate && candidate.length > 0) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+function resolveTaskStartedDisplayText(payload: Record<string, unknown>): string {
+    const context = asRecord(payload.context);
+    const displayText = asString(context.displayText)?.trim() ?? '';
+    if (displayText.length > 0) {
+        return displayText;
+    }
+
+    const userQuery = asString(context.userQuery)?.trim() ?? '';
+    if (userQuery.length > 0) {
+        return extractOriginalTaskFromRoutedQuery(userQuery) ?? userQuery;
+    }
+
+    const description = asString(payload.description)?.trim() ?? '';
+    if (description.length > 0) {
+        return extractOriginalTaskFromRoutedQuery(description) ?? description;
+    }
+
+    return asString(payload.title)?.trim() ?? '';
+}
+
 function baseMessage(event: TaskEvent, role: CanonicalMessageRole): CanonicalTaskMessage {
     return {
         id: event.id,
@@ -136,20 +174,41 @@ function baseMessage(event: TaskEvent, role: CanonicalMessageRole): CanonicalTas
 }
 
 function makeCollaborationPart(payload: TaskClarificationRequiredPayload, fallbackKind: string): CanonicalTaskMessagePart {
-    const kind = payload.clarificationType ?? fallbackKind;
-    const choicesRaw = Array.isArray(payload.routeChoices) ? payload.routeChoices : [];
+    const payloadRecord = payload as Record<string, unknown>;
+    const kind = asString(payloadRecord.kind)
+        ?? payload.clarificationType
+        ?? fallbackKind;
+    const choicesRaw = Array.isArray(payload.routeChoices)
+        ? payload.routeChoices
+        : [];
     const choices = choicesRaw
         .map((choice) => ({
             label: asString(choice.label) ?? '',
             value: asString(choice.value) ?? '',
         }))
         .filter((choice) => choice.label.length > 0 && choice.value.length > 0);
+    const authUrl = asString(payloadRecord.authUrl);
+    if (kind === 'external_auth' && authUrl) {
+        choices.push({
+            label: '打开登录页面',
+            value: `__auth_open_page__:${authUrl}`,
+        });
+        if (asBoolean(payloadRecord.canAutoResume, false)) {
+            choices.push({
+                label: '我已登录，继续执行',
+                value: '继续执行',
+            });
+        }
+    }
+
+    const title = asString(payloadRecord.title) ?? payload.reason;
+    const description = asString(payloadRecord.description) ?? payload.reason;
     return {
         type: 'collaboration',
         kind,
-        title: payload.reason,
-        description: payload.reason,
-        blocking: true,
+        title,
+        description,
+        blocking: asBoolean(payloadRecord.blocking, true),
         questions: asStringArray(payload.questions),
         instructions: asStringArray(payload.instructions),
         choices: choices.length > 0 ? choices : undefined,
@@ -170,9 +229,12 @@ function eventToCanonicalMessage(event: TaskEvent): CanonicalTaskMessage | undef
             return message;
         }
         case 'TASK_STARTED': {
-            const data = payload as TaskStartedPayload;
-            const message = baseMessage(event, 'runtime');
-            message.parts.push({ type: 'status', status: 'running', label: data.title });
+            const message = baseMessage(event, 'user');
+            const content = resolveTaskStartedDisplayText(payload);
+            if (!content) {
+                return undefined;
+            }
+            message.parts.push({ type: 'text', text: content });
             return message;
         }
         case 'TASK_STATUS': {
@@ -187,12 +249,12 @@ function eventToCanonicalMessage(event: TaskEvent): CanonicalTaskMessage | undef
         }
         case 'TASK_SUSPENDED': {
             const message = baseMessage(event, 'runtime');
-            message.parts.push({ type: 'status', status: 'idle', label: asString(payload.reason) });
+            message.parts.push({ type: 'status', status: 'idle' });
             return message;
         }
         case 'TASK_RESUMED': {
             const message = baseMessage(event, 'runtime');
-            message.parts.push({ type: 'status', status: 'running', label: asString(payload.reason) });
+            message.parts.push({ type: 'status', status: 'running' });
             return message;
         }
         case 'TASK_PLAN_READY': {
@@ -252,11 +314,13 @@ function eventToCanonicalMessage(event: TaskEvent): CanonicalTaskMessage | undef
         case 'TASK_USER_ACTION_REQUIRED': {
             const data = payload as TaskClarificationRequiredPayload;
             const message = baseMessage(event, 'runtime');
+            const title = asString((payload as Record<string, unknown>).title) ?? data.reason;
+            const summary = asString((payload as Record<string, unknown>).description) ?? data.reason;
             message.parts.push({
                 type: 'task',
                 event: 'user_action_required',
-                title: data.reason,
-                summary: data.reason,
+                title,
+                summary,
                 data: payload,
             });
             message.parts.push(makeCollaborationPart(data, 'user_action_required'));

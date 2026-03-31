@@ -8,8 +8,6 @@ import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import styles from '../Timeline.module.css';
 import type { ToolCallItem } from '../../../../types';
 import { isExternalHref } from '../../../../lib/externalLinks';
@@ -60,21 +58,22 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item, viewModel }) => {
                                         remarkPlugins={[remarkGfm]}
                                         components={{
                                             code(props) {
-                                                const { children, className, node, ref, ...rest } = props as any;
-                                                const match = /language-(\w+)/.exec(className || '');
-                                                return match ? (
-                                                    <SyntaxHighlighter
-                                                        {...rest}
-                                                        PreTag="div"
-                                                        children={String(children).replace(/\n$/, '')}
-                                                        language={match[1]}
-                                                        style={oneLight}
-                                                        customStyle={{ margin: 0, borderRadius: 'var(--radius-md)', fontSize: '12px', border: '1px solid var(--border-subtle)' }}
-                                                    />
-                                                ) : (
-                                                    <code {...props} className={className}>
-                                                        {children}
-                                                    </code>
+                                                const { children, className } = props;
+                                                const isBlock = className?.includes('language-');
+                                                if (!isBlock) {
+                                                    return (
+                                                        <code {...props} className={className}>
+                                                            {children}
+                                                        </code>
+                                                    );
+                                                }
+
+                                                return (
+                                                    <pre className={styles.codeBlock}>
+                                                        <code className={className}>
+                                                            {String(children).replace(/\n$/, '')}
+                                                        </code>
+                                                    </pre>
                                                 );
                                             },
                                             a(props) {

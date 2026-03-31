@@ -25,7 +25,6 @@ import {
     type CanonicalTaskMessage,
 } from '../../../../../../sidecar/src/protocol';
 import { materializeCanonicalMessages } from '../../../../bridges/canonicalTaskStream';
-import { buildLegacyTimelineItems } from './legacyTimelineBuilder';
 import {
     buildPlannedTaskList,
     buildPlanSummaryLines,
@@ -60,40 +59,6 @@ type CanonicalEffectPart = Extract<CanonicalMessagePart, { type: 'effect' }>;
 type CanonicalPatchPart = Extract<CanonicalMessagePart, { type: 'patch' }>;
 type CanonicalFinishPart = Extract<CanonicalMessagePart, { type: 'finish' }>;
 type CanonicalErrorPart = Extract<CanonicalMessagePart, { type: 'error' }>;
-
-const LOCAL_CANONICAL_TIMELINE_EVENT_TYPES = new Set<string>([
-    'TASK_STARTED',
-    'CHAT_MESSAGE',
-    'TEXT_DELTA',
-    'TASK_STATUS',
-    'TASK_PLAN_READY',
-    'PLAN_UPDATED',
-    'TASK_RESEARCH_UPDATED',
-    'TASK_CONTRACT_REOPENED',
-    'TASK_CHECKPOINT_REACHED',
-    'TASK_USER_ACTION_REQUIRED',
-    'TASK_CLARIFICATION_REQUIRED',
-    'TOOL_CALLED',
-    'TOOL_RESULT',
-    'EFFECT_REQUESTED',
-    'EFFECT_APPROVED',
-    'EFFECT_DENIED',
-    'PATCH_PROPOSED',
-    'PATCH_APPLIED',
-    'PATCH_REJECTED',
-    'TASK_FINISHED',
-    'TASK_FAILED',
-    'RATE_LIMITED',
-    // Timeline-safe no-op events: these affect session/store state but do not render visible timeline items.
-    'TASK_SUSPENDED',
-    'TASK_RESUMED',
-    'TASK_HISTORY_CLEARED',
-    'SKILL_RECOMMENDATION',
-    'AGENT_IDENTITY_ESTABLISHED',
-    'MCP_GATEWAY_DECISION',
-    'RUNTIME_SECURITY_ALERT',
-    'TOKEN_USAGE',
-]);
 
 function createEmptyPhaseLines(): Record<TaskPhaseKey, string[]> {
     return {
@@ -231,6 +196,27 @@ function formatResumeReasonNotice(reason: unknown): string | null {
     return null;
 }
 
+function resolveLastResumeReason(session: TaskSession): string {
+    const fromSession = normalizeText(session.lastResumeReason);
+    if (fromSession.length > 0) {
+        return fromSession;
+    }
+
+    for (let index = session.events.length - 1; index >= 0; index -= 1) {
+        const event = session.events[index];
+        if (event.type !== 'TASK_RESUMED') {
+            continue;
+        }
+        const payload = event.payload as Record<string, unknown>;
+        const resumeReason = normalizeText(payload.resumeReason);
+        if (resumeReason.length > 0) {
+            return resumeReason;
+        }
+    }
+
+    return '';
+}
+
 function upsertCanonicalToolCall(
     turn: AssistantTurnItem,
     message: CanonicalTaskMessage,
@@ -270,12 +256,19 @@ function upsertCanonicalEffectRequest(
     const nextEffects = [...(turn.effectRequests ?? [])];
     const existingIndex = nextEffects.findIndex((entry) => entry.id === normalizedRequestId);
     const existing = existingIndex >= 0 ? nextEffects[existingIndex] : undefined;
+    const isResolvedEffect = part.status === 'approved' || part.status === 'denied';
+    const useExistingEffectType = isResolvedEffect && (!part.effectType || part.effectType === 'effect');
+    const useExistingRisk = isResolvedEffect && ((part.riskLevel ?? 0) <= 0);
     const nextItem: EffectRequestItem = {
         type: 'effect_request',
         id: normalizedRequestId,
         timestamp: message.timestamp,
-        effectType: part.effectType || existing?.effectType || 'effect',
-        risk: part.riskLevel ?? existing?.risk ?? 0,
+        effectType: useExistingEffectType
+            ? (existing?.effectType || 'effect')
+            : (part.effectType || existing?.effectType || 'effect'),
+        risk: useExistingRisk
+            ? (existing?.risk ?? 0)
+            : (part.riskLevel ?? existing?.risk ?? 0),
         approved: part.status === 'requested'
             ? existing?.approved
             : part.status === 'approved',
@@ -912,7 +905,7 @@ function buildCanonicalTimelineItems(
         ];
     }
 
-    const resumeNotice = formatResumeReasonNotice(session.lastResumeReason);
+    const resumeNotice = formatResumeReasonNotice(resolveLastResumeReason(session));
     if (resumeNotice) {
         const targetTurn = currentAssistantTurn?.taskCard
             ? currentAssistantTurn
@@ -983,17 +976,26 @@ function buildRawConversationTrajectoryItems(session: TaskSession): TimelineItem
     return items;
 }
 
-function extractLatestTaskStatusTurn(items: TimelineItemType[]): AssistantTurnItem | null {
+function extractLatestStructuredAssistantTurn(items: TimelineItemType[]): AssistantTurnItem | null {
     for (let index = items.length - 1; index >= 0; index -= 1) {
         const item = items[index];
-        if (item?.type !== 'assistant_turn' || !item.taskCard) {
+        if (item?.type !== 'assistant_turn') {
             continue;
         }
 
-        const hasActiveTaskState = item.taskCard.status === 'running'
-            || item.taskCard.status === 'idle'
-            || Boolean(item.taskCard.collaboration);
-        if (!hasActiveTaskState) {
+        const taskCard = item.taskCard;
+        const hasActiveTaskState = taskCard
+            ? (
+                taskCard.status === 'running'
+                || taskCard.status === 'idle'
+                || Boolean(taskCard.collaboration)
+            )
+            : false;
+        const hasStructuredArtifacts = hasActiveTaskState
+            || (item.toolCalls?.length ?? 0) > 0
+            || (item.effectRequests?.length ?? 0) > 0
+            || (item.patches?.length ?? 0) > 0;
+        if (!hasStructuredArtifacts) {
             continue;
         }
 
@@ -1018,16 +1020,16 @@ function extractLatestTaskStatusTurn(items: TimelineItemType[]): AssistantTurnIt
     return null;
 }
 
-function appendLatestTaskStatusTurn(
+function appendLatestStructuredAssistantTurn(
     rawItems: TimelineItemType[],
     standardItems: TimelineItemType[],
 ): TimelineItemType[] {
-    const latestTaskTurn = extractLatestTaskStatusTurn(standardItems);
-    if (!latestTaskTurn) {
+    const latestStructuredTurn = extractLatestStructuredAssistantTurn(standardItems);
+    if (!latestStructuredTurn) {
         return rawItems;
     }
 
-    return [...rawItems, latestTaskTurn];
+    return [...rawItems, latestStructuredTurn];
 }
 
 function mergeUniqueTextParts(base: string[], incoming: string[]): string[] {
@@ -1323,8 +1325,32 @@ function buildCanonicalMessagesFromTaskEvents(taskId: string, events: TaskSessio
     return materializeCanonicalMessages(taskId, canonicalEvents);
 }
 
-function canUseLocalCanonicalTimeline(events: TaskSession['events']): boolean {
-    return events.every((event) => LOCAL_CANONICAL_TIMELINE_EVENT_TYPES.has(event.type));
+function buildCanonicalMessagesFromSessionMessages(session: TaskSession): CanonicalTaskMessage[] {
+    return session.messages
+        .map((message, index): CanonicalTaskMessage | null => {
+            const normalizedText = normalizeText(message.content);
+            if (!normalizedText) {
+                return null;
+            }
+
+            const role = message.role === 'user' || message.role === 'assistant' || message.role === 'system'
+                ? message.role
+                : 'runtime';
+
+            return {
+                id: message.id || `session-message-${session.taskId}-${index}`,
+                taskId: session.taskId,
+                role,
+                timestamp: message.timestamp || session.updatedAt,
+                sequence: index + 1,
+                status: 'complete',
+                parts: [{
+                    type: 'text',
+                    text: normalizedText,
+                }],
+            };
+        })
+        .filter((message): message is CanonicalTaskMessage => message !== null);
 }
 
 export function buildTimelineItems(
@@ -1339,15 +1365,14 @@ export function buildTimelineItems(
     const providedCanonicalMessages = canonicalMessages && canonicalMessages.length > 0
         ? canonicalMessages
         : undefined;
+    const localCanonicalMessages = buildCanonicalMessagesFromTaskEvents(session.taskId, sourceEvents);
     const effectiveCanonicalMessages = providedCanonicalMessages
-        ?? (canUseLocalCanonicalTimeline(sourceEvents)
-            ? buildCanonicalMessagesFromTaskEvents(session.taskId, sourceEvents)
-            : []);
-    const standardItems = effectiveCanonicalMessages.length > 0
-        ? buildCanonicalTimelineItems(session, effectiveCanonicalMessages)
-        : buildLegacyTimelineItems(session, sourceEvents);
+        ?? (localCanonicalMessages.length > 0
+            ? localCanonicalMessages
+            : buildCanonicalMessagesFromSessionMessages(session));
+    const standardItems = buildCanonicalTimelineItems(session, effectiveCanonicalMessages);
     const rawItems = shouldPreserveTaskMessageTrajectory(session)
-        ? appendLatestTaskStatusTurn(buildRawConversationTrajectoryItems(session), standardItems)
+        ? appendLatestStructuredAssistantTurn(buildRawConversationTrajectoryItems(session), standardItems)
         : standardItems;
     const turnRoundItems = normalizeTimelineToTurnRounds(rawItems);
     const items = ensureVisibleUserEntry(turnRoundItems, session);

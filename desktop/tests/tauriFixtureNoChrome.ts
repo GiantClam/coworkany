@@ -794,6 +794,48 @@ class DarwinBrowserHarness {
         });
     }
 
+    private async handleConfirmEffectInvoke(args: Record<string, unknown>): Promise<{
+        success: boolean;
+        payload: {
+            requestId: string;
+            approved: true;
+            remember: boolean;
+        };
+    }> {
+        const requestId = String(args.requestId ?? '');
+        const remember = Boolean(args.remember);
+        this.logs.push(`invoke_confirm_effect requestId=${requestId} remember=${remember}\n`);
+        return {
+            success: true,
+            payload: {
+                requestId,
+                approved: true,
+                remember,
+            },
+        };
+    }
+
+    private async handleDenyEffectInvoke(args: Record<string, unknown>): Promise<{
+        success: boolean;
+        payload: {
+            requestId: string;
+            approved: false;
+            reason?: string;
+        };
+    }> {
+        const requestId = String(args.requestId ?? '');
+        const reason = typeof args.reason === 'string' ? args.reason : undefined;
+        this.logs.push(`invoke_deny_effect requestId=${requestId} reason=${reason ?? ''}\n`);
+        return {
+            success: true,
+            payload: {
+                requestId,
+                approved: false,
+                reason,
+            },
+        };
+    }
+
     private async invoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
         switch (cmd) {
             case 'plugin:store|load':
@@ -837,6 +879,10 @@ class DarwinBrowserHarness {
                 return { enabled: false, profile: 'optimized', runLabel: '' };
             case 'record_startup_metric':
                 return null;
+            case 'confirm_effect':
+                return this.handleConfirmEffectInvoke(args);
+            case 'deny_effect':
+                return this.handleDenyEffectInvoke(args);
             case 'list_workspaces':
                 return { success: true, payload: { workspaces: [this.workspace] } };
             case 'create_workspace':

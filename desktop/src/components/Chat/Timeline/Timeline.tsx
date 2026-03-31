@@ -6,6 +6,7 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import styles from './Timeline.module.css';
 import type {
     AssistantTurnItem,
@@ -18,10 +19,25 @@ import { AssistantTurnBlock } from './components/AssistantTurnBlock';
 import { getPendingTaskStatus } from './pendingTaskStatus';
 import { useCanonicalTaskStreamStore } from '../../../stores/useCanonicalTaskStreamStore';
 import { buildTimelineTurnRoundViewModel } from './viewModels/turnRounds';
+import { isTauri } from '../../../lib/tauri';
+import {
+    invokeConfirmEffectCommand,
+    invokeDenyEffectCommand,
+} from '../../../lib/effectApprovalCommands';
 
 // ============================================================================
 // Main Timeline Component
 // ============================================================================
+
+const LazyAssistantUiRuntimeBridge = React.lazy(async () => {
+    const module = await import('../assistantUi/AssistantUiRuntimeBridge');
+    return { default: module.AssistantUiRuntimeBridge };
+});
+
+const LazyAssistantUiThreadView = React.lazy(async () => {
+    const module = await import('../assistantUi/AssistantUiThreadView');
+    return { default: module.AssistantUiThreadView };
+});
 
 interface TimelineProps {
     session: TaskSession;
@@ -31,6 +47,62 @@ interface TimelineProps {
         actionId?: string;
         value: string;
     }) => void;
+}
+
+export interface AssistantUiApprovalDecisionInput {
+    requestId: string;
+    decision: 'approve' | 'deny' | 'modify_approve';
+    note?: string;
+}
+
+interface ResolveAssistantUiApprovalDecisionParams {
+    input: AssistantUiApprovalDecisionInput;
+    taskId: string;
+    isTauriRuntime: boolean;
+    invokeCommand: typeof invoke;
+    onTaskCollaborationSubmit?: (input: {
+        taskId?: string;
+        cardId: string;
+        actionId?: string;
+        value: string;
+    }) => void | Promise<void>;
+}
+
+export async function resolveAssistantUiApprovalDecision({
+    input,
+    taskId,
+    isTauriRuntime,
+    invokeCommand,
+    onTaskCollaborationSubmit,
+}: ResolveAssistantUiApprovalDecisionParams): Promise<'skipped' | 'approved' | 'denied' | 'modify_forwarded'> {
+    if (!isTauriRuntime) {
+        return 'skipped';
+    }
+
+    if (input.decision === 'approve') {
+        await invokeConfirmEffectCommand(invokeCommand, {
+            requestId: input.requestId,
+            remember: false,
+        });
+        return 'approved';
+    }
+
+    const note = typeof input.note === 'string' ? input.note.trim() : '';
+    await invokeDenyEffectCommand(invokeCommand, {
+        requestId: input.requestId,
+        reason: note,
+    });
+
+    if (input.decision === 'modify_approve' && note && onTaskCollaborationSubmit) {
+        await onTaskCollaborationSubmit({
+            taskId,
+            cardId: input.requestId,
+            value: `请按以下修改重新执行：${note}`,
+        });
+        return 'modify_forwarded';
+    }
+
+    return 'denied';
 }
 
 export function buildDisplayItemsWithPendingState(
@@ -64,13 +136,8 @@ const TimelineComponent: React.FC<TimelineProps> = ({
 }) => {
     const { t } = useTranslation();
     const canonicalMessages = useCanonicalTaskStreamStore((state) => state.sessions.get(session.taskId)?.messages);
-    const latestVisibleMessageCount = 10;
-    const [showFullHistory, setShowFullHistory] = React.useState(false);
     const { items: timelineItems } = useTimelineItems(session, undefined, canonicalMessages);
-    const hiddenMessageCount = Math.max(timelineItems.length - latestVisibleMessageCount, 0);
-    const visibleItems = showFullHistory || hiddenMessageCount === 0
-        ? timelineItems
-        : timelineItems.slice(-latestVisibleMessageCount);
+    const visibleItems = timelineItems;
     const pendingStatus = React.useMemo(() => getPendingTaskStatus(session), [session]);
     const pendingLabel = React.useMemo(() => {
         switch (pendingStatus?.phase) {
@@ -92,6 +159,19 @@ const TimelineComponent: React.FC<TimelineProps> = ({
         () => buildTimelineTurnRoundViewModel(displayItems),
         [displayItems],
     );
+    const handleAssistantUiApprovalDecision = React.useCallback(async (input: AssistantUiApprovalDecisionInput) => {
+        try {
+            await resolveAssistantUiApprovalDecision({
+                input,
+                taskId: session.taskId,
+                isTauriRuntime: isTauri(),
+                invokeCommand: invoke,
+                onTaskCollaborationSubmit,
+            });
+        } catch (error) {
+            console.error('[Timeline] Failed to resolve approval action', error);
+        }
+    }, [onTaskCollaborationSubmit, session.taskId]);
     const lastAssistantTurnId = React.useMemo(() => {
         for (let index = displayItems.length - 1; index >= 0; index -= 1) {
             const item = displayItems[index];
@@ -105,10 +185,6 @@ const TimelineComponent: React.FC<TimelineProps> = ({
     const containerRef = React.useRef<HTMLDivElement>(null);
     const [userScrolled, setUserScrolled] = React.useState(false);
     const scrollTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    React.useEffect(() => {
-        setShowFullHistory(false);
-    }, [session.taskId]);
 
     // Detect if user manually scrolled up
     React.useEffect(() => {
@@ -190,22 +266,24 @@ const TimelineComponent: React.FC<TimelineProps> = ({
         );
     }, [lastAssistantTurnId, onTaskCollaborationSubmit, pendingLabel, turnRoundViewModel.rounds]);
 
-    return (
+    const timelineContent = (
         <div className={styles.timeline} ref={containerRef}>
-            {hiddenMessageCount > 0 && (
-                <button
-                    type="button"
-                    onClick={() => setShowFullHistory((prev) => !prev)}
-                    className={styles.historyToggle}
-                >
-                    {showFullHistory
-                        ? t('chat.collapseEarlierMessages')
-                        : t('chat.showEarlierMessages', { count: hiddenMessageCount })}
-                </button>
-            )}
             {turnRoundViewModel.rounds.map((_, index) => renderTimelineRound(index))}
             <div ref={endRef} />
         </div>
+    );
+
+    return (
+        <React.Suspense fallback={timelineContent}>
+            <LazyAssistantUiRuntimeBridge
+                sessionId={session.taskId}
+                rounds={turnRoundViewModel.rounds}
+                pendingLabel={pendingLabel}
+                isRunning={Boolean(pendingStatus)}
+            >
+                <LazyAssistantUiThreadView onApprovalDecision={handleAssistantUiApprovalDecision} />
+            </LazyAssistantUiRuntimeBridge>
+        </React.Suspense>
     );
 };
 

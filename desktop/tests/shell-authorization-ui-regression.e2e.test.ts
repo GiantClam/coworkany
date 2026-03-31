@@ -1,4 +1,5 @@
 import { test, expect } from './tauriFixtureNoChrome';
+import { seedPendingApprovalSession } from './utils/assistantUiApprovalSeed';
 
 const TASK_TIMEOUT_MS = 4 * 60 * 1000;
 const INPUT_SELECTORS = [
@@ -118,33 +119,21 @@ test.describe('shell authorization desktop regression', () => {
         expect(userMessages.some((message: any) => String(message.content ?? '').includes('原始任务：'))).toBe(false);
     });
 
-    test('effect confirmation dialog contract renders shell authorization UI', async ({ page }) => {
+    test('assistant-ui approval card contract renders shell authorization UI', async ({ page }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(5000);
 
-        await page.evaluate(() => {
-            (window as Window & { __codexEmit?: (eventName: string, payload: unknown) => void }).__codexEmit?.(
-                'effect-confirmation-required',
-                {
-                    requestId: 'req-shell-write-regression',
-                    sessionId: 'session-shell-write-regression',
-                    effectType: 'shell:write',
-                    description: 'Builtin shell execution requires policy approval before the command runs.',
-                    details: {
-                        command: 'sudo shutdown -h 03:00',
-                        cwd: '/tmp/workspace',
-                    },
-                    riskLevel: 90,
-                    source: 'agent',
-                    sourceId: 'run_command',
-                },
-            );
+        await seedPendingApprovalSession(page, {
+            taskId: 'task-shell-write-regression-ui',
+            requestId: 'req-shell-write-regression',
+            effectType: 'shell:write',
+            userContent: '早上3点关机',
+            title: 'shell authorization approval card regression',
         });
 
-        await expect(page.getByText(/Permission Required|需要权限/)).toBeVisible();
+        await expect(page.getByText(/High risk approvals|高风险审批/)).toBeVisible();
         await expect(page.getByText(/shell:write/)).toBeVisible();
-        await expect(page.getByText(/sudo shutdown -h 03:00/)).toBeVisible();
-        await expect(page.getByRole('button', { name: /Approve|批准/ })).toBeVisible();
+        await expect(page.getByRole('button', { name: /^Approve$|^批准$/ })).toBeVisible();
         await expect(page.getByRole('button', { name: /Deny|拒绝/ })).toBeVisible();
     });
 });

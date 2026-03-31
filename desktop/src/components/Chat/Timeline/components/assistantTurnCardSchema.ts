@@ -99,21 +99,6 @@ export function buildAssistantTurnCardSchemas(
         .filter((entry) => entry.length > 0);
     const hasRenderedAssistantMessages = safeMessages.length > 0;
 
-    if (safePendingLabel) {
-        cards.push({
-            type: 'runtime-status',
-            id: `${item.id}-runtime-pending`,
-            summary: {
-                kind: 'runtime',
-                kicker: 'Runtime',
-                title: safePendingLabel,
-                statusLabel: 'Running',
-                statusTone: 'running',
-            },
-            indicator: 'pending',
-        });
-    }
-
     if (safeMessages.length > 0 || safeSystemEvents.length > 0) {
         cards.push({
             type: 'assistant-response',
@@ -126,6 +111,21 @@ export function buildAssistantTurnCardSchemas(
             },
             messages: safeMessages,
             systemEvents: safeSystemEvents,
+        });
+    }
+
+    if (safePendingLabel) {
+        cards.push({
+            type: 'runtime-status',
+            id: `${item.id}-runtime-pending`,
+            summary: {
+                kind: 'runtime',
+                kicker: 'Runtime',
+                title: safePendingLabel,
+                statusLabel: 'Running',
+                statusTone: 'running',
+            },
+            indicator: 'pending',
         });
     }
 
@@ -146,15 +146,6 @@ export function buildAssistantTurnCardSchemas(
         });
     }
 
-    for (const patch of item.patches || []) {
-        cards.push({
-            type: 'task-card',
-            id: `${patch.id}-patch`,
-            viewModel: buildTaskCardViewModel(toPatchTaskCardItem(patch)),
-            placement: 'inline',
-        });
-    }
-
     if (item.taskCard) {
         cards.push({
             type: 'task-card',
@@ -164,6 +155,15 @@ export function buildAssistantTurnCardSchemas(
                 hideResultSection: hasRenderedAssistantMessages,
             }),
             placement: 'primary',
+        });
+    }
+
+    for (const patch of item.patches || []) {
+        cards.push({
+            type: 'task-card',
+            id: `${patch.id}-patch`,
+            viewModel: buildTaskCardViewModel(toPatchTaskCardItem(patch)),
+            placement: 'inline',
         });
     }
 

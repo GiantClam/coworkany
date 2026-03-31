@@ -2031,9 +2031,7 @@ fn handle_sidecar_command(
                 let effect_type = request.effect_type.clone();
 
                 let state = app_handle.state::<PolicyEngineState>();
-                let result =
-                    policy_commands::request_effect(request.clone(), state, app_handle.clone())
-                        .await;
+                let result = policy_commands::request_effect(request.clone(), state).await;
 
                 let response = match result {
                     Ok(res) => res,
@@ -2199,9 +2197,7 @@ fn handle_sidecar_command(
                     if matches!(operation, PatchOperation::Delete | PatchOperation::Rename) {
                         let request = build_effect_request_for_patch(operation, &path);
                         let state = app_handle.state::<PolicyEngineState>();
-                        let policy =
-                            policy_commands::request_effect(request, state, app_handle.clone())
-                                .await;
+                        let policy = policy_commands::request_effect(request, state).await;
 
                         if let Ok(response) = &policy {
                             if !response.approved {

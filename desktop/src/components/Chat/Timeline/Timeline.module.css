@@ -16,24 +16,6 @@
     box-sizing: border-box;
 }
 
-.historyToggle {
-    align-self: center;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-panel);
-    color: var(--text-secondary);
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
-}
-
-.historyToggle:hover {
-    background: var(--bg-element-hover);
-    color: var(--text-primary);
-    border-color: var(--border-strong);
-}
-
 /* ============================================================================
  * Timeline Items
  * ============================================================================ */
@@ -74,8 +56,8 @@
     align-items: center;
     justify-content: center;
     font-size: 16px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
     flex-shrink: 0;
 }
 
@@ -88,8 +70,8 @@
 
 .assistantThreadBrandChip {
     border-radius: 10px;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 76%, var(--bg-panel));
     color: var(--text-secondary);
     font-size: 12px;
     line-height: 1;
@@ -130,7 +112,7 @@
     line-height: 1.55;
     color: var(--text-secondary);
     padding-left: 12px;
-    border-left: 2px solid rgba(148, 163, 184, 0.18);
+    border-left: 2px solid color-mix(in srgb, var(--border-subtle) 75%, transparent);
 }
 
 .assistantTurnSteps {
@@ -146,46 +128,46 @@
     align-items: flex-start;
     gap: 10px;
     border-radius: 14px;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
     padding: 10px 12px;
 }
 
 .assistantTurnStepNeutral {
-    border-color: rgba(148, 163, 184, 0.22);
+    border-color: color-mix(in srgb, var(--border-subtle) 86%, transparent);
 }
 
 .assistantTurnStepRunning {
-    border-color: rgba(59, 130, 246, 0.35);
+    border-color: color-mix(in srgb, var(--status-info) 38%, var(--border-subtle));
 }
 
 .assistantTurnStepSuccess {
-    border-color: rgba(34, 197, 94, 0.35);
+    border-color: color-mix(in srgb, var(--status-success) 38%, var(--border-subtle));
 }
 
 .assistantTurnStepFailed {
-    border-color: rgba(248, 113, 113, 0.35);
+    border-color: color-mix(in srgb, var(--status-error) 38%, var(--border-subtle));
 }
 
 .assistantTurnStepDot {
     width: 8px;
     height: 8px;
     border-radius: 999px;
-    background: rgba(148, 163, 184, 0.85);
+    background: color-mix(in srgb, var(--text-muted) 84%, var(--text-secondary));
     margin-top: 6px;
     flex-shrink: 0;
 }
 
 .assistantTurnStepRunning .assistantTurnStepDot {
-    background: rgba(59, 130, 246, 0.95);
+    background: color-mix(in srgb, var(--status-info) 90%, var(--text-primary));
 }
 
 .assistantTurnStepSuccess .assistantTurnStepDot {
-    background: rgba(34, 197, 94, 0.95);
+    background: color-mix(in srgb, var(--status-success) 90%, var(--text-primary));
 }
 
 .assistantTurnStepFailed .assistantTurnStepDot {
-    background: rgba(248, 113, 113, 0.95);
+    background: color-mix(in srgb, var(--status-error) 90%, var(--text-primary));
 }
 
 .assistantTurnStepText {
@@ -299,8 +281,8 @@
     width: min(320px, 100%);
     max-width: 100%;
     border-radius: var(--radius-lg);
-    border: 1px solid rgba(15, 23, 42, 0.08);
-    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 68%, var(--bg-panel));
     object-fit: cover;
 }
 
@@ -329,9 +311,13 @@
 
 .fileCard {
     width: 100%;
-    border: 1px solid rgba(148, 163, 184, 0.22);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
     border-radius: 16px;
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.1), rgba(15, 23, 42, 0.04));
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-element) 84%, transparent),
+        color-mix(in srgb, var(--bg-panel) 90%, transparent)
+    );
     padding: 12px 14px;
     display: grid;
     grid-template-columns: auto 1fr auto;
@@ -347,9 +333,13 @@
 }
 
 .fileCardClickable:hover {
-    border-color: rgba(96, 165, 250, 0.36);
+    border-color: color-mix(in srgb, var(--status-info) 38%, var(--border-subtle));
     transform: translateY(-1px);
-    background: linear-gradient(180deg, rgba(30, 41, 59, 0.18), rgba(15, 23, 42, 0.08));
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-element-hover) 84%, transparent),
+        color-mix(in srgb, var(--bg-element) 86%, transparent)
+    );
 }
 
 .fileCard:disabled {
@@ -363,9 +353,9 @@
     width: 42px;
     height: 42px;
     border-radius: 12px;
-    background: rgba(96, 165, 250, 0.14);
-    border: 1px solid rgba(96, 165, 250, 0.18);
-    color: #bfdbfe;
+    background: color-mix(in srgb, var(--status-info) 15%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-info) 30%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-info) 74%, var(--text-primary));
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -395,11 +385,11 @@
 .fileCardAction {
     align-self: flex-start;
     border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.24);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
     padding: 6px 10px;
     font-size: 12px;
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.02);
+    background: color-mix(in srgb, var(--bg-element) 74%, var(--bg-panel));
 }
 
 .htmlPreviewCard {
@@ -407,8 +397,12 @@
     flex-direction: column;
     gap: 10px;
     border-radius: 18px;
-    border: 1px solid rgba(96, 165, 250, 0.22);
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.14), rgba(15, 23, 42, 0.05));
+    border: 1px solid color-mix(in srgb, var(--status-info) 32%, var(--border-subtle));
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--status-info) 10%, var(--bg-element)),
+        color-mix(in srgb, var(--status-info) 5%, var(--bg-panel))
+    );
     padding: 12px;
 }
 
@@ -431,7 +425,7 @@
     font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #93c5fd;
+    color: color-mix(in srgb, var(--status-info) 76%, var(--text-primary));
 }
 
 .htmlPreviewTitle {
@@ -458,9 +452,9 @@
 }
 
 .htmlPreviewActionButton {
-    border: 1px solid rgba(148, 163, 184, 0.26);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
     border-radius: 999px;
-    background: rgba(15, 23, 42, 0.26);
+    background: color-mix(in srgb, var(--bg-element) 78%, var(--bg-panel));
     color: var(--text-primary);
     font-size: 12px;
     padding: 7px 12px;
@@ -468,7 +462,7 @@
 }
 
 .htmlPreviewActionButton:hover:not(:disabled) {
-    border-color: rgba(96, 165, 250, 0.34);
+    border-color: color-mix(in srgb, var(--status-info) 35%, var(--border-subtle));
 }
 
 .htmlPreviewActionButton:disabled {
@@ -479,10 +473,10 @@
 .htmlPreviewViewport {
     width: 100%;
     min-height: 220px;
-    border: 1px solid rgba(148, 163, 184, 0.18);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent);
     border-radius: 14px;
     overflow: hidden;
-    background: rgba(255, 255, 255, 0.98);
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-subtle));
     padding: 0;
     cursor: zoom-in;
 }
@@ -508,7 +502,7 @@
     min-height: 220px;
     border: 0;
     display: block;
-    background: #fff;
+    background: var(--bg-panel);
 }
 
 .htmlPreviewHint {
@@ -527,7 +521,7 @@
     height: 100%;
     border: 0;
     display: block;
-    background: #fff;
+    background: var(--bg-panel);
 }
 
 .assistantPendingCard .structuredCardBody {
@@ -551,7 +545,7 @@
     width: 7px;
     height: 7px;
     border-radius: 999px;
-    background: rgba(110, 231, 183, 0.94);
+    background: color-mix(in srgb, var(--status-success) 85%, var(--text-primary));
     animation: pendingDotBounce 1.05s ease-in-out infinite;
 }
 
@@ -569,7 +563,7 @@
     width: min(360px, 100%);
     height: 5px;
     border-radius: 999px;
-    background: rgba(52, 211, 153, 0.14);
+    background: color-mix(in srgb, var(--status-success) 18%, transparent);
     overflow: hidden;
 }
 
@@ -578,7 +572,12 @@
     inset: 0 auto 0 -42%;
     width: 42%;
     border-radius: inherit;
-    background: linear-gradient(90deg, rgba(52, 211, 153, 0), rgba(52, 211, 153, 0.94), rgba(52, 211, 153, 0));
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--status-success) 0%, transparent),
+        color-mix(in srgb, var(--status-success) 88%, transparent),
+        color-mix(in srgb, var(--status-success) 0%, transparent)
+    );
     animation: pendingStatusSweep 1.2s linear infinite;
 }
 
@@ -622,22 +621,38 @@
 }
 
 .structuredCardAssistant {
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.7)) !important;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-element) 90%, transparent),
+        color-mix(in srgb, var(--bg-panel) 92%, transparent)
+    ) !important;
 }
 
 .structuredCardRuntime {
-    background: linear-gradient(180deg, rgba(12, 34, 24, 0.78), rgba(10, 26, 20, 0.72)) !important;
-    border-color: rgba(34, 197, 94, 0.2);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--status-success) 12%, var(--bg-element)),
+        color-mix(in srgb, var(--status-success) 8%, var(--bg-panel))
+    ) !important;
+    border-color: color-mix(in srgb, var(--status-success) 30%, var(--border-subtle));
 }
 
 .structuredCardTask {
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.74), rgba(17, 24, 39, 0.68)) !important;
-    border-color: rgba(148, 163, 184, 0.22);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-element) 86%, transparent),
+        color-mix(in srgb, var(--bg-subtle) 88%, transparent)
+    ) !important;
+    border-color: color-mix(in srgb, var(--border-subtle) 90%, transparent);
 }
 
 .structuredCardTool {
-    background: linear-gradient(180deg, rgba(12, 24, 40, 0.78), rgba(11, 21, 35, 0.72)) !important;
-    border-color: rgba(59, 130, 246, 0.2);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--status-info) 12%, var(--bg-element)),
+        color-mix(in srgb, var(--status-info) 7%, var(--bg-panel))
+    ) !important;
+    border-color: color-mix(in srgb, var(--status-info) 32%, var(--border-subtle));
 }
 
 .structuredCardHeader {
@@ -689,19 +704,19 @@
 }
 
 .structuredCardKicker {
-    color: #bfdbfe;
+    color: color-mix(in srgb, var(--status-info) 75%, var(--text-primary));
 }
 
 .structuredCardRuntime .structuredCardKicker {
-    color: #86efac;
+    color: color-mix(in srgb, var(--status-success) 76%, var(--text-primary));
 }
 
 .structuredCardTool .structuredCardKicker {
-    color: #93c5fd;
+    color: color-mix(in srgb, var(--status-info) 82%, var(--text-primary));
 }
 
 .structuredCardTask .structuredCardKicker {
-    color: #fde68a;
+    color: color-mix(in srgb, var(--status-warning) 74%, var(--text-primary));
 }
 
 .structuredCardTitle {
@@ -724,33 +739,33 @@
     font-size: 11px;
     line-height: 1.2;
     border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    color: #cbd5e1;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    color: var(--text-secondary);
     padding: 3px 8px;
 }
 
 .structuredCardStatusRunning,
 .taskStatusrunning {
-    border-color: rgba(34, 197, 94, 0.35);
-    color: #bbf7d0;
+    border-color: color-mix(in srgb, var(--status-info) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-info) 78%, var(--text-primary));
 }
 
 .structuredCardStatusSuccess,
 .taskStatusfinished {
-    border-color: rgba(59, 130, 246, 0.4);
-    color: #bfdbfe;
+    border-color: color-mix(in srgb, var(--status-success) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 74%, var(--text-primary));
 }
 
 .structuredCardStatusFailed,
 .taskStatusfailed {
-    border-color: rgba(248, 113, 113, 0.4);
-    color: #fecaca;
+    border-color: color-mix(in srgb, var(--status-error) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 78%, var(--text-primary));
 }
 
 .structuredCardStatusNeutral,
 .taskStatusidle {
-    border-color: rgba(148, 163, 184, 0.35);
-    color: #cbd5e1;
+    border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    color: var(--text-secondary);
 }
 
 .structuredCardToggle {
@@ -778,8 +793,8 @@
 }
 
 .taskListRow {
-    background: rgba(15, 23, 42, 0.34);
-    border: 1px solid rgba(100, 116, 139, 0.24);
+    background: color-mix(in srgb, var(--bg-element) 78%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
     border-radius: 10px;
     padding: 8px 10px;
     display: flex;
@@ -802,41 +817,41 @@
 .taskListStatus {
     font-size: 10px;
     border-radius: 999px;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    color: #cbd5e1;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    color: var(--text-secondary);
     padding: 2px 6px;
     white-space: nowrap;
 }
 
 .taskListStatuspending {
-    border-color: rgba(148, 163, 184, 0.35);
-    color: #cbd5e1;
+    border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    color: var(--text-secondary);
 }
 
 .taskListStatusin_progress {
-    border-color: rgba(34, 197, 94, 0.35);
-    color: #bbf7d0;
+    border-color: color-mix(in srgb, var(--status-info) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-info) 80%, var(--text-primary));
 }
 
 .taskListStatuscomplete,
 .taskListStatuscompleted {
-    border-color: rgba(59, 130, 246, 0.4);
-    color: #bfdbfe;
+    border-color: color-mix(in srgb, var(--status-success) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 78%, var(--text-primary));
 }
 
 .taskListStatusfailed {
-    border-color: rgba(248, 113, 113, 0.4);
-    color: #fecaca;
+    border-color: color-mix(in srgb, var(--status-error) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 78%, var(--text-primary));
 }
 
 .taskListStatusblocked {
-    border-color: rgba(251, 191, 36, 0.4);
-    color: #fde68a;
+    border-color: color-mix(in srgb, var(--status-warning) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-warning) 74%, var(--text-primary));
 }
 
 .taskListStatusskipped {
-    border-color: rgba(148, 163, 184, 0.28);
-    color: #94a3b8;
+    border-color: color-mix(in srgb, var(--border-subtle) 76%, transparent);
+    color: var(--text-muted);
 }
 
 .taskListDeps {
@@ -878,17 +893,17 @@
     flex: 1;
     min-width: 0;
     border-radius: 10px;
-    border: 1px solid rgba(100, 116, 139, 0.35);
-    background: rgba(15, 23, 42, 0.52);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 85%, var(--bg-panel));
     color: var(--text-primary);
     padding: 8px 10px;
     font-size: 12px;
 }
 
 .structuredActionButton {
-    border: 1px solid rgba(59, 130, 246, 0.34);
-    background: rgba(30, 64, 175, 0.2);
-    color: #dbeafe;
+    border: 1px solid color-mix(in srgb, var(--status-info) 36%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-info) 16%, var(--bg-element));
+    color: color-mix(in srgb, var(--status-info) 70%, var(--text-primary));
     border-radius: 10px;
     padding: 8px 12px;
     font-size: 12px;
@@ -897,7 +912,7 @@
 }
 
 .structuredActionButton:hover:not(:disabled) {
-    background: rgba(37, 99, 235, 0.3);
+    background: color-mix(in srgb, var(--status-info) 24%, var(--bg-element-hover));
 }
 
 .structuredActionButton:disabled {
@@ -942,18 +957,18 @@
 }
 
 .toolCard .structuredCardStatusRunning {
-    border-color: rgba(59, 130, 246, 0.35);
-    color: #bfdbfe;
+    border-color: color-mix(in srgb, var(--status-info) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-info) 78%, var(--text-primary));
 }
 
 .toolCard .structuredCardStatusSuccess {
-    border-color: rgba(34, 197, 94, 0.4);
-    color: #bbf7d0;
+    border-color: color-mix(in srgb, var(--status-success) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 76%, var(--text-primary));
 }
 
 .toolCard .structuredCardStatusFailed {
-    border-color: rgba(248, 113, 113, 0.4);
-    color: #fecaca;
+    border-color: color-mix(in srgb, var(--status-error) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 76%, var(--text-primary));
 }
 
 .toolCard .structuredCardBody {
@@ -1012,7 +1027,7 @@
     line-height: 1.45;
     color: var(--text-secondary);
     padding-left: 12px;
-    border-left: 2px solid rgba(96, 165, 250, 0.16);
+    border-left: 2px solid color-mix(in srgb, var(--status-info) 28%, transparent);
 }
 
 /* ============================================================================

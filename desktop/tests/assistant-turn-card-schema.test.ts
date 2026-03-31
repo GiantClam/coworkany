@@ -76,23 +76,14 @@ describe('buildAssistantTurnCardSchemas', () => {
         const cards = buildAssistantTurnCardSchemas(turn, 'Planning next step');
 
         expect(cards.map((card) => card.type)).toEqual([
-            'runtime-status',
             'assistant-response',
+            'runtime-status',
             'tool-call',
             'task-card',
             'task-card',
             'task-card',
         ]);
         expect(cards[0]).toMatchObject({
-            type: 'runtime-status',
-            summary: {
-                kind: 'runtime',
-                title: 'Planning next step',
-                statusLabel: 'Running',
-                statusTone: 'running',
-            },
-        });
-        expect(cards[1]).toMatchObject({
             type: 'assistant-response',
             summary: {
                 kind: 'assistant',
@@ -101,6 +92,15 @@ describe('buildAssistantTurnCardSchemas', () => {
             },
             messages: ['Draft response'],
             systemEvents: ['Runtime attached'],
+        });
+        expect(cards[1]).toMatchObject({
+            type: 'runtime-status',
+            summary: {
+                kind: 'runtime',
+                title: 'Planning next step',
+                statusLabel: 'Running',
+                statusTone: 'running',
+            },
         });
         expect(cards[2]).toMatchObject({
             type: 'tool-call',
@@ -122,18 +122,18 @@ describe('buildAssistantTurnCardSchemas', () => {
         });
         expect(cards[4]).toMatchObject({
             type: 'task-card',
+            placement: 'primary',
+            viewModel: {
+                id: 'task-card-primary',
+            },
+        });
+        expect(cards[5]).toMatchObject({
+            type: 'task-card',
             placement: 'inline',
             viewModel: {
                 summary: {
                     title: 'Patch update',
                 },
-            },
-        });
-        expect(cards[5]).toMatchObject({
-            type: 'task-card',
-            placement: 'primary',
-            viewModel: {
-                id: 'task-card-primary',
             },
         });
     });

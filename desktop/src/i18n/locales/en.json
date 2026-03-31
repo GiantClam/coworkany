@@ -244,8 +244,7 @@
     "pendingWaitingForModel": "Sent. Thinking...",
     "pendingUsingTool": "Message sent. Running {{tool}}...",
     "pendingRetrying": "Rate limited. Retrying automatically...",
-    "showEarlierMessages": "Show earlier messages ({{count}} hidden)",
-    "collapseEarlierMessages": "Collapse earlier messages",
+    "messageRouting": "Message routing",
     "stopVoice": "Stop voice",
     "stoppingVoice": "Stopping...",
     "voicePlaybackActive": "Voice playback active",
@@ -467,20 +466,6 @@
     "acceptAll": "Accept All Changes"
   },
 
-  "effect": {
-    "permissionRequired": "Permission Required",
-    "riskLevel": "Risk Level",
-    "effectType": "Effect Type:",
-    "source": "Source:",
-    "rememberChoice": "Remember this choice for similar actions this session",
-    "deny": "Deny",
-    "approve": "Approve",
-    "riskCritical": "Critical",
-    "riskHigh": "High",
-    "riskMedium": "Medium",
-    "riskLow": "Low"
-  },
-
   "quality": {
     "excellent": "Excellent",
     "good": "Good",
@@ -676,6 +661,29 @@
     "promptSummarize": "Help me write a concise daily status update.",
     "promptUseGuide": "How should I work with you more effectively?",
     "promptCapabilities": "Show me what you can do in chat mode."
+  },
+
+  "assistantUi": {
+    "showMore": "Show {{count}} more",
+    "runtimeStatus": "Runtime status",
+    "runtimeStatusAriaRunning": "runtime status running",
+    "statusRunning": "running",
+    "highRiskApprovals": "High risk approvals",
+    "tools": "Tools",
+    "approvals": "Approvals",
+    "task": "Task",
+    "patches": "Patches",
+    "approve": "Approve",
+    "modifyApprove": "Modify & Approve",
+    "deny": "Deny",
+    "submit": "Submit",
+    "modifyPlaceholder": "Describe required changes before approval...",
+    "args": "args",
+    "result": "result",
+    "progress": "progress",
+    "risk": "risk",
+    "assistantLabel": "CoworkAny",
+    "systemLabel": "System"
   },
 
   "diagnostics": {

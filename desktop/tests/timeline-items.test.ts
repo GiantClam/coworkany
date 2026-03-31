@@ -1586,7 +1586,6 @@ describe('buildTimelineItems', () => {
             'assistant_turn',
             'user_message',
             'assistant_turn',
-            'assistant_turn',
         ]);
         expect(result.items[0]).toMatchObject({
             type: 'user_message',
@@ -1598,8 +1597,8 @@ describe('buildTimelineItems', () => {
             content: '发送到 X',
         });
         expect(turns[1]?.messages).toEqual(['需要先完成登录准备。']);
-        expect(turns[2]?.taskCard?.collaboration?.title).toBe('Complete required manual action');
-        expect(turns[2]?.taskCard?.subtitle).toBe('需要先完成登录准备。');
+        expect(turns[1]?.taskCard?.collaboration?.title).toBe('Complete required manual action');
+        expect(turns[1]?.taskCard?.subtitle).toBe('需要先完成登录准备。');
     });
 
     test('preserves the first user message trajectory while a task-mode session is still running', () => {
@@ -1660,7 +1659,7 @@ describe('buildTimelineItems', () => {
         expect(taskCards[0]?.status).toBe('running');
     });
 
-    test('keeps single-user task sessions on the collapsed task timeline path', () => {
+    test('keeps single-user task sessions as one user+assistant round', () => {
         const session = makeSession({
             status: 'idle',
             taskMode: 'immediate_task',
@@ -1713,7 +1712,12 @@ describe('buildTimelineItems', () => {
         const result = buildTimelineItems(session);
         const turns = extractAssistantTurns(result.items);
 
-        expect(result.items).toHaveLength(1);
+        expect(result.items).toHaveLength(2);
+        expect(result.items[0]).toMatchObject({
+            type: 'user_message',
+            content: '导出 PDF',
+        });
+        expect(turns[0]?.messages).toEqual(['先确认导出权限。']);
         expect(turns[0]?.taskCard?.collaboration?.title).toBe('Grant PDF export access');
     });
 });

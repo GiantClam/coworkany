@@ -4,12 +4,6 @@
 
 export { DiffViewer, type DiffViewerProps, type FilePatch, type DiffHunk } from './DiffViewer';
 export {
-    EffectConfirmationDialog,
-    type EffectConfirmationDialogProps,
-    type EffectRequest,
-    type EffectType,
-} from './EffectConfirmationDialog';
-export {
     PatchPreview,
     type PatchPreviewProps,
     type PatchSet,

@@ -5,8 +5,17 @@ Make Coworkany own task planning and collaboration by adding structured delivera
 
 ## 2026-03-27 Canonical Timeline Status
 - Desktop timeline now renders through the canonical message/part builder by default when source events are fully covered by canonical synthesis.
-- Legacy event projection remains as a guarded fallback for non-migrated event types only.
-- Next cleanup step is to delete or isolate the remaining legacy-only timeline code after a final unsupported-event audit.
+- Legacy event projection path has been removed from desktop timeline rendering.
+- Legacy-only timeline code has been deleted after canonical parity verification.
+- Assistant-ui is now the only timeline runtime surface; runtime gate/fallback switches are being removed as dead code.
+- Global modal effect-approval fallback has been removed; shell/effect approvals are rendered via assistant-ui timeline cards.
+- Rust policy command bridge no longer emits legacy approval UI events; approval state flows through canonical task/IPC paths only.
+- Assistant-ui message/task card styling is now token-aligned with app theme (removed light fallback colors) and includes Manus-style role rail + runtime/task progress cues.
+- Composer now exposes one-shot explicit routing controls (`Chat Mode` / `Task Mode`) to reduce route ambiguity without reintroducing fallback paths.
+- Task mode initial surface now mounts `TaskListView` directly from chat shell, with explicit switch-back to chat mode.
+- Explicit slash commands (`/ask`, `/task`, `/schedule`) now participate in route intent resolution in chat submission flow.
+- Task board projection now backfills task list metadata from `TASK_PLAN_READY` when canonical card projection omits `tasks`.
+- Timeline fallback/staging styles continue to be tokenized; file-preview/pending visuals no longer rely on hardcoded light color values.
 
 ## Current Phase
 Phase 5
@@ -267,7 +276,7 @@ Introduce a transport-agnostic canonical task stream alongside the existing `Tas
 - Immediate task-mode canonical adoption: complete
 - Scheduled task-mode canonical adoption: complete
 - Local TaskEvent -> canonical synthesis fallback: complete
-- Legacy event-only timeline retirement: pending
+- Legacy event-only timeline retirement: complete
 
 ### Decisions
 - Keep `TaskEvent` as the current user-facing source of truth during phase 1.
@@ -279,7 +288,7 @@ Introduce a transport-agnostic canonical task stream alongside the existing `Tas
 - Immediate task-mode now shares the same canonical builder as chat-mode.
 - Scheduled task-mode now also shares the canonical builder, with scheduled-specific suppressions for internal user echoes, research noise, and compact finish handling preserved.
 - Desktop now locally synthesizes canonical messages from `TaskEvent`s when store-backed canonical messages are absent, so canonical projection is the default render path even for older event-only sessions.
-- Remaining migration boundary is cleanup: the legacy event-specific builder still exists as the final fallback, but it is no longer the primary rendering path.
+- Remaining migration boundary moved to verification posture: assistant-ui runtime is now the sole timeline runtime path.
 
 ## 2026-03-22 Canary Checklist Evidence Gate
 

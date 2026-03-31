@@ -242,8 +242,7 @@
     "pendingWaitingForModel": "已发送，正在思考中…",
     "pendingUsingTool": "消息已发送，正在调用 {{tool}}…",
     "pendingRetrying": "请求暂时受限，正在自动重试…",
-    "showEarlierMessages": "显示更早消息（已折叠 {{count}} 条）",
-    "collapseEarlierMessages": "收起更早消息",
+    "messageRouting": "消息路由",
     "stopVoice": "终止播报",
     "stoppingVoice": "终止中…",
     "voicePlaybackActive": "正在播报任务结果",
@@ -465,20 +464,6 @@
     "acceptAll": "接受所有更改"
   },
 
-  "effect": {
-    "permissionRequired": "需要权限",
-    "riskLevel": "风险等级",
-    "effectType": "效果类型：",
-    "source": "来源：",
-    "rememberChoice": "记住本次会话中类似操作的选择",
-    "deny": "拒绝",
-    "approve": "批准",
-    "riskCritical": "严重",
-    "riskHigh": "高",
-    "riskMedium": "中",
-    "riskLow": "低"
-  },
-
   "quality": {
     "excellent": "优秀",
     "good": "良好",
@@ -674,6 +659,29 @@
     "promptSummarize": "帮我写一份简洁的日报。",
     "promptUseGuide": "我应该怎么更高效地和你协作？",
     "promptCapabilities": "介绍一下你在 Chat 模式下的能力。"
+  },
+
+  "assistantUi": {
+    "showMore": "展开其余 {{count}} 项",
+    "runtimeStatus": "运行状态",
+    "runtimeStatusAriaRunning": "运行状态 进行中",
+    "statusRunning": "进行中",
+    "highRiskApprovals": "高风险审批",
+    "tools": "工具",
+    "approvals": "审批",
+    "task": "任务",
+    "patches": "补丁",
+    "approve": "批准",
+    "modifyApprove": "修改后批准",
+    "deny": "拒绝",
+    "submit": "提交",
+    "modifyPlaceholder": "填写批准前需要修改的内容...",
+    "args": "参数",
+    "result": "结果",
+    "progress": "进度",
+    "risk": "风险",
+    "assistantLabel": "CoworkAny",
+    "systemLabel": "系统"
   },
 
   "diagnostics": {

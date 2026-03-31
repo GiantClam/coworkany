@@ -28,6 +28,7 @@ import { getVoiceSettings } from '../../lib/configStore';
 import { encodeTaskCollaborationMessage } from './collaborationMessage';
 import { isConversationTurnLocked } from './turnTaking';
 import type { TaskEvent } from '../../types';
+import { TaskListView } from '../jarvis/TaskListView';
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('../Skills/SkillsView');
@@ -99,13 +100,13 @@ function stripCreateTaskIntentPrefix(text: string): string {
         .trim();
 }
 
-function buildRoutedEntrySourceText(text: string, mode: EntryMode): string {
+export function buildRoutedEntrySourceText(text: string, mode: EntryMode): string {
     const trimmed = text.trim();
     if (!trimmed) {
         return text;
     }
 
-    if (/^\/(?:ask|task)\b/i.test(trimmed)) {
+    if (/^\/(?:ask|task|schedule)\b/i.test(trimmed)) {
         return trimmed;
     }
 
@@ -115,6 +116,28 @@ function buildRoutedEntrySourceText(text: string, mode: EntryMode): string {
 
     const route = mode === 'chat' ? 'chat' : 'task';
     return `原始任务：${trimmed}\n用户路由：${route}`;
+}
+
+export function parseRouteCommand(text: string): {
+    mode: EntryMode | null;
+    normalizedQuery: string;
+} {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('/')) {
+        return { mode: null, normalizedQuery: text };
+    }
+
+    const matched = trimmed.match(/^\/(ask|task|schedule)\b\s*(.*)$/i);
+    if (!matched) {
+        return { mode: null, normalizedQuery: text };
+    }
+
+    const mode: EntryMode = matched[1].toLowerCase() === 'ask' ? 'chat' : 'task';
+    const normalizedQuery = matched[2]?.trim() ?? '';
+    return {
+        mode,
+        normalizedQuery,
+    };
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -129,6 +152,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showMcpDialog, setShowMcpDialog] = useState(false);
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
     const [entryMode, setEntryMode] = useState<EntryMode>('chat');
+    const [nextRouteMode, setNextRouteMode] = useState<EntryMode | null>(null);
     const [isReconnectingLlm, setIsReconnectingLlm] = useState(false);
 
     const activeSession = useActiveSession();
@@ -219,7 +243,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     useEffect(() => {
         if (!activeSession || activeSession.isDraft) {
             setEntryMode('chat');
+            return;
         }
+        setNextRouteMode(null);
     }, [activeSession?.taskId, activeSession?.isDraft]);
 
     const setActiveProfile = useCallback(async (id: string) => {
@@ -316,18 +342,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ): Promise<boolean> => {
         const includeAttachments = options?.includeAttachments ?? true;
         const trimmedQuery = text.trim();
+        const routeCommand = parseRouteCommand(trimmedQuery);
         const createTaskIntent = Boolean(
             activeSession?.taskId
             && !activeSession.isDraft
-            && isLikelyCreateTaskIntent(trimmedQuery)
+            && (isLikelyCreateTaskIntent(trimmedQuery) || routeCommand.mode === 'task')
         );
         const normalizedQuery = createTaskIntent ? stripCreateTaskIntentPrefix(trimmedQuery) : trimmedQuery;
-        const effectiveQuery = normalizedQuery || trimmedQuery;
+        const commandNormalizedQuery = routeCommand.normalizedQuery.trim();
+        const effectiveQuery = commandNormalizedQuery || normalizedQuery || trimmedQuery;
         if (!effectiveQuery && (!includeAttachments || attachments.length === 0)) return false;
         const requestContent = includeAttachments ? buildContentWithAttachments(effectiveQuery) : effectiveQuery;
+        const routedMode: EntryMode = createTaskIntent
+            ? 'task'
+            : (routeCommand.mode ?? nextRouteMode ?? entryMode);
         const routedRequestContent = buildRoutedEntrySourceText(
             requestContent,
-            createTaskIntent ? 'task' : entryMode
+            routedMode,
         );
         const titleSource = effectiveQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
         const enabledSkillsForRequest = enabledSkills;
@@ -354,6 +385,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (includeAttachments) {
                     clearAttachments();
                 }
+                setNextRouteMode(null);
             } else {
                 appendLocalTaskEvent(taskId, 'TASK_FAILED', {
                     error: result?.error ?? t('chat.connectionError'),
@@ -413,9 +445,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             if (includeAttachments) {
                 clearAttachments();
             }
+            setNextRouteMode(null);
         }
         return result?.success === true;
-    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, appendLocalTaskEvent, appendLocalUserEcho, createDraftSession, entryMode]);
+    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, appendLocalTaskEvent, appendLocalUserEcho, createDraftSession, entryMode, nextRouteMode]);
 
     const handleSubmit = useCallback(async () => {
         if (isTurnLocked) {
@@ -564,6 +597,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         t('welcome.promptCapabilities'),
     ]), [t]);
 
+    if (showInitialEntry && entryMode === 'task') {
+        return (
+            <div className="chat-interface">
+                <TaskListView
+                    onSwitchToChat={() => {
+                        setEntryMode('chat');
+                    }}
+                />
+            </div>
+        );
+    }
+
     if (showInitialEntry) {
         return (
             <div className="chat-interface">
@@ -606,6 +651,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     llmProfiles={llmConfig.profiles ?? []}
                     activeProfileId={llmConfig.activeProfileId}
                     onSelectProfile={setActiveProfile}
+                    showRouteControls={true}
+                    routeMode={nextRouteMode ?? entryMode}
+                    onRouteModeChange={(mode) => {
+                        setEntryMode(mode);
+                        setNextRouteMode(mode);
+                    }}
                 />
             </div>
         );
@@ -674,6 +725,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 llmProfiles={llmConfig.profiles ?? []}
                 activeProfileId={llmConfig.activeProfileId}
                 onSelectProfile={setActiveProfile}
+                showRouteControls={Boolean(activeSession?.isDraft)}
+                routeMode={nextRouteMode ?? entryMode}
+                onRouteModeChange={(mode) => {
+                    setEntryMode(mode);
+                    setNextRouteMode(mode);
+                }}
             />
 
             {/* Dialogs */}
