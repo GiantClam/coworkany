@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import type { MastraModelOutput } from '@mastra/core/stream';
 import { supervisor } from '../mastra/agents/supervisor';
+import { listMcpToolsetsSafe } from '../mastra/mcp/clients';
+import { createTaskRequestContext } from '../mastra/requestContext';
 import {
     extractMastraTokenUsageEvent,
     mapMastraChunkToDesktopEvent,
@@ -11,8 +13,11 @@ type SendToDesktop = (event: DesktopEvent) => void;
 type RunContext = {
     threadId: string;
     resourceId: string;
+    taskId: string;
+    workspacePath?: string;
 };
 const runContextById = new Map<string, RunContext>();
+const MAX_CACHED_RUN_CONTEXTS = 256;
 const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-4-5';
 const PROVIDER_KEY_MAP: Record<string, string> = {
     anthropic: 'ANTHROPIC_API_KEY',
@@ -51,13 +56,37 @@ async function forwardStream(stream: MastraModelOutput<unknown>, sendToDesktop: 
         }
     }
 }
+
+function cacheRunContext(runId: string, context: RunContext): void {
+    runContextById.set(runId, context);
+    if (runContextById.size <= MAX_CACHED_RUN_CONTEXTS) {
+        return;
+    }
+    const oldestRunId = runContextById.keys().next().value;
+    if (typeof oldestRunId === 'string') {
+        runContextById.delete(oldestRunId);
+    }
+}
+
+function sendWithRunContextCleanup(runId: string, sendToDesktop: SendToDesktop): SendToDesktop {
+    return (event) => {
+        sendToDesktop(event);
+        if (event.runId === runId && (event.type === 'complete' || event.type === 'error')) {
+            runContextById.delete(runId);
+        }
+    };
+}
 export async function handleUserMessage(
     message: string,
     threadId: string,
     resourceId: string,
     sendToDesktop: SendToDesktop,
     options?: {
+        taskId?: string;
+        workspacePath?: string;
         requireToolApproval?: boolean;
+        autoResumeSuspendedTools?: boolean;
+        toolCallConcurrency?: number;
         maxSteps?: number;
     },
 ): Promise<{ runId: string }> {
@@ -72,18 +101,36 @@ export async function handleUserMessage(
         });
         return { runId };
     }
+    const taskId = options?.taskId ?? threadId;
+    const requestContext = createTaskRequestContext({
+        threadId,
+        resourceId,
+        taskId,
+        workspacePath: options?.workspacePath,
+    });
+    const dynamicToolsets = await listMcpToolsetsSafe();
     const stream = await supervisor.stream(message, {
         memory: {
             thread: threadId,
             resource: resourceId,
         },
+        requestContext,
+        toolsets: Object.keys(dynamicToolsets).length > 0 ? dynamicToolsets : undefined,
         requireToolApproval: options?.requireToolApproval ?? true,
+        autoResumeSuspendedTools: options?.autoResumeSuspendedTools ?? true,
+        toolCallConcurrency: options?.toolCallConcurrency ?? 1,
         maxSteps: options?.maxSteps ?? 16,
     });
-    runContextById.set(stream.runId, { threadId, resourceId });
+    cacheRunContext(stream.runId, {
+        threadId,
+        resourceId,
+        taskId,
+        workspacePath: options?.workspacePath,
+    });
     try {
-        await forwardStream(stream, sendToDesktop);
+        await forwardStream(stream, sendWithRunContextCleanup(stream.runId, sendToDesktop));
     } catch (error) {
+        runContextById.delete(stream.runId);
         sendToDesktop({
             type: 'error',
             runId: stream.runId,
@@ -102,6 +149,14 @@ export async function handleApprovalResponse(
     const baseOptions = {
         runId,
         toolCallId,
+        requestContext: runContext
+            ? createTaskRequestContext({
+                threadId: runContext.threadId,
+                resourceId: runContext.resourceId,
+                taskId: runContext.taskId,
+                workspacePath: runContext.workspacePath,
+            })
+            : undefined,
         memory: runContext
             ? {
                 thread: runContext.threadId,
@@ -113,8 +168,9 @@ export async function handleApprovalResponse(
         ? await supervisor.approveToolCall(baseOptions)
         : await supervisor.declineToolCall(baseOptions);
     try {
-        await forwardStream(stream, sendToDesktop);
+        await forwardStream(stream, sendWithRunContextCleanup(runId, sendToDesktop));
     } catch (error) {
+        runContextById.delete(runId);
         sendToDesktop({
             type: 'error',
             runId,

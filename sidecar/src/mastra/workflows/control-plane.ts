@@ -5,6 +5,10 @@ import { buildExecutionProfile } from './steps/assess-risk';
 import { runResearchLoop } from './steps/research-loop';
 import { freezeContract } from './steps/freeze-contract';
 import { executeFrozenTask } from './steps/execute-task';
+
+const CONTROL_PLANE_RETRY_ATTEMPTS = 2;
+const CONTROL_PLANE_RETRY_DELAY_MS = 400;
+
 const analyzeIntentStep = createStep({
     id: 'analyze-intent',
     description: 'Analyze user intent and normalize into work request.',
@@ -19,6 +23,7 @@ const analyzeIntentStep = createStep({
         hardness: z.string(),
         requiredCapabilities: z.array(z.string()),
     }),
+    retries: 1,
     execute: async ({ inputData }) => {
         return analyzeWorkRequest(inputData);
     },
@@ -50,6 +55,7 @@ const researchStep = createStep({
         answers: z.record(z.string(), z.string()).optional(),
     }),
     outputSchema: z.any(),
+    retries: 1,
     execute: async ({ inputData, resumeData, suspend }) => {
         const userActions = inputData.userActions as Array<{ questions: string[]; blocking: boolean }> | undefined;
         const hasBlockingAction = Boolean(userActions && userActions.some((action) => action.blocking));
@@ -105,7 +111,13 @@ const executeTaskStep = createStep({
         result: z.string(),
         completed: z.boolean(),
     }),
-    execute: async ({ inputData, resumeData, suspend, mastra }) => {
+    execute: async ({ inputData, resumeData, suspend, mastra, bail }) => {
+        if (typeof inputData.executionQuery !== 'string' || inputData.executionQuery.trim().length === 0) {
+            return bail({
+                result: 'Execution query is empty after contract freeze; workflow stopped safely.',
+                completed: false,
+            });
+        }
         const requiresCheckpointApproval = (inputData.checkpoints as Array<{ requiresUserConfirmation?: boolean }> | undefined)
             ?.some((checkpoint) => checkpoint.requiresUserConfirmation === true);
         if (requiresCheckpointApproval && resumeData?.approved !== true) {
@@ -124,6 +136,7 @@ const executeTaskStep = createStep({
                 executionQuery: inputData.executionQuery,
             },
             approved: resumeData?.approved,
+            workspacePath: typeof inputData.workspacePath === 'string' ? inputData.workspacePath : undefined,
         });
         return executed;
     },
@@ -139,6 +152,26 @@ export const controlPlaneWorkflow = createWorkflow({
         result: z.string(),
         completed: z.boolean(),
     }),
+    retryConfig: {
+        attempts: CONTROL_PLANE_RETRY_ATTEMPTS,
+        delay: CONTROL_PLANE_RETRY_DELAY_MS,
+    },
+    options: {
+        onFinish: ({ workflowId, runId, result }) => {
+            console.info('[Mastra control-plane] finish', {
+                workflowId,
+                runId,
+                status: result.status,
+            });
+        },
+        onError: ({ workflowId, runId, error }) => {
+            console.error('[Mastra control-plane] error', {
+                workflowId,
+                runId,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        },
+    },
 })
     .then(analyzeIntentStep)
     .then(assessRiskStep)

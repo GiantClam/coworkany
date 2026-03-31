@@ -1,6 +1,14 @@
 import { randomUUID } from 'crypto';
 import type { DesktopEvent } from '../ipc/bridge';
 type OutgoingMessage = Record<string, unknown>;
+type UserMessageExecutionOptions = {
+    taskId?: string;
+    workspacePath?: string;
+    requireToolApproval?: boolean;
+    autoResumeSuspendedTools?: boolean;
+    toolCallConcurrency?: number;
+    maxSteps?: number;
+};
 type ProtocolCommand = {
     id?: string;
     commandId?: string;
@@ -13,6 +21,7 @@ type UserMessageHandler = (
     threadId: string,
     resourceId: string,
     sendToDesktop: (event: DesktopEvent) => void,
+    options?: UserMessageExecutionOptions,
 ) => Promise<{ runId: string }>;
 type ApprovalHandler = (
     runId: string,
@@ -198,6 +207,28 @@ function pickResourceOverride(payload: Record<string, unknown>): string | null {
     }
     const config = toRecord(payload.config);
     return getString(config.resourceId) ?? getString(config.memoryResourceId);
+}
+
+function pickBooleanConfigValue(config: Record<string, unknown>, key: string): boolean | undefined {
+    const value = config[key];
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+function pickPositiveIntegerConfigValue(
+    config: Record<string, unknown>,
+    key: string,
+    min: number,
+    max: number,
+): number | undefined {
+    const value = config[key];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return undefined;
+    }
+    const normalized = Math.floor(value);
+    if (normalized < min || normalized > max) {
+        return undefined;
+    }
+    return normalized;
 }
 function buildResponse(
     commandId: string,
@@ -686,6 +717,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 message: string;
                 resourceId: string;
                 preferredThreadId: string;
+                workspacePath?: string;
+                executionOptions?: UserMessageExecutionOptions;
             }): Promise<void> => {
                 const executeAttempt = async (threadId: string): Promise<DesktopEvent[]> => {
                     const events: DesktopEvent[] = [];
@@ -694,6 +727,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         threadId,
                         input.resourceId,
                         (event) => events.push(event),
+                        {
+                            ...input.executionOptions,
+                            taskId: input.taskId,
+                            workspacePath: input.workspacePath,
+                        },
                     );
                     return events;
                 };
@@ -854,6 +892,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     return;
                 }
                 const workspacePath = getString(toRecord(payload.context).workspacePath) ?? process.cwd();
+                const commandConfig = toRecord(payload.config);
+                const executionOptions: UserMessageExecutionOptions = {
+                    requireToolApproval: pickBooleanConfigValue(commandConfig, 'requireToolApproval'),
+                    autoResumeSuspendedTools: pickBooleanConfigValue(commandConfig, 'autoResumeSuspendedTools'),
+                    toolCallConcurrency: pickPositiveIntegerConfigValue(commandConfig, 'toolCallConcurrency', 1, 32),
+                    maxSteps: pickPositiveIntegerConfigValue(commandConfig, 'maxSteps', 1, 128),
+                };
                 const previousState = taskStates.get(taskId);
                 const resourceId = resolveTaskResourceId(taskId, payload, previousState?.resourceId);
                 if (
@@ -962,6 +1007,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     message,
                     resourceId,
                     preferredThreadId: state.conversationThreadId,
+                    workspacePath: state.workspacePath,
+                    executionOptions,
                 });
                 return;
             }
@@ -987,6 +1034,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     state.conversationThreadId,
                     state.resourceId,
                     (event) => emitDesktopEvent(taskId, event, emit),
+                    {
+                        taskId,
+                        workspacePath: state.workspacePath,
+                    },
                 );
                 return;
             }

@@ -1,5 +1,9 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
+
+const SCHEDULED_RETRY_ATTEMPTS = 2;
+const SCHEDULED_RETRY_DELAY_MS = 250;
+
 const loadCheckpointStep = createStep({
     id: 'load-checkpoint',
     inputSchema: z.object({
@@ -11,6 +15,7 @@ const loadCheckpointStep = createStep({
         stage: z.number().int().nonnegative(),
         checkpointLoaded: z.boolean(),
     }),
+    retries: 1,
     execute: async ({ inputData }) => {
         return {
             scheduleId: inputData.scheduleId,
@@ -27,6 +32,7 @@ const executeStageStep = createStep({
         stage: z.number().int().nonnegative(),
         done: z.boolean(),
     }),
+    retries: 1,
     execute: async ({ inputData }) => {
         return {
             scheduleId: inputData.scheduleId,
@@ -62,6 +68,19 @@ export const scheduledTaskWorkflow = createWorkflow({
         completed: z.boolean(),
         nextStage: z.number().int().nonnegative(),
     }),
+    retryConfig: {
+        attempts: SCHEDULED_RETRY_ATTEMPTS,
+        delay: SCHEDULED_RETRY_DELAY_MS,
+    },
+    options: {
+        onError: ({ workflowId, runId, error }) => {
+            console.error('[Mastra scheduled-task] error', {
+                workflowId,
+                runId,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        },
+    },
 })
     .then(loadCheckpointStep)
     .then(executeStageStep)

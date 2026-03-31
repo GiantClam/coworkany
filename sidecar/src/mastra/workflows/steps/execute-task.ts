@@ -3,6 +3,7 @@ import type {
     ExecutionPlan,
     FrozenWorkRequest,
 } from '../../../orchestration/workRequestSchema';
+import { createTaskRequestContext } from '../../requestContext';
 export interface ExecuteTaskInput {
     frozen: FrozenWorkRequest;
     executionPlan: ExecutionPlan;
@@ -16,6 +17,7 @@ export async function executeFrozenTask(input: {
     coworker: Agent;
     task: ExecuteTaskInput;
     approved?: boolean;
+    workspacePath?: string;
 }): Promise<ExecuteTaskOutput> {
     const checkpoint = input.task.executionPlan.steps.find((step) => step.kind === 'execution');
     if (checkpoint && input.approved === false) {
@@ -24,12 +26,23 @@ export async function executeFrozenTask(input: {
             completed: false,
         };
     }
+    const threadId = `control-plane-${input.task.frozen.id}`;
+    const resourceId = 'org-coworkany';
+    const requestContext = createTaskRequestContext({
+        threadId,
+        resourceId,
+        taskId: input.task.frozen.id,
+        workspacePath: input.workspacePath,
+    });
     const output = await input.coworker.generate(input.task.executionQuery, {
         memory: {
-            thread: `control-plane-${input.task.frozen.id}`,
-            resource: 'org-coworkany',
+            thread: threadId,
+            resource: resourceId,
         },
+        requestContext,
         requireToolApproval: true,
+        autoResumeSuspendedTools: true,
+        toolCallConcurrency: 1,
         maxSteps: 8,
     });
     return {

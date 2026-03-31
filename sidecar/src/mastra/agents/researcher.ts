@@ -14,4 +14,10 @@ export const researcher = new Agent({
     tools: {
         bash: bashTool,
     },
+    defaultOptions: {
+        requireToolApproval: true,
+        autoResumeSuspendedTools: true,
+        toolCallConcurrency: 1,
+        maxSteps: 14,
+    },
 });

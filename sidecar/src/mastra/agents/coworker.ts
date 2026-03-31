@@ -28,4 +28,10 @@ export const coworker = new Agent({
             ...mcpTools,
         };
     },
+    defaultOptions: {
+        requireToolApproval: true,
+        autoResumeSuspendedTools: true,
+        toolCallConcurrency: 1,
+        maxSteps: 16,
+    },
 });

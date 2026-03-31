@@ -21,6 +21,30 @@ export async function listMcpToolsSafe(): Promise<Record<string, Tool<unknown, u
         return {};
     }
 }
+
+export async function listMcpToolsetsSafe(): Promise<Record<string, Record<string, Tool<unknown, unknown, unknown, unknown>>>> {
+    if (!MCP_ENABLED) {
+        return {};
+    }
+    try {
+        return await mcp.listToolsets();
+    } catch (error) {
+        console.warn('[Mastra MCP] listToolsets failed, falling back to empty toolsets:', error);
+        return {};
+    }
+}
+
+export async function disconnectMcpSafe(): Promise<void> {
+    if (!MCP_ENABLED) {
+        return;
+    }
+    try {
+        await mcp.disconnect();
+    } catch (error) {
+        console.warn('[Mastra MCP] disconnect failed:', error);
+    }
+}
+
 export function isMcpEnabled(): boolean {
     return MCP_ENABLED;
 }

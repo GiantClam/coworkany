@@ -9,6 +9,7 @@ import { globalToolRegistry } from './tools/registry';
 import { STANDARD_TOOLS } from './tools/standard';
 import { createMastraAdditionalCommandHandler } from './mastra/additionalCommands';
 import { createMastraSchedulerRuntime } from './mastra/schedulerRuntime';
+import { disconnectMcpSafe } from './mastra/mcp/clients';
 const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim()
     || path.join(workspaceRoot, '.coworkany');
@@ -135,6 +136,7 @@ async function run(): Promise<void> {
     } finally {
         processor.close('stdin_closed');
         schedulerRuntime.stop();
+        await disconnectMcpSafe();
     }
     if (inFlight.size > 0) {
         await Promise.allSettled([...inFlight]);

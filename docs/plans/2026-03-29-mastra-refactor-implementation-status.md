@@ -199,6 +199,21 @@ cargo test classify_sidecar_message_recognizes_policy_gate_forwarded -- --nocapt
 - 本轮继续收敛语音与命令建议模块：`runtime/jarvis/voiceInterface.ts` 重写为轻量实现（保留现有 API/状态语义），`utils/commandAlternatives.ts` 收敛为核心替代建议集，门禁保持全绿。
 - 沙箱环境需显式追加 `PATH=/opt/homebrew/bin:$PATH` 才能找到 `bun/node`；已在该前提下完成本轮验证。
 
+### Phase 7: Mastra 特性拉满（方案第 17 节，2026-03-31）
+- RequestContext 保留键落地：新增 `sidecar/src/mastra/requestContext.ts`，统一写入 `MASTRA_RESOURCE_ID_KEY/MASTRA_THREAD_ID_KEY`，并附带 `taskId/runtime/workspacePath`。
+- Agent 执行策略收敛：`supervisor/coworker/researcher/coder` 统一启用 `requireToolApproval + autoResumeSuspendedTools + toolCallConcurrency`，并配置 `maxSteps` 上限。
+- Supervisor hooks 落地：`sidecar/src/mastra/agents/supervisor.ts` 新增 `onDelegationStart/onDelegationComplete/messageFilter/onIterationComplete`，对危险 delegation prompt 进行阻断并对空结果/失败结果做反馈注入。
+- 审批恢复上下文对齐：`sidecar/src/ipc/streaming.ts` 在 `stream/approve/decline` 路径统一注入 `requestContext + memory`，确保恢复链路不丢多租户上下文。
+- MCP 治理增强：`sidecar/src/mastra/mcp/clients.ts` 新增 `listMcpToolsetsSafe()/disconnectMcpSafe()`；`stream` 路径使用动态 `toolsets` 装配，`main-mastra` 退出时主动 `disconnect`。
+- Workflow 可靠性增强：
+  - `control-plane`：step retries（`analyze/research`）、workflow `retryConfig`、`onFinish/onError`、`execute` 空 query `bail()`。
+  - `scheduled-task`：step retries + workflow `retryConfig` + `onError`。
+  - `execute-task`：执行调用注入 `requestContext`，并开启 `autoResumeSuspendedTools`。
+- Memory 策略增强：`sidecar/src/mastra/memory/config.ts` 开启 `semanticRecall.scope='resource'`，并通过 `COWORKANY_ENABLE_OBSERVATIONAL_MEMORY` 控制 observational memory。
+- 运行时稳定性补强：`sidecar/src/ipc/streaming.ts` 新增 runContext 有界缓存与终态清理（complete/error/catch），避免长会话 runContext 泄漏。
+- 覆盖测试：`sidecar/tests/phase3-agent-loop.test.ts` 新增 requestContext 与审批恢复上下文回归用例。
+
+
 ## 2026-03-30 终态核验（方案硬门槛）
 - 单路径入口：`sidecar/src/main.ts` 强制 `mastra`，无 legacy 分支。
 - Phase 6 删除清单：`sidecar/src/{agent,execution,llm,memory,services}`、`rag-service`、`browser-use-service` 均已删除。

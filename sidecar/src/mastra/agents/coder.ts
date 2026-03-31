@@ -15,4 +15,10 @@ export const coder = new Agent({
         bash: bashTool,
         bash_approval: bashApprovalTool,
     },
+    defaultOptions: {
+        requireToolApproval: true,
+        autoResumeSuspendedTools: true,
+        toolCallConcurrency: 1,
+        maxSteps: 20,
+    },
 });
