@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import styles from '../SetupWizard.module.css';
+import { mapValidationErrorToUserMessage } from '../../../lib/llmValidationErrors';
 import {
     buildSetupValidationInput,
     getSetupProviderPreset,
@@ -45,7 +46,11 @@ export function ApiKeyStep({ onConfigured, onValidated }: ApiKeyStepProps) {
         let handedOff = false;
 
         try {
-            const input = buildSetupValidationInput(provider, apiKey.trim());
+            const input = buildSetupValidationInput(provider, apiKey.trim(), {
+                enabled: proxyEnabled,
+                url: proxyEnabled ? (proxyUrl.trim() || DEFAULT_PROXY_URL) : undefined,
+                bypass: proxyEnabled ? (proxyBypass.trim() || undefined) : undefined,
+            });
 
             const result = await invoke<{ success: boolean; payload?: { error?: string } }>(
                 'validate_llm_settings',
@@ -71,12 +76,23 @@ export function ApiKeyStep({ onConfigured, onValidated }: ApiKeyStepProps) {
                     setIsApplying(false);
                 });
             } else {
-                setValidationResult({ ok: false, msg: result.payload?.error || t('setup.verificationFailed') });
+                setValidationResult({
+                    ok: false,
+                    msg: mapValidationErrorToUserMessage({
+                        provider,
+                        rawError: result.payload?.error || t('setup.verificationFailed'),
+                        t,
+                    }),
+                });
             }
         } catch (err) {
             setValidationResult({
                 ok: false,
-                msg: err instanceof Error ? err.message : t('setup.connectionError'),
+                msg: mapValidationErrorToUserMessage({
+                    provider,
+                    rawError: err instanceof Error ? err.message : t('setup.connectionError'),
+                    t,
+                }),
             });
         } finally {
             if (!handedOff) {

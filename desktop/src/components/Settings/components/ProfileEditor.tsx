@@ -26,7 +26,7 @@ const FIXED_BASE_URLS: Record<string, string> = {
     siliconflow: 'https://api.siliconflow.cn/v1',
     gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
     qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    minimax: 'https://api.minimax.chat/v1',
+    minimax: 'https://api.minimaxi.com/v1',
     kimi: 'https://api.moonshot.cn/v1',
     ollama: 'http://localhost:11434/v1',
 };
@@ -40,7 +40,7 @@ const DEFAULT_MODELS: Record<string, string> = {
     siliconflow: 'Qwen/Qwen2.5-7B-Instruct',
     gemini: 'gemini-2.0-flash',
     qwen: 'qwen-plus',
-    minimax: 'MiniMax-Text-01',
+    minimax: 'MiniMax-M2.7',
     kimi: 'moonshot-v1-8k',
     ollama: 'llama3',
 };

@@ -3444,6 +3444,395 @@ const marketResearch = createWorkflow({
   - `../claude-code/src/utils/{permissions,tasks,cronTasksLock,sessionStorage}.ts`
   - `../claude-code/src/memdir/*`
 
+### 18.8 已落地进展（2026-04-01）
+
+#### Batch 1（已完成）
+1. **会话持久化与跨重启恢复（Phase A）**
+   - `taskStates` 已迁移为文件持久化（`mastra-task-runtime-state.json`），并在启动时自动恢复。
+   - 运行中任务在重启后自动降级为 `interrupted`，避免假阳性 `running`。
+2. **调度租约锁（Phase F）**
+   - 调度轮询引入跨进程 lease lock + renew/release 机制，防止多实例重复执行。
+3. **资源隔离修复**
+   - `execute-task` 已移除硬编码 `org-coworkany`，改为 task-scoped `resourceId`。
+
+#### Batch 2（已完成）
+1. **三层上下文压缩（Phase E）**
+   - 新增上下文压缩存储（`mastra-context-state.json`）：
+     - Layer 1: micro context（最近轮次压缩）
+     - Layer 2: structured summary（目标/约束/进展）
+     - Layer 3: 文件记忆沉淀（`workspace/.coworkany/MEMORY.md`）
+   - 压缩上下文已接入 `handleUserMessage` 主链路，作为运行前置上下文。
+2. **技能加载启用（Phase C 的执行链补强）**
+   - 新增 `skill prompt` 组装器：显式启用技能 + trigger 命中技能合并注入执行前提示。
+   - `entrypoint -> streaming` 已支持 `enabledSkills` 与 `skillPrompt` 透传。
+3. **稳定工具调用补强**
+   - 流启动与审批恢复引入 transient 错误重试（timeout/network/429 等）。
+
+#### Batch 3（已完成）
+1. **统一策略判定中台（Phase B）**
+   - 新增 `PolicyEngine`，将 `task_command / forward_command / approval_result` 统一接入判定。
+   - 透传命令可按配置拒绝（`COWORKANY_POLICY_DENY_FORWARD_COMMANDS`），拒绝统一返回 `policy_denied:*`。
+2. **审批决策审计轨迹（Phase B）**
+   - 新增持久化 `DecisionLog`（`mastra-policy-decisions.json`），记录 `requestId/source/action/reason/ruleId/result`。
+   - 支持运行时查询命令：`get_policy_decision_log`。
+3. **Hook Runtime 首批事件（Phase B）**
+   - 新增持久化 Hook 事件流（`mastra-hook-events.json`）。
+   - 已接入事件：`SessionStart / TaskCreated / PermissionRequest / PreToolUse / PostToolUse / TaskCompleted / TaskFailed / TaskRewound`。
+   - 支持运行时查询命令：`get_hook_events`。
+
+#### Batch 4（已完成，迁移复用优先）
+1. **调度租约锁迁移复用（Phase F）**
+   - 已将 `claude-code/src/utils/cronTasksLock.ts` 的核心模式迁入 CoworkAny：
+     - `O_EXCL` 原子创建
+     - `pid` 存活探测
+     - stale lock 恢复（过期/死进程/损坏锁文件）
+   - 落地文件：`sidecar/src/mastra/schedulerLeaseLock.ts`（替换原简化版仅 TTL 逻辑）。
+2. **迁移复用回归用例**
+   - 新增 `tests/mastra-scheduler-lease-lock.test.ts` 覆盖：
+     - 单活 owner
+     - 死进程 stale lock 恢复
+     - 同 owner 重获锁刷新 `pid/expiresAt`
+   - 已纳入 `test:mastra:phases` 与 release gate。
+
+#### Batch 5（已完成，迁移复用优先）
+1. **Hook 事件总线迁移复用（Phase B）**
+   - 迁移 `claude-code/src/utils/hooks/hookEvents.ts` 的核心机制：
+     - handler 注册
+     - pending 事件缓冲
+     - always-emitted 事件白名单 + 全量开关
+   - 落地文件：`sidecar/src/mastra/hookEventBus.ts`，并接入 `MastraHookRuntimeStore.emit`。
+2. **Hook 事件总线回归用例**
+   - 新增 `tests/mastra-hook-event-bus.test.ts` 覆盖：
+     - 先发事件后注册 handler 的缓冲回放
+     - 全量开关关闭时仅白名单事件透出
+
+#### Batch 6（已完成，迁移复用优先）
+1. **Plugin 依赖解析迁移复用（Phase C）**
+   - 迁移 `claude-code` 插件依赖解析思路，落地 `sidecar/src/mastra/pluginDependencyResolver.ts`：
+     - `verifyAndDemotePlugins`（依赖未满足时自动识别降级集合）
+     - `findReverseDependents`（反向依赖查询）
+   - 接入主流程：
+     - `import_claude_skill`：导入时依赖校验，支持本地依赖自动安装（`autoInstallDependencies`）
+     - `set_claude_skill_enabled`：启用时检查依赖满足；禁用时保护被依赖技能
+     - `skillPrompt`：过滤依赖不满足技能，避免脏技能注入提示词
+2. **Plugin Policy 接入主流程（Phase B/C）**
+   - 新增 `sidecar/src/mastra/pluginPolicy.ts`，统一读取：
+     - `.coworkany/extension-allowlist.json`
+     - `.coworkany/policy-settings.json`（`blockedSkillIds/blockedToolpackIds`）
+     - 环境变量覆盖（`COWORKANY_POLICY_BLOCKED_SKILLS / COWORKANY_POLICY_BLOCKED_TOOLPACKS`）
+   - 接入能力命令：
+     - `install_toolpack / set_toolpack_enabled` 策略拦截
+     - `import_claude_skill / set_claude_skill_enabled` 策略拦截
+   - 接入提示词解析：
+     - `main-mastra -> skillPrompt` 仅注入 policy 允许技能
+3. **回归与验收补齐**
+   - 新增测试：
+     - `tests/mastra-plugin-policy.test.ts`
+     - `tests/mastra-plugin-dependency-resolver.test.ts`
+   - 扩展测试：
+     - `tests/mastra-additional-commands.test.ts`（依赖自动安装/缺失失败/反向依赖保护/策略阻断）
+     - `tests/mastra-skill-prompt.test.ts`（policy+dependency 过滤）
+   - 已纳入 `test:mastra:phases` 与 release gate 清单。
+
+#### Batch 7（已完成，迁移复用优先）
+1. **递归依赖安装与循环依赖诊断（Phase C）**
+   - 在 `import_claude_skill` 中将依赖安装从“一层”升级为“递归闭包安装”：
+     - 支持 `A -> B -> C` 的自动安装链路
+     - 复用本地 skills 目录扫描结果，减少重复 I/O
+   - 在 `sidecar/src/mastra/pluginDependencyResolver.ts` 新增循环依赖检测能力：
+     - `detectDependencyCycles(...)`
+     - 导入时若检测到根技能可达环（例如 `A -> B -> A`），返回 `skill_dependency_cycle`
+2. **策略热更新一致性（Phase B/C）**
+   - 维持命令级策略快照实时读取（文件变更后下一条命令立即生效）。
+   - 新增回归覆盖“导入后修改 policy 文件，再次启用被阻断”的场景，验证跨命令一致性。
+3. **回归覆盖补强**
+   - 扩展 `tests/mastra-additional-commands.test.ts`：
+     - 递归依赖自动安装
+     - 依赖环路阻断
+     - 策略热更新即时生效
+   - 扩展 `tests/mastra-plugin-dependency-resolver.test.ts`：
+     - 根技能可达循环依赖检测
+
+#### Batch 8（已完成，迁移复用优先）
+1. **启用路径环路防护前移（Phase C）**
+   - `set_claude_skill_enabled` 在启用前新增循环依赖检测：
+     - 若检测到目标技能可达依赖环，直接返回 `skill_dependency_cycle`
+     - 避免历史脏数据或手工写入状态下环路技能被再次启用
+2. **Skill Prompt 环路过滤（Phase C）**
+   - `skillPrompt` 组装时新增环路节点过滤：
+     - 已启用但存在依赖环的技能不会注入系统提示词
+3. **回归覆盖补强**
+   - 扩展 `tests/mastra-additional-commands.test.ts`：
+     - 既有技能注册中存在环路时，启用被阻断
+   - 扩展 `tests/mastra-skill-prompt.test.ts`：
+     - 环路技能不进入 `enabledSkillIds` / prompt
+
+#### Batch 9（已完成，关键缺口收口）
+1. **Hook 补齐 `PreCompact/PostCompact`（Phase B）**
+   - 事件类型扩展到 `PreCompact / PostCompact`，并接入主流程：
+     - `entrypoint -> streaming` 通过 `onPreCompact/onPostCompact` 回调透传
+     - `missing_api_key` 预检失败路径也会触发 `PostCompact`，避免事件断档
+2. **memdir 二层记忆最小落地（Phase E）**
+   - `contextCompression` 增加 topic files + index 召回：
+     - 写入：`workspace/.coworkany/memory/*.md`
+     - 索引：`workspace/.coworkany/MEMORY.md` 单行链接入口
+     - 召回：按查询 token overlap 从 index 反查 topic files，注入 preamble 的 `Relevant file memories`
+3. **MCP 生命周期治理最小落地（Phase D）**
+   - 新增 `McpConnectionManager`：
+     - 连接缓存 + TTL 缓存
+     - 失败自动重连（最小间隔）
+     - 动态工具集刷新（`listToolsetsSafe` 主链路）
+   - 新增运行时查询命令：`get_mcp_connection_status`
+4. **回归与发布门禁补齐**
+   - 新增单测：`tests/mastra-mcp-connection-manager.test.ts`
+   - 扩展 E2E：
+     - `tests/mastra-policy-hooks.e2e.test.ts`（断言 `PreCompact/PostCompact`）
+     - `tests/mastra-context-compression.e2e.test.ts`（断言 topic memory 文件与 index 链接）
+     - `tests/additional-commands-full-chain.e2e.test.ts`（断言 `get_mcp_connection_status` 全链路）
+   - 已纳入 `test:mastra:phases` 与 release gate 列表
+
+#### Batch 10（已完成，Phase D 继续收口）
+1. **MCP scope 治理与审批命令（Phase D）**
+   - 新增 `sidecar/src/mastra/mcp/security.ts`：
+     - `managed/project/user` 三类 scope
+     - `user` scope 必须审批后放行
+   - `clients.ts` 接入 policy 快照签名与热刷新：
+     - policy 变更触发 `forceReconnect`
+     - toolsets 按 allowed server 过滤后注入主流程
+2. **新增 MCP 控制面命令**
+   - `list_mcp_servers`
+   - `upsert_mcp_server`
+   - `set_mcp_server_enabled`
+   - `set_mcp_server_approval`
+   - `refresh_mcp_connections`
+   - `get_mcp_connection_status` 响应扩展 `security` 字段
+3. **回归覆盖补齐**
+   - 新增：`tests/mastra-mcp-security.test.ts`
+   - 扩展：
+     - `tests/mastra-additional-commands.test.ts`
+     - `tests/additional-commands-full-chain.e2e.test.ts`
+   - 已纳入 `test:mastra:phases` 与 release gate 列表
+
+#### Batch 11（已完成，外部事件注入闭环首版）
+1. **Remote session 绑定（Phase D）**
+   - 新增命令：`bind_remote_session`
+   - 支持 `taskId <-> remoteSessionId` 绑定，并写入 transcript + hook（`RemoteSessionLinked`）
+2. **Channel 事件注入（Phase D）**
+   - 新增命令：`inject_channel_event`
+   - 支持通过 `taskId` 或 `remoteSessionId` 注入外部事件到任务主流程：
+     - 写入 `TASK_EVENT(type=channel_event)`
+     - 写入 transcript
+     - 写入 hook（`ChannelEventInjected`）
+3. **回归覆盖补齐**
+   - 扩展单测：`tests/mastra-entrypoint.test.ts`
+   - 扩展 E2E：`tests/additional-commands-full-chain.e2e.test.ts`
+   - 已纳入 `test:mastra:phases`。
+
+#### Batch 12（已完成，Phase D 远程会话持久化）
+1. **Remote session 持久化存储（Phase D）**
+   - 新增 `sidecar/src/mastra/remoteSessionStore.ts`：
+     - `list/get/upsertLink/heartbeat/close` 生命周期接口
+     - 原子写入与重启恢复
+     - active session 冲突保护（同 `remoteSessionId` 不允许跨 task 绑定）
+2. **主流程接入远程会话生命周期命令**
+   - `entrypoint` 新增命令：
+     - `list_remote_sessions`
+     - `open_remote_session`
+     - `heartbeat_remote_session`
+     - `close_remote_session`
+   - `bind_remote_session/inject_channel_event` 升级为持久化后端，支持重启后映射恢复
+   - Hook 事件面补齐：
+     - `RemoteSessionLinked`
+     - `ChannelEventInjected`
+3. **回归覆盖补齐**
+   - 新增：`tests/mastra-remote-session-store.test.ts`
+   - 扩展：`tests/mastra-entrypoint.test.ts`
+   - 扩展：`tests/mastra-task-state-persistence.e2e.test.ts`
+   - 扩展：`tests/additional-commands-full-chain.e2e.test.ts`
+
+#### Batch 13（已完成，Phase F 状态机框架化首版）
+1. **Task runtime 状态模型升级（Phase F）**
+   - `taskRuntimeState` 新增：
+     - `status: retrying`
+     - `checkpoint`（`id/label/at/metadata`）
+     - `retry`（`attempts/maxAttempts/lastRetryAt/lastError`）
+   - 重启恢复规则扩展：`running/retrying -> interrupted`
+2. **主流程状态机命令与流转接入**
+   - `entrypoint` 新增命令：
+     - `set_task_checkpoint`
+     - `retry_task`
+     - `get_task_runtime_state`
+   - 运行事件接入 checkpoint/retry 流转：
+     - `approval_required/suspended` -> 写入 checkpoint
+     - `complete` -> 清理 checkpoint，清空 retry.lastError
+     - `error/tripwire` -> 写入 retry.lastError
+   - `start_task/send_task_message` 支持 `config.maxRetries`，写入 retry 上限策略
+3. **端到端与单测验收**
+   - 扩展单测：`tests/mastra-entrypoint.test.ts`
+   - 扩展 E2E：
+     - `tests/mastra-task-state-persistence.e2e.test.ts`
+     - `tests/additional-commands-full-chain.e2e.test.ts`
+
+#### Batch 14（已完成，Phase F 故障注入覆盖扩展）
+1. **调度器故障注入点（测试/诊断）**
+   - `createMastraSchedulerRuntime` 新增 `injectFault` 依赖注入回调
+   - 支持注入阶段：
+     - `before_run`
+     - `after_running_marked`
+     - `before_complete`
+2. **故障注入回归用例**
+   - 扩展 `tests/mastra-scheduler-runtime.test.ts`：
+     - 注入 `before_complete` 故障后，任务状态正确落为 `failed`
+     - 不遗留 `running` 脏状态
+3. **门禁覆盖**
+   - 该用例已纳入 `test:mastra:phases` 主门禁。
+
+#### Batch 15（已完成，Phase D/F 关键缺口继续收口）
+1. **远程续连与投递保证增强（Phase D）**
+   - `channel delivery` 新增显式 `eventId` 幂等注入能力，重复注入不重复投递。
+   - delivery 事件新增投递指标：
+     - `deliveryAttempts`
+     - `lastDeliveredAt`
+   - 新增命令：`sync_remote_session`
+     - 远程会话续连（upsert + heartbeat）
+     - pending delivery 自动重放（`action: replayed_on_sync`）
+     - 可选 `ackReplayed`，重放后自动确认投递
+   - `replay_channel_delivery_events` 增强：
+     - 支持 `ackOnReplay`
+     - 重放时更新 delivery attempts
+2. **自动恢复编排（Phase F）**
+   - 新增命令：`recover_tasks`
+     - 支持 `mode: auto/resume/retry`
+     - 支持 `dryRun` 预演恢复计划
+   - 自动恢复策略：
+     - `failed/retrying` 优先 retry（受 `maxRetries` 上限约束）
+     - `interrupted/suspended` 走 resume
+     - `approval_required` 挂起任务跳过并给出 `awaiting_manual_approval`
+3. **回归与持久化验收补齐**
+   - 扩展单测：
+     - `tests/mastra-remote-session-store.test.ts`
+     - `tests/mastra-entrypoint.test.ts`
+   - 扩展 E2E：
+     - `tests/mastra-task-state-persistence.e2e.test.ts`
+     - `tests/additional-commands-full-chain.e2e.test.ts`
+   - 覆盖续连重放、重放后 ack、幂等注入、批量恢复 dry-run 等场景。
+
+#### Batch 16（已完成，Phase C marketplace 命令补齐）
+1. **恢复 `install_from_github`（Phase C）**
+   - 引入 `githubDownloader`（迁移复用）并接入 capability 主链：
+     - 支持 `skill` 安装（下载后自动走 `importSkillFromDirectory`）
+     - 支持 `mcp` 安装（下载后解析 `mcp.json` 并注册到 `ToolpackStore`）
+   - 支持本地 source（目录 / `file://`）路径，便于离线和测试场景。
+2. **恢复 marketplace 基础命令（Phase C）**
+   - `scan_default_repos`：不再返回 `unsupported`，可返回默认源 + 当前已安装能力视图
+   - `validate_github_url`：不再返回 `unsupported`，支持 skill/mcp 基础校验与 preview
+   - 同步补齐 `scan_skills / scan_mcp_servers / validate_skill / validate_mcp` 最小可用响应
+3. **单测 + 全链路验收**
+   - 扩展：
+     - `tests/mastra-additional-commands.test.ts`
+     - `tests/additional-commands-full-chain.e2e.test.ts`
+   - 新增覆盖：
+     - `install_from_github` 本地 source 技能安装全链路
+     - `scan_default_repos` 与 `validate_github_url` 可用性
+
+#### Batch 17（已完成，Phase D/F 企业治理与故障编排继续收口）
+1. **远程会话企业治理策略（Phase D）**
+   - 新增 `remoteSessionGovernance` 策略加载：
+     - 来源：`.coworkany/policy-settings.json` + 环境变量
+     - 参数：`conflictStrategy / staleAfterMs / enforceTenantIsolation / requireTenantIdForManaged / enforceEndpointIsolation`
+   - 主流程接入 `open/bind/sync_remote_session`：
+     - `managed` scope 可强制 tenantId
+     - 支持 `reject / takeover / takeover_if_stale` 冲突仲裁
+     - 响应与 `TASK_EVENT` 增加 `scope/arbitration` 可观测字段
+2. **forwarded command 断链可观测与一致性（Phase F）**
+   - `entrypoint` 增加 policy-gate bridge 统计：
+     - `forwardedRequests / successfulResponses`
+     - `orphanResponses / duplicateResponses`
+     - `timeoutErrors / retries / transportClosedRejects / invalidResponses`
+   - `get_runtime_snapshot` 暴露 `policyGateBridge` 统计，支持运行态审计与回放诊断
+3. **回归与全链路验收补齐**
+   - 新增单测：
+     - `tests/mastra-remote-session-governance.test.ts`
+   - 扩展单测：
+     - `tests/mastra-entrypoint.test.ts`（tenant 治理 + stale takeover + duplicate/orphan response）
+   - 扩展 E2E：
+     - `tests/additional-commands-full-chain.e2e.test.ts`（managed tenant requirement）
+     - `tests/main-mastra-policy-gate.e2e.test.ts`（duplicate/orphan forwarded response 统计）
+
+#### Batch 18（已完成，Phase C/D 企业治理闭环继续收口）
+1. **marketplace 信任治理 + 审计回滚（Phase C）**
+   - 新增 `marketplaceGovernance`：
+     - 信任策略加载（`.coworkany/policy-settings.json` + env）
+     - 来源信任判定（owner/source allow/deny + trust score）
+     - 安装审计日志持久化（`mastra-marketplace-audit-log.json`）
+   - capability 主流程接入：
+     - `install_from_github` 前置 trust gate + 审计记录
+     - 新增命令：
+       - `get_marketplace_trust_policy`
+       - `list_marketplace_audit_log`
+       - `rollback_marketplace_install`
+2. **managed settings 同步/回滚编排（Phase D）**
+   - 新增 `managedSettings`：
+     - `policy-settings.json` / `extension-allowlist.json` 双文件同步与回滚
+     - sync 历史持久化（`mastra-managed-settings-sync-log.json`）
+   - additional commands 主流程接入：
+     - `sync_managed_settings`
+     - `rollback_managed_settings`
+     - `list_managed_settings_sync_log`
+   - MCP 配置回滚补齐“删除恢复”能力：
+     - `McpServerSecurityStore.remove`
+     - `removeMcpServerDefinition`
+3. **回归与全链路验收补齐**
+   - 新增单测：
+     - `tests/mastra-marketplace-governance.test.ts`
+     - `tests/mastra-managed-settings.test.ts`
+   - 扩展单测：
+     - `tests/mastra-additional-commands.test.ts`
+   - 扩展 E2E：
+     - `tests/additional-commands-full-chain.e2e.test.ts`（marketplace trust/audit、managed settings sync/rollback）
+
+#### Batch 19（已完成，Phase D/F 一致性与多租户治理收口）
+1. **长任务恢复一致性增强（Phase F）**
+   - `taskRuntimeState` 增加：
+     - `checkpointVersion`（单调递增 checkpoint 版本）
+     - `operationLog`（按 task 记录恢复操作，支持幂等判定）
+   - `entrypoint` 命令增强：
+     - `set_task_checkpoint / resume_interrupted_task / retry_task / recover_tasks`
+     - 支持 `operationId/idempotencyKey` 幂等键
+     - 支持 `expectedCheckpointVersion` 版本护栏（拒绝 stale 恢复）
+   - `recover_tasks` 增加按任务的恢复操作幂等（重复同 operationId 不重复执行）。
+2. **managed 多租户远程会话治理闭环增强（Phase D）**
+   - `remoteSessionGovernance` 策略新增：
+     - `requireEndpointIdForManaged`
+     - `enforceManagedIdentityImmutable`
+     - `requireTenantIdForManagedCommands`
+   - 主流程治理接入：
+     - `open/bind/sync/heartbeat/close_remote_session`
+     - `inject/list/ack/replay_channel_delivery_events`
+   - 关键能力：
+     - managed 场景可强制 `endpointId` 必填
+     - managed identity（tenant/endpoint）可配置为不可变
+     - managed channel 命令可强制携带且匹配 tenant 上下文
+3. **回归与验收补齐**
+   - 扩展单测：
+     - `tests/mastra-entrypoint.test.ts`（checkpoint 版本护栏、recover 幂等、managed endpoint/identity/tenant command 治理）
+     - `tests/mastra-remote-session-governance.test.ts`（新增策略加载与 env 覆盖）
+   - 扩展/复跑 E2E：
+     - `tests/mastra-task-state-persistence.e2e.test.ts`
+     - `tests/additional-commands-full-chain.e2e.test.ts`
+
+#### 当前验收状态
+- `npm run typecheck` 通过
+- `npm run test:mastra:phases` 通过（`218 pass, 1 skip, 0 fail`，含新增单测与 E2E）
+
+### 18.9 实现审计（2026-04-01）
+
+- 逐条实现审计矩阵见：
+  - `docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 结论摘要：
+  - Batch 1-18 主流程接入已完成；
+  - Phase C/D/F 已进一步增强，剩余重点为 marketplace 签名/来源信誉深度治理与更细粒度故障编排覆盖。
+
 ---
 
 ## 附录 A: 时间线总览

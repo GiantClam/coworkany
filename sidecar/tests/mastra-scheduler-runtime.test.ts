@@ -21,6 +21,10 @@ function createHarness(input?: {
         resourceId: string,
         emit: (event: DesktopEvent) => void,
     ) => Promise<void>;
+    onInjectFault?: (input: {
+        phase: 'before_run' | 'after_running_marked' | 'before_complete';
+        record: Record<string, unknown>;
+    }) => void;
 }) {
     const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-mastra-scheduler-'));
     tempDirs.push(appDataRoot);
@@ -47,6 +51,12 @@ function createHarness(input?: {
                 emittedEvents.push({ taskId, event });
             },
             getNow: () => now,
+            injectFault: input?.onInjectFault
+                ? (fault) => input.onInjectFault?.({
+                    phase: fault.phase,
+                    record: fault.record as unknown as Record<string, unknown>,
+                })
+                : undefined,
         },
     });
 
@@ -264,6 +274,50 @@ describe('mastra scheduler runtime', () => {
         expect(records[0]?.status).toBe('completed');
     });
 
+    test('poll lease prevents duplicate due-task execution across concurrent runtimes', async () => {
+        const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-scheduler-lease-'));
+        tempDirs.push(appDataRoot);
+
+        let now = new Date('2026-03-30T02:00:00.000Z');
+        const handleCalls: Array<{ message: string; threadId: string; resourceId: string }> = [];
+
+        const createRuntime = () => createMastraSchedulerRuntime({
+            appDataRoot,
+            deps: {
+                handleUserMessage: async (message, threadId, resourceId, emit) => {
+                    handleCalls.push({ message, threadId, resourceId });
+                    await new Promise((resolve) => setTimeout(resolve, 80));
+                    emit({ type: 'text_delta', content: `done:${message}` });
+                    emit({ type: 'complete', finishReason: 'stop' });
+                    return { runId: `run-${threadId}` };
+                },
+                resolveResourceIdForTask: (taskId) => `employee-${taskId}`,
+                emitDesktopEventForTask: () => {},
+                getNow: () => now,
+            },
+        });
+
+        const runtimeA = createRuntime();
+        const runtimeB = createRuntime();
+
+        await runtimeA.scheduleIfNeeded({
+            sourceTaskId: 'task-lease',
+            title: 'Lease lock task',
+            message: '1 分钟后整理日报',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        now = new Date('2026-03-30T02:02:00.000Z');
+        await Promise.all([
+            runtimeA.pollDueTasks(now),
+            runtimeB.pollDueTasks(now),
+        ]);
+
+        expect(handleCalls).toHaveLength(1);
+        expect(handleCalls[0]?.threadId).toBe('task-lease');
+    });
+
     test('pollDueTasks recovers stale running tasks and emits failure event', async () => {
         const harness = createHarness({
             now: new Date('2026-03-30T02:30:00.000Z'),
@@ -297,5 +351,32 @@ describe('mastra scheduler runtime', () => {
             (entry) => entry.taskId === 'task-stale' && entry.event.type === 'error',
         );
         expect(failureEvent).toBeDefined();
+    });
+
+    test('fault injection marks running scheduled task as failed without leaving stale running status', async () => {
+        const harness = createHarness({
+            onInjectFault: ({ phase }) => {
+                if (phase === 'before_complete') {
+                    throw new Error('fault_injected_before_complete');
+                }
+            },
+        });
+
+        await harness.runtime.scheduleIfNeeded({
+            sourceTaskId: 'task-fault-injected',
+            title: 'fault injection task',
+            message: '1 分钟后整理日报',
+            workspacePath: '/tmp/ws',
+            config: {},
+        });
+
+        harness.setNow(new Date('2026-03-30T02:02:00.000Z'));
+        await harness.runtime.pollDueTasks(new Date('2026-03-30T02:02:00.000Z'));
+
+        expect(harness.handleCalls).toHaveLength(1);
+        const record = harness.readRecords().find((item) => item.sourceTaskId === 'task-fault-injected');
+        expect(record).toBeDefined();
+        expect(record?.status).toBe('failed');
+        expect(String(record?.error ?? '')).toContain('fault_injected_before_complete');
     });
 });

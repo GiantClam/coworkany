@@ -15,6 +15,7 @@ export type CoworkanyRequestContextValues = {
     taskId: string;
     runtime: 'desktop-sidecar';
     workspacePath?: string;
+    enabledSkills?: string[];
 };
 
 export function createTaskRequestContext(input: {
@@ -22,6 +23,7 @@ export function createTaskRequestContext(input: {
     resourceId: string;
     taskId?: string;
     workspacePath?: string;
+    enabledSkills?: string[];
 }): RequestContext<CoworkanyRequestContextValues> {
     const requestContext = new RequestContext<CoworkanyRequestContextValues>();
     requestContext.set(MASTRA_RESOURCE_ID_KEY, input.resourceId);
@@ -31,6 +33,9 @@ export function createTaskRequestContext(input: {
 
     if (typeof input.workspacePath === 'string' && input.workspacePath.length > 0) {
         requestContext.set('workspacePath', input.workspacePath);
+    }
+    if (Array.isArray(input.enabledSkills) && input.enabledSkills.length > 0) {
+        requestContext.set('enabledSkills', input.enabledSkills);
     }
 
     return requestContext;

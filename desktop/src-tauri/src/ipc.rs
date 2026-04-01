@@ -779,10 +779,73 @@ fn openai_compatible_default(provider: &str) -> Option<&'static str> {
         "siliconflow" => Some("https://api.siliconflow.cn/v1"),
         "gemini" => Some("https://generativelanguage.googleapis.com/v1beta/openai"),
         "qwen" => Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        "minimax" => Some("https://api.minimax.chat/v1"),
+        "minimax" => Some("https://api.minimaxi.com/v1"),
         "kimi" => Some("https://api.moonshot.cn/v1"),
         _ => None,
     }
+}
+
+fn openai_compatible_default_model(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("gpt-4o"),
+        "aiberm" => Some("gpt-5.3-codex"),
+        "nvidia" => Some("meta/llama-3.1-70b-instruct"),
+        "siliconflow" => Some("Qwen/Qwen2.5-7B-Instruct"),
+        "gemini" => Some("gemini-2.0-flash"),
+        "qwen" => Some("qwen-plus"),
+        "minimax" => Some("MiniMax-M2.7"),
+        "kimi" => Some("moonshot-v1-8k"),
+        _ => None,
+    }
+}
+
+fn is_minimax_coding_model(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    normalized == "codex-minimax-m2.7" || normalized == "minimax-m2.7"
+}
+
+fn normalize_openai_compatible_model(
+    provider: &str,
+    model: Option<&str>,
+    default_model: &str,
+) -> String {
+    let selected = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_model);
+    let without_openai_prefix = selected
+        .strip_prefix("openai/")
+        .unwrap_or(selected)
+        .trim();
+
+    if provider == "minimax" && is_minimax_coding_model(without_openai_prefix) {
+        return "MiniMax-M2.7".to_string();
+    }
+
+    without_openai_prefix.to_string()
+}
+
+fn resolve_openai_compatible_base_url(
+    provider: &str,
+    base_url: Option<&str>,
+    normalized_model: &str,
+    default_base_url: &str,
+) -> String {
+    let selected = base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_base_url)
+        .trim()
+        .trim_end_matches('/');
+
+    if provider == "minimax"
+        && is_minimax_coding_model(normalized_model)
+        && selected.eq_ignore_ascii_case("https://api.minimax.chat/v1")
+    {
+        return "https://api.minimaxi.com/v1".to_string();
+    }
+
+    selected.to_string()
 }
 
 fn build_transcription_provider_from_profile(
@@ -1611,11 +1674,15 @@ pub async fn transcribe_audio(
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_proxy_to_client_builder, build_validation_request_plan,
         build_doctor_preflight_payload, is_duplicate_recent_send_task_message,
-        select_transcription_model_from_catalog, send_task_message_fingerprint,
-        DoctorPreflightInput,
+        AnthropicProviderSettings, CustomProviderSettings, OpenAIProviderSettings,
+        OpenRouterProviderSettings, ProxySettings, ValidateLlmInput, ValidationAuthScheme,
+        normalize_openai_compatible_model, resolve_openai_compatible_base_url,
+        select_transcription_model_from_catalog, send_task_message_fingerprint, DoctorPreflightInput,
     };
     use serde_json::json;
+    use std::env;
     use std::time::{Duration, Instant};
     use uuid::Uuid;
 
@@ -1640,6 +1707,43 @@ mod tests {
         ];
 
         assert_eq!(select_transcription_model_from_catalog(&models), None);
+    }
+
+    #[test]
+    fn normalize_openai_compatible_model_canonicalizes_minimax_coding_model() {
+        assert_eq!(
+            normalize_openai_compatible_model(
+                "minimax",
+                Some("codex-minimax-m2.7"),
+                "MiniMax-M2.7"
+            ),
+            "MiniMax-M2.7"
+        );
+    }
+
+    #[test]
+    fn normalize_openai_compatible_model_strips_openai_prefix() {
+        assert_eq!(
+            normalize_openai_compatible_model(
+                "minimax",
+                Some("openai/MiniMax-Text-01"),
+                "MiniMax-M2.7"
+            ),
+            "MiniMax-Text-01"
+        );
+    }
+
+    #[test]
+    fn resolve_openai_compatible_base_url_upgrades_minimax_coding_model_endpoint() {
+        assert_eq!(
+            resolve_openai_compatible_base_url(
+                "minimax",
+                Some("https://api.minimax.chat/v1"),
+                "MiniMax-M2.7",
+                "https://api.minimaxi.com/v1"
+            ),
+            "https://api.minimaxi.com/v1"
+        );
     }
 
     #[test]
@@ -1700,6 +1804,221 @@ mod tests {
             fingerprint,
             now + Duration::from_secs(10)
         ));
+    }
+
+    async fn send_validation_request_real(
+        client: &reqwest::Client,
+        input: ValidateLlmInput,
+    ) -> Result<reqwest::StatusCode, String> {
+        let plan = build_validation_request_plan(input)?;
+        let mut last_error: Option<String> = None;
+        for attempt in 1..=2 {
+            let mut request = client.post(&plan.url);
+            if plan.auth_scheme == ValidationAuthScheme::Anthropic {
+                request = request
+                    .header("x-api-key", plan.api_key.clone())
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json");
+            } else {
+                request = request
+                    .header("Authorization", format!("Bearer {}", plan.api_key.clone()))
+                    .header("content-type", "application/json");
+            }
+
+            match request.json(&plan.body).send().await {
+                Ok(response) => return Ok(response.status()),
+                Err(err) => {
+                    last_error = Some(format!("attempt {attempt}: {}", err));
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| "request failed without error message".to_string()))
+    }
+
+    fn openai_compatible_real_input(provider: &str, api_key: String) -> ValidateLlmInput {
+        ValidateLlmInput {
+            provider: provider.to_string(),
+            anthropic: None,
+            openrouter: None,
+            openai: Some(OpenAIProviderSettings {
+                api_key: Some(api_key),
+                base_url: None,
+                model: None,
+                allow_insecure_tls: None,
+            }),
+            custom: None,
+            proxy: None,
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "Real connectivity test. Run manually with RUN_REAL_LLM_CONNECTIVITY_TESTS=1."]
+    async fn real_llm_provider_connectivity_matrix() {
+        if env::var("RUN_REAL_LLM_CONNECTIVITY_TESTS").ok().as_deref() != Some("1") {
+            eprintln!("skip: set RUN_REAL_LLM_CONNECTIVITY_TESTS=1 to run real provider connectivity checks");
+            return;
+        }
+
+        let strict = matches!(
+            env::var("RUN_REAL_LLM_CONNECTIVITY_STRICT").ok().as_deref(),
+            Some("1") | Some("true") | Some("TRUE")
+        );
+        let proxy_url = env::var("REAL_LLM_PROXY_URL")
+            .ok()
+            .or_else(|| env::var("COWORKANY_PROXY_URL").ok())
+            .or_else(|| env::var("HTTPS_PROXY").ok())
+            .or_else(|| env::var("https_proxy").ok());
+        let proxy = proxy_url.and_then(|raw| {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(ProxySettings {
+                    enabled: Some(true),
+                    url: Some(trimmed),
+                    bypass: env::var("REAL_LLM_PROXY_BYPASS").ok(),
+                })
+            }
+        });
+
+        let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(20));
+        client_builder = apply_proxy_to_client_builder(client_builder, proxy.as_ref())
+            .expect("proxy settings should be valid");
+        let client = client_builder.build().expect("build connectivity test client");
+
+        let mut cases: Vec<(&str, ValidateLlmInput)> = Vec::new();
+        let mut missing: Vec<&str> = Vec::new();
+
+        let anthropic_key = env::var("REAL_ANTHROPIC_API_KEY").ok();
+        if let Some(key) = anthropic_key {
+            cases.push((
+                "anthropic",
+                ValidateLlmInput {
+                    provider: "anthropic".to_string(),
+                    anthropic: Some(AnthropicProviderSettings {
+                        api_key: Some(key),
+                        model: Some("claude-sonnet-4-5".to_string()),
+                    }),
+                    openrouter: None,
+                    openai: None,
+                    custom: None,
+                    proxy: None,
+                },
+            ));
+        } else {
+            missing.push("anthropic");
+        }
+
+        let openrouter_key = env::var("REAL_OPENROUTER_API_KEY").ok();
+        if let Some(key) = openrouter_key {
+            cases.push((
+                "openrouter",
+                ValidateLlmInput {
+                    provider: "openrouter".to_string(),
+                    anthropic: None,
+                    openrouter: Some(OpenRouterProviderSettings {
+                        api_key: Some(key),
+                        model: Some("anthropic/claude-sonnet-4.5".to_string()),
+                    }),
+                    openai: None,
+                    custom: None,
+                    proxy: None,
+                },
+            ));
+        } else {
+            missing.push("openrouter");
+        }
+
+        for provider in [
+            "openai",
+            "aiberm",
+            "nvidia",
+            "siliconflow",
+            "gemini",
+            "qwen",
+            "minimax",
+            "kimi",
+        ] {
+            let env_key = format!("REAL_{}_API_KEY", provider.to_ascii_uppercase());
+            match env::var(&env_key).ok() {
+                Some(key) => cases.push((provider, openai_compatible_real_input(provider, key))),
+                None => missing.push(provider),
+            }
+        }
+
+        if strict && !missing.is_empty() {
+            panic!("missing API keys for strict real connectivity matrix: {}", missing.join(", "));
+        }
+
+        if cases.is_empty() {
+            eprintln!("skip: no real provider API keys found. Set REAL_<PROVIDER>_API_KEY env vars.");
+            return;
+        }
+
+        let custom_openai_key = env::var("REAL_CUSTOM_OPENAI_API_KEY").ok();
+        if let Some(key) = custom_openai_key {
+            let base_url = env::var("REAL_CUSTOM_OPENAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
+            let model = env::var("REAL_CUSTOM_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+            cases.push((
+                "custom-openai",
+                ValidateLlmInput {
+                    provider: "custom".to_string(),
+                    anthropic: None,
+                    openrouter: None,
+                    openai: None,
+                    custom: Some(CustomProviderSettings {
+                        api_key: Some(key),
+                        base_url: Some(base_url),
+                        model: Some(model),
+                        allow_insecure_tls: None,
+                        api_format: Some("openai".to_string()),
+                    }),
+                    proxy: None,
+                },
+            ));
+        }
+
+        let custom_anthropic_key = env::var("REAL_CUSTOM_ANTHROPIC_API_KEY").ok();
+        if let Some(key) = custom_anthropic_key {
+            let base_url = env::var("REAL_CUSTOM_ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|_| "https://api.anthropic.com/v1/messages".to_string());
+            let model = env::var("REAL_CUSTOM_ANTHROPIC_MODEL")
+                .unwrap_or_else(|_| "claude-sonnet-4-5".to_string());
+            cases.push((
+                "custom-anthropic",
+                ValidateLlmInput {
+                    provider: "custom".to_string(),
+                    anthropic: None,
+                    openrouter: None,
+                    openai: None,
+                    custom: Some(CustomProviderSettings {
+                        api_key: Some(key),
+                        base_url: Some(base_url),
+                        model: Some(model),
+                        allow_insecure_tls: None,
+                        api_format: Some("anthropic".to_string()),
+                    }),
+                    proxy: None,
+                },
+            ));
+        }
+
+        let mut failures: Vec<String> = Vec::new();
+        for (label, input) in cases {
+            match send_validation_request_real(&client, input).await {
+                Ok(status) if status.is_success() => {}
+                Ok(status) => failures.push(format!("{label}: status={status}")),
+                Err(err) => failures.push(format!("{label}: request_error={err}")),
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "real connectivity matrix failed:\n{}",
+            failures.join("\n")
+        );
     }
 }
 
@@ -2038,21 +2357,25 @@ pub struct ValidateLlmInput {
     pub openrouter: Option<OpenRouterProviderSettings>,
     pub openai: Option<OpenAIProviderSettings>,
     pub custom: Option<CustomProviderSettings>,
+    pub proxy: Option<ProxySettings>,
 }
 
-/// Validate LLM connectivity
-#[tauri::command]
-pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpcResult, String> {
-    info!(
-        "validate_llm_settings: validating connectivity for {}",
-        input.provider
-    );
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ValidationAuthScheme {
+    Anthropic,
+    Bearer,
+}
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+#[derive(Debug, Clone)]
+struct ValidationRequestPlan {
+    provider: String,
+    url: String,
+    api_key: String,
+    body: Value,
+    auth_scheme: ValidationAuthScheme,
+}
 
+fn build_validation_request_plan(input: ValidateLlmInput) -> Result<ValidationRequestPlan, String> {
     let normalize_openai_compatible_url = |raw: &str| -> String {
         let trimmed = raw.trim().trim_end_matches('/');
         if trimmed.ends_with("/chat/completions") {
@@ -2062,129 +2385,147 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
         }
     };
 
-    let openai_compatible_default = |provider: &str| -> Option<(&'static str, &'static str)> {
-        match provider {
-            "openai" => Some(("https://api.openai.com/v1", "gpt-4o")),
-            "aiberm" => Some(("https://aiberm.com/v1", "gpt-5.3-codex")),
-            "nvidia" => Some((
-                "https://integrate.api.nvidia.com/v1",
-                "meta/llama-3.1-70b-instruct",
-            )),
-            "siliconflow" => Some(("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct")),
-            "gemini" => Some((
-                "https://generativelanguage.googleapis.com/v1beta/openai",
-                "gemini-2.0-flash",
-            )),
-            "qwen" => Some((
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "qwen-plus",
-            )),
-            "minimax" => Some(("https://api.minimax.chat/v1", "MiniMax-Text-01")),
-            "kimi" => Some(("https://api.moonshot.cn/v1", "moonshot-v1-8k")),
-            _ => None,
-        }
-    };
-
-    let (url, api_key, body) = match input.provider.as_str() {
+    let provider = input.provider;
+    match provider.as_str() {
         "anthropic" => {
             let settings = input.anthropic.ok_or("Missing Anthropic settings")?;
-            let key = settings.api_key.ok_or("Missing API key")?;
+            let api_key = settings.api_key.ok_or("Missing API key")?;
             let model = settings
                 .model
                 .unwrap_or_else(|| "claude-3-5-sonnet-20240620".to_string());
-            (
-                "https://api.anthropic.com/v1/messages".to_string(),
-                key,
-                json!({
+            Ok(ValidationRequestPlan {
+                provider,
+                url: "https://api.anthropic.com/v1/messages".to_string(),
+                api_key,
+                body: json!({
                     "model": model,
                     "max_tokens": 1,
                     "messages": [{"role": "user", "content": "ping"}]
                 }),
-            )
+                auth_scheme: ValidationAuthScheme::Anthropic,
+            })
         }
         "openrouter" => {
             let settings = input.openrouter.ok_or("Missing OpenRouter settings")?;
-            let key = settings.api_key.ok_or("Missing API key")?;
+            let api_key = settings.api_key.ok_or("Missing API key")?;
             let model = settings
                 .model
                 .unwrap_or_else(|| "anthropic/claude-3.5-sonnet".to_string());
-            (
-                "https://openrouter.ai/api/v1/chat/completions".to_string(),
-                key,
-                json!({
+            Ok(ValidationRequestPlan {
+                provider,
+                url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                api_key,
+                body: json!({
                     "model": model,
                     "max_tokens": 1,
                     "messages": [{"role": "user", "content": "ping"}]
                 }),
-            )
+                auth_scheme: ValidationAuthScheme::Bearer,
+            })
         }
         "custom" => {
             let settings = input.custom.ok_or("Missing Custom settings")?;
-            let key = settings.api_key.ok_or("Missing API key")?;
+            let api_key = settings.api_key.ok_or("Missing API key")?;
             let base_url = settings.base_url.ok_or("Missing Base URL")?;
             let model = settings.model.ok_or("Missing Model ID")?;
             let format = settings.api_format.unwrap_or_else(|| "openai".to_string());
-
-            if format == "anthropic" {
-                (
-                    base_url,
-                    key,
-                    json!({
-                        "model": model,
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "ping"}]
-                    }),
-                )
+            let auth_scheme = if format.eq_ignore_ascii_case("anthropic") {
+                ValidationAuthScheme::Anthropic
             } else {
-                (
-                    base_url,
-                    key,
-                    json!({
-                        "model": model,
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "ping"}]
-                    }),
-                )
-            }
+                ValidationAuthScheme::Bearer
+            };
+
+            Ok(ValidationRequestPlan {
+                provider,
+                url: base_url,
+                api_key,
+                body: json!({
+                    "model": model,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "ping"}]
+                }),
+                auth_scheme,
+            })
         }
-        provider => {
-            if let Some((default_url, default_model)) = openai_compatible_default(provider) {
+        provider_name => {
+            if let (Some(default_url), Some(default_model)) = (
+                openai_compatible_default(provider_name),
+                openai_compatible_default_model(provider_name),
+            ) {
                 let settings = input.openai.ok_or("Missing OpenAI-compatible settings")?;
-                let key = settings.api_key.ok_or("Missing API key")?;
-                let model = settings.model.unwrap_or_else(|| default_model.to_string());
-                let request_url = normalize_openai_compatible_url(
-                    settings.base_url.as_deref().unwrap_or(default_url),
+                let api_key = settings.api_key.ok_or("Missing API key")?;
+                let model = normalize_openai_compatible_model(
+                    provider_name,
+                    settings.model.as_deref(),
+                    default_model,
                 );
-                (
-                    request_url,
-                    key,
-                    json!({
+                let base_url = resolve_openai_compatible_base_url(
+                    provider_name,
+                    settings.base_url.as_deref(),
+                    &model,
+                    default_url,
+                );
+                Ok(ValidationRequestPlan {
+                    provider,
+                    url: normalize_openai_compatible_url(&base_url),
+                    api_key,
+                    body: json!({
                         "model": model,
                         "max_tokens": 1,
                         "messages": [{"role": "user", "content": "ping"}]
                     }),
-                )
+                    auth_scheme: ValidationAuthScheme::Bearer,
+                })
             } else {
-                return Err(format!("Unknown provider: {}", input.provider));
+                Err(format!("Unknown provider: {}", provider_name))
             }
         }
+    }
+}
+
+/// Validate LLM connectivity
+#[tauri::command]
+pub async fn validate_llm_settings(
+    input: ValidateLlmInput,
+    app_handle: AppHandle,
+) -> Result<GenericIpcResult, String> {
+    info!(
+        "validate_llm_settings: validating connectivity for {}",
+        input.provider
+    );
+
+    let configured_proxy = match llm_config_path(&app_handle) {
+        Ok(path) if path.exists() => tokio::fs::read_to_string(path)
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_str::<LlmConfig>(&raw).ok())
+            .and_then(|config| config.proxy),
+        _ => None,
     };
+    let proxy_settings = input.proxy.as_ref().or(configured_proxy.as_ref());
 
-    let mut request = client.post(url);
+    let mut client_builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10));
+    client_builder = apply_proxy_to_client_builder(client_builder, proxy_settings)?;
+    let client = client_builder
+        .build()
+        .map_err(|e| e.to_string())?;
+    let plan = build_validation_request_plan(input)?;
 
-    if input.provider == "anthropic" {
+    let mut request = client.post(&plan.url);
+
+    if plan.auth_scheme == ValidationAuthScheme::Anthropic {
         request = request
-            .header("x-api-key", api_key)
+            .header("x-api-key", plan.api_key.clone())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json");
     } else {
         request = request
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {}", plan.api_key))
             .header("content-type", "application/json");
     }
 
     let res = request
-        .json(&body)
+        .json(&plan.body)
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -2193,7 +2534,7 @@ pub async fn validate_llm_settings(input: ValidateLlmInput) -> Result<GenericIpc
     if status.is_success() {
         info!(
             "validate_llm_settings: connectivity verified for {}",
-            input.provider
+            plan.provider
         );
         Ok(GenericIpcResult {
             success: true,

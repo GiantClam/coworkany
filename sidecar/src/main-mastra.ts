@@ -1,7 +1,7 @@
 import * as readline from 'readline';
 import * as path from 'path';
 import { getMastraHealth } from './mastra';
-import { handleApprovalResponse, handleUserMessage } from './ipc/streaming';
+import { handleApprovalResponse, handleUserMessage, rewindTaskContextCompression } from './ipc/streaming';
 import { createMastraEntrypointProcessor } from './mastra/entrypoint';
 import { createVoiceProviderBindings } from './mastra/runtimeBindings';
 import { getVoicePlaybackState, stopVoicePlayback } from './tools/core/voice';
@@ -12,6 +12,15 @@ import { createMastraSchedulerRuntime } from './mastra/schedulerRuntime';
 import { disconnectMcpSafe } from './mastra/mcp/clients';
 import { replayWorkflowRunTimeTravel } from './mastra/workflowReplay';
 import { destroyWorkspaceRuntime } from './mastra/workspace/runtime';
+import { buildSkillPromptFromStore } from './mastra/skillPrompt';
+import { MastraTaskRuntimeStateStore } from './mastra/taskRuntimeStateStore';
+import { MastraTaskTranscriptStore } from './mastra/taskTranscriptStore';
+import { MastraRemoteSessionStore } from './mastra/remoteSessionStore';
+import { MastraPolicyDecisionLogStore } from './mastra/policyDecisionLog';
+import { MastraHookRuntimeStore, setHookRuntimeEventsEnabled } from './mastra/hookRuntime';
+import { createMastraPolicyEngineFromEnv } from './mastra/policyEngine';
+import { evaluateSkillPolicy } from './mastra/pluginPolicy';
+import { loadRemoteSessionGovernancePolicy } from './mastra/remoteSessionGovernance';
 const workspaceRoot = process.cwd();
 const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim()
     || path.join(workspaceRoot, '.coworkany');
@@ -19,6 +28,24 @@ const additionalCommandRuntime = createMastraAdditionalCommandHandler({
     workspaceRoot,
     appDataRoot,
 });
+const taskStateStore = new MastraTaskRuntimeStateStore(
+    path.join(appDataRoot, 'mastra-task-runtime-state.json'),
+);
+const taskTranscriptStore = new MastraTaskTranscriptStore(
+    path.join(appDataRoot, 'mastra-task-transcript.json'),
+);
+const remoteSessionStore = new MastraRemoteSessionStore(
+    path.join(appDataRoot, 'mastra-remote-sessions.json'),
+);
+const policyDecisionLog = new MastraPolicyDecisionLogStore(
+    path.join(appDataRoot, 'mastra-policy-decisions.json'),
+);
+const hookRuntime = new MastraHookRuntimeStore(
+    path.join(appDataRoot, 'mastra-hook-events.json'),
+);
+setHookRuntimeEventsEnabled(true);
+const policyEngine = createMastraPolicyEngineFromEnv();
+const remoteSessionGovernancePolicy = loadRemoteSessionGovernancePolicy(workspaceRoot);
 function writeEvent(event: Record<string, unknown>): void {
     process.stdout.write(`${JSON.stringify(event)}\n`);
 }
@@ -101,6 +128,28 @@ async function run(): Promise<void> {
             0,
             5,
         ),
+        resolveSkillPrompt: ({ message, explicitEnabledSkills }) => {
+            const policySnapshot = additionalCommandRuntime.getPluginPolicySnapshot();
+            return buildSkillPromptFromStore(additionalCommandRuntime.skillStore, {
+                userMessage: message,
+                explicitEnabledSkills,
+                isSkillAllowed: ({ skillId, isBuiltin }) => evaluateSkillPolicy(
+                    { skillId, isBuiltin },
+                    policySnapshot,
+                ).allowed,
+            });
+        },
+        taskTranscriptStore,
+        rewindTaskContext: ({ taskId, userTurns }) => rewindTaskContextCompression({
+            taskId,
+            userTurns,
+        }),
+        policyEngine,
+        policyDecisionLog,
+        hookRuntime,
+        taskStateStore,
+        remoteSessionStore,
+        remoteSessionGovernancePolicy,
     });
     schedulerRuntime = createMastraSchedulerRuntime({
         appDataRoot,

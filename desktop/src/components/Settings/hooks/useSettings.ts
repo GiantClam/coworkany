@@ -6,7 +6,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
 import { saveConfig as saveToStore } from '../../../lib/configStore';
+import { mapValidationErrorToUserMessage } from '../../../lib/llmValidationErrors';
 import type {
     LlmConfig,
     LlmProfile,
@@ -49,6 +51,7 @@ function normalizeProxySettings(proxy?: ProxySettings): ProxySettings {
 }
 
 export function useSettings() {
+    const { t } = useTranslation();
     // Configuration state
     const [config, setConfig] = useState<LlmConfig>({ provider: 'anthropic', profiles: [] });
     const [loading, setLoading] = useState(false);
@@ -146,12 +149,13 @@ export function useSettings() {
                 openrouter: profile.openrouter,
                 openai: profile.openai,
                 custom: profile.custom,
+                proxy: config.proxy,
             };
 
             const result = await invoke<ValidationResult>('validate_llm_settings', { input });
 
             if (result.success) {
-                setValidationMsg({ type: 'success', text: 'Verification successful!' });
+                setValidationMsg({ type: 'success', text: t('setup.apiKeyVerified') });
 
                 const newProfiles = [...(config.profiles || [])];
                 const existingIdx = newProfiles.findIndex(
@@ -169,20 +173,30 @@ export function useSettings() {
                     activeProfileId: config.activeProfileId || profile.id,
                 });
             } else {
+                const rawError = result.payload?.error || t('setup.verificationFailed');
                 setValidationMsg({
                     type: 'error',
-                    text: result.payload?.error || 'Verification failed',
+                    text: mapValidationErrorToUserMessage({
+                        provider: profile.provider,
+                        rawError,
+                        t,
+                    }),
                 });
             }
         } catch (err) {
+            const rawError = err instanceof Error ? err.message : t('setup.connectionError');
             setValidationMsg({
                 type: 'error',
-                text: err instanceof Error ? err.message : 'Connection error',
+                text: mapValidationErrorToUserMessage({
+                    provider: profile.provider,
+                    rawError,
+                    t,
+                }),
             });
         } finally {
             setIsValidating(false);
         }
-    }, [config, saveConfig]);
+    }, [config, saveConfig, t]);
 
     /**
      * Switch active profile

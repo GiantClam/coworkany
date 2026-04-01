@@ -1,5 +1,7 @@
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import type { DesktopEvent } from '../ipc/bridge';
+import { tryAcquireSchedulerLease } from './schedulerLeaseLock';
 import {
     ScheduledTaskStore,
     computeNextRecurringExecuteAt,
@@ -19,6 +21,10 @@ type SchedulerMeta = {
     recurrence?: { kind: 'rrule'; value: string };
     chainedStages?: ChainedScheduledStageIntent[];
 };
+export type SchedulerFaultInjectionPhase =
+    | 'before_run'
+    | 'after_running_marked'
+    | 'before_complete';
 type ScheduledTaskConfigWithMeta = ScheduledTaskConfig & {
     __mastraSchedulerMeta?: SchedulerMeta;
 };
@@ -39,6 +45,10 @@ type SchedulerRuntimeDeps = {
     resolveResourceIdForTask: (taskId: string) => string;
     emitDesktopEventForTask: (taskId: string, event: DesktopEvent) => void;
     getNow?: () => Date;
+    injectFault?: (input: {
+        phase: SchedulerFaultInjectionPhase;
+        record: ScheduledTaskRecord;
+    }) => void;
 };
 type RuntimeInput = {
     appDataRoot: string;
@@ -70,6 +80,14 @@ const SCHEDULED_IDEMPOTENCY_WINDOW_MS = parseEnvWindow(
     'COWORKANY_MASTRA_SCHEDULED_IDEMPOTENCY_WINDOW_MS',
     45_000,
     true,
+);
+const SCHEDULER_POLL_LEASE_MS = parseEnvWindow(
+    'COWORKANY_MASTRA_SCHEDULER_POLL_LEASE_MS',
+    120_000,
+);
+const SCHEDULER_POLL_LEASE_RENEW_MS = Math.max(
+    1_000,
+    Math.floor(SCHEDULER_POLL_LEASE_MS / 3),
 );
 const IDEMPOTENT_STATUSES = new Set<ScheduledTaskRecord['status']>([
     'scheduled',
@@ -310,6 +328,8 @@ export function createMastraSchedulerRuntime(input: RuntimeInput): {
     getStore: () => ScheduledTaskStore;
 } {
     const store = new ScheduledTaskStore(path.join(input.appDataRoot, 'scheduled-tasks.json'));
+    const pollLeasePath = path.join(input.appDataRoot, 'scheduled-tasks.poll.lock');
+    const pollLeaseOwnerId = randomUUID();
     const getNow = input.deps.getNow ?? (() => new Date());
     const runningRecords = new Set<string>();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -399,6 +419,10 @@ export function createMastraSchedulerRuntime(input: RuntimeInput): {
         const resourceId = input.deps.resolveResourceIdForTask(sourceTaskId);
         let assistantText = '';
         try {
+            input.deps.injectFault?.({
+                phase: 'before_run',
+                record,
+            });
             await input.deps.handleUserMessage(
                 record.taskQuery,
                 sourceTaskId,
@@ -408,8 +432,16 @@ export function createMastraSchedulerRuntime(input: RuntimeInput): {
                     input.deps.emitDesktopEventForTask(sourceTaskId, event);
                 },
             );
+            input.deps.injectFault?.({
+                phase: 'after_running_marked',
+                record: runningRecord,
+            });
             if (readLatestRecord(store, record.id)?.status === 'cancelled') return;
             const completedAt = getNow();
+            input.deps.injectFault?.({
+                phase: 'before_complete',
+                record: runningRecord,
+            });
             store.upsert({
                 ...runningRecord,
                 status: 'completed',
@@ -431,7 +463,7 @@ export function createMastraSchedulerRuntime(input: RuntimeInput): {
             runningRecords.delete(record.id);
         }
     };
-    const pollDueTasks = async (now = getNow()): Promise<void> => {
+    const pollDueTasksInternal = async (now = getNow()): Promise<void> => {
         const recovered = store.recoverStaleRunning({
             now,
             timeoutMs: STALE_RUNNING_TIMEOUT_MS,
@@ -445,6 +477,34 @@ export function createMastraSchedulerRuntime(input: RuntimeInput): {
         }
         for (const record of store.listDue(now)) {
             await runScheduledRecord(record);
+        }
+    };
+    const pollDueTasks = async (now = getNow()): Promise<void> => {
+        const lease = tryAcquireSchedulerLease({
+            lockFilePath: pollLeasePath,
+            ownerId: pollLeaseOwnerId,
+            leaseMs: SCHEDULER_POLL_LEASE_MS,
+            getNow,
+        });
+        if (!lease) {
+            return;
+        }
+        const renewTimer = setInterval(() => {
+            try {
+                lease.renew();
+            } catch (error) {
+                console.error('[MastraSchedulerRuntime] failed to renew scheduler lease:', error);
+            }
+        }, SCHEDULER_POLL_LEASE_RENEW_MS);
+        try {
+            await pollDueTasksInternal(now);
+        } finally {
+            clearInterval(renewTimer);
+            try {
+                lease.release();
+            } catch (error) {
+                console.error('[MastraSchedulerRuntime] failed to release scheduler lease:', error);
+            }
         }
     };
     const pollDueTasksWithLock = async (): Promise<void> => {

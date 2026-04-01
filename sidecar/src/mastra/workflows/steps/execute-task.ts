@@ -3,6 +3,7 @@ import type {
     ExecutionPlan,
     FrozenWorkRequest,
 } from '../../../orchestration/workRequestSchema';
+import { deriveDefaultResourceId } from '../../runtimeIdentity';
 import { createTaskRequestContext } from '../../requestContext';
 import { createTelemetryRunContext } from '../../telemetry';
 export interface ExecuteTaskInput {
@@ -28,7 +29,7 @@ export async function executeFrozenTask(input: {
         };
     }
     const threadId = `control-plane-${input.task.frozen.id}`;
-    const resourceId = 'org-coworkany';
+    const resourceId = deriveDefaultResourceId(input.task.frozen.id);
     const requestContext = createTaskRequestContext({
         threadId,
         resourceId,

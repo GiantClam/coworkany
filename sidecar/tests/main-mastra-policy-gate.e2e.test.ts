@@ -421,6 +421,84 @@ describe('main-mastra policy-gate stdio e2e', () => {
         expect(payload.error).toBe('policy_gate_invalid_response:read_file_response');
     }, 30_000);
 
+    test('policy-gate bridge snapshot captures duplicate/orphan forwarded responses', async () => {
+        session = new MastraStdioSession();
+        await session.start();
+
+        const commandId = 'cmd-policy-gate-stats-e2e';
+        session.send({
+            id: commandId,
+            timestamp: new Date().toISOString(),
+            type: 'read_file',
+            payload: {
+                path: '/tmp/policy-gate-stats-e2e.txt',
+            },
+        });
+        const forwarded = await session.waitFor(
+            (message) =>
+                message.type === 'read_file'
+                && typeof message.id === 'string'
+                && toRecord(message.payload).path === '/tmp/policy-gate-stats-e2e.txt',
+            5_000,
+        );
+        const forwardedId = String(forwarded.id);
+
+        session.send({
+            type: 'read_file_response',
+            commandId: forwardedId,
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                content: 'first',
+            },
+        });
+        await session.waitFor(
+            (message) =>
+                message.type === 'read_file_response'
+                && message.commandId === commandId,
+            5_000,
+        );
+
+        session.send({
+            type: 'read_file_response',
+            commandId: forwardedId,
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                content: 'duplicate',
+            },
+        });
+        session.send({
+            type: 'read_file_response',
+            commandId: 'orphan-forward-id-e2e',
+            timestamp: new Date().toISOString(),
+            payload: {
+                success: true,
+                content: 'orphan',
+            },
+        });
+
+        const snapshotId = 'cmd-policy-gate-stats-snapshot-e2e';
+        session.send({
+            id: snapshotId,
+            timestamp: new Date().toISOString(),
+            type: 'get_runtime_snapshot',
+            payload: {},
+        });
+        const snapshotResponse = await session.waitFor(
+            (message) =>
+                message.type === 'get_runtime_snapshot_response'
+                && message.commandId === snapshotId,
+            5_000,
+        );
+        const snapshot = toRecord(toRecord(snapshotResponse.payload).snapshot);
+        const bridge = toRecord(snapshot.policyGateBridge);
+        expect(Number(bridge.forwardedRequests)).toBeGreaterThanOrEqual(1);
+        expect(Number(bridge.successfulResponses)).toBeGreaterThanOrEqual(1);
+        expect(Number(bridge.duplicateResponses)).toBeGreaterThanOrEqual(1);
+        expect(Number(bridge.orphanResponses)).toBeGreaterThanOrEqual(1);
+    }, 30_000);
+
     test('apply_patch maps stdin_closed to io_error when policy-gate transport closes', async () => {
         session = new MastraStdioSession({
             env: {

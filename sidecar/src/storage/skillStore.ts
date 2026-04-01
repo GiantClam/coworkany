@@ -14,6 +14,7 @@ export interface ClaudeSkillManifest {
     version: string;
     description: string;
     directory: string;
+    dependencies?: string[];
     scriptsDir?: string;
     tags?: string[];
     allowedTools?: string[];
@@ -189,6 +190,22 @@ export class SkillStore {
         if (parsed.scriptsDir) manifest.scriptsDir = parsed.scriptsDir as string;
         if (Array.isArray(parsed.tags)) {
             manifest.tags = parsed.tags as string[];
+        }
+        if (Array.isArray(parsed.dependencies)) {
+            manifest.dependencies = (parsed.dependencies as unknown[])
+                .filter((entry): entry is string => typeof entry === 'string')
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+        } else if (Array.isArray(parsed['depends-on'])) {
+            manifest.dependencies = (parsed['depends-on'] as unknown[])
+                .filter((entry): entry is string => typeof entry === 'string')
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+        } else if (Array.isArray(parsed.dependsOn)) {
+            manifest.dependencies = (parsed.dependsOn as unknown[])
+                .filter((entry): entry is string => typeof entry === 'string')
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
         }
         if (Array.isArray(parsed['allowed-tools'])) {
             manifest.allowedTools = parsed['allowed-tools'] as string[];

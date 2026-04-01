@@ -27,7 +27,9 @@
     "installed": "Installed",
     "validating": "Validating...",
     "installing": "Installing...",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "openRouterPolicyBlocked": "OpenRouter rejected this request (403). This is usually an account/provider risk-control or policy block.",
+    "openRouterPolicyBlockedHint": "Try a new API key, switch to a mainstream model, and disable proxy/VPN before retrying. If it persists, contact OpenRouter support with the raw error."
   },
 
   "setup": {

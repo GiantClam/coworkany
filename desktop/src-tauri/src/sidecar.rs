@@ -1463,6 +1463,35 @@ impl SidecarManager {
         }
     }
 
+    fn normalize_openai_compatible_model_for_provider(provider: &str, model: &str) -> String {
+        let selected = model.trim();
+        let without_openai_prefix = selected.strip_prefix("openai/").unwrap_or(selected).trim();
+
+        if provider == "minimax" {
+            let normalized = without_openai_prefix.to_ascii_lowercase();
+            if normalized == "codex-minimax-m2.7" || normalized == "minimax-m2.7" {
+                return "MiniMax-M2.7".to_string();
+            }
+        }
+
+        without_openai_prefix.to_string()
+    }
+
+    fn resolve_openai_compatible_base_url_for_provider(
+        provider: &str,
+        base_url: &str,
+        normalized_model: &str,
+    ) -> String {
+        let selected = base_url.trim().trim_end_matches('/');
+        if provider == "minimax"
+            && normalized_model.eq_ignore_ascii_case("MiniMax-M2.7")
+            && selected.eq_ignore_ascii_case("https://api.minimax.chat/v1")
+        {
+            return "https://api.minimaxi.com/v1".to_string();
+        }
+        selected.to_string()
+    }
+
     fn openai_compatible_default(provider: &str) -> Option<(&'static str, &'static str)> {
         match provider {
             "openai" => Some(("https://api.openai.com/v1", "gpt-4o")),
@@ -1480,7 +1509,7 @@ impl SidecarManager {
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "qwen-plus",
             )),
-            "minimax" => Some(("https://api.minimax.chat/v1", "MiniMax-Text-01")),
+            "minimax" => Some(("https://api.minimaxi.com/v1", "MiniMax-M2.7")),
             "kimi" => Some(("https://api.moonshot.cn/v1", "moonshot-v1-8k")),
             _ => None,
         }
@@ -1625,20 +1654,29 @@ impl SidecarManager {
                 if let Some((default_base_url, default_model)) =
                     Self::openai_compatible_default(openai_compatible_provider)
                 {
-                    let base_url = settings
+                    let raw_base_url = settings
                         .base_url
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .unwrap_or(default_base_url);
-                    command.env("OPENAI_BASE_URL", base_url);
                     let model = settings
                         .model
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .unwrap_or(default_model);
-                    resolved_model = Some(Self::normalize_model_id("openai", model));
+                    let normalized_model = Self::normalize_openai_compatible_model_for_provider(
+                        openai_compatible_provider,
+                        model,
+                    );
+                    let base_url = Self::resolve_openai_compatible_base_url_for_provider(
+                        openai_compatible_provider,
+                        raw_base_url,
+                        &normalized_model,
+                    );
+                    command.env("OPENAI_BASE_URL", &base_url);
+                    resolved_model = Some(Self::normalize_model_id("openai", &normalized_model));
                 }
             }
         }
@@ -3078,6 +3116,50 @@ mod tests {
         assert!(
             !envs.contains_key("ANTHROPIC_API_KEY"),
             "active profile should decide provider key propagation"
+        );
+
+        let _ = fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[test]
+    fn apply_llm_env_normalizes_minimax_codex_alias_model() {
+        let app_data_dir = unique_temp_dir("sidecar-llm-config-minimax");
+        fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        fs::write(
+            app_data_dir.join("llm-config.json"),
+            r#"{
+                "provider": "minimax",
+                "activeProfileId": "profile-minimax",
+                "profiles": [
+                    {
+                        "id": "profile-minimax",
+                        "provider": "minimax",
+                        "openai": {
+                            "apiKey": "sk-minimax-real",
+                            "baseUrl": "https://api.minimax.chat/v1",
+                            "model": "codex-minimax-m2.7"
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("write llm-config");
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_llm_env(&mut command, app_data_dir.to_str().expect("utf8 path"));
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("OPENAI_API_KEY"),
+            Some(&"sk-minimax-real".to_string())
+        );
+        assert_eq!(
+            envs.get("OPENAI_BASE_URL"),
+            Some(&"https://api.minimaxi.com/v1".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MODEL"),
+            Some(&"openai/MiniMax-M2.7".to_string())
         );
 
         let _ = fs::remove_dir_all(&app_data_dir);

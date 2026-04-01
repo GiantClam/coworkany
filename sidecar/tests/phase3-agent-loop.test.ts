@@ -222,6 +222,59 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
+    test('handleUserMessage retries transient stream-start failures before succeeding', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousRetryCount = process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT;
+        let attempts = 0;
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT = '1';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                attempts += 1;
+                if (attempts === 1) {
+                    throw new Error('network timeout while connecting');
+                }
+                return {
+                    runId: 'run-phase3-retry',
+                    fullStream: (async function* () {
+                        // no-op
+                    })(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'retry test',
+                'thread-retry',
+                'employee-retry',
+                () => undefined,
+            );
+
+            expect(result.runId).toBe('run-phase3-retry');
+            expect(attempts).toBe(2);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT = previousRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT;
+            }
+        }
+    });
+
     test('handleApprovalResponse resumes with requestContext and memory from cached run context', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalApprove = supervisor.approveToolCall.bind(supervisor);

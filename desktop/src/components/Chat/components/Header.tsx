@@ -61,7 +61,7 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     const { t } = useTranslation();
 
     const displayTitle = abbreviateTitle(title);
-    const canReconnectLlm = status === 'finished';
+    const canReconnectLlm = status === 'finished' || status === 'failed';
     const isStatusActionDisabled = !isSpeaking && status !== 'running' && !canReconnectLlm;
     const statusActionHint = isSpeaking
         ? (isStoppingVoice ? t('chat.stoppingVoice') : t('chat.stopVoice'))

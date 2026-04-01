@@ -1,5 +1,64 @@
 # Progress Log
 
+## 2026-04-01
+
+- Continued Mastra refactor against the Claude-code alignment plan (`docs/plans/2026-03-29-mastra-refactoring-plan.md`, section 18):
+  - Added persisted runtime task-state store and startup recovery in:
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/taskRuntimeState.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/taskRuntimeStateStore.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main-mastra.ts`
+  - Added scheduler lease locking (cross-process acquire/renew/release) in:
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/schedulerLeaseLock.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/schedulerRuntime.ts`
+  - Removed hardcoded workflow memory scope and switched to task-scoped resource identity:
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/runtimeIdentity.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/workflows/steps/execute-task.ts`
+  - Added context-compression + file-memory layer and skill prompt orchestration in main runtime path:
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/contextCompression.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/skillPrompt.ts`
+    - `/Users/beihuang/Documents/github/coworkany/sidecar/src/ipc/streaming.ts`
+  - Added transient retry for stream/tool-approval startup in `streaming.ts`.
+  - Added Phase-B policy/hook control-plane slice:
+    - unified policy engine: `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/policyEngine.ts`
+    - persisted decision log: `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/policyDecisionLog.ts`
+    - persisted hook runtime: `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/hookRuntime.ts`
+    - wired through main runtime + entrypoint:
+      - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main-mastra.ts`
+      - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+    - added runtime queries:
+      - `get_policy_decision_log`
+      - `get_hook_events`
+    - policy now gates:
+      - `task_command`
+      - `forward_command`
+      - `approval_result`
+  - Migrated scheduler lock implementation from Claude-code lock pattern (reuse-first):
+    - replaced `sidecar/src/mastra/schedulerLeaseLock.ts` with `O_EXCL + pid liveness + stale lock recovery` semantics aligned to `claude-code/src/utils/cronTasksLock.ts`.
+    - retained CoworkAny runtime API (`tryAcquireSchedulerLease`) to avoid scheduler call-site churn.
+  - Migrated hook event-bus skeleton from Claude-code (reuse-first):
+    - added `sidecar/src/mastra/hookEventBus.ts` based on `claude-code/src/utils/hooks/hookEvents.ts` core model (handler registration, pending buffer, always-emitted + full-stream switch).
+    - wired bus emission from `sidecar/src/mastra/hookRuntime.ts` and enabled runtime stream in `sidecar/src/main-mastra.ts`.
+- Added/updated release-gate tests:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-scheduler-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/execute-task-step.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-task-state-persistence.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-context-compression.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-skill-prompt.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-context-compression.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-policy-engine.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-policy-hooks.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-scheduler-lease-lock.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-hook-event-bus.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/phase3-agent-loop.test.ts`
+- Updated test gate wiring:
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`
+- Verification:
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck`
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases`
+
 ## 2026-03-31
 
 - Ran the assistant-ui visual cleanup pass to align message/task rendering with app theme tokens and Manus-like card hierarchy:
@@ -1014,3 +1073,387 @@
   - `/Users/beihuang/Documents/github/coworkany/desktop/src/bridges/canonicalTaskStream.ts` now exposes `materializeCanonicalMessages(...)` for local stream-event reduction
   - `/Users/beihuang/Documents/github/coworkany/sidecar/src/protocol/canonicalStream.ts` gained `PLAN_UPDATED` canonical task-part mapping to keep task progress fidelity during local synthesis
   - desktop locally maps `RATE_LIMITED` into canonical runtime status labels so event-only sessions still surface retry feedback without relying on the legacy builder
+
+## 2026-04-01
+
+- 继续执行 claude-code 迁移优先重构（Batch 6），完成 plugin dependency + policy 主流程接入。
+- 新增并接入 `sidecar/src/mastra/pluginPolicy.ts`：
+  - 读取 `.coworkany/extension-allowlist.json`、`.coworkany/policy-settings.json`
+  - 支持 env 覆盖：`COWORKANY_POLICY_BLOCKED_SKILLS`、`COWORKANY_POLICY_BLOCKED_TOOLPACKS`
+  - 覆盖 `install_toolpack` / `set_toolpack_enabled` / `import_claude_skill` / `set_claude_skill_enabled`
+- 完成依赖解析接入：
+  - 使用 `sidecar/src/mastra/pluginDependencyResolver.ts` 的 `verifyAndDemotePlugins` / `findReverseDependents`
+  - `import_claude_skill` 支持依赖自动安装与缺失依赖失败保护
+  - `set_claude_skill_enabled` 支持启用依赖校验与反向依赖保护
+  - `skillPrompt` 过滤策略禁用或依赖不满足技能
+- Skill manifest 扩展：
+  - `sidecar/src/storage/skillStore.ts` 新增 `dependencies` 字段解析（`dependencies` / `depends-on` / `dependsOn`）
+- 新增/增强测试并纳入 gate：
+  - 新增：`sidecar/tests/mastra-plugin-policy.test.ts`
+  - 新增：`sidecar/tests/mastra-plugin-dependency-resolver.test.ts`
+  - 增强：`sidecar/tests/mastra-additional-commands.test.ts`
+  - 增强：`sidecar/tests/mastra-skill-prompt.test.ts`
+  - 更新：`sidecar/package.json`、`sidecar/scripts/release-readiness.ts`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`158 pass, 1 skip, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/release-readiness.test.ts` 通过（`16 pass, 0 fail`）
+
+- 继续 Batch 7（迁移优先）：
+  - 依赖安装升级为递归闭包安装（支持 transitive dependencies）
+  - 新增依赖环路检测：`skill_dependency_cycle`（根技能可达环阻断导入）
+  - 验证策略热更新一致性：策略文件变更后下一条命令立即生效
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/pluginDependencyResolver.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/additionalCommands.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-additional-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-plugin-dependency-resolver.test.ts`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-plugin-dependency-resolver.test.ts tests/mastra-additional-commands.test.ts tests/mastra-skill-prompt.test.ts` 通过（`15 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`162 pass, 1 skip, 0 fail`）
+
+- 继续 Batch 8（迁移优先）：
+  - 将循环依赖防护前移到 `set_claude_skill_enabled` 启用路径
+  - `skillPrompt` 增加环路技能过滤，避免注入有环技能
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/capabilities.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/skillPrompt.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-additional-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-skill-prompt.test.ts`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-additional-commands.test.ts tests/mastra-skill-prompt.test.ts tests/mastra-plugin-dependency-resolver.test.ts` 通过（`17 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`164 pass, 1 skip, 0 fail`）
+
+- 完成重构文档实现审计并落盘：
+  - 新增审计矩阵：`/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+  - 在主方案中增加审计入口：`/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`（18.9）
+- 审计结论：
+  - 18.8 Batch 1-8 已进入主流程并可回归验证
+  - 18.4 Phase D 与部分 Phase E/F 仍是“未实现/部分实现”，尚未达到“整份文档完全实现”
+
+- 继续收口待实现关键点（Batch 9）：
+  - Hook 事件补齐：新增并接入 `PreCompact / PostCompact`（含 `missing_api_key` 预检失败路径的 `PostCompact`）
+  - memdir 二层记忆补齐：`MEMORY.md` 索引 + `memory/*.md` topic files + relevance 回补到 preamble
+  - MCP 生命周期治理最小版：新增 `McpConnectionManager`（缓存/重连/动态工具刷新），新增 `get_mcp_connection_status` 命令
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/hookRuntime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/ipc/streaming.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/contextCompression.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/connectionManager.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/clients.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/additionalCommands.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-context-compression.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-context-compression.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-policy-hooks.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-additional-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-mcp-connection-manager.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-context-compression.test.ts tests/mastra-mcp-connection-manager.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts` 通过（`57 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-policy-hooks.e2e.test.ts tests/mastra-context-compression.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`8 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`170 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 10，Phase D 继续）：
+  - 新增 `MCP` scope 治理模块：`managed/project/user` + `user` 审批门禁
+  - 新增 MCP 控制面命令：
+    - `list_mcp_servers`
+    - `upsert_mcp_server`
+    - `set_mcp_server_enabled`
+    - `set_mcp_server_approval`
+    - `refresh_mcp_connections`
+  - `get_mcp_connection_status` 扩展返回 `security` 快照
+  - `clients.ts` 接入策略签名热刷新：policy 变更后触发 `forceReconnect` 并重建连接
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/security.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/connectionManager.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/clients.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/additionalCommands.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-mcp-security.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-additional-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-mcp-security.test.ts tests/mastra-mcp-connection-manager.test.ts tests/mastra-additional-commands.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`26 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`175 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 11，Phase D 外部事件闭环首版）：
+  - `entrypoint` 新增：
+    - `bind_remote_session`
+    - `inject_channel_event`
+  - 支持 `taskId <-> remoteSessionId` 绑定与外部 channel 事件注入：
+    - 写入 `TASK_EVENT(type=channel_event)`
+    - 写入 transcript
+    - 写入 hook：`RemoteSessionLinked` / `ChannelEventInjected`
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/hookRuntime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-entrypoint.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`49 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`177 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 12，Phase D 远程会话持久化）：
+  - 新增 `sidecar/src/mastra/remoteSessionStore.ts`，实现远程会话持久化生命周期：
+    - `list/get/upsertLink/heartbeat/close`
+    - 原子写入 + 跨重启恢复
+    - active 会话跨 task 绑定冲突保护
+  - `main-mastra` 注入 `remoteSessionStore`
+  - `entrypoint` 接入远程会话生命周期命令：
+    - `list_remote_sessions`
+    - `open_remote_session`
+    - `heartbeat_remote_session`
+    - `close_remote_session`
+  - `bind_remote_session` 与 `inject_channel_event` 升级为持久化后端，重启后可恢复 `remoteSessionId -> taskId` 映射
+  - Hook 事件类型扩展并接入：
+    - `RemoteSessionLinked`
+    - `ChannelEventInjected`
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/remoteSessionStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main-mastra.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/hookRuntime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-remote-session-store.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-task-state-persistence.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/package.json`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/scripts/release-readiness.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-remote-session-store.test.ts tests/mastra-entrypoint.test.ts tests/mastra-task-state-persistence.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`54 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`181 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 13，Phase F 状态机框架化首版）：
+  - `taskRuntimeState` 升级：
+    - 新增 `status: retrying`
+    - 新增 `checkpoint`（`id/label/at/metadata`）
+    - 新增 `retry`（`attempts/maxAttempts/lastRetryAt/lastError`）
+    - 重启恢复规则扩展：`running/retrying -> interrupted`
+  - `entrypoint` 新增任务状态机命令：
+    - `set_task_checkpoint`
+    - `retry_task`
+    - `get_task_runtime_state`
+  - 主流程状态流转接入：
+    - `approval_required/suspended` 写入 checkpoint
+    - `complete` 清理 checkpoint 并清空 `retry.lastError`
+    - `error/tripwire` 写入 `retry.lastError`
+    - `start_task/send_task_message` 支持 `config.maxRetries`
+  - 增强存储 clone，保证 `checkpoint/retry` 深拷贝持久化安全
+  - E2E 补齐：
+    - `mastra-task-state-persistence.e2e` 增加 checkpoint 跨重启持久化
+    - `additional-commands-full-chain.e2e` 增加 runtime state 命令闭环
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/taskRuntimeState.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/taskRuntimeStateStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-task-state-persistence.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-entrypoint.test.ts tests/mastra-task-state-persistence.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`56 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`185 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 14，Phase F 故障注入覆盖扩展）：
+  - `createMastraSchedulerRuntime` 新增可注入故障点（测试/诊断）：
+    - `before_run`
+    - `after_running_marked`
+    - `before_complete`
+  - 扩展调度回归：
+    - 注入 `before_complete` 故障时任务正确标记 `failed`
+    - 不遗留 `running` 脏状态
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/schedulerRuntime.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-scheduler-runtime.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-scheduler-runtime.test.ts` 通过（`11 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`186 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 15，Phase D/F 续连与恢复编排增强）：
+  - Phase D（远程会话与投递保证）增强：
+    - `channel delivery` 支持显式 `eventId` 幂等注入（重复注入去重）
+    - 新增投递尝试跟踪（`deliveryAttempts/lastDeliveredAt`）
+    - 新增 `sync_remote_session` 命令：
+      - 会话续连（upsert + heartbeat）
+      - pending delivery 重放（`replayed_on_sync`）
+      - 可选重放后自动 ack（`ackReplayed`）
+    - `replay_channel_delivery_events` 支持 `ackOnReplay` 并记录投递尝试
+  - Phase F（状态机恢复编排）增强：
+    - 新增 `recover_tasks` 命令（`auto/resume/retry` + `dryRun`）
+    - 自动恢复策略：
+      - `failed/retrying` 优先 retry（受 `maxRetries` 限制）
+      - `interrupted/suspended` 走 resume
+      - `approval_required` 挂起任务跳过并给出理由
+  - 运行时可观测增强：
+    - `get_runtime_snapshot` 新增 remote session 与 channel delivery 统计视图
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/remoteSessionStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-remote-session-store.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-task-state-persistence.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-remote-session-store.test.ts tests/mastra-entrypoint.test.ts tests/mastra-task-state-persistence.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`69 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`197 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 16，Phase C marketplace 命令补齐）：
+  - capability 层恢复此前 `unsupported` 的 marketplace 核心命令：
+    - `install_from_github`
+    - `scan_default_repos`
+    - `validate_github_url`
+  - 同时补齐最小可用响应：
+    - `scan_skills / scan_mcp_servers`
+    - `validate_skill / validate_mcp`
+  - 迁移复用并接入 `githubDownloader`：
+    - 支持 `github:` / `github.com` 源下载
+    - 支持本地目录与 `file://` 作为 source（离线/测试友好）
+  - `install_from_github` 主流程：
+    - `targetType=skill`：下载后走 `importSkillFromDirectory`
+    - `targetType=mcp`：下载后解析 `mcp.json` 注册到 `ToolpackStore`
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/utils/githubDownloader.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/capabilities.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/additionalCommands.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-additional-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-additional-commands.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`27 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`199 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 17，Phase D/F 企业治理与故障编排增强）：
+  - Phase D（远程会话企业治理）：
+    - 新增 `remoteSessionGovernance` 策略加载（`.coworkany/policy-settings.json` + env）
+    - 主流程接入 `open/bind/sync_remote_session`：
+      - `managed` scope 可强制 `tenantId`
+      - `reject/takeover/takeover_if_stale` 冲突仲裁
+      - 响应和 `TASK_EVENT` 返回 `scope/arbitration`
+  - Phase F（跨模块故障编排）：
+    - `entrypoint` 新增 policy-gate bridge 统计：
+      - `forwardedRequests/successfulResponses`
+      - `orphanResponses/duplicateResponses`
+      - `timeoutErrors/retries/transportClosedRejects/invalidResponses`
+    - `get_runtime_snapshot` 暴露转发桥统计，支撑断链与重放一致性诊断
+  - 测试补齐：
+    - 新增 `tests/mastra-remote-session-governance.test.ts`
+    - 扩展 `tests/mastra-entrypoint.test.ts`
+    - 扩展 `tests/main-mastra-policy-gate.e2e.test.ts`
+    - 扩展 `tests/additional-commands-full-chain.e2e.test.ts`
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/remoteSessionGovernance.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/main-mastra.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-remote-session-governance.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/main-mastra-policy-gate.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-entrypoint.test.ts tests/mastra-remote-session-governance.test.ts tests/main-mastra-policy-gate.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts` 通过（`75 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`205 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 18，Phase C/D 企业治理闭环增强）：
+  - Phase C（marketplace 信任治理）：
+    - 新增 `marketplaceGovernance`：trust policy loader + source trust evaluator + audit log store
+    - `install_from_github` 接入 trust gate 与审计记录
+    - 新增命令：
+      - `get_marketplace_trust_policy`
+      - `list_marketplace_audit_log`
+      - `rollback_marketplace_install`
+  - Phase D（managed settings 同步/回滚）：
+    - 新增 `managedSettings`：配置文件同步/回滚 + sync log 持久化
+    - `additionalCommands` 新增：
+      - `sync_managed_settings`
+      - `rollback_managed_settings`
+      - `list_managed_settings_sync_log`
+    - MCP 回滚补齐删除恢复能力：
+      - `McpServerSecurityStore.remove`
+      - `removeMcpServerDefinition`
+  - 测试补齐：
+    - 新增 `tests/mastra-marketplace-governance.test.ts`
+    - 新增 `tests/mastra-managed-settings.test.ts`
+    - 扩展 `tests/mastra-additional-commands.test.ts`
+    - 扩展 `tests/additional-commands-full-chain.e2e.test.ts`
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/handlers/capabilities.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/marketplaceGovernance.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/managedSettings.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/additionalCommands.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/security.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/mcp/clients.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-marketplace-governance.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-managed-settings.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-additional-commands.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/additional-commands-full-chain.e2e.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-04-01-refactor-implementation-audit.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-marketplace-governance.test.ts tests/mastra-managed-settings.test.ts tests/mastra-additional-commands.test.ts` 通过（`20 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/additional-commands-full-chain.e2e.test.ts` 通过（`16 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && npm run test:mastra:phases` 通过（`209 pass, 1 skip, 0 fail`）
+
+- 继续收口待实现关键点（Batch 19，Phase D/F 一致性与多租户治理）：
+  - Phase F（长任务一致性）：
+    - 任务状态新增 `checkpointVersion` + `operationLog`
+    - `set_task_checkpoint / resume_interrupted_task / retry_task / recover_tasks` 接入 `operationId/idempotencyKey` 幂等
+    - 恢复链路接入 `expectedCheckpointVersion` 版本护栏，阻断 stale 恢复
+  - Phase D（managed 多租户远程会话治理闭环）：
+    - 治理策略新增：
+      - `requireEndpointIdForManaged`
+      - `enforceManagedIdentityImmutable`
+      - `requireTenantIdForManagedCommands`
+    - 接入主流程命令：
+      - `open/bind/sync/heartbeat/close_remote_session`
+      - `inject/list/ack/replay_channel_delivery_events`
+  - 测试补齐：
+    - 扩展 `tests/mastra-entrypoint.test.ts`
+    - 扩展 `tests/mastra-remote-session-governance.test.ts`
+    - 复跑 `tests/mastra-task-state-persistence.e2e.test.ts`
+    - 复跑 `tests/additional-commands-full-chain.e2e.test.ts`
+- 代码变更：
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/taskRuntimeState.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/taskRuntimeStateStore.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/remoteSessionGovernance.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/src/mastra/entrypoint.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-entrypoint.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/sidecar/tests/mastra-remote-session-governance.test.ts`
+  - `/Users/beihuang/Documents/github/coworkany/docs/plans/2026-03-29-mastra-refactoring-plan.md`
+- 验证：
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run typecheck` 通过
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-entrypoint.test.ts tests/mastra-remote-session-governance.test.ts` 通过（`61 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/mastra-task-state-persistence.e2e.test.ts` 通过（`5 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun test tests/additional-commands-full-chain.e2e.test.ts` 通过（`18 pass, 0 fail`）
+  - `cd /Users/beihuang/Documents/github/coworkany/sidecar && bun run test:mastra:phases` 通过（`218 pass, 1 skip, 0 fail`）

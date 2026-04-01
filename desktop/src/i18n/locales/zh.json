@@ -27,7 +27,9 @@
     "installed": "已安装",
     "validating": "验证中...",
     "installing": "安装中...",
-    "unknown": "未知"
+    "unknown": "未知",
+    "openRouterPolicyBlocked": "OpenRouter 拒绝了该请求（403），通常是账号风控或上游策略拦截。",
+    "openRouterPolicyBlockedHint": "请尝试更换 API Key、切换常见模型，并先关闭代理/VPN 后重试。若仍失败，请将原始错误提交给 OpenRouter 支持。"
   },
 
   "setup": {

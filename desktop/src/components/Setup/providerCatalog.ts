@@ -95,10 +95,10 @@ const DEFAULT_PRESETS: SetupProviderPreset[] = [
         provider: 'minimax',
         label: 'MiniMax',
         apiKeyLabel: 'MiniMax API Key',
-        hint: 'Use your MiniMax API key',
+        hint: 'Use your MiniMax Token Plan API key',
         placeholder: 'sk-...',
-        baseUrl: 'https://api.minimax.chat/v1',
-        model: 'MiniMax-Text-01',
+        baseUrl: 'https://api.minimaxi.com/v1',
+        model: 'MiniMax-M2.7',
     },
     {
         provider: 'kimi',
@@ -127,12 +127,17 @@ export function getSetupProviderLabel(provider: string | null): string | null {
     return preset?.label ?? provider;
 }
 
-export function buildSetupValidationInput(provider: SetupProvider, apiKey: string): Record<string, unknown> {
+export function buildSetupValidationInput(
+    provider: SetupProvider,
+    apiKey: string,
+    proxy?: { enabled?: boolean; url?: string; bypass?: string },
+): Record<string, unknown> {
     const preset = getSetupProviderPreset(provider);
 
     if (provider === 'anthropic') {
         return {
             provider,
+            proxy,
             anthropic: {
                 apiKey,
                 model: preset.model,
@@ -143,6 +148,7 @@ export function buildSetupValidationInput(provider: SetupProvider, apiKey: strin
     if (provider === 'openrouter') {
         return {
             provider,
+            proxy,
             openrouter: {
                 apiKey,
                 model: preset.model,
@@ -152,6 +158,7 @@ export function buildSetupValidationInput(provider: SetupProvider, apiKey: strin
 
     return {
         provider,
+        proxy,
         openai: {
             apiKey,
             baseUrl: preset.baseUrl,

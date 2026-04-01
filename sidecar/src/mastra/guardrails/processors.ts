@@ -27,7 +27,10 @@ function buildInputProcessors(): InputProcessorOrWorkflow[] {
         }),
         new PIIDetector({
             model: sharedModelConfig,
-            strategy: 'block',
+            // Input prompts often include task metadata (uuid/url/date strings).
+            // Redact instead of hard-blocking to avoid false-positive task aborts.
+            strategy: 'redact',
+            redactionMethod: 'placeholder',
             threshold: 0.7,
         }),
         new ModerationProcessor({

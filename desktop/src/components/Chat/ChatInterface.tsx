@@ -26,7 +26,7 @@ import { useFileAttachment } from '../../hooks/useFileAttachment';
 import { getPendingTaskStatus } from './Timeline/pendingTaskStatus';
 import { getVoiceSettings } from '../../lib/configStore';
 import { encodeTaskCollaborationMessage } from './collaborationMessage';
-import { isConversationTurnLocked } from './turnTaking';
+import { isConversationTurnLocked, TURN_LOCK_IDLE_GRACE_MS } from './turnTaking';
 import type { TaskEvent } from '../../types';
 import { TaskListView } from '../jarvis/TaskListView';
 
@@ -154,6 +154,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [entryMode, setEntryMode] = useState<EntryMode>('chat');
     const [nextRouteMode, setNextRouteMode] = useState<EntryMode | null>(null);
     const [isReconnectingLlm, setIsReconnectingLlm] = useState(false);
+    const [turnLockTick, setTurnLockTick] = useState(0);
 
     const activeSession = useActiveSession();
     const addTaskEvent = useTaskEventStore((state) => state.addEvent);
@@ -234,9 +235,49 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         () => activeSession ? getPendingTaskStatus(activeSession) : null,
         [activeSession]
     );
+    const headerStatus = useMemo<'idle' | 'running' | 'finished' | 'failed'>(() => {
+        if (!activeSession) {
+            return 'idle';
+        }
+        if (activeSession.status === 'running') {
+            return 'running';
+        }
+        if (activeSession.status === 'failed') {
+            return 'failed';
+        }
+        if (activeSession.failure) {
+            return 'failed';
+        }
+        return activeSession.status;
+    }, [activeSession]);
+    useEffect(() => {
+        if (!activeSession || activeSession.status !== 'running' || pendingTaskStatus) {
+            return undefined;
+        }
+
+        const updatedAtMs = Date.parse(activeSession.updatedAt);
+        if (Number.isNaN(updatedAtMs)) {
+            return undefined;
+        }
+
+        const elapsedMs = Date.now() - updatedAtMs;
+        const remainingMs = TURN_LOCK_IDLE_GRACE_MS - elapsedMs;
+        if (remainingMs <= 0) {
+            return undefined;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setTurnLockTick((value) => value + 1);
+        }, remainingMs + 16);
+
+        return () => {
+            window.clearTimeout(timeoutId);
+        };
+    }, [activeSession?.taskId, activeSession?.status, activeSession?.updatedAt, pendingTaskStatus]);
+
     const isTurnLocked = useMemo(
-        () => isConversationTurnLocked(activeSession),
-        [activeSession],
+        () => isConversationTurnLocked(activeSession, pendingTaskStatus, Date.now()),
+        [activeSession, pendingTaskStatus, turnLockTick],
     );
     const showInitialEntry = !activeSession || (activeSession.isDraft && activeSession.messages.length === 0);
 
@@ -259,7 +300,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const statusLabel = useMemo(() => {
         if (!activeSession) return '';
-        switch (activeSession.status) {
+        switch (headerStatus) {
             case 'running':
                 switch (pendingTaskStatus?.phase) {
                     case 'waiting_for_model':
@@ -278,7 +319,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             default:
                 return t('chat.statusIdle');
         }
-    }, [activeSession, pendingTaskStatus, t]);
+    }, [activeSession, headerStatus, pendingTaskStatus, t]);
 
     const handleClearHistory = useCallback(async () => {
         if (!activeSession?.taskId || activeSession.isDraft) return;
@@ -666,7 +707,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div className="chat-interface">
             <Header
                 title={activeSession?.title || t('chat.newSessionTitle')}
-                status={activeSession.status}
+                status={headerStatus}
                 statusLabel={statusLabel}
                 modelName={activeModelName}
                 enabledSkillsCount={enabledSkills.length}
