@@ -156,9 +156,7 @@ async function run(): Promise<void> {
         deps: {
             handleUserMessage,
             resolveResourceIdForTask: (taskId) => processor.resolveResourceIdForTask(taskId),
-            emitDesktopEventForTask: (taskId, event) => {
-                processor.emitDesktopEventForTask(taskId, event, writeEvent);
-            },
+            emitDesktopEventForTask: (taskId, event) => processor.emitDesktopEventForTask(taskId, event, writeEvent),
         },
     });
     schedulerRuntime.start();

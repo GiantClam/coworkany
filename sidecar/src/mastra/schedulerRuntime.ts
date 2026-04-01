@@ -43,7 +43,7 @@ export type ScheduledCancelResult = {
 type SchedulerRuntimeDeps = {
     handleUserMessage: UserMessageHandler;
     resolveResourceIdForTask: (taskId: string) => string;
-    emitDesktopEventForTask: (taskId: string, event: DesktopEvent) => void;
+    emitDesktopEventForTask: (taskId: string, event: DesktopEvent) => Promise<void>;
     getNow?: () => Date;
     injectFault?: (input: {
         phase: SchedulerFaultInjectionPhase;

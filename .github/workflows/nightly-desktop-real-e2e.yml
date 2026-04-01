@@ -1,0 +1,81 @@
+name: Nightly Desktop Real E2E
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  desktop-tier2-macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
+
+      - name: Run desktop real e2e tier2
+        working-directory: desktop
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          E2E_AIBERM_API_KEY: ${{ secrets.E2E_AIBERM_API_KEY }}
+          E2E_AIBERM_BASE_URL: ${{ secrets.E2E_AIBERM_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TEST_MODEL_ID: ${{ secrets.TEST_MODEL_ID }}
+        run: npm run test:e2e:tier2
+
+  desktop-tier3-macos:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: bun install
+
+      - name: Run desktop real e2e tier3
+        working-directory: desktop
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          E2E_AIBERM_API_KEY: ${{ secrets.E2E_AIBERM_API_KEY }}
+          E2E_AIBERM_BASE_URL: ${{ secrets.E2E_AIBERM_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TEST_MODEL_ID: ${{ secrets.TEST_MODEL_ID }}
+        run: npm run test:e2e:tier3

@@ -12,7 +12,7 @@
     "dev:mastra": "bun run --watch src/main-mastra.ts",
     "build": "bun build --target=bun -e electron -e chromium-bidi -e chromium-bidi/* -e playwright -e playwright-core -e playwright-core/* src/main-mastra.ts --outdir dist/build",
     "build:release": "node scripts/build-release.mjs",
-    "release:readiness": "bun run scripts/release-readiness.ts",
+    "release:readiness": "bun run scripts/release-readiness.ts --build-desktop --real-e2e --real-model-smoke",
     "release:readiness:full": "bun run scripts/release-readiness.ts --build-desktop --real-e2e",
     "release:readiness:commercial": "bun run scripts/release-readiness.ts --build-desktop --real-e2e --real-model-smoke",
     "doctor": "bun run scripts/sidecar-doctor.ts",

@@ -83,7 +83,7 @@ test.describe('Desktop sidecar spawn reuse', () => {
     test.skip(process.platform === 'darwin', 'Darwin fixture uses mocked invoke bridge, skip real spawn_sidecar integration');
     test.setTimeout(180_000);
 
-    test('@smoke @regression repeated spawn_sidecar calls reuse the same running sidecar', async ({ page, tauriLogs }) => {
+    test('@critical @smoke @regression repeated spawn_sidecar calls reuse the same running sidecar', async ({ page, tauriLogs }) => {
         await page.waitForLoadState('domcontentloaded');
 
         // Force a clean baseline: stop any currently connected sidecar transport first.

@@ -1,5 +1,6 @@
 import { test, expect } from './tauriFixtureNoChrome';
 import { seedPendingApprovalSession } from './utils/assistantUiApprovalSeed';
+import { assertChatInputEditableAfterTaskTerminal } from './utils/chatInputAssertions';
 
 const TASK_TIMEOUT_MS = 4 * 60 * 1000;
 const INPUT_SELECTORS = [
@@ -198,7 +199,7 @@ function buildProtocolRegressionSnapshot() {
 test.describe('desktop message protocol regression', () => {
     test.setTimeout(TASK_TIMEOUT_MS);
 
-    test('echoes original user message immediately and shows pending execution status after input submit', async ({ page }) => {
+    test('@critical echoes original user message immediately and shows pending execution status after input submit', async ({ page }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(15000);
 
@@ -231,7 +232,7 @@ test.describe('desktop message protocol regression', () => {
         }).toMatch(/等待模型响应|正在调用|进行中|Waiting for model response|Using |In progress/);
     });
 
-    test('shows scheduled confirmation in timeline and sidebar after desktop submit', async ({ page }) => {
+    test('@critical shows scheduled confirmation in timeline and sidebar after desktop submit', async ({ page }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(15_000);
 
@@ -273,9 +274,14 @@ test.describe('desktop message protocol regression', () => {
             timeout: 30_000,
             message: 'scheduled task should be visible in sidebar (task list or workspace section)',
         }).toBe(true);
+
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 60_000,
+            editableTimeoutMs: 20_000,
+        });
     });
 
-    test('@regression renders real assistant timeline reply after send_task_message (full chain)', async ({ page, tauriLogs }) => {
+    test('@critical @regression renders real assistant timeline reply after send_task_message (full chain)', async ({ page, tauriLogs }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(15_000);
         const seededAibermConfig = await seedAibermLlmConfigIfAvailable(page);
@@ -346,6 +352,11 @@ test.describe('desktop message protocol regression', () => {
 
         expect(latestAssistantContent.includes('原始任务：'), 'assistant timeline content should not leak runtime wrapper text').toBe(false);
         expect(latestAssistantContent.includes('用户路由：'), 'assistant timeline content should not leak runtime wrapper text').toBe(false);
+
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 90_000,
+            editableTimeoutMs: 20_000,
+        });
     });
 
     test('@regression renders sidecar task events in UI even when event id is missing', async ({ page }) => {
@@ -441,6 +452,11 @@ test.describe('desktop message protocol regression', () => {
         await expect(page.getByRole('heading', { name: /How can I help you today\?/ })).toHaveCount(0);
         await expect(page.locator('main').getByText(streamedAssistantText)).toBeVisible({
             timeout: 20_000,
+        });
+
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 20_000,
+            editableTimeoutMs: 20_000,
         });
     });
 

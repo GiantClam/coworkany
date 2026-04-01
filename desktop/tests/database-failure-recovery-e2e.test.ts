@@ -10,6 +10,7 @@
 
 import { test, expect } from './tauriFixtureNoChrome';
 import type { TauriLogCollector } from './tauriFixture';
+import { assertChatInputEditableAfterTaskTerminal } from './utils/chatInputAssertions';
 
 const TASK_TIMEOUT_MS = 4 * 60 * 1000;
 const INPUT_SELECTORS = [
@@ -55,7 +56,7 @@ async function expectTaskFailedWithAssistantError(page: any): Promise<void> {
 test.describe('Database Failure Recovery - Tauri Desktop E2E', () => {
     test.setTimeout(TASK_TIMEOUT_MS);
 
-    test('数据库连接失败时应在UI显示失败状态与错误反馈', async ({ page, tauriLogs }) => {
+    test('@critical 数据库连接失败时应在UI显示失败状态与错误反馈', async ({ page, tauriLogs }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(5000);
 
@@ -64,19 +65,34 @@ test.describe('Database Failure Recovery - Tauri Desktop E2E', () => {
 
         await expectTaskFailedWithAssistantError(page);
         await expect(page.locator('main').getByText(query).first()).toBeVisible({ timeout: 15_000 });
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 60_000,
+            editableTimeoutMs: 20_000,
+            acceptedStatuses: ['failed', 'finished', 'cancelled'],
+        });
     });
 
-    test('任务失败后应允许继续提交并进入新一轮执行', async ({ page, tauriLogs }) => {
+    test('@critical 任务失败后应允许继续提交并进入新一轮执行', async ({ page, tauriLogs }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(5000);
 
         const firstQuery = '连接不存在的数据库 10.0.0.999:5432 执行 SELECT * FROM users';
         await submitTaskFromInput(page, tauriLogs, firstQuery);
         await expectTaskFailedWithAssistantError(page);
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 60_000,
+            editableTimeoutMs: 20_000,
+            acceptedStatuses: ['failed', 'finished', 'cancelled'],
+        });
 
         const secondQuery = '再次尝试连接数据库并查询 users 表，若失败请说明原因';
         await submitTaskFromInput(page, tauriLogs, secondQuery);
         await expectTaskFailedWithAssistantError(page);
         await expect(page.locator('main').getByText(secondQuery).first()).toBeVisible({ timeout: 15_000 });
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 60_000,
+            editableTimeoutMs: 20_000,
+            acceptedStatuses: ['failed', 'finished', 'cancelled'],
+        });
     });
 });

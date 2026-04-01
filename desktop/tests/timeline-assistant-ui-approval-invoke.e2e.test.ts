@@ -6,7 +6,7 @@ const TASK_TIMEOUT_MS = 2 * 60 * 1000;
 test.describe('assistant-ui approval invoke regression', () => {
     test.setTimeout(TASK_TIMEOUT_MS);
 
-    test('Approve button triggers confirm_effect invoke command', async ({ page, tauriLogs }) => {
+    test('@critical Approve button triggers confirm_effect invoke command', async ({ page, tauriLogs }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(5000);
 
@@ -34,7 +34,7 @@ test.describe('assistant-ui approval invoke regression', () => {
         ).toContain(`invoke_confirm_effect requestId=${requestId}`);
     });
 
-    test('Deny button triggers deny_effect invoke command', async ({ page, tauriLogs }) => {
+    test('@critical Deny button triggers deny_effect invoke command', async ({ page, tauriLogs }) => {
         await page.waitForLoadState('domcontentloaded');
         await page.waitForTimeout(5000);
 

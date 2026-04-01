@@ -600,6 +600,12 @@ function buildResponse(
         payload,
     };
 }
+
+// Tools that are safe to auto-approve without user confirmation
+const AUTO_APPROVE_TOOLS = new Set([
+    'updateWorkingMemory',
+]);
+
 export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const getNowIso = deps.getNowIso ?? (() => new Date().toISOString());
     const createId = deps.createId ?? (() => randomUUID());
@@ -1442,11 +1448,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         }
         return decision;
     };
-    const emitDesktopEvent = (
+    const emitDesktopEvent = async (
         taskId: string,
         event: DesktopEvent,
         emit: (message: OutgoingMessage) => void,
-    ): void => {
+    ): Promise<void> => {
         const traceId = event.traceId ?? null;
         if (typeof event.traceId === 'string' && event.traceId.length > 0) {
             upsertTaskState(taskId, {
@@ -1469,6 +1475,16 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'approval_required') {
+            // Auto-approve safe tools without requiring user confirmation
+            if (AUTO_APPROVE_TOOLS.has(event.toolName)) {
+                await deps.handleApprovalResponse(
+                    event.runId ?? '',
+                    event.toolCallId,
+                    true,
+                    (event) => emit(toRecord(event)),
+                );
+                return;
+            }
             const requestId = createId();
             const checkpoint: TaskRuntimeCheckpoint = {
                 id: `approval:${requestId}`,
@@ -1858,12 +1874,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         throw lastError instanceof Error ? lastError : new Error(String(lastError));
     };
     return {
-        emitDesktopEventForTask: (
+        emitDesktopEventForTask: async (
             taskId: string,
             event: DesktopEvent,
             emit: (message: OutgoingMessage) => void,
-        ): void => {
-            emitDesktopEvent(taskId, event, emit);
+        ): Promise<void> => {
+            await emitDesktopEvent(taskId, event, emit);
         },
         resolveResourceIdForTask: (taskId: string): string => {
             return taskStates.get(taskId)?.resourceId ?? resolveTaskResourceId(taskId, {});

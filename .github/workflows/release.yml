@@ -57,7 +57,14 @@ jobs:
 
       - name: Run release readiness gate
         working-directory: sidecar
-        run: bun run scripts/release-readiness.ts --build-desktop
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          E2E_AIBERM_API_KEY: ${{ secrets.E2E_AIBERM_API_KEY }}
+          E2E_AIBERM_BASE_URL: ${{ secrets.E2E_AIBERM_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bun run scripts/release-readiness.ts --build-desktop --real-e2e --real-model-smoke
 
       - name: Upload release readiness report
         uses: actions/upload-artifact@v4
