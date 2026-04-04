@@ -2215,6 +2215,43 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     && typeof event.content === 'string'
                     && event.content.trim().length > 0
                 );
+                const emitFalseCompletionFailure = (event: Extract<DesktopEvent, { type: 'complete' }>): void => {
+                    clearPendingApprovalsForTask(input.taskId);
+                    const existingRetry = taskStates.get(input.taskId)?.retry;
+                    upsertTaskState(input.taskId, {
+                        status: 'failed',
+                        suspended: false,
+                        suspensionReason: undefined,
+                        checkpoint: undefined,
+                        retry: existingRetry
+                            ? {
+                                ...existingRetry,
+                                lastError: 'false_completion_no_assistant_narrative',
+                            }
+                            : undefined,
+                    });
+                    emitHookEvent('TaskFailed', {
+                        taskId: input.taskId,
+                        runId: event.runId,
+                        payload: {
+                            message: 'Mastra completed without assistant narrative.',
+                            errorCode: 'E_PROTOCOL_FALSE_COMPLETION',
+                            finishReason: event.finishReason ?? 'stop',
+                        },
+                    });
+                    emit({
+                        type: 'TASK_FAILED',
+                        taskId: input.taskId,
+                        payload: {
+                            error: 'Mastra completed without assistant narrative.',
+                            errorCode: 'E_PROTOCOL_FALSE_COMPLETION',
+                            recoverable: false,
+                            suggestion: 'Retry the chat turn only after assistant text is emitted before terminal completion.',
+                            finishReason: event.finishReason ?? 'stop',
+                            turnId: input.turnId,
+                        },
+                    });
+                };
                 const executeAttempt = async (
                     threadId: string,
                     onEvent: (event: DesktopEvent) => void,
@@ -2292,6 +2329,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         hasRecoverableHistoryError = true;
                         suppressRecoverableAttempt = true;
                         suppressedRecoverableEvents.push(event);
+                        return;
+                    }
+                    if (!hasAssistantNarrative && event.type === 'complete') {
+                        emitFalseCompletionFailure(event);
                         return;
                     }
                     emitDesktopEvent(input.taskId, event, emit, input.turnId);

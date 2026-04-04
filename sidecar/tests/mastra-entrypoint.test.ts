@@ -3347,6 +3347,11 @@ describe('mastra entrypoint processor', () => {
                     result: { exitCode: 0 },
                 });
                 emit({
+                    type: 'text_delta',
+                    runId: 'run-hook-events',
+                    content: 'hook query completed',
+                });
+                emit({
                     type: 'complete',
                     runId: 'run-hook-events',
                     finishReason: 'stop',
