@@ -18,58 +18,33 @@
     "taskFinished": true,
     "taskFailed": false,
     "taskFailedError": "",
-    "searchWebCallCount": 4,
-    "adviceKeywordHits": [
-      "买入",
-      "持有",
-      "buy",
-      "sell",
-      "评级",
-      "建议"
-    ],
-    "predictionKeywordHits": [
-      "预测",
-      "预期",
-      "未来",
-      "走势",
-      "概率",
-      "forecast",
-      "upside",
-      "downside"
-    ],
+    "searchWebCallCount": 0,
+    "adviceKeywordHits": [],
+    "predictionKeywordHits": [],
     "entityCoverage": [
       {
         "id": "cloudflare",
         "displayName": "Cloudflare",
-        "matchedAliases": [
-          "cloudflare",
-          "net"
-        ]
+        "matchedAliases": []
       },
       {
         "id": "reddit",
         "displayName": "Reddit",
-        "matchedAliases": [
-          "reddit",
-          "rddt"
-        ]
+        "matchedAliases": []
       },
       {
         "id": "nvidia",
         "displayName": "NVIDIA",
-        "matchedAliases": [
-          "nvidia",
-          "nvda"
-        ]
+        "matchedAliases": []
       }
     ],
-    "allEntitiesCovered": true,
+    "allEntitiesCovered": false,
     "markerSeen": true,
     "readyForFollowUpSeen": true,
     "completedBySilence": false,
     "completed": true,
     "externalFailure": false,
-    "evidenceTextLength": 9514,
-    "rawLogLength": 228435
+    "evidenceTextLength": 54,
+    "rawLogLength": 6353
   }
 }

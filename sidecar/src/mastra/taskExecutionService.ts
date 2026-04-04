@@ -7,9 +7,11 @@ import type {
 import { mastra } from './index';
 import { createTelemetryRunContext } from './telemetry';
 import { TaskContextCompressionStore } from './contextCompression';
+import { resolveMissingApiKeyForModel } from '../ipc/streaming';
 
 type TaskExecutionMode = 'direct' | 'workflow';
 const contextCompressionStore = new TaskContextCompressionStore();
+const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-4-5';
 
 function toRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -130,9 +132,47 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
         content: input.message,
     });
     const promptPack = contextCompressionStore.buildPromptPack(input.taskId);
-    const workflowUserInput = promptPack?.preamble
-        ? `${promptPack.preamble}\n\n[Latest user request]\n${input.message}`
-        : input.message;
+    const recalledMemoryFiles = promptPack?.recalledTopicMemories.map((entry) => entry.relativePath) ?? [];
+    if (promptPack) {
+        input.executionOptions?.onPreCompact?.({
+            taskId: input.taskId,
+            threadId: input.preferredThreadId,
+            resourceId: input.resourceId,
+            workspacePath: input.workspacePath,
+            microSummary: promptPack.microSummary,
+            structuredSummary: promptPack.structuredSummary,
+            recalledMemoryFiles,
+        });
+    }
+    const modelId = process.env.COWORKANY_MODEL || DEFAULT_MODEL_ID;
+    const missingApiKey = resolveMissingApiKeyForModel(modelId);
+    if (missingApiKey) {
+        const failureMessage = `missing_api_key:${missingApiKey}`;
+        const snapshot = contextCompressionStore.recordAssistantTurn({
+            taskId: input.taskId,
+            threadId: input.preferredThreadId,
+            resourceId: input.resourceId,
+            workspacePath: input.workspacePath,
+            content: failureMessage,
+        });
+        input.executionOptions?.onPostCompact?.({
+            taskId: input.taskId,
+            threadId: input.preferredThreadId,
+            resourceId: input.resourceId,
+            workspacePath: input.workspacePath,
+            microSummary: snapshot.microSummary,
+            structuredSummary: snapshot.structuredSummary,
+            recalledMemoryFiles,
+        });
+        await input.emitDesktopEvent({
+            type: 'error',
+            runId: `preflight-${randomUUID()}`,
+            message: failureMessage,
+            turnId: input.turnId,
+        });
+        return 'workflow';
+    }
+    const workflowUserInput = input.message;
     const workflow = mastra.getWorkflow('controlPlane');
     const runId = `control-plane-${randomUUID()}`;
     const telemetry = createTelemetryRunContext({
@@ -158,6 +198,17 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
     });
     const status = pickWorkflowStatus(result);
     if (status === 'suspended') {
+        if (promptPack) {
+            input.executionOptions?.onPostCompact?.({
+                taskId: input.taskId,
+                threadId: input.preferredThreadId,
+                resourceId: input.resourceId,
+                workspacePath: input.workspacePath,
+                microSummary: promptPack.microSummary,
+                structuredSummary: promptPack.structuredSummary,
+                recalledMemoryFiles,
+            });
+        }
         await input.emitDesktopEvent({
             type: 'suspended',
             runId,
@@ -170,12 +221,21 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
     }
     if (status === 'failed' || status === 'tripwire') {
         const failureMessage = pickWorkflowResultText(result) ?? `control_plane_failed:${status}`;
-        contextCompressionStore.recordAssistantTurn({
+        const snapshot = contextCompressionStore.recordAssistantTurn({
             taskId: input.taskId,
             threadId: input.preferredThreadId,
             resourceId: input.resourceId,
             workspacePath: input.workspacePath,
             content: failureMessage,
+        });
+        input.executionOptions?.onPostCompact?.({
+            taskId: input.taskId,
+            threadId: input.preferredThreadId,
+            resourceId: input.resourceId,
+            workspacePath: input.workspacePath,
+            microSummary: snapshot.microSummary,
+            structuredSummary: snapshot.structuredSummary,
+            recalledMemoryFiles,
         });
         await input.emitDesktopEvent({
             type: 'error',
@@ -187,12 +247,21 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
     }
     const summary = pickWorkflowResultText(result) ?? 'Task completed via workflow runtime.';
     if (summary) {
-        contextCompressionStore.recordAssistantTurn({
+        const snapshot = contextCompressionStore.recordAssistantTurn({
             taskId: input.taskId,
             threadId: input.preferredThreadId,
             resourceId: input.resourceId,
             workspacePath: input.workspacePath,
             content: summary,
+        });
+        input.executionOptions?.onPostCompact?.({
+            taskId: input.taskId,
+            threadId: input.preferredThreadId,
+            resourceId: input.resourceId,
+            workspacePath: input.workspacePath,
+            microSummary: snapshot.microSummary,
+            structuredSummary: snapshot.structuredSummary,
+            recalledMemoryFiles,
         });
         await input.emitDesktopEvent({
             type: 'text_delta',
@@ -200,6 +269,16 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
             role: 'assistant',
             content: summary,
             turnId: input.turnId,
+        });
+    } else if (promptPack) {
+        input.executionOptions?.onPostCompact?.({
+            taskId: input.taskId,
+            threadId: input.preferredThreadId,
+            resourceId: input.resourceId,
+            workspacePath: input.workspacePath,
+            microSummary: promptPack.microSummary,
+            structuredSummary: promptPack.structuredSummary,
+            recalledMemoryFiles,
         });
     }
     await input.emitDesktopEvent({

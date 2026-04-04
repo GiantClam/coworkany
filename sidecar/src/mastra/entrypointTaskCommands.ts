@@ -137,6 +137,11 @@ function isStartOrSendCommandType(commandType: string): commandType is StartOrSe
     return commandType === 'start_task' || commandType === 'send_task_message';
 }
 
+const EXPLICIT_SCHEDULE_PREFIX = /^(?:创建|新建)?定时任务[：:\s,，、-]*/u;
+const HIGH_RISK_HOST_ACTION_PATTERN = /\b(shutdown|reboot|poweroff|halt)\b|关机|重启/u;
+const SPACED_ABSOLUTE_TIME_PATTERN = /(?:今天|明天|后天)?\s*(?:凌晨|早上|上午|中午|下午|晚上)?\s*[零〇一二两兩三四五六七八九十\d]{1,3}\s+点/u;
+const DATABASE_OPERATION_PATTERN = /(连接(?:到)?数据库|数据库.*(?:查询|执行)|\b(?:mysql|postgres(?:ql)?|sqlite|database)\b|(?:select|insert|update|delete)\s+.+\s+from)/iu;
+
 function resolveTaskStartedMode(input: {
     forcedRouteMode?: UserMessageExecutionOptions['forcedRouteMode'];
     executionPath?: UserMessageExecutionOptions['executionPath'];
@@ -223,7 +228,7 @@ export async function handleStartOrSendTaskCommand(
             enabledSkillIds: explicitEnabledSkills ?? [],
         };
     const resolvedExecutionPath = input.pickTaskExecutionPath(commandConfig) ?? input.toUserMessageExecutionPath(previousState?.executionPath);
-    const executionOptions: UserMessageExecutionOptions = {
+    let executionOptions: UserMessageExecutionOptions = {
         enabledSkills: resolvedSkillPrompt.enabledSkillIds,
         skillPrompt: resolvedSkillPrompt.prompt,
         requireToolApproval: input.pickBooleanConfigValue(commandConfig, 'requireToolApproval'),
@@ -295,7 +300,35 @@ export async function handleStartOrSendTaskCommand(
         return true;
     }
 
-    if (input.scheduleTaskIfNeeded && routedMessage.forcedRouteMode !== 'chat') {
+    const hasExplicitSchedulePrefix = EXPLICIT_SCHEDULE_PREFIX.test(rawMessage);
+    const isHighRiskHostAction = HIGH_RISK_HOST_ACTION_PATTERN.test(message);
+    const hasSpacedAbsoluteTimeCue = SPACED_ABSOLUTE_TIME_PATTERN.test(message);
+    const isDatabaseOperation = DATABASE_OPERATION_PATTERN.test(message);
+    const skipImplicitSchedule =
+        !routedMessage.usedEnvelope
+        && !hasExplicitSchedulePrefix
+        && isHighRiskHostAction
+        && !hasSpacedAbsoluteTimeCue;
+    if (skipImplicitSchedule) {
+        executionOptions = {
+            ...executionOptions,
+            executionPath: 'direct',
+            forcedRouteMode: 'task',
+            forcePostAssistantCompletion: undefined,
+        };
+    }
+    const shouldForceDatabaseTaskPath = isDatabaseOperation
+        && routedMessage.forcedRouteMode !== 'chat';
+    if (shouldForceDatabaseTaskPath) {
+        executionOptions = {
+            ...executionOptions,
+            executionPath: 'direct',
+            forcedRouteMode: 'task',
+            forcePostAssistantCompletion: undefined,
+        };
+    }
+
+    if (input.scheduleTaskIfNeeded && !skipImplicitSchedule) {
         const scheduleDecision = await input.scheduleTaskIfNeeded({
             sourceTaskId: taskId,
             title: input.getString(payload.title) ?? undefined,

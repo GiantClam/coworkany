@@ -180,7 +180,7 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
     if (englishMatch?.[1] && englishMatch[2]) {
         const amount = Number(englishMatch[1]);
         const unitMs = relativeUnitToMs(englishMatch[2]);
-        if (Number.isFinite(amount) && amount > 0 && unitMs) {
+        if (Number.isFinite(amount) && amount >= 0 && unitMs) {
             return new Date(now.getTime() + amount * unitMs);
         }
     }
@@ -188,7 +188,7 @@ function parseRelativeTimeExpression(expression: string, now: Date): Date | null
     if (chineseMatch?.[1] && chineseMatch[2]) {
         const amount = parseRelativeAmount(chineseMatch[1]);
         const unitMs = relativeUnitToMs(chineseMatch[2]);
-        if (Number.isFinite(amount) && amount > 0 && unitMs) {
+        if (Number.isFinite(amount) && amount >= 0 && unitMs) {
             return new Date(now.getTime() + amount * unitMs);
         }
     }
@@ -303,7 +303,7 @@ function parseRelativeDelayMs(expression: string): number | null {
         return null;
     }
     const delayMs = parsed.getTime() - anchor.getTime();
-    return delayMs > 0 ? delayMs : null;
+    return delayMs >= 0 ? delayMs : null;
 }
 function extractChainedStages(taskQueryRaw: string): {
     primaryTaskQuery: string;

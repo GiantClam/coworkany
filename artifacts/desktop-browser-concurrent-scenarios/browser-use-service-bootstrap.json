@@ -1,7 +1,7 @@
 {
-  "available": true,
+  "available": false,
   "startedByTest": false,
-  "reason": "browser-use-service already healthy at http://127.0.0.1:8100/health",
+  "reason": "browser-use-service is unavailable at http://127.0.0.1:8100/health; start it externally before running agentbrowser scenarios",
   "process": null,
   "stderrTail": ""
 }

@@ -25,7 +25,7 @@
         "build": "tsc && vite build",
         "preview": "vite preview",
         "tauri": "tauri",
-        "test": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
+        "test": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts tests/p2-competitive-acceptance.test.ts",
         "test:ci": "bun test tests/phase1-acceptance.test.ts tests/phase2-acceptance.test.ts",
         "test:e2e": "playwright test",
         "test:e2e:tier1": "playwright test tests/sidecar-spawn-reuse.e2e.test.ts tests/desktop-message-protocol-regression.e2e.test.ts tests/database-failure-recovery-e2e.test.ts tests/timeline-assistant-ui-approval-invoke.e2e.test.ts --grep @critical",

@@ -16,6 +16,7 @@ export type CoworkanyRequestContextValues = {
     runtime: 'desktop-sidecar';
     workspacePath?: string;
     enabledSkills?: string[];
+    skillPrompt?: string;
 };
 
 export function createTaskRequestContext(input: {
@@ -24,6 +25,7 @@ export function createTaskRequestContext(input: {
     taskId?: string;
     workspacePath?: string;
     enabledSkills?: string[];
+    skillPrompt?: string;
 }): RequestContext<CoworkanyRequestContextValues> {
     const requestContext = new RequestContext<CoworkanyRequestContextValues>();
     requestContext.set(MASTRA_RESOURCE_ID_KEY, input.resourceId);
@@ -36,6 +38,9 @@ export function createTaskRequestContext(input: {
     }
     if (Array.isArray(input.enabledSkills) && input.enabledSkills.length > 0) {
         requestContext.set('enabledSkills', input.enabledSkills);
+    }
+    if (typeof input.skillPrompt === 'string' && input.skillPrompt.trim().length > 0) {
+        requestContext.set('skillPrompt', input.skillPrompt.trim());
     }
 
     return requestContext;

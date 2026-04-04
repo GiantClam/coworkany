@@ -31,7 +31,6 @@
     "openRouterPolicyBlocked": "OpenRouter 拒绝了该请求（403），通常是账号风控或上游策略拦截。",
     "openRouterPolicyBlockedHint": "请尝试更换 API Key、切换常见模型，并先关闭代理/VPN 后重试。若仍失败，请将原始错误提交给 OpenRouter 支持。"
   },
-
   "setup": {
     "welcomeTitle": "欢迎使用 CoworkAny",
     "welcomeSubtitle": "一款 AI 驱动的桌面助手，帮你自动化任务、检索信息、高效完成工作。",
@@ -75,7 +74,6 @@
     "ragPrepareFailedTitle": "RAG 模型下载失败",
     "ragPrepareFailedDesc": "请检查代理或网络配置后重试。"
   },
-
   "settings": {
     "title": "设置",
     "subtitle": "集中管理模型、搜索、运行时和应用偏好。",
@@ -192,7 +190,6 @@
     "newShellHint": "切换新的统一壳层体验；如布局表现异常，建议重启应用后生效。",
     "exportDiagnostics": "导出诊断信息"
   },
-
   "chat": {
     "howCanIHelp": "今天有什么我可以帮你的？",
     "startTaskHint": "在下方输入开始一个任务。",
@@ -267,7 +264,6 @@
     "outputTokens": "输出: {{value}}",
     "estimatedCost": "~${{cost}}"
   },
-
   "search": {
     "selectWorkspaceFirst": "请先选择一个工作区",
     "placeholder": "你想构建什么？",
@@ -287,7 +283,6 @@
     "checkingSystemState": "检查系统状态...",
     "analyzingCodeStructure": "分析代码结构"
   },
-
   "dashboard": {
     "mcpComingSoon": "MCP 服务器管理（即将推出）",
     "skillComingSoon": "技能管理（即将推出）",
@@ -335,7 +330,6 @@
     "statusBlocked": "已阻塞",
     "statusPending": "待处理"
   },
-
   "errorBoundary": {
     "applicationError": "应用错误",
     "unexpectedError": "CoworkAny 遇到了意外错误。你的数据是安全的。",
@@ -343,7 +337,6 @@
     "sectionError": "此区域遇到了错误",
     "retry": "重试"
   },
-
   "sidebar": {
     "coworkAny": "CoworkAny",
     "navigation": "导航",
@@ -369,7 +362,6 @@
     "sidecarConnected": "Sidecar 已连接",
     "disconnected": "已断开"
   },
-
   "skills": {
     "claudeSkills": "Claude 技能",
     "browseRepositories": "浏览仓库",
@@ -395,7 +387,6 @@
     "installedDate": "安装时间: {{date}}",
     "folderPlaceholder": "输入包含 SKILL.md 的文件夹路径..."
   },
-
   "mcp": {
     "mcpServers": "MCP 服务器",
     "browseRepositories": "浏览仓库",
@@ -416,7 +407,6 @@
     "installWithErrors": "安装完成但有错误：\n{{succeeded}} 个成功，{{failed}} 个失败",
     "successfullyInstalled": "成功安装 {{count}} 个 MCP 服务器！"
   },
-
   "toolpacks": {
     "mcpToolpacks": "MCP 工具包",
     "localToolpackPlaceholder": "本地工具包文件夹或清单路径",
@@ -436,7 +426,6 @@
     "risk": "风险: {{level}}/10",
     "folderPlaceholder": "输入包含 toolpack.json 的文件夹路径..."
   },
-
   "repository": {
     "scanningRepositories": "扫描仓库中...",
     "errorLoadingRepositories": "加载仓库出错",
@@ -454,7 +443,6 @@
     "installSelected": "安装选中 ({{count}})",
     "noItemsFound": "未找到匹配筛选条件的项目"
   },
-
   "workspace": {
     "noWorkspace": "无工作区",
     "noWorkspaceSelected": "未选择工作区",
@@ -463,7 +451,6 @@
     "deleteTooltip": "删除工作区（及文件）",
     "defaultHint": "新工作区会自动创建在程序目录下的 /workspace 中。名称可以留空，首条消息会自动生成工作区名称。"
   },
-
   "titlebar": {
     "coworkAny": "CoworkAny",
     "minimize": "最小化",
@@ -473,7 +460,6 @@
     "closeWindow": "关闭窗口",
     "quitApp": "退出程序"
   },
-
   "fluid": {
     "placeholder": "问 CoworkAny...",
     "enterHint": "回车",
@@ -482,7 +468,6 @@
     "activeSessions": "活跃会话",
     "active": "活跃"
   },
-
   "patch": {
     "reviewChanges": "审查更改",
     "filesAffected": "{{count}} 个文件",
@@ -493,7 +478,6 @@
     "rejectAll": "拒绝所有更改",
     "acceptAll": "接受所有更改"
   },
-
   "quality": {
     "excellent": "优秀",
     "good": "良好",
@@ -511,7 +495,6 @@
     "line": "行",
     "noIssuesFound": "未发现问题"
   },
-
   "verification": {
     "passed": "验证通过",
     "failed": "验证失败",
@@ -521,7 +504,6 @@
     "evidence": "证据：",
     "suggestions": "建议："
   },
-
   "runtime": {
     "python": "Python",
     "nodejs": "Node.js",
@@ -530,7 +512,6 @@
     "builtin": "内置",
     "unknown": "未知"
   },
-
   "updater": {
     "updateAvailable": "有更新可用",
     "newVersionAvailable": "版本 {{version}} 已发布",
@@ -544,13 +525,11 @@
     "checkFailed": "检查更新失败",
     "currentVersion": "当前版本: {{version}}"
   },
-
   "offline": {
     "noConnection": "无网络连接",
     "ollamaHint": "云端 LLM 服务不可用。请在设置中切换到 Ollama（本地）以离线使用。",
     "reconnected": "网络已恢复"
   },
-
   "sandbox": {
     "commandBlocked": "命令已拦截",
     "dangerousCommand": "此命令因安全原因已被拦截。",
@@ -569,7 +548,6 @@
     "networkConfig": "网络配置变更",
     "processKill": "终止系统进程"
   },
-
   "voice": {
     "startRecording": "开始语音输入",
     "stopRecording": "停止录音",
@@ -586,7 +564,6 @@
     "nativeAsrFailed": "系统语音识别未能返回最终转写结果。",
     "recordingError": "启动录音失败"
   },
-
   "multimodal": {
     "dragDropHint": "拖拽文件到此处或点击添加附件",
     "attachFile": "添加附件",
@@ -597,7 +574,6 @@
     "fileTooLarge": "文件过大（最大 {{max}}MB）",
     "pasteImage": "从剪贴板粘贴图片"
   },
-
   "feedback": {
     "sendFeedback": "发送反馈",
     "feedbackTitle": "帮助我们改进 CoworkAny",
@@ -613,7 +589,6 @@
     "crashReporting": "崩溃报告",
     "crashReportingDescription": "自动发送崩溃报告以帮助更快修复 Bug。"
   },
-
   "marketplace": {
     "title": "技能 & MCP 市场",
     "searchPlaceholder": "搜索技能、MCP 服务器...",
@@ -638,7 +613,6 @@
     "viewDetails": "查看详情",
     "noResults": "未找到 \"{{query}}\" 的结果"
   },
-
   "commandPalette": {
     "search": "搜索命令...",
     "primaryActions": "常用操作",
@@ -646,7 +620,6 @@
     "settings": "设置",
     "noResults": "没有找到匹配的命令"
   },
-
   "shortcutsOverlay": {
     "title": "键盘快捷键",
     "commandPalette": "命令面板",
@@ -657,7 +630,6 @@
     "closeModal": "关闭弹窗",
     "esc": "ESC"
   },
-
   "quickChat": {
     "title": "Quick Chat",
     "windowTitle": "CoworkAny Quick Chat",
@@ -666,7 +638,6 @@
     "devHint": "Quick Chat 功能仍在开发中，请使用主窗口体验完整功能。",
     "emptyGreeting": "有什么我可以帮你的？"
   },
-
   "welcome": {
     "newTask": "新建任务",
     "newTaskDesc": "创建新的AI任务",
@@ -690,7 +661,6 @@
     "promptUseGuide": "我应该怎么更高效地和你协作？",
     "promptCapabilities": "介绍一下你在 Chat 模式下的能力。"
   },
-
   "assistantUi": {
     "showMore": "展开其余 {{count}} 项",
     "runtimeStatus": "运行状态",
@@ -728,11 +698,16 @@
     "assistantLabel": "CoworkAny",
     "systemLabel": "系统"
   },
-
   "diagnostics": {
     "title": "诊断信息已导出",
     "description": "UI 诊断与 sidecar doctor 预检结果已复制到剪贴板并输出到控制台。",
     "failedTitle": "导出诊断失败",
     "failedDescription": "当前无法导出诊断信息。"
+  },
+  "effect": {
+    "title": "效果审批",
+    "pending": "等待审批",
+    "approved": "已批准",
+    "denied": "已拒绝"
   }
 }

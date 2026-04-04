@@ -17,50 +17,28 @@
     "taskFinished": true,
     "taskFailed": false,
     "taskFailedError": "",
-    "searchWebCallCount": 6,
-    "adviceKeywordHits": [
-      "持有",
-      "hold",
-      "评级",
-      "建议"
-    ],
-    "predictionKeywordHits": [
-      "预测",
-      "预期",
-      "未来",
-      "走势",
-      "概率",
-      "forecast",
-      "projection",
-      "next 6 months"
-    ],
+    "searchWebCallCount": 0,
+    "adviceKeywordHits": [],
+    "predictionKeywordHits": [],
     "entityCoverage": [
       {
         "id": "yankuang",
         "displayName": "兖矿能源",
-        "matchedAliases": [
-          "兖矿能源",
-          "yankuang",
-          "600188",
-          "1171"
-        ]
+        "matchedAliases": []
       },
       {
         "id": "nvidia",
         "displayName": "NVIDIA",
-        "matchedAliases": [
-          "nvidia",
-          "nvda"
-        ]
+        "matchedAliases": []
       }
     ],
-    "allEntitiesCovered": true,
+    "allEntitiesCovered": false,
     "markerSeen": true,
     "readyForFollowUpSeen": true,
     "completedBySilence": false,
     "completed": true,
     "externalFailure": false,
-    "evidenceTextLength": 13530,
-    "rawLogLength": 303747
+    "evidenceTextLength": 48,
+    "rawLogLength": 63830
   }
 }

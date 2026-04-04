@@ -31,7 +31,6 @@
     "openRouterPolicyBlocked": "OpenRouter rejected this request (403). This is usually an account/provider risk-control or policy block.",
     "openRouterPolicyBlockedHint": "Try a new API key, switch to a mainstream model, and disable proxy/VPN before retrying. If it persists, contact OpenRouter support with the raw error."
   },
-
   "setup": {
     "welcomeTitle": "Welcome to CoworkAny",
     "welcomeSubtitle": "Your AI-powered desktop agent that helps you automate tasks, research information, and get things done.",
@@ -77,7 +76,6 @@
     "ragPrepareFailedTitle": "RAG model download failed",
     "ragPrepareFailedDesc": "Please check proxy/network in Settings and retry."
   },
-
   "settings": {
     "title": "Settings",
     "subtitle": "Manage models, search, runtime, and app preferences in one place.",
@@ -194,7 +192,6 @@
     "newShellHint": "Toggle the new unified shell experience and restart the app if layout behavior looks stale.",
     "exportDiagnostics": "Export Diagnostics"
   },
-
   "chat": {
     "howCanIHelp": "How can I help you today?",
     "startTaskHint": "Start a task by typing below.",
@@ -269,7 +266,6 @@
     "outputTokens": "Out: {{value}}",
     "estimatedCost": "~${{cost}}"
   },
-
   "search": {
     "selectWorkspaceFirst": "Please select a workspace first",
     "placeholder": "What would you like to build?",
@@ -289,7 +285,6 @@
     "checkingSystemState": "Checking system state...",
     "analyzingCodeStructure": "Analyzing code structure"
   },
-
   "dashboard": {
     "mcpComingSoon": "MCP Server Management (Coming Soon)",
     "skillComingSoon": "Skill Management (Coming Soon)",
@@ -337,7 +332,6 @@
     "statusBlocked": "Blocked",
     "statusPending": "Pending"
   },
-
   "errorBoundary": {
     "applicationError": "Application Error",
     "unexpectedError": "CoworkAny encountered an unexpected error. Your data is safe.",
@@ -345,7 +339,6 @@
     "sectionError": "This section encountered an error",
     "retry": "Retry"
   },
-
   "sidebar": {
     "coworkAny": "CoworkAny",
     "navigation": "Navigation",
@@ -371,7 +364,6 @@
     "sidecarConnected": "Sidecar Connected",
     "disconnected": "Disconnected"
   },
-
   "skills": {
     "claudeSkills": "Claude Skills",
     "browseRepositories": "Browse Repositories",
@@ -397,7 +389,6 @@
     "installedDate": "Installed: {{date}}",
     "folderPlaceholder": "Enter folder path containing SKILL.md..."
   },
-
   "mcp": {
     "mcpServers": "MCP Servers",
     "browseRepositories": "Browse Repositories",
@@ -418,7 +409,6 @@
     "installWithErrors": "Installation completed with errors:\n{{succeeded}} succeeded, {{failed}} failed",
     "successfullyInstalled": "Successfully installed {{count}} MCP server(s)!"
   },
-
   "toolpacks": {
     "mcpToolpacks": "MCP Toolpacks",
     "localToolpackPlaceholder": "Local toolpack folder or manifest path",
@@ -438,7 +428,6 @@
     "risk": "Risk: {{level}}/10",
     "folderPlaceholder": "Enter folder path containing toolpack.json..."
   },
-
   "repository": {
     "scanningRepositories": "Scanning repositories...",
     "errorLoadingRepositories": "Error loading repositories",
@@ -456,7 +445,6 @@
     "installSelected": "Install Selected ({{count}})",
     "noItemsFound": "No items found matching your filters"
   },
-
   "workspace": {
     "noWorkspace": "No Workspace",
     "noWorkspaceSelected": "No workspace selected",
@@ -465,7 +453,6 @@
     "deleteTooltip": "Delete Workspace (and files)",
     "defaultHint": "New workspaces are created automatically in the app directory under /workspace. Leave the name empty to auto-name it from the first message."
   },
-
   "titlebar": {
     "coworkAny": "CoworkAny",
     "minimize": "Minimize",
@@ -475,7 +462,6 @@
     "closeWindow": "Close Window",
     "quitApp": "Quit App"
   },
-
   "fluid": {
     "placeholder": "Ask CoworkAny...",
     "enterHint": "Enter",
@@ -484,7 +470,6 @@
     "activeSessions": "Active Sessions",
     "active": "ACTIVE"
   },
-
   "patch": {
     "reviewChanges": "Review Changes",
     "filesAffected": "{{count}} file(s)",
@@ -495,7 +480,6 @@
     "rejectAll": "Reject All Changes",
     "acceptAll": "Accept All Changes"
   },
-
   "quality": {
     "excellent": "Excellent",
     "good": "Good",
@@ -513,7 +497,6 @@
     "line": "Line",
     "noIssuesFound": "No issues found"
   },
-
   "verification": {
     "passed": "Verification Passed",
     "failed": "Verification Failed",
@@ -523,7 +506,6 @@
     "evidence": "Evidence:",
     "suggestions": "Suggestions:"
   },
-
   "runtime": {
     "python": "Python",
     "nodejs": "Node.js",
@@ -532,7 +514,6 @@
     "builtin": "Built-in",
     "unknown": "Unknown"
   },
-
   "updater": {
     "updateAvailable": "Update Available",
     "newVersionAvailable": "Version {{version}} is available",
@@ -546,13 +527,11 @@
     "checkFailed": "Update check failed",
     "currentVersion": "Current version: {{version}}"
   },
-
   "offline": {
     "noConnection": "No internet connection",
     "ollamaHint": "Cloud LLM providers are unavailable. Switch to Ollama (local) in Settings for offline use.",
     "reconnected": "Connection restored"
   },
-
   "sandbox": {
     "commandBlocked": "Command Blocked",
     "dangerousCommand": "This command has been blocked for safety reasons.",
@@ -571,7 +550,6 @@
     "networkConfig": "Network configuration changes",
     "processKill": "Kill system processes"
   },
-
   "voice": {
     "startRecording": "Start voice input",
     "stopRecording": "Stop recording",
@@ -588,7 +566,6 @@
     "nativeAsrFailed": "System speech recognition failed to return a final transcript.",
     "recordingError": "Failed to start recording"
   },
-
   "multimodal": {
     "dragDropHint": "Drop files here or click to attach",
     "attachFile": "Attach file",
@@ -599,7 +576,6 @@
     "fileTooLarge": "File too large (max {{max}}MB)",
     "pasteImage": "Paste image from clipboard"
   },
-
   "feedback": {
     "sendFeedback": "Send Feedback",
     "feedbackTitle": "Help us improve CoworkAny",
@@ -615,7 +591,6 @@
     "crashReporting": "Crash Reporting",
     "crashReportingDescription": "Automatically send crash reports to help fix bugs faster."
   },
-
   "marketplace": {
     "title": "Skill & MCP Marketplace",
     "searchPlaceholder": "Search skills, MCP servers...",
@@ -640,7 +615,6 @@
     "viewDetails": "View Details",
     "noResults": "No results found for \"{{query}}\""
   },
-
   "commandPalette": {
     "search": "Search commands...",
     "primaryActions": "Primary",
@@ -648,7 +622,6 @@
     "settings": "Settings",
     "noResults": "No matching commands found"
   },
-
   "shortcutsOverlay": {
     "title": "Keyboard Shortcuts",
     "commandPalette": "Command Palette",
@@ -659,7 +632,6 @@
     "closeModal": "Close Modal",
     "esc": "ESC"
   },
-
   "quickChat": {
     "title": "Quick Chat",
     "windowTitle": "CoworkAny Quick Chat",
@@ -668,7 +640,6 @@
     "devHint": "Quick Chat is still under development. Use the main window for full features.",
     "emptyGreeting": "How can I help you today?"
   },
-
   "welcome": {
     "newTask": "New Task",
     "newTaskDesc": "Create a new AI task",
@@ -692,7 +663,6 @@
     "promptUseGuide": "How should I work with you more effectively?",
     "promptCapabilities": "Show me what you can do in chat mode."
   },
-
   "assistantUi": {
     "showMore": "Show {{count}} more",
     "runtimeStatus": "Runtime status",
@@ -730,11 +700,16 @@
     "assistantLabel": "CoworkAny",
     "systemLabel": "System"
   },
-
   "diagnostics": {
     "title": "Diagnostics Exported",
     "description": "UI diagnostics and sidecar doctor preflight copied to clipboard and printed to console.",
     "failedTitle": "Diagnostics Export Failed",
     "failedDescription": "Unable to export diagnostics right now."
+  },
+  "effect": {
+    "title": "Effect approvals",
+    "pending": "Pending approval",
+    "approved": "Approved",
+    "denied": "Denied"
   }
 }

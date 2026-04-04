@@ -32,6 +32,7 @@ const CHAT_PATTERN = /^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢�
 const CODE_PATTERN = /(修复|修改|重构|实现|patch|apply patch|edit|refactor|implement|bug|test|代码|code)/i;
 const FILE_WRITE_PATTERN = /(写入|保存|创建文件|生成文件|输出到|write to|save to|create (a )?file|readme|markdown|md\b)/i;
 const SHELL_PATTERN = /(运行命令|执行命令|terminal|shell|bash|zsh|command line|run command|npm\s+run|bun\s+run)/i;
+const HOST_CONTROL_PATTERN = /(关机|重启|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b)/i;
 const BROWSER_PATTERN = /(浏览器|网页|打开网站|click|navigate|browser|playwright|screenshot|页面)/i;
 const WEB_RESEARCH_PATTERN = /(搜索|调研|research|search|latest|最新|today|新闻|news|行情|市场|web)/i;
 const HIGH_RISK_ACTION_PATTERN = /(删除|移除|drop\s+table|rm\s+-rf|publish|发帖|发布到|send email|付款|payment)/i;
@@ -69,7 +70,7 @@ function collectSignals(text: string): IntentSignals {
     return {
         code: CODE_PATTERN.test(text),
         fileWrite: FILE_WRITE_PATTERN.test(text),
-        shell: SHELL_PATTERN.test(text),
+        shell: SHELL_PATTERN.test(text) || HOST_CONTROL_PATTERN.test(text),
         browser: BROWSER_PATTERN.test(text),
         webResearch: WEB_RESEARCH_PATTERN.test(text),
         highRisk: HIGH_RISK_ACTION_PATTERN.test(text),
@@ -233,8 +234,13 @@ function buildHitlPolicy(input: {
     if (input.hostAccessRequired) reasons.push('Task targets host paths outside workspace boundary.');
     if (input.publishIntent?.requiresSideEffect) reasons.push('Task includes external publishing side effects.');
     if (input.signals.highRisk) reasons.push('Task contains high-risk actions.');
-    const highRisk = input.clarification.required || input.hostAccessRequired || Boolean(input.publishIntent?.requiresSideEffect);
-    const mediumRisk = input.signals.code || input.signals.shell || input.signals.browser;
+    const highRisk = input.clarification.required
+        || input.hostAccessRequired
+        || Boolean(input.publishIntent?.requiresSideEffect)
+        || input.signals.highRisk;
+    // Shell-like operational commands rely on tool-level approval gates.
+    // Avoid plan-confirmation checkpoints that block direct approval flows.
+    const mediumRisk = input.signals.code || input.signals.browser;
     return {
         riskTier: highRisk ? 'high' : mediumRisk ? 'medium' : 'low',
         requiresPlanConfirmation: highRisk || mediumRisk,
@@ -322,6 +328,9 @@ function resolveMode(input: {
     }
     if (forcedMode) {
         return forcedMode;
+    }
+    if (HOST_CONTROL_PATTERN.test(input.text)) {
+        return 'immediate_task';
     }
     if (!input.text || CHAT_PATTERN.test(input.text) || input.text.length <= 16) {
         return 'chat';

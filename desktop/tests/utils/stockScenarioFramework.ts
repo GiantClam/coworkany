@@ -389,8 +389,20 @@ export async function runStockDesktopScenario(options: {
         const hasAdvice = adviceKeywordHits.length > 0;
         const hasPrediction = predictionKeywordHits.length > 0;
         const quietForMs = Date.now() - lastGrowthAt;
+        const insufficientResearchEvidence = (
+            searchWebCallCount < scenario.minSearchWebCalls
+            || !allEntitiesCovered
+            || !hasAdvice
+            || !hasPrediction
+        );
 
         if (taskFailed) {
+            break;
+        }
+
+        // Fail fast when runtime already emitted terminal completion but
+        // never produced expected stock-research evidence.
+        if (taskFinished && insufficientResearchEvidence && quietForMs > 15_000) {
             break;
         }
 

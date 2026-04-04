@@ -1,0 +1,103 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e6]:
+    - complementary [ref=e7]:
+      - generic [ref=e8]:
+        - generic [ref=e10]:
+          - img "CoworkAny" [ref=e11]
+          - generic [ref=e12]:
+            - generic [ref=e13]: CoworkAny
+            - generic [ref=e14]: Desktop agent
+        - region "Task List" [ref=e15]:
+          - generic [ref=e16]:
+            - button "Task List" [ref=e17] [cursor=pointer]:
+              - img [ref=e18]
+              - generic [ref=e21]: Task List
+            - button "New Task" [ref=e22] [cursor=pointer]:
+              - img [ref=e23]
+          - generic [ref=e25]: No run records
+        - region "Workspaces" [ref=e26]:
+          - generic [ref=e27]:
+            - button "Workspaces" [ref=e28] [cursor=pointer]:
+              - img [ref=e29]
+              - generic [ref=e31]: Workspaces
+            - button "Create new workspace" [ref=e32] [cursor=pointer]:
+              - img [ref=e33]
+          - generic [ref=e35]:
+            - generic [ref=e36]:
+              - button "Desktop Test Workspace 1" [ref=e37] [cursor=pointer]:
+                - generic [ref=e38]: Desktop Test Workspace
+                - generic [ref=e39]: "1"
+              - button "Delete Workspace (and files)":
+                - img
+            - generic [ref=e41]:
+              - button "早上3点关机" [ref=e42] [cursor=pointer]:
+                - generic [ref=e44]: 早上3点关机
+              - button "Delete":
+                - img
+        - generic [ref=e46]:
+          - button "Settings" [ref=e47] [cursor=pointer]:
+            - img [ref=e48]
+            - generic [ref=e51]: Settings
+          - generic [ref=e52]:
+            - generic [ref=e54]: Sidecar Connected
+            - button "Close Window" [ref=e55] [cursor=pointer]:
+              - img [ref=e56]
+      - separator "Resize sidebar" [ref=e58]
+    - main [ref=e59]:
+      - generic [ref=e61]:
+        - generic [ref=e63]:
+          - heading "早上3点关机" [level=2] [ref=e68]
+          - generic [ref=e69]:
+            - button "Ready for follow-up" [ref=e70] [cursor=pointer]:
+              - generic [ref=e71]: Ready for follow-up
+              - generic [ref=e72]: Reconnect LLM
+            - button "Aiberm (Setup) | Edit LLM Settings" [ref=e73] [cursor=pointer]:
+              - generic [ref=e74]: Aiberm (Setup)
+            - button "More actions" [ref=e76] [cursor=pointer]:
+              - generic [ref=e77]: ⋯
+        - generic [ref=e79]:
+          - generic [ref=e83]:
+            - generic [ref=e84]:
+              - generic [ref=e85]: User
+              - time [ref=e86]: 09:21 PM
+              - button "Copy message" [ref=e88] [cursor=pointer]:
+                - generic [ref=e89]: ⧉
+            - paragraph [ref=e90]: 早上3点关机
+          - generic [ref=e94]:
+            - generic [ref=e95]:
+              - generic [ref=e96]: CoworkAny
+              - time [ref=e97]: 09:21 PM
+              - generic [ref=e98]:
+                - button "Copy message" [ref=e99] [cursor=pointer]:
+                  - generic [ref=e100]: ⧉
+                - button "Retry" [ref=e101] [cursor=pointer]:
+                  - generic [ref=e102]: ↻
+            - paragraph [ref=e103]: 已安排在 04/05 03:00:00 执行：早上3点关机。
+            - article "Task" [ref=e105]:
+              - generic [ref=e107]: Task
+              - generic [ref=e109]:
+                - strong [ref=e110]: 早上3点关机
+                - generic "task status finished" [ref=e111]: Completed
+        - generic [ref=e113]:
+          - textbox "New instructions..." [ref=e115]
+          - generic [ref=e116]:
+            - generic [ref=e117]:
+              - button "Attach file" [ref=e118] [cursor=pointer]:
+                - img [ref=e119]
+              - button "Start voice input" [ref=e120] [cursor=pointer]:
+                - img [ref=e121]
+              - generic [ref=e124]: Chat Mode
+              - generic [ref=e125]:
+                - generic [ref=e126]: AI
+                - combobox "LLM Settings" [ref=e127]:
+                  - option "Aiberm (Setup)" [selected]
+            - generic [ref=e128]:
+              - generic [ref=e129]: Enter
+              - button "chat.sendMessage" [disabled] [ref=e130]:
+                - img [ref=e131]
+  - region "Notifications (F8)":
+    - list
+```

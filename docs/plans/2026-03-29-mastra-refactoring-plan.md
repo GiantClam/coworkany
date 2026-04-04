@@ -3833,6 +3833,205 @@ const marketResearch = createWorkflow({
   - Batch 1-18 主流程接入已完成；
   - Phase C/D/F 已进一步增强，剩余重点为 marketplace 签名/来源信誉深度治理与更细粒度故障编排覆盖。
 
+### 18.10 插件生态即插即用兼容重构（2026-04-04）
+
+> 目标：让 `oh-my-claudecode`、`oh-my-codex`、`oh-my-openagent` 这类社区插件在 CoworkAny 中实现“可安装、可运行、可观测、可回滚”的统一导入体验。  
+> 原则：不修改上游仓库结构，导入时做标准化与兼容分级，避免“路径 hack”导致后续不可维护。
+
+#### 18.10.1 问题定义与成功标准
+
+当前阻塞点：
+1. Skill 导入入口要求目录根存在 `SKILL.md`，多插件仓库采用 `skills/*/SKILL.md` 或 `.opencode/skills/*/SKILL.md` 分层结构，无法直接整包导入。
+2. Toolpack 读取固定 `mcp.json`，社区插件常见 `.mcp.json` 或 `plugin.json -> mcpServers` 描述，无法直接复用。
+3. 部分技能内容包含 `omx/opencode/claude plugin` 专有运行时语义，仅“改路径”无法保证运行行为一致。
+
+目标成功标准（DoD）：
+1. `install_from_github` 支持识别并安装三类布局：Claude 插件、Codex 工作流插件、OpenCode 插件。
+2. 对于可自动适配能力，导入后可在 CoworkAny 中触发并执行；对不可自动适配能力，给出结构化告警与降级说明。
+3. 所有导入操作具备审计、回滚、幂等和可重试能力。
+4. 为上述三个仓库新增端到端兼容回归用例并纳入发布门禁。
+
+#### 18.10.2 社区最佳实践对齐（落地约束）
+
+1. **Manifest-first 发现**：先识别插件清单，再决定解析器，不依赖路径猜测。
+2. **Normalize at import-time**：导入时归一化到 CoworkAny 内部模型，不污染上游代码。
+3. **Capability negotiation**：导入后做能力分级（A/B/C），A 直接启用，B 需 shim，C 默认禁用并提示。
+4. **Secure-by-default**：来源信任、权限扩张审批、MCP server 审批必须在安装链路前置。
+5. **Deterministic rollback**：每一步可逆，失败时原子回滚，不留下半安装状态。
+
+#### 18.10.3 目标架构（Plugin Adapter Layer）
+
+新增四层适配架构：
+
+1. **Discovery 层（识别）**
+   - 输入：GitHub 下载目录
+   - 输出：`PluginPackageCandidate[]`
+   - 支持：
+     - `.claude-plugin/plugin.json`
+     - `.codex-plugin/plugin.json`（若存在）
+     - OpenCode 约定目录（`.opencode/skills`）
+     - `skills/*/SKILL.md` 纯 skill 仓库
+
+2. **Normalization 层（标准化）**
+   - 将候选插件映射为统一模型：
+     - `normalizedSkills[]`（目录、manifest、依赖、触发词）
+     - `normalizedMcpServers[]`（由 `.mcp.json` 或 `mcpServers` 转换）
+     - `runtimeHints[]`（omx/opencode/team 等语义标签）
+     - `compatibilityGrade`（A/B/C）
+
+3. **Install 层（生命周期）**
+   - Skills 批量安装到 `.coworkany/skills/<id>/`
+   - MCP/toolpack 生成标准 `mcp.json` 并走既有审批策略
+   - 写入 `plugins-registry.json`（来源、版本、文件摘要、回滚指针）
+
+4. **Runtime Shim 层（轻兼容）**
+   - 命令别名 shim（示例：`omx team status` -> CoworkAny 能力查询事件）
+   - 状态目录映射 shim（只读映射 `.omx/.opencode` 语义到 `.coworkany`）
+   - 对无法等价语义输出“可解释降级事件”，不静默失败
+
+#### 18.10.4 分期实施（可执行清单）
+
+##### Phase P0：协议与数据模型（1 天）
+
+新增文件：
+- `sidecar/src/plugins/contracts.ts`
+- `sidecar/src/plugins/compatibilityGrade.ts`
+
+定义：
+- `PluginSourceType`、`PluginLayoutType`
+- `PluginPackageCandidate`、`NormalizedPluginPackage`
+- `CompatibilityGrade = 'A' | 'B' | 'C'`
+- `CompatibilityIssue`（code/message/severity/suggestion）
+
+测试：
+- `sidecar/tests/plugins-contracts.test.ts`
+
+##### Phase P1：发现与解析器（2 天）
+
+新增文件：
+- `sidecar/src/plugins/discovery.ts`
+- `sidecar/src/plugins/adapters/claudePluginAdapter.ts`
+- `sidecar/src/plugins/adapters/codexPluginAdapter.ts`
+- `sidecar/src/plugins/adapters/opencodePluginAdapter.ts`
+- `sidecar/src/plugins/adapters/rawSkillsAdapter.ts`
+
+改造文件：
+- `sidecar/src/handlers/capabilities.ts`（`install_from_github` 接入 discovery）
+
+要求：
+1. 不再假设根目录存在 `SKILL.md`。
+2. 支持递归收集 `skills/*/SKILL.md` 与 `.opencode/skills/*/SKILL.md`。
+3. 支持读取 `.mcp.json` 与 `plugin.json.mcpServers`。
+
+测试：
+- `sidecar/tests/plugins-discovery.test.ts`
+- `sidecar/tests/plugins-adapters.test.ts`
+
+##### Phase P2：标准化安装与注册中心（2 天）
+
+新增文件：
+- `sidecar/src/plugins/pluginInstallManager.ts`
+- `sidecar/src/plugins/pluginRegistryStore.ts`
+
+改造文件：
+- `sidecar/src/mastra/additionalCommands.ts`（skill 批量安装入口）
+- `sidecar/src/handlers/capabilities.ts`（`install_from_github_response` 增加兼容报告）
+
+新增持久化：
+- `.coworkany/plugins-registry.json`
+  - `pluginId/source/version/installedAt/skills/mcps/compatibilityGrade/issues/rollback`
+
+测试：
+- `sidecar/tests/plugins-install-manager.test.ts`
+- `sidecar/tests/plugins-registry-store.test.ts`
+
+##### Phase P3：MCP 兼容桥接（1 天）
+
+改造文件：
+- `sidecar/src/handlers/capabilities.ts`
+- `sidecar/src/mastra/mcp/security.ts`
+
+要求：
+1. 接受 `.mcp.json` 并转换为内部标准 `mcp.json` 结构。
+2. 复用现有 server 审批与 scope 治理，不新增旁路。
+3. 安装结果中返回 server 级别状态（installed/blocked/skipped）。
+
+测试：
+- `sidecar/tests/plugins-mcp-bridge.test.ts`
+
+##### Phase P4：Runtime Shim 与降级事件（2 天）
+
+新增文件：
+- `sidecar/src/plugins/runtimeShim.ts`
+- `sidecar/src/plugins/compatibilityEventMapper.ts`
+
+改造文件：
+- `sidecar/src/mastra/entrypoint.ts`
+- `desktop/src/stores/taskEvents/reducers/effectReducer.ts`
+
+要求：
+1. 将无法直接运行的专有命令映射为结构化 `PLUGIN_COMPAT_WARNING` 事件。
+2. 对可替代能力给出自动 fallback（例如状态查询、只读命令）。
+3. chat 时间线可见“已降级执行/需手动处理”的明确提示。
+
+测试：
+- `sidecar/tests/plugins-runtime-shim.test.ts`
+- `desktop/src/stores/taskEvents/__tests__/plugin-compat-events.test.ts`
+
+##### Phase P5：真实仓库回放与发布门禁（2 天）
+
+新增 E2E：
+- `sidecar/tests/e2e/plugin-compat-oh-my-claudecode.e2e.test.ts`
+- `sidecar/tests/e2e/plugin-compat-oh-my-codex.e2e.test.ts`
+- `sidecar/tests/e2e/plugin-compat-oh-my-openagent.e2e.test.ts`
+
+验证点：
+1. 识别成功（layout + skills + mcp）
+2. 安装成功率（无半安装）
+3. 兼容分级与告警正确
+4. 回滚成功（registry 与落盘目录一致恢复）
+
+发布门禁：
+- 将上述 e2e 纳入 `test:mastra:phases` 或新增 `test:plugin-compat` 并在 release gate 必跑。
+
+#### 18.10.5 数据与协议变更
+
+`install_from_github_response` 增量字段：
+- `pluginId?: string`
+- `compatibilityGrade?: 'A'|'B'|'C'`
+- `compatibilityIssues?: Array<{ code: string; severity: 'info'|'warn'|'error'; message: string; suggestion?: string }>`
+- `installedSkills?: string[]`
+- `installedMcpServers?: string[]`
+
+新增命令：
+- `list_installed_plugins`
+- `get_plugin_compatibility_report`
+- `rollback_plugin_install`
+
+#### 18.10.6 风险与回滚策略
+
+主要风险：
+1. 误判布局导致错误导入。
+2. runtime shim 过度替换，掩盖真实能力缺失。
+3. 多源插件并存时依赖冲突扩大。
+
+缓解与回滚：
+1. 解析器按优先级短路并输出 `discoveryTrace`，便于诊断。
+2. shim 仅做白名单映射；未覆盖语义必须显式告警。
+3. 每次安装写审计快照，失败自动回滚；保留手动 `rollback_plugin_install`。
+
+#### 18.10.7 里程碑与责任边界
+
+里程碑：
+1. M1（P0-P1）：可识别并解析三类仓库结构。
+2. M2（P2-P3）：可安装并治理 skills/mcp，支持回滚。
+3. M3（P4-P5）：运行时降级可观测，三仓库 e2e 稳定通过。
+
+责任边界：
+1. Sidecar 负责解析、安装、治理、事件输出。
+2. Desktop 负责兼容事件展示与用户可见诊断。
+3. 不在本期内实现对上游运行时（omx/opencode）的完整语义等价，仅实现“可运行 + 可解释降级”。
+
 ---
 
 ## 附录 A: 时间线总览

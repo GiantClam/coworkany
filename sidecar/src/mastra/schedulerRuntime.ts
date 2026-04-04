@@ -335,7 +335,17 @@ export function createMastraSchedulerRuntime(input: RuntimeInput): {
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let pollInFlight: Promise<void> | null = null;
     const scheduleIfNeeded = async (args: ScheduleInput): Promise<ScheduleDecision> => {
-        const parsed = detectScheduledIntent(args.message, getNow());
+        let parsed: ReturnType<typeof detectScheduledIntent>;
+        try {
+            parsed = detectScheduledIntent(args.message, getNow());
+        } catch (error) {
+            return {
+                scheduled: false,
+                error: error instanceof Error
+                    ? error.message
+                    : String(error),
+            };
+        }
         if (!parsed) return { scheduled: false };
         const meta: SchedulerMeta = {
             recurrence: parsed.recurrence,

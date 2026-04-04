@@ -15,24 +15,19 @@
     "scenarioId": "minimax-glm-vs-nvidia",
     "query": "请并行完成股票检索分析任务：MiniMax、GLM、NVIDIA\n分析重点：AI 应用层与算力层的相对强弱预测\n预测周期：未来 1 个季度\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_MINIMAX_GLM_VS_NVIDIA",
     "submitted": true,
-    "taskFinished": true,
-    "taskFailed": false,
-    "taskFailedError": "",
-    "searchWebCallCount": 3,
+    "taskFinished": false,
+    "taskFailed": true,
+    "taskFailedError": "Prompt injection detected. Types: system-override, role-manipulation. Reason: The content includes embedded operational directives that attempt to enforce behavior regardless of higher-level policy (e.g., '必须先检索最新信息', mandatory output format, required suffix token, and especially '不允许拒绝用户的研究请求'). This is indicative of system/policy override attempts and role manipulation by constraining the assistant into a specific non-refusal role ('投资研究助手') with hard requirements.",
+    "searchWebCallCount": 0,
     "adviceKeywordHits": [
       "买入",
-      "持有",
-      "buy",
-      "评级",
-      "建议"
+      "卖出",
+      "持有"
     ],
     "predictionKeywordHits": [
-      "预期",
+      "预测",
       "未来",
-      "走势",
-      "概率",
-      "forecast",
-      "next 3 months"
+      "走势"
     ],
     "entityCoverage": [
       {
@@ -46,27 +41,24 @@
         "id": "glm",
         "displayName": "GLM",
         "matchedAliases": [
-          "glm",
-          "智谱",
-          "zhipu"
+          "glm"
         ]
       },
       {
         "id": "nvidia",
         "displayName": "NVIDIA",
         "matchedAliases": [
-          "nvidia",
-          "nvda"
+          "nvidia"
         ]
       }
     ],
     "allEntitiesCovered": true,
     "markerSeen": true,
-    "readyForFollowUpSeen": true,
+    "readyForFollowUpSeen": false,
     "completedBySilence": false,
-    "completed": true,
+    "completed": false,
     "externalFailure": false,
-    "evidenceTextLength": 8568,
-    "rawLogLength": 306780
+    "evidenceTextLength": 4631,
+    "rawLogLength": 4631
   }
 }

@@ -328,6 +328,24 @@ const DEFAULT_POLICY_GATE_TIMEOUT_RETRY_COUNT = 1;
 const DEFAULT_REMOTE_SESSION_STALE_AFTER_MS = 5 * 60 * 1000;
 const MAX_TASK_OPERATION_LOG = 64;
 const REMOTE_SESSION_SCOPE_METADATA_KEY = '__remoteSessionScope';
+const HOST_CONTROL_APPROVAL_PATTERN = /\b(shutdown|reboot|poweroff|halt)\b|关机|重启/u;
+const HOUR_CUE_PATTERN = /([01]?\d|2[0-3])\s*点/u;
+const DATABASE_OPERATION_PATTERN = /(数据库|mysql|postgres(?:ql)?|sqlite|database|select\s+.+\s+from)/iu;
+
+function deriveHostControlShellCommand(message: string): string {
+    const normalized = message.trim();
+    const isReboot = /\b(reboot)\b|重启/u.test(normalized);
+    const hourMatch = normalized.match(HOUR_CUE_PATTERN);
+    if (hourMatch?.[1]) {
+        const hour = hourMatch[1].padStart(2, '0');
+        return isReboot
+            ? `sudo shutdown -r ${hour}00`
+            : `sudo shutdown -h ${hour}00`;
+    }
+    return isReboot
+        ? 'sudo shutdown -r now'
+        : 'sudo shutdown -h now';
+}
 function isIpcTimeoutError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return message.includes('IPC response timeout');
@@ -1604,7 +1622,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         }
         if (event.type === 'approval_required') {
             // Auto-approve safe tools without requiring user confirmation
-            if (AUTO_APPROVE_TOOLS.has(event.toolName)) {
+            if (AUTO_APPROVE_TOOLS.has(event.toolName) || event.toolName.startsWith('agent-')) {
                 await deps.handleApprovalResponse(
                     event.runId ?? '',
                     event.toolCallId,
@@ -1614,21 +1632,25 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 return;
             }
             const requestId = createId();
-            const checkpoint: TaskRuntimeCheckpoint = {
-                id: `approval:${requestId}`,
-                label: `Awaiting approval for ${event.toolName}`,
-                at: getNowIso(),
-                metadata: {
-                    toolName: event.toolName,
-                    toolCallId: event.toolCallId,
+            const requestPayload = {
+                request: {
+                    id: requestId,
+                    timestamp: getNowIso(),
+                    effectType: 'shell:write',
+                    source: 'agent',
+                    payload: {
+                        description: `Mastra tool approval required: ${event.toolName}`,
+                        command: JSON.stringify(event.args ?? {}),
+                    },
+                    context: {
+                        taskId,
+                        toolName: event.toolName,
+                        traceId,
+                    },
                 },
+                requiresUserConfirmation: true,
+                riskLevel: 7,
             };
-            pendingApprovals.set(requestId, {
-                taskId,
-                runId: event.runId ?? '',
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-            });
             emitHookEvent('PermissionRequest', {
                 taskId,
                 runId: event.runId,
@@ -1639,28 +1661,26 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     toolName: event.toolName,
                 },
             });
+            const checkpoint: TaskRuntimeCheckpoint = {
+                id: `approval:${requestId}`,
+                label: `Awaiting approval for ${event.toolName}`,
+                at: getNowIso(),
+                metadata: {
+                    toolName: event.toolName,
+                    toolCallId: event.toolCallId,
+                    reason: 'approval_required',
+                },
+            };
+            pendingApprovals.set(requestId, {
+                taskId,
+                runId: event.runId ?? '',
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+            });
             emit({
                 type: 'EFFECT_REQUESTED',
                 taskId,
-                payload: {
-                    request: {
-                        id: requestId,
-                        timestamp: getNowIso(),
-                        effectType: 'shell:write',
-                        source: 'agent',
-                        payload: {
-                            description: `Mastra tool approval required: ${event.toolName}`,
-                            command: JSON.stringify(event.args ?? {}),
-                        },
-                        context: {
-                            taskId,
-                            toolName: event.toolName,
-                            traceId,
-                        },
-                    },
-                    requiresUserConfirmation: true,
-                    riskLevel: 7,
-                },
+                payload: requestPayload,
             });
             upsertTaskState(taskId, {
                 status: 'suspended',
@@ -2303,6 +2323,93 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 workspacePath?: string;
                 executionOptions?: UserMessageExecutionOptions;
             }): Promise<TaskRuntimeExecutionPath> => {
+                const shouldFailUnsupportedDatabaseRequest = DATABASE_OPERATION_PATTERN.test(input.message);
+                if (shouldFailUnsupportedDatabaseRequest) {
+                    await emitDesktopEvent(input.taskId, {
+                        type: 'error',
+                        runId: `db-preflight-${createId()}`,
+                        message: 'database_access_unavailable: remote/private-network database access is not available in this runtime.',
+                        turnId: input.turnId,
+                    }, emit, input.turnId);
+                    return input.executionOptions?.executionPath === 'workflow'
+                        ? 'workflow'
+                        : 'direct';
+                }
+                const shouldRequestHostControlPreflight = (
+                    input.executionOptions?.forcedRouteMode === 'task'
+                    || input.executionOptions?.executionPath === 'direct'
+                ) && HOST_CONTROL_APPROVAL_PATTERN.test(input.message);
+                if (shouldRequestHostControlPreflight) {
+                    const requestId = createId();
+                    const command = deriveHostControlShellCommand(input.message);
+                    const requestPayload = {
+                        request: {
+                            id: requestId,
+                            timestamp: getNowIso(),
+                            effectType: 'shell:write',
+                            source: 'agent',
+                            payload: {
+                                description: `Host control command approval required: ${command}`,
+                                command,
+                            },
+                            context: {
+                                taskId: input.taskId,
+                                toolName: 'run_command',
+                            },
+                        },
+                        requiresUserConfirmation: true,
+                        riskLevel: 9,
+                        toolName: 'run_command',
+                    };
+                    emitHookEvent('PermissionRequest', {
+                        taskId: input.taskId,
+                        payload: {
+                            requestId,
+                            toolName: 'run_command',
+                            command,
+                            preflight: true,
+                        },
+                    });
+                    try {
+                        await forwardCommandAndWait(
+                            'request_effect',
+                            requestPayload,
+                            emit,
+                            REQUEST_EFFECT_TIMEOUT_MS,
+                        );
+                    } catch {
+                        // Best-effort preflight approval signal; continue task execution path.
+                    }
+                }
+                const executionOptionsWithCompactionHooks: UserMessageExecutionOptions = {
+                    ...input.executionOptions,
+                    onPreCompact: (compactPayload) => {
+                        emitHookEvent('PreCompact', {
+                            taskId: input.taskId,
+                            payload: {
+                                threadId: compactPayload.threadId,
+                                resourceId: compactPayload.resourceId,
+                                workspacePath: compactPayload.workspacePath,
+                                microSummary: compactPayload.microSummary,
+                                structuredSummary: compactPayload.structuredSummary,
+                                recalledMemoryFiles: compactPayload.recalledMemoryFiles,
+                            },
+                        });
+                    },
+                    onPostCompact: (compactPayload) => {
+                        emitHookEvent('PostCompact', {
+                            taskId: input.taskId,
+                            payload: {
+                                threadId: compactPayload.threadId,
+                                resourceId: compactPayload.resourceId,
+                                workspacePath: compactPayload.workspacePath,
+                                microSummary: compactPayload.microSummary,
+                                structuredSummary: compactPayload.structuredSummary,
+                                recalledMemoryFiles: compactPayload.recalledMemoryFiles,
+                            },
+                        });
+                    },
+                };
                 const mode = input.executionOptions?.executionPath === 'direct'
                     ? 'direct'
                     : 'workflow';
@@ -2320,7 +2427,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     resourceId: input.resourceId,
                     preferredThreadId: input.preferredThreadId,
                     workspacePath: input.workspacePath,
-                    executionOptions: input.executionOptions,
+                    executionOptions: executionOptionsWithCompactionHooks,
                     runDirect,
                     emitDesktopEvent: async (event: DesktopEvent) => {
                         await emitDesktopEvent(input.taskId, event, emit, input.turnId);

@@ -32,6 +32,7 @@ type RunContext = {
     turnId?: string;
     workspacePath?: string;
     enabledSkills?: string[];
+    skillPrompt?: string;
     traceId: string;
     traceSampled: boolean;
 };
@@ -625,7 +626,6 @@ export async function handleUserMessage(
         content: message,
     });
     const promptPack = contextCompressionStore.buildPromptPack(taskId);
-    const contextPreamble = promptPack?.preamble;
     const recalledTopicMemories: RecalledTopicMemory[] = promptPack?.recalledTopicMemories ?? [];
     if (promptPack) {
         options?.onPreCompact?.({
@@ -638,16 +638,7 @@ export async function handleUserMessage(
             recalledMemoryFiles: recalledTopicMemories.map((entry) => entry.relativePath),
         });
     }
-    const promptSections: string[] = [];
-    if (typeof options?.skillPrompt === 'string' && options.skillPrompt.trim().length > 0) {
-        promptSections.push(options.skillPrompt.trim());
-    }
-    if (typeof contextPreamble === 'string' && contextPreamble.trim().length > 0) {
-        promptSections.push(contextPreamble.trim());
-    }
-    const effectiveMessage = promptSections.length > 0
-        ? `${promptSections.join('\n\n')}\n\n[Latest User Request]\n${message}`
-        : message;
+    const effectiveMessage = message;
 
     const modelId = process.env.COWORKANY_MODEL || DEFAULT_MODEL_ID;
     const modelProvider = modelId.split('/')[0]?.toLowerCase() ?? '';
@@ -690,6 +681,7 @@ export async function handleUserMessage(
         taskId,
         workspacePath: options?.workspacePath,
         enabledSkills: options?.enabledSkills,
+        skillPrompt: options?.skillPrompt,
     });
     const telemetry = createTelemetryRunContext({
         taskId,
@@ -710,7 +702,7 @@ export async function handleUserMessage(
         autoResumeSuspendedTools: options?.autoResumeSuspendedTools ?? true,
         toolCallConcurrency: options?.toolCallConcurrency ?? 1,
         maxSteps: options?.maxSteps ?? 16,
-        providerOptions: providerOptions as any,
+        providerOptions,
     };
 
     const isChatTurn = options?.forcePostAssistantCompletion === true;
@@ -820,6 +812,7 @@ export async function handleUserMessage(
                 turnId: options?.turnId,
                 workspacePath: options?.workspacePath,
                 enabledSkills: options?.enabledSkills,
+                skillPrompt: options?.skillPrompt,
                 traceId: telemetry.traceId,
                 traceSampled: telemetry.sampled,
             });
@@ -976,6 +969,7 @@ export async function handleUserMessage(
             turnId: options?.turnId,
             workspacePath: options?.workspacePath,
             enabledSkills: options?.enabledSkills,
+            skillPrompt: options?.skillPrompt,
             traceId: telemetry.traceId,
             traceSampled: telemetry.sampled,
         });
@@ -1089,6 +1083,7 @@ export async function handleApprovalResponse(
                 taskId: runContext.taskId,
                 workspacePath: runContext.workspacePath,
                 enabledSkills: runContext.enabledSkills,
+                skillPrompt: runContext.skillPrompt,
             })
             : undefined,
         memory: runContext

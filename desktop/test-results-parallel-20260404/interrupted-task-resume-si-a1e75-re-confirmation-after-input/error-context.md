@@ -1,0 +1,98 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e6]:
+    - complementary [ref=e7]:
+      - generic [ref=e8]:
+        - generic [ref=e10]:
+          - img "CoworkAny" [ref=e11]
+          - generic [ref=e12]:
+            - generic [ref=e13]: CoworkAny
+            - generic [ref=e14]: Desktop agent
+        - region "Task List" [ref=e15]:
+          - generic [ref=e16]:
+            - button "Task List" [ref=e17] [cursor=pointer]:
+              - img [ref=e18]
+              - generic [ref=e21]: Task List
+            - button "New Task" [ref=e22] [cursor=pointer]:
+              - img [ref=e23]
+          - generic [ref=e25]:
+            - button "Untitled Task" [ref=e26] [cursor=pointer]:
+              - generic [ref=e28]: Untitled Task
+            - button "Delete":
+              - img
+        - region "Workspaces" [ref=e29]:
+          - generic [ref=e30]:
+            - button "Workspaces" [ref=e31] [cursor=pointer]:
+              - img [ref=e32]
+              - generic [ref=e34]: Workspaces
+            - button "Create new workspace" [ref=e35] [cursor=pointer]:
+              - img [ref=e36]
+          - generic [ref=e38]:
+            - generic [ref=e39]:
+              - button "Resume Sidecar Smoke Workspace 2" [ref=e40] [cursor=pointer]:
+                - generic [ref=e41]: Resume Sidecar Smoke Workspace
+                - generic [ref=e42]: "2"
+              - button "Delete Workspace (and files)":
+                - img
+            - generic [ref=e43]:
+              - generic [ref=e44]:
+                - button "Concurrent collaboration gate 2" [ref=e45] [cursor=pointer]:
+                  - generic [ref=e47]: Concurrent collaboration gate 2
+                - button "Delete":
+                  - img
+              - generic [ref=e48]:
+                - button "Concurrent collaboration gate 3" [ref=e49] [cursor=pointer]:
+                  - generic [ref=e51]: Concurrent collaboration gate 3
+                - button "Delete":
+                  - img
+        - generic [ref=e53]:
+          - button "Settings" [ref=e54] [cursor=pointer]:
+            - img [ref=e55]
+            - generic [ref=e58]: Settings
+          - generic [ref=e59]:
+            - generic [ref=e61]: Sidecar Connected
+            - button "Close Window" [ref=e62] [cursor=pointer]:
+              - img [ref=e63]
+      - separator "Resize sidebar" [ref=e65]
+    - main [ref=e66]:
+      - generic [ref=e68]:
+        - generic [ref=e70]:
+          - tablist "Choose Task Mode" [ref=e72]:
+            - tab "Chat Mode" [selected] [ref=e73] [cursor=pointer]
+            - tab "Task Mode" [ref=e74] [cursor=pointer]
+          - heading "How can I help you today?" [level=1] [ref=e75]
+          - paragraph [ref=e76]: Fast direct answers for conversational questions.
+          - generic [ref=e77]:
+            - heading "Suggested prompts" [level=2] [ref=e78]
+            - generic [ref=e79]:
+              - button "Help me write a concise daily status update." [ref=e80] [cursor=pointer]:
+                - generic [ref=e81]: Help me write a concise daily status update.
+                - img [ref=e82]
+              - button "How should I work with you more effectively?" [ref=e84] [cursor=pointer]:
+                - generic [ref=e85]: How should I work with you more effectively?
+                - img [ref=e86]
+              - button "Show me what you can do in chat mode." [ref=e88] [cursor=pointer]:
+                - generic [ref=e89]: Show me what you can do in chat mode.
+                - img [ref=e90]
+        - generic [ref=e93]:
+          - textbox "Ask me anything..." [ref=e95]
+          - generic [ref=e96]:
+            - generic [ref=e97]:
+              - button "Attach file" [ref=e98] [cursor=pointer]:
+                - img [ref=e99]
+              - button "Start voice input" [ref=e100] [cursor=pointer]:
+                - img [ref=e101]
+              - generic [ref=e104]: Chat Mode
+              - generic [ref=e105]:
+                - generic [ref=e106]: AI
+                - combobox "LLM Settings" [disabled] [ref=e107]:
+                  - option "No profiles" [selected]
+            - generic [ref=e108]:
+              - generic [ref=e109]: Enter
+              - button "chat.sendMessage" [disabled] [ref=e110]:
+                - img [ref=e111]
+  - region "Notifications (F8)":
+    - list
+```

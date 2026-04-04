@@ -814,11 +814,8 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 recoverable: payload.recoverable === true,
                 suggestion: typeof payload.suggestion === 'string' ? payload.suggestion.trim() : undefined,
             };
-            const isDuplicateFailure =
-                session.failure?.error === nextFailure.error &&
-                session.failure?.errorCode === nextFailure.errorCode &&
-                session.failure?.recoverable === nextFailure.recoverable &&
-                session.failure?.suggestion === nextFailure.suggestion;
+            const assistantMessageId = `${event.id}:assistant`;
+            const isDuplicateFailureEvent = session.messages.some((message) => message.id === assistantMessageId);
             const failureMessage = [
                 `Task failed: ${nextFailure.error}`,
                 nextFailure.suggestion ?? null,
@@ -837,7 +834,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 assistantDraft: undefined,
             };
 
-            if (isDuplicateFailure) {
+            if (isDuplicateFailureEvent) {
                 return nextSession;
             }
 

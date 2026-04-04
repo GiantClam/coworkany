@@ -1,0 +1,84 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e6]:
+    - complementary [ref=e7]:
+      - generic [ref=e8]:
+        - generic [ref=e10]:
+          - img "CoworkAny" [ref=e11]
+          - generic [ref=e12]:
+            - generic [ref=e13]: CoworkAny
+            - generic [ref=e14]: Desktop agent
+        - region "Task List" [ref=e15]:
+          - generic [ref=e16]:
+            - button "Task List" [ref=e17] [cursor=pointer]:
+              - img [ref=e18]
+              - generic [ref=e21]: Task List
+            - button "New Task" [ref=e22] [cursor=pointer]:
+              - img [ref=e23]
+          - generic [ref=e25]: No run records
+        - region "Workspaces" [ref=e26]:
+          - generic [ref=e27]:
+            - button "Workspaces" [ref=e28] [cursor=pointer]:
+              - img [ref=e29]
+              - generic [ref=e31]: Workspaces
+            - button "Create new workspace" [ref=e32] [cursor=pointer]:
+              - img [ref=e33]
+          - generic [ref=e35]:
+            - generic [ref=e36]:
+              - button "Resume Sidecar Smoke Workspace 0" [ref=e37] [cursor=pointer]:
+                - generic [ref=e38]: Resume Sidecar Smoke Workspace
+                - generic [ref=e39]: "0"
+              - button "Delete Workspace (and files)":
+                - img
+            - generic [ref=e41]: No run records
+        - generic [ref=e43]:
+          - button "Settings" [ref=e44] [cursor=pointer]:
+            - img [ref=e45]
+            - generic [ref=e48]: Settings
+          - generic [ref=e49]:
+            - generic [ref=e51]: Sidecar Connected
+            - button "Close Window" [ref=e52] [cursor=pointer]:
+              - img [ref=e53]
+      - separator "Resize sidebar" [ref=e55]
+    - main [ref=e56]:
+      - generic [ref=e58]:
+        - generic [ref=e60]:
+          - tablist "Choose Task Mode" [ref=e62]:
+            - tab "Chat Mode" [selected] [ref=e63] [cursor=pointer]
+            - tab "Task Mode" [ref=e64] [cursor=pointer]
+          - heading "How can I help you today?" [level=1] [ref=e65]
+          - paragraph [ref=e66]: Fast direct answers for conversational questions.
+          - generic [ref=e67]:
+            - heading "Suggested prompts" [level=2] [ref=e68]
+            - generic [ref=e69]:
+              - button "Help me write a concise daily status update." [ref=e70] [cursor=pointer]:
+                - generic [ref=e71]: Help me write a concise daily status update.
+                - img [ref=e72]
+              - button "How should I work with you more effectively?" [ref=e74] [cursor=pointer]:
+                - generic [ref=e75]: How should I work with you more effectively?
+                - img [ref=e76]
+              - button "Show me what you can do in chat mode." [ref=e78] [cursor=pointer]:
+                - generic [ref=e79]: Show me what you can do in chat mode.
+                - img [ref=e80]
+        - generic [ref=e83]:
+          - textbox "Ask me anything..." [ref=e85]
+          - generic [ref=e86]:
+            - generic [ref=e87]:
+              - button "Attach file" [ref=e88] [cursor=pointer]:
+                - img [ref=e89]
+              - button "Start voice input" [ref=e90] [cursor=pointer]:
+                - img [ref=e91]
+              - generic [ref=e94]: Chat Mode
+              - generic [ref=e95]:
+                - generic [ref=e96]: AI
+                - combobox "LLM Settings" [disabled] [ref=e97]:
+                  - option "No profiles" [selected]
+            - generic [ref=e98]:
+              - generic [ref=e99]: Enter
+              - button "chat.sendMessage" [disabled] [ref=e100]:
+                - img [ref=e101]
+  - region "Notifications (F8)":
+    - list
+```

@@ -1279,8 +1279,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {t(activeFailureDescriptor.titleKey, { defaultValue: activeFailureDescriptor.titleDefault })}
                         </strong>
                         <span className="chat-recovery-banner__description">
-                            {activeSession.failure?.suggestion
-                                || t(activeFailureDescriptor.descriptionKey, { defaultValue: activeFailureDescriptor.descriptionDefault })}
+                            {activeSession.failure?.error
+                                ? `Task failed: ${activeSession.failure.error}`
+                                : (
+                                    activeSession.failure?.suggestion
+                                    || t(activeFailureDescriptor.descriptionKey, { defaultValue: activeFailureDescriptor.descriptionDefault })
+                                )}
                         </span>
                     </div>
                     <button
