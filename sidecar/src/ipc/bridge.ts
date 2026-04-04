@@ -179,6 +179,16 @@ function collectTextFragmentsFromMessageLike(value: unknown): string[] {
 
     return fragments;
 }
+
+function isAssistantMessageLike(value: unknown): boolean {
+    const message = toRecord(value);
+    if (!message) {
+        return false;
+    }
+    const role = normalizeText(message.role);
+    return role === null || role === 'assistant';
+}
+
 function extractAssistantTextFromFinishChunk(data: Record<string, unknown>): string {
     const fragments: string[] = [];
     appendUniqueText(fragments, data.text);
@@ -193,6 +203,9 @@ function extractAssistantTextFromFinishChunk(data: Record<string, unknown>): str
 
         const uiMessages = Array.isArray(response.uiMessages) ? response.uiMessages : [];
         for (const message of uiMessages) {
+            if (!isAssistantMessageLike(message)) {
+                continue;
+            }
             const nested = collectTextFragmentsFromMessageLike(message);
             for (const text of nested) {
                 appendUniqueText(fragments, text);
@@ -201,6 +214,9 @@ function extractAssistantTextFromFinishChunk(data: Record<string, unknown>): str
 
         const messages = Array.isArray(response.messages) ? response.messages : [];
         for (const message of messages) {
+            if (!isAssistantMessageLike(message)) {
+                continue;
+            }
             const nested = collectTextFragmentsFromMessageLike(message);
             for (const text of nested) {
                 appendUniqueText(fragments, text);
