@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
@@ -139,20 +140,22 @@ function deriveTitle(session: TaskSession): string {
         return latestUserPrompt;
     }
 
-    return `Task ${getSessionTaskId(session).slice(0, 8)}`;
+    return `#${getSessionTaskId(session).slice(0, 8)}`;
 }
 
-function formatStatus(status: TaskStatus): string {
+function formatStatus(status: TaskStatus, t: TFunction): string {
     switch (status) {
         case 'running':
-            return 'Running';
+            return t('dashboard.statusRunning', { defaultValue: 'Running' });
         case 'finished':
-            return 'Completed';
+            return t('dashboard.statusCompleted', { defaultValue: 'Completed' });
         case 'failed':
-            return 'Failed';
+            return t('dashboard.statusFailed', { defaultValue: 'Failed' });
+        case 'suspended':
+            return t('dashboard.statusSuspended', { defaultValue: 'Suspended' });
         case 'idle':
         default:
-            return 'Waiting';
+            return t('dashboard.statusWaiting', { defaultValue: 'Waiting' });
     }
 }
 
@@ -200,7 +203,7 @@ function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem 
     if (sections.length === 0) {
         sections.push({
             label: 'Conversation · Status',
-            lines: [`Status: ${formatStatus(session.status)}`],
+            lines: [`Status: ${session.status}`],
         });
     }
 
@@ -216,6 +219,30 @@ function buildBoardTaskCard(session: TaskSession, taskId: string): TaskCardItem 
         result: result ? { summary: result } : undefined,
         timestamp: session.updatedAt || session.createdAt || new Date().toISOString(),
     };
+}
+
+function formatBoardSectionLabel(label: string, t: TFunction): string {
+    const normalized = label.trim().toLowerCase();
+    if (normalized === 'plan') {
+        return t('dashboard.sectionPlan', { defaultValue: 'Plan' });
+    }
+    if (normalized === 'outcome') {
+        return t('dashboard.sectionOutcome', { defaultValue: 'Outcome' });
+    }
+    if (normalized === 'capability review') {
+        return t('dashboard.sectionCapabilityReview', { defaultValue: 'Capability review' });
+    }
+
+    if (normalized === 'conversation · request') {
+        return t('dashboard.sectionConversationRequest', { defaultValue: 'Conversation · Request' });
+    }
+    if (normalized === 'conversation · latest response') {
+        return t('dashboard.sectionConversationLatestResponse', { defaultValue: 'Conversation · Latest response' });
+    }
+    if (normalized === 'conversation · status') {
+        return t('dashboard.sectionConversationStatus', { defaultValue: 'Conversation · Status' });
+    }
+    return label;
 }
 
 export function buildBoardTasks(sessions: Iterable<TaskSession>): BoardTask[] {
@@ -583,6 +610,7 @@ const statusTone: Record<TaskStatus, string> = {
     running: 'running',
     failed: 'blocked',
     idle: 'pending',
+    suspended: 'blocked',
 };
 
 const DeleteIcon = () => (
@@ -603,6 +631,7 @@ const TaskBoardTaskCard: React.FC<{
     openLabel: string;
     deleteLabel: string;
 }> = ({ task, onSelect, onDelete, onSwitchToChat, openLabel, deleteLabel }) => {
+    const { t } = useTranslation();
     const previewTasks = React.useMemo(
         () => (task.taskCard.tasks ?? []).slice(0, 4),
         [task.taskCard.tasks],
@@ -619,7 +648,7 @@ const TaskBoardTaskCard: React.FC<{
             <div className="task-board-card-toolbar">
                 <div className="task-board-card-toolbar-left">
                     <span className={`task-priority-pill ${statusTone[task.status]}`}>
-                        {formatStatus(task.status)}
+                        {formatStatus(task.status, t)}
                     </span>
                     <span className="task-card-date">{formatUpdatedAt(task.updatedAt)}</span>
                 </div>
@@ -664,14 +693,16 @@ const TaskBoardTaskCard: React.FC<{
                                         <span className={`task-board-task-dot ${statusClass}`} aria-hidden="true" />
                                         <span className="task-board-task-title">{item.title}</span>
                                         <span className={`task-board-task-status ${statusClass}`}>
-                                            {formatTaskStepStatus(item.status)}
+                                            {formatTaskStepStatus(item.status, t)}
                                         </span>
                                     </li>
                                 );
                             })}
                         </ul>
                         {hiddenTaskCount > 0 ? (
-                            <p className="task-board-truncation-note">+{hiddenTaskCount} more tasks</p>
+                            <p className="task-board-truncation-note">
+                                {t('dashboard.moreTasks', { count: hiddenTaskCount, defaultValue: `+${hiddenTaskCount} more tasks` })}
+                            </p>
                         ) : null}
                     </section>
                 ) : null}
@@ -687,7 +718,7 @@ const TaskBoardTaskCard: React.FC<{
 
                     return (
                         <section key={`${task.id}-${section.label}`} className="task-board-message-section">
-                            <span className="task-board-section-label">{section.label}</span>
+                            <span className="task-board-section-label">{formatBoardSectionLabel(section.label, t)}</span>
                             <div className="task-board-section-content">
                                 {lines.map((line, index) => (
                                     <p key={`${task.id}-${section.label}-${index}`} className="task-board-section-line">{line}</p>
@@ -699,7 +730,7 @@ const TaskBoardTaskCard: React.FC<{
 
                 {resultSummary ? (
                     <section className="task-board-message-section">
-                        <span className="task-board-section-label">Outcome</span>
+                        <span className="task-board-section-label">{t('dashboard.sectionOutcome', { defaultValue: 'Outcome' })}</span>
                         <p className="task-board-section-line">{resultSummary}</p>
                     </section>
                 ) : null}
@@ -726,21 +757,21 @@ function normalizeTaskStepStatusClass(status: TaskCardTaskEntry['status']): 'pen
     }
 }
 
-function formatTaskStepStatus(status: TaskCardTaskEntry['status']): string {
+function formatTaskStepStatus(status: TaskCardTaskEntry['status'], t: TFunction): string {
     switch (status) {
         case 'in_progress':
-            return 'Running';
+            return t('dashboard.statusRunning', { defaultValue: 'Running' });
         case 'complete':
         case 'completed':
-            return 'Done';
+            return t('dashboard.statusDone', { defaultValue: 'Done' });
         case 'skipped':
-            return 'Skipped';
+            return t('dashboard.statusSkipped', { defaultValue: 'Skipped' });
         case 'failed':
-            return 'Failed';
+            return t('dashboard.statusFailed', { defaultValue: 'Failed' });
         case 'blocked':
-            return 'Blocked';
+            return t('dashboard.statusBlocked', { defaultValue: 'Blocked' });
         case 'pending':
         default:
-            return 'Pending';
+            return t('dashboard.statusPending', { defaultValue: 'Pending' });
     }
 }

@@ -56,7 +56,7 @@ export type TaskEventType =
 // Task & Session Types
 // ============================================================================
 
-export type TaskStatus = 'idle' | 'running' | 'finished' | 'failed';
+export type TaskStatus = 'idle' | 'running' | 'finished' | 'failed' | 'suspended';
 
 export interface PlanStep {
     id: string;
@@ -548,6 +548,8 @@ export interface TaskUserActionRequiredPayload {
 export interface TextDeltaPayload {
     role?: 'thinking' | 'assistant';
     delta: string;
+    messageId?: string;
+    correlationId?: string;
 }
 
 export interface ToolCalledPayload {

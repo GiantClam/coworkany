@@ -10,6 +10,7 @@ interface CanonicalTaskStreamStoreState {
     sessions: Map<string, CanonicalTaskStreamState>;
     addEvent: (event: CanonicalStreamEvent) => void;
     addEvents: (events: CanonicalStreamEvent[]) => void;
+    clearSession: (taskId: string) => void;
     getSession: (taskId: string) => CanonicalTaskStreamState | undefined;
     reset: () => void;
 }
@@ -39,6 +40,20 @@ export const useCanonicalTaskStreamStore = create<CanonicalTaskStreamStoreState>
                 const current = sessions.get(taskId) ?? createEmptyCanonicalTaskStreamState(taskId);
                 sessions.set(taskId, applyCanonicalStreamEvent(current, event));
             }
+            return { sessions };
+        });
+    },
+
+    clearSession: (taskId) => {
+        if (!taskId) {
+            return;
+        }
+        set((state) => {
+            if (!state.sessions.has(taskId)) {
+                return state;
+            }
+            const sessions = new Map(state.sessions);
+            sessions.delete(taskId);
             return { sessions };
         });
     },

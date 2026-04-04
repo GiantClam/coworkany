@@ -1,40 +1,126 @@
 .threadRoot {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
     height: 100%;
     min-height: 0;
+    position: relative;
+}
+
+.threadRoot::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 28px;
+    pointer-events: none;
+    z-index: 2;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-app) 98%, transparent),
+        color-mix(in srgb, var(--bg-app) 0%, transparent)
+    );
+}
+
+.threadRoot::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 20px;
+    pointer-events: none;
+    z-index: 2;
+    background: linear-gradient(
+        0deg,
+        color-mix(in srgb, var(--bg-app) 96%, transparent),
+        color-mix(in srgb, var(--bg-app) 0%, transparent)
+    );
 }
 
 .viewport {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    width: min(100%, 980px);
+    gap: calc(var(--surface-stack-gap) + 6px);
+    width: 100%;
+    max-width: calc(var(--chat-content-max-width) + (var(--chat-content-gutter) * 2));
     margin: 0 auto;
-    padding: 12px 12px 18px;
+    padding: calc(var(--space-6) + 0px) var(--chat-content-gutter) calc(var(--space-4) + 2px + var(--chat-floating-input-reserve, 0px));
+    box-sizing: border-box;
     overflow-y: auto;
     min-height: 0;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.viewport::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.viewportScrolling {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--border-strong) 82%, transparent) transparent;
+}
+
+.viewportScrolling::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.viewportScrolling::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--border-strong) 82%, transparent);
+    border-radius: 999px;
+}
+
+.viewportScrolling::-webkit-scrollbar-track {
+    background: transparent;
 }
 
 .messageRow {
     display: flex;
     width: 100%;
+    justify-content: center;
 }
 
 .messageRowUser {
-    justify-content: flex-end;
+    justify-content: center;
 }
 
 .messageRowAssistant,
 .messageRowSystem {
-    justify-content: flex-start;
+    justify-content: center;
 }
 
 .messageRail {
     display: flex;
     align-items: flex-start;
-    gap: 10px;
-    width: min(100%, 880px);
+    gap: calc(var(--surface-stack-gap) + 2px);
+    width: 100%;
+    max-width: var(--chat-content-max-width);
+    position: relative;
+}
+
+.messageRowAssistant .messageRail,
+.messageRowSystem .messageRail {
+    padding-left: var(--timeline-rail-inset);
+}
+
+.messageRowAssistant .messageRail::before,
+.messageRowSystem .messageRail::before {
+    content: '';
+    position: absolute;
+    left: 1px;
+    top: 4px;
+    bottom: 6px;
+    width: 1px;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--border-subtle) 65%, transparent),
+        color-mix(in srgb, var(--border-subtle) 8%, transparent)
+    );
+    pointer-events: none;
 }
 
 .messageRowUser .messageRail {
@@ -42,42 +128,43 @@
 }
 
 .roleBadge {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border-radius: 999px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-element);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 90%, var(--bg-panel));
     color: var(--text-secondary);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     font-family: var(--font-code);
     font-size: 10px;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.06em;
     flex-shrink: 0;
-    margin-top: 2px;
+    margin-top: 1px;
 }
 
 .roleBadgeAssistant {
-    border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-subtle));
-    background: color-mix(in srgb, var(--accent-subtle) 62%, var(--bg-element));
+    border-color: color-mix(in srgb, var(--accent-primary) 26%, var(--border-subtle));
+    background: color-mix(in srgb, var(--accent-subtle) 70%, var(--bg-element));
     color: var(--text-primary);
 }
 
 .roleBadgeSystem {
-    border-color: color-mix(in srgb, var(--status-warning) 35%, var(--border-subtle));
-    background: color-mix(in srgb, var(--status-warning) 12%, var(--bg-element));
+    border-color: color-mix(in srgb, var(--status-warning) 32%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-warning) 11%, var(--bg-element));
 }
 
 .messageBubble {
-    max-width: min(100%, 820px);
-    border-radius: 14px;
-    padding: 11px 13px;
-    line-height: 1.45;
+    max-width: min(72%, 100%);
+    border-radius: calc(var(--surface-card-radius) + 10px);
+    padding: 10px 14px;
+    line-height: 1.58;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 13px;
-    border: 1px solid transparent;
+    font-size: var(--font-size-base);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 92%, var(--bg-panel));
 }
 
 .messageBubble :where(p) {
@@ -88,43 +175,111 @@
     margin-top: 8px;
 }
 
+.messageActions {
+    margin-left: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 3px;
+    flex-shrink: 0;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.messageActionsUser {
+    margin-left: 2px;
+}
+
+.messageActionsAssistant {
+    margin-left: 4px;
+}
+
+.messageActionButton {
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.messageActionButton:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--bg-element) 94%, transparent);
+    color: var(--text-primary);
+}
+
+.messageActionButton[data-copied="true"] {
+    color: color-mix(in srgb, var(--status-success) 82%, var(--text-primary));
+}
+
+.messageActionButton:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.messageActionGlyph {
+    font-size: 12px;
+    line-height: 1;
+}
+
 .userBubble {
     margin-left: auto;
-    background: linear-gradient(
-        135deg,
-        color-mix(in srgb, var(--accent-primary) 84%, var(--bg-element)),
-        color-mix(in srgb, var(--accent-hover) 75%, var(--bg-element))
-    );
+    border-radius: 1.55rem;
+    background: color-mix(in srgb, var(--accent-primary) 92%, var(--bg-element));
     color: var(--text-on-dark);
-    box-shadow: var(--shadow-sm);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 24%, transparent);
 }
 
 .assistantBubble {
     flex: 1 1 auto;
-    background:
-        linear-gradient(
-            180deg,
-            color-mix(in srgb, var(--bg-element) 92%, transparent),
-            color-mix(in srgb, var(--bg-panel) 92%, transparent)
-        );
-    color: var(--text-primary);
-    border-color: color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    max-width: 100%;
+    border-radius: var(--surface-card-radius);
+    border: none;
+    background: transparent;
+    padding: 0;
+}
+
+.assistantBubblePending {
+    padding: var(--surface-stack-gap-tight) var(--shell-panel-padding);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 90%, var(--bg-panel));
 }
 
 .systemBubble {
     flex: 1 1 auto;
+    max-width: 100%;
     background: color-mix(in srgb, var(--bg-subtle) 90%, var(--bg-element));
     color: var(--text-secondary);
     border-style: dashed;
     border-color: color-mix(in srgb, var(--border-subtle) 80%, var(--status-info));
+    border-radius: var(--radius-lg);
 }
 
 .messageMetaRow {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 8px;
-    margin-bottom: 8px;
+    margin-bottom: 7px;
+}
+
+.messageMetaSpacer {
+    flex: 1 1 auto;
+    min-width: 8px;
+}
+
+.messageTimestamp {
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 
 .messageRoleLabel {
@@ -135,44 +290,92 @@
     color: var(--text-muted);
 }
 
+.pendingResponseShimmer {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    min-height: 18px;
+    width: 100%;
+}
+
+.pendingResponseDot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--status-info) 82%, var(--text-primary));
+    animation: loadingDots 0.9s ease-in-out infinite;
+}
+
+.pendingResponseDot:nth-child(2) {
+    animation-delay: 0.12s;
+}
+
+.pendingResponseDot:nth-child(3) {
+    animation-delay: 0.24s;
+}
+
+.pendingResponseShimmerLine {
+    display: inline-flex;
+    height: 7px;
+    width: min(184px, 46%);
+    border-radius: 999px;
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--border-subtle) 24%, transparent),
+        color-mix(in srgb, var(--text-muted) 30%, transparent),
+        color-mix(in srgb, var(--border-subtle) 24%, transparent)
+    );
+    background-size: 220% 100%;
+    animation: pendingResponseSweep 1.15s linear infinite;
+}
+
+.pendingResponseLabel {
+    margin-left: 2px;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--text-muted);
+    letter-spacing: 0.01em;
+}
+
 .structuredBlock {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    margin-top: 8px;
     display: flex;
     flex-direction: column;
-    gap: 9px;
+    gap: 8px;
 }
 
 .structuredCard {
-    border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
-    border-radius: 12px;
-    padding: 9px 10px;
-    background: color-mix(in srgb, var(--bg-subtle) 74%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    border-radius: var(--radius-lg);
+    padding: 11px 12px;
+    background: color-mix(in srgb, var(--bg-panel) 95%, var(--bg-element));
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: 9px;
 }
 
 .structuredCardHeader {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
 }
 
 .structuredCount {
     font-size: 11px;
     color: var(--text-secondary);
-    border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
     border-radius: 999px;
-    padding: 1px 7px;
+    padding: 2px 8px;
+    line-height: 1;
 }
 
 .structuredHeading {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.08em;
     color: var(--text-muted);
 }
 
@@ -182,18 +385,18 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
 }
 
 .structuredListGroup {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
 }
 
 .structuredDetails {
-    border-top: 1px dashed color-mix(in srgb, var(--border-subtle) 80%, transparent);
-    padding-top: 5px;
+    border-top: 1px dashed color-mix(in srgb, var(--border-subtle) 76%, transparent);
+    padding-top: 6px;
 }
 
 .structuredSummary {
@@ -205,16 +408,60 @@
 
 .structuredItem {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     font-size: 12px;
-    flex-wrap: wrap;
+}
+
+.structuredItemTimeline {
+    position: relative;
+    align-items: stretch;
+    gap: 10px;
+}
+
+.structuredItemTimeline::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 16px;
+    bottom: -10px;
+    width: 1px;
+    background: color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+
+.structuredList > .structuredItemTimeline:last-child::after {
+    display: none;
+}
+
+.structuredTimelineDot {
+    width: 9px;
+    height: 9px;
+    margin-top: 5px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 92%, var(--bg-panel));
+    flex-shrink: 0;
+}
+
+.structuredTimelinePending .structuredTimelineDot {
+    border-color: color-mix(in srgb, var(--status-info) 40%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-info) 24%, var(--bg-element));
+}
+
+.structuredTimelineSuccess .structuredTimelineDot {
+    border-color: color-mix(in srgb, var(--status-success) 42%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-success) 26%, var(--bg-element));
+}
+
+.structuredTimelineFailed .structuredTimelineDot {
+    border-color: color-mix(in srgb, var(--status-error) 42%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 24%, var(--bg-element));
 }
 
 .structuredItemBody {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     min-width: 0;
 }
 
@@ -227,6 +474,7 @@
 
 .structuredPrimaryText {
     color: var(--text-primary);
+    font-weight: 500;
 }
 
 .structuredMeta {
@@ -238,40 +486,293 @@
     font-size: 11px;
     color: var(--text-secondary);
     word-break: break-word;
+    line-height: 1.4;
+}
+
+.runtimeStatusCard {
+    border-color: color-mix(in srgb, var(--status-info) 22%, var(--border-subtle));
+}
+
+.eventCard {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--border-subtle) 76%, transparent);
+    background: color-mix(in srgb, var(--bg-subtle) 86%, var(--bg-panel));
+}
+
+.eventItem {
+    align-items: center;
+    gap: 9px;
+}
+
+.eventDot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-muted) 58%, transparent);
+    flex-shrink: 0;
+}
+
+.eventText {
+    font-size: 11px;
+    line-height: 1.4;
+    color: color-mix(in srgb, var(--text-secondary) 86%, var(--text-muted));
+    font-weight: 400;
+}
+
+.runtimeStatusBody {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.runtimeStatusDot {
+    width: 9px;
+    height: 9px;
+    margin-top: 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--status-info) 86%, var(--accent-primary));
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 20%, transparent);
+    animation: runtimePulse 1.6s ease-in-out infinite;
+}
+
+.runtimeStatusTextCol {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    width: 100%;
+}
+
+.runtimeStatusTitleRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.runtimeStatusDetail {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+
+.runtimeStatusTrack {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--border-subtle) 55%, transparent);
+    overflow: hidden;
+}
+
+.runtimeStatusTrackBar {
+    display: block;
+    width: 34%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--status-info) 70%, transparent),
+        color-mix(in srgb, var(--accent-primary) 64%, transparent)
+    );
+    animation: runtimeTrackSweep 1.2s linear infinite;
+}
+
+.toolEventItem {
+    position: relative;
+    align-items: flex-start;
+}
+
+.toolEventItem::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 16px;
+    bottom: -10px;
+    width: 1px;
+    background: color-mix(in srgb, var(--border-subtle) 74%, transparent);
+}
+
+.toolEventItem:last-child::before {
+    display: none;
+}
+
+.toolEventMarker {
+    position: relative;
+    width: 10px;
+    height: 10px;
+    margin-top: 5px;
+    flex-shrink: 0;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 90%, transparent);
+}
+
+.toolEventMarkerRunning {
+    border-color: color-mix(in srgb, var(--status-info) 46%, transparent);
+    background: color-mix(in srgb, var(--status-info) 22%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 18%, transparent);
+    animation: toolEventPulse 1.4s ease-in-out infinite;
+}
+
+.toolEventMarkerSuccess {
+    border-color: color-mix(in srgb, var(--status-success) 44%, transparent);
+    background: color-mix(in srgb, var(--status-success) 24%, transparent);
+}
+
+.toolEventMarkerFailed {
+    border-color: color-mix(in srgb, var(--status-error) 42%, transparent);
+    background: color-mix(in srgb, var(--status-error) 22%, transparent);
+}
+
+.toolEventDetails {
+    flex: 1;
+    min-width: 0;
+}
+
+.toolEventSummary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+}
+
+.toolEventSummary::-webkit-details-marker {
+    display: none;
+}
+
+.toolEventBody {
+    margin-top: 4px;
+    padding-top: 4px;
+}
+
+.toolsGroupDetails {
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 92%, var(--bg-panel));
+    overflow: hidden;
+}
+
+.toolsGroupSummary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 0 10px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text-secondary);
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.toolsGroupSummary:hover {
+    background: color-mix(in srgb, var(--bg-element-hover) 90%, transparent);
+    color: var(--text-primary);
+}
+
+.toolsGroupSummary::-webkit-details-marker {
+    display: none;
+}
+
+.toolsGroupSummary::after {
+    content: '▾';
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11px;
+    transition: transform var(--transition-fast);
+}
+
+.toolsGroupDetails:not([open]) .toolsGroupSummary::after {
+    transform: rotate(-90deg);
+}
+
+.toolsGroupSummaryLabel {
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.toolsGroupSummaryCount {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.toolsGroupBody {
+    padding: 8px 8px 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
+}
+
+.approvalDecisionCard {
+    border-style: solid;
+}
+
+.approvalItem {
+    width: 100%;
+    padding-right: 2px;
+    gap: 10px;
+}
+
+.approvalItem .structuredItemBody {
+    gap: 7px;
+}
+
+.approvalItemHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    flex-wrap: wrap;
+}
+
+.approvalItemMeta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    flex-wrap: wrap;
+}
+
+.approvalBlockingHint {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--status-warning) 82%, var(--text-primary));
 }
 
 .statusPill {
     display: inline-flex;
     align-items: center;
     border-radius: 999px;
-    padding: 2px 8px;
-    font-size: 11px;
+    padding: 3px 9px;
+    font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.01em;
+    letter-spacing: 0;
     border: 1px solid transparent;
+    text-transform: none;
+    line-height: 1;
 }
 
 .statusPillRunning {
-    background: color-mix(in srgb, var(--status-info) 16%, transparent);
-    border-color: color-mix(in srgb, var(--status-info) 35%, transparent);
-    color: color-mix(in srgb, var(--status-info) 80%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-info) 14%, transparent);
+    border-color: color-mix(in srgb, var(--status-info) 34%, transparent);
+    color: color-mix(in srgb, var(--status-info) 82%, var(--text-primary));
 }
 
 .statusPillSuccess {
-    background: color-mix(in srgb, var(--status-success) 16%, transparent);
-    border-color: color-mix(in srgb, var(--status-success) 34%, transparent);
-    color: color-mix(in srgb, var(--status-success) 84%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-success) 14%, transparent);
+    border-color: color-mix(in srgb, var(--status-success) 33%, transparent);
+    color: color-mix(in srgb, var(--status-success) 82%, var(--text-primary));
 }
 
 .statusPillFailed {
-    background: color-mix(in srgb, var(--status-error) 17%, transparent);
-    border-color: color-mix(in srgb, var(--status-error) 38%, transparent);
+    background: color-mix(in srgb, var(--status-error) 15%, transparent);
+    border-color: color-mix(in srgb, var(--status-error) 35%, transparent);
     color: color-mix(in srgb, var(--status-error) 84%, var(--text-primary));
 }
 
 .statusPillPending {
-    background: color-mix(in srgb, var(--text-muted) 14%, transparent);
-    border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
+    background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+    border-color: color-mix(in srgb, var(--text-muted) 34%, transparent);
     color: var(--text-secondary);
 }
 
@@ -279,7 +780,7 @@
     display: inline-flex;
     align-items: center;
     border-radius: 999px;
-    padding: 1px 7px;
+    padding: 2px 8px;
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
@@ -294,20 +795,20 @@
 }
 
 .severityMedium {
-    background: color-mix(in srgb, var(--status-warning) 15%, transparent);
+    background: color-mix(in srgb, var(--status-warning) 14%, transparent);
     border-color: color-mix(in srgb, var(--status-warning) 30%, transparent);
-    color: color-mix(in srgb, var(--status-warning) 80%, var(--text-primary));
+    color: color-mix(in srgb, var(--status-warning) 82%, var(--text-primary));
 }
 
 .severityHigh {
-    background: color-mix(in srgb, var(--status-error) 15%, transparent);
-    border-color: color-mix(in srgb, var(--status-error) 32%, transparent);
-    color: color-mix(in srgb, var(--status-error) 82%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-error) 14%, transparent);
+    border-color: color-mix(in srgb, var(--status-error) 31%, transparent);
+    color: color-mix(in srgb, var(--status-error) 84%, var(--text-primary));
 }
 
 .severityCritical {
     background: color-mix(in srgb, var(--status-error) 20%, transparent);
-    border-color: color-mix(in srgb, var(--status-error) 45%, transparent);
+    border-color: color-mix(in srgb, var(--status-error) 44%, transparent);
     color: color-mix(in srgb, var(--status-error) 92%, var(--text-primary));
 }
 
@@ -320,12 +821,13 @@
 
 .approvalButton {
     border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--bg-element) 80%, var(--bg-panel));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--bg-element) 86%, var(--bg-panel));
     color: var(--text-primary);
     font-size: 11px;
     font-weight: 600;
-    padding: 4px 8px;
+    padding: 0 10px;
+    min-height: calc(var(--button-height) - 8px);
     cursor: pointer;
     transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
@@ -336,17 +838,17 @@
 }
 
 .approvalButtonApprove {
-    border-color: color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
+    border-color: color-mix(in srgb, var(--status-success) 34%, var(--border-subtle));
     color: color-mix(in srgb, var(--status-success) 84%, var(--text-primary));
 }
 
 .approvalButtonModify {
-    border-color: color-mix(in srgb, var(--status-warning) 34%, var(--border-subtle));
+    border-color: color-mix(in srgb, var(--status-warning) 32%, var(--border-subtle));
     color: color-mix(in srgb, var(--status-warning) 82%, var(--text-primary));
 }
 
 .approvalButtonDeny {
-    border-color: color-mix(in srgb, var(--status-error) 35%, var(--border-subtle));
+    border-color: color-mix(in srgb, var(--status-error) 34%, var(--border-subtle));
     color: color-mix(in srgb, var(--status-error) 84%, var(--text-primary));
 }
 
@@ -366,25 +868,16 @@
     flex: 1 1 240px;
     min-width: 180px;
     border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
-    border-radius: 8px;
-    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    padding: 7px 9px;
     font-size: 12px;
-    line-height: 1.3;
+    line-height: 1.35;
     color: var(--text-primary);
     background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
 }
 
 .approvalInput:focus-visible {
     border-color: var(--border-strong);
-}
-
-.runtimePulseDot {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--status-info) 90%, var(--accent-primary));
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 35%, transparent);
-    animation: runtimePulse 1.8s ease-in-out infinite;
 }
 
 .taskProgressTrack {
@@ -402,8 +895,8 @@
     border-radius: inherit;
     background: linear-gradient(
         90deg,
-        color-mix(in srgb, var(--accent-primary) 85%, var(--status-info)),
-        color-mix(in srgb, var(--status-success) 72%, var(--accent-hover))
+        color-mix(in srgb, var(--accent-primary) 82%, var(--status-info)),
+        color-mix(in srgb, var(--status-success) 70%, var(--accent-hover))
     );
 }
 
@@ -412,12 +905,54 @@
     animation: highRiskGlowPulse 2s ease-in-out infinite;
 }
 
+@keyframes loadingDots {
+    0%,
+    100% {
+        opacity: 0.45;
+        transform: translateY(0);
+    }
+    50% {
+        opacity: 1;
+        transform: translateY(-3px);
+    }
+}
+
+@keyframes pendingResponseSweep {
+    0% {
+        background-position: 220% 0;
+    }
+    100% {
+        background-position: -20% 0;
+    }
+}
+
 @keyframes runtimePulse {
     0% {
         box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 30%, transparent);
     }
     70% {
         box-shadow: 0 0 0 6px color-mix(in srgb, var(--status-info) 0%, transparent);
+    }
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 0%, transparent);
+    }
+}
+
+@keyframes runtimeTrackSweep {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(295%);
+    }
+}
+
+@keyframes toolEventPulse {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 20%, transparent);
+    }
+    70% {
+        box-shadow: 0 0 0 5px color-mix(in srgb, var(--status-info) 0%, transparent);
     }
     100% {
         box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 0%, transparent);
@@ -438,7 +973,176 @@
 
 @media (prefers-reduced-motion: reduce) {
     .highRiskCardPulse,
-    .runtimePulseDot {
+    .runtimeStatusDot,
+    .runtimeStatusTrackBar,
+    .toolEventMarkerRunning,
+    .pendingResponseDot,
+    .pendingResponseShimmerLine {
         animation: none;
+    }
+}
+
+/* ============================================================================
+ * Zola deep alignment overrides
+ * Keep message rhythm, tool events and approval interactions close to Zola UX
+ * ============================================================================ */
+
+.viewport {
+    gap: 16px;
+    padding: 24px var(--chat-content-gutter) calc(16px + var(--chat-floating-input-reserve, 0px));
+}
+
+.messageRail {
+    gap: 14px;
+}
+
+.roleBadge {
+    width: 30px;
+    height: 30px;
+    margin-top: 0;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-subtle) 82%, var(--bg-element));
+    color: var(--text-muted);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+}
+
+.roleBadgeAssistant {
+    border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 92%, var(--bg-panel));
+    color: var(--text-secondary);
+}
+
+.messageBubble {
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+.userBubble {
+    max-width: min(70%, 100%);
+    border-radius: 1.5rem;
+    padding: 10px 18px;
+    border: none;
+    background: color-mix(in srgb, var(--accent-primary) 92%, var(--bg-element));
+}
+
+.assistantBubble {
+    padding-top: 0;
+}
+
+.messageMetaRow {
+    margin-bottom: 8px;
+}
+
+.messageRoleLabel {
+    letter-spacing: 0.06em;
+    font-size: 10px;
+}
+
+.pendingResponseShimmer {
+    gap: 5px;
+    margin-bottom: 8px;
+}
+
+.pendingResponseDot {
+    width: 6px;
+    height: 6px;
+}
+
+.pendingResponseLabel {
+    font-size: 10px;
+}
+
+.pendingResponseShimmerLine {
+    height: 6px;
+}
+
+.structuredBlock {
+    margin-top: 8px;
+    gap: 8px;
+}
+
+.structuredCard {
+    border-radius: var(--radius-md);
+    padding: 10px 11px;
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-element));
+}
+
+.runtimeStatusCard {
+    border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
+}
+
+.runtimeStatusDetail {
+    font-size: 11px;
+}
+
+.runtimeStatusTrack {
+    height: 3px;
+}
+
+.runtimeStatusTrackBar {
+    width: 28%;
+}
+
+.toolEventItem {
+    padding: 7px 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 92%, var(--bg-panel));
+}
+
+.toolEventItem::before {
+    left: 13px;
+    top: 24px;
+    bottom: -14px;
+}
+
+.toolEventSummary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.toolEventSummary::after {
+    content: '▾';
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11px;
+    transition: transform var(--transition-fast);
+}
+
+.toolEventDetails:not([open]) .toolEventSummary::after {
+    transform: rotate(-90deg);
+}
+
+.toolEventDetails[open] .toolEventSummary::after {
+    transform: rotate(0deg);
+}
+
+.toolEventBody {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
+}
+
+.approvalButton {
+    min-height: 28px;
+}
+
+.taskProgressTrack {
+    height: 4px;
+}
+
+@media (max-width: 860px) {
+    .viewport {
+        padding: 14px var(--space-3) calc(12px + var(--chat-floating-input-reserve-mobile, var(--chat-floating-input-reserve, 0px)));
+    }
+
+    .userBubble {
+        max-width: 88%;
+    }
+
+    .pendingResponseShimmerLine {
+        width: min(120px, 36%);
     }
 }

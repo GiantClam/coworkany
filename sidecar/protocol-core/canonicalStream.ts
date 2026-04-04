@@ -57,6 +57,7 @@ export type CanonicalTaskMessagePart =
 export type CanonicalTaskMessage = {
     id: string;
     taskId: string;
+    turnId?: string;
     role: CanonicalMessageRole;
     timestamp: string;
     sequence: number;
@@ -77,6 +78,7 @@ export type CanonicalStreamEvent =
         payload: {
             id: string;
             taskId: string;
+            turnId?: string;
             role: CanonicalMessageRole;
             timestamp: string;
             sequence: number;
@@ -160,9 +162,11 @@ function resolveTaskStartedDisplayText(payload: Record<string, unknown>): string
 }
 
 function baseMessage(event: TaskEvent, role: CanonicalMessageRole): CanonicalTaskMessage {
+    const payload = asRecord(event.payload);
     return {
         id: event.id,
         taskId: event.taskId,
+        turnId: asString(payload.turnId),
         role,
         timestamp: event.timestamp,
         sequence: event.sequence,
@@ -455,12 +459,15 @@ function eventToCanonicalMessageDelta(event: TaskEvent): CanonicalStreamEvent | 
     return {
         type: 'canonical_message_delta',
         payload: {
-            id: payload.messageId ?? `${event.taskId}-${isReasoning ? 'thinking' : 'assistant'}`,
+            id: payload.messageId
+                ?? payload.correlationId
+                ?? (payload.turnId ? `${payload.turnId}:assistant` : event.id),
             taskId: event.taskId,
+            turnId: payload.turnId,
             role: 'assistant',
             timestamp: event.timestamp,
             sequence: event.sequence,
-            correlationId: payload.correlationId,
+            correlationId: payload.correlationId ?? payload.turnId,
             sourceEventId: event.id,
             sourceEventType: event.type,
             part: {

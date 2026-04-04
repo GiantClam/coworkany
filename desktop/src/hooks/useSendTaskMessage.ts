@@ -12,6 +12,7 @@ export interface SendTaskMessageInput {
     taskId: string;
     content: string;
     config?: StartTaskConfig;
+    bypassDedup?: boolean;
 }
 
 export interface SendTaskMessageResult {

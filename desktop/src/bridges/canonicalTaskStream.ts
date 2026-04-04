@@ -58,10 +58,25 @@ function applyMessageDelta(
     messages: CanonicalTaskMessage[],
     event: Extract<CanonicalStreamEvent, { type: 'canonical_message_delta' }>,
 ): CanonicalTaskMessage[] {
-    const existingIndex = findMessageIndex(messages, {
+    let existingIndex = findMessageIndex(messages, {
         id: event.payload.id,
         correlationId: event.payload.correlationId,
     });
+    const hasExplicitIdentity = Boolean(
+        event.payload.correlationId
+        || (event.payload.id && event.payload.id !== event.payload.sourceEventId),
+    );
+    if (existingIndex < 0 && !hasExplicitIdentity) {
+        const lastMessage = messages[messages.length - 1];
+        if (
+            lastMessage
+            && lastMessage.role === 'assistant'
+            && lastMessage.status === 'streaming'
+            && lastMessage.sourceEventType === 'TEXT_DELTA'
+        ) {
+            existingIndex = messages.length - 1;
+        }
+    }
     const existing = existingIndex >= 0 ? messages[existingIndex] : undefined;
     const nextMessage: CanonicalTaskMessage = existing
         ? { ...existing }

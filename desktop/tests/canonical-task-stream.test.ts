@@ -96,6 +96,51 @@ describe('canonical task stream bridge', () => {
         });
     });
 
+    test('keeps streaming assistant buffers isolated across turnId boundaries without terminal events', () => {
+        const state = applyEvents([
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'assistant-stream-shared',
+                    taskId,
+                    turnId: 'turn-1',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:00:00.000Z',
+                    sequence: 1,
+                    sourceEventId: 'evt-turn1-delta1',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: { type: 'text', delta: '第一轮回复' },
+                },
+            },
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'assistant-stream-shared',
+                    taskId,
+                    turnId: 'turn-2',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:00:02.000Z',
+                    sequence: 2,
+                    sourceEventId: 'evt-turn2-delta1',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: { type: 'text', delta: '第二轮回复' },
+                },
+            },
+        ]);
+
+        expect(state.messages).toHaveLength(2);
+        expect(state.messages[0]).toMatchObject({
+            turnId: 'turn-1',
+            status: 'streaming',
+            parts: [{ type: 'text', text: '第一轮回复' }],
+        });
+        expect(state.messages[1]).toMatchObject({
+            turnId: 'turn-2',
+            status: 'streaming',
+            parts: [{ type: 'text', text: '第二轮回复' }],
+        });
+    });
+
     test('keeps independent runtime messages alongside assistant content', () => {
         const state = applyEvents([
             {

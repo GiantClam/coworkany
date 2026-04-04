@@ -1,8 +1,72 @@
 import React from 'react';
-import { MessagePrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react';
+import { ActionBarPrimitive, MessagePrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react';
 import { useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import styles from './AssistantUiThreadView.module.css';
-import { readAssistantUiStructuredPayload, type AssistantUiStructuredApproval } from './messageAdapter';
+import {
+    readAssistantUiStructuredPayload,
+    type AssistantUiStructuredApproval,
+    type AssistantUiStructuredPayload,
+} from './messageAdapter';
+import { processMessageContent } from '../../../lib/text/messageProcessor';
+import { isExternalHref } from '../../../lib/externalLinks';
+import { formatAssistantUiTimestamp, toTimestampIsoString } from './messageTime';
+
+type RuntimeTone = 'running' | 'pending';
+
+interface RuntimeDescriptor {
+    label: string;
+    detail: string;
+    tone: RuntimeTone;
+}
+
+function getRuntimePhaseDescriptor(
+    runtime: AssistantUiStructuredPayload['runtime'] | undefined,
+    t: (key: string, options?: Record<string, unknown>) => string,
+): RuntimeDescriptor | null {
+    if (!runtime) {
+        return null;
+    }
+
+    const toolName = runtime.toolName || t('assistantUi.genericTool', { defaultValue: 'tool' });
+    switch (runtime.pendingPhase) {
+        case 'running_tool':
+            return {
+                label: t('assistantUi.runtimeUsingTool', { defaultValue: 'Using tool' }),
+                detail: runtime.pendingLabel || t('assistantUi.runtimeUsingToolDetail', {
+                    tool: toolName,
+                    defaultValue: `Executing ${toolName} and waiting for result...`,
+                }),
+                tone: 'running',
+            };
+        case 'retrying':
+            return {
+                label: t('assistantUi.runtimeRetrying', { defaultValue: 'Retrying' }),
+                detail: runtime.pendingLabel || t('assistantUi.runtimeRetryingDetail', {
+                    defaultValue: 'Request was rate limited. Retrying now...',
+                }),
+                tone: 'pending',
+            };
+        case 'waiting_for_model':
+            return {
+                label: t('assistantUi.runtimeThinking', { defaultValue: 'Thinking' }),
+                detail: runtime.pendingLabel || t('assistantUi.runtimeThinkingDetail', {
+                    defaultValue: 'Model is reasoning and preparing the response...',
+                }),
+                tone: 'running',
+            };
+        default:
+            if (runtime.pendingLabel) {
+                return {
+                    label: t('assistantUi.runtimeRunning', { defaultValue: 'Running' }),
+                    detail: runtime.pendingLabel,
+                    tone: 'running',
+                };
+            }
+            return null;
+    }
+}
 
 function getToolStatusClass(status: 'running' | 'success' | 'failed'): string {
     switch (status) {
@@ -15,6 +79,31 @@ function getToolStatusClass(status: 'running' | 'success' | 'failed'): string {
     }
 }
 
+function getToolStatusLabel(
+    status: 'running' | 'success' | 'failed',
+    t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+    switch (status) {
+        case 'success':
+            return t('assistantUi.statusCompleted', { defaultValue: 'Completed' });
+        case 'failed':
+            return t('assistantUi.statusFailed', { defaultValue: 'Failed' });
+        default:
+            return t('assistantUi.statusRunning', { defaultValue: 'Running' });
+    }
+}
+
+function getToolEventMarkerClass(status: 'running' | 'success' | 'failed'): string {
+    switch (status) {
+        case 'success':
+            return styles.toolEventMarkerSuccess;
+        case 'failed':
+            return styles.toolEventMarkerFailed;
+        default:
+            return styles.toolEventMarkerRunning;
+    }
+}
+
 function getDecisionClass(decision: 'pending' | 'approved' | 'denied'): string {
     switch (decision) {
         case 'approved':
@@ -23,6 +112,17 @@ function getDecisionClass(decision: 'pending' | 'approved' | 'denied'): string {
             return styles.statusPillFailed;
         default:
             return styles.statusPillPending;
+    }
+}
+
+function getDecisionTimelineClass(decision: 'pending' | 'approved' | 'denied'): string {
+    switch (decision) {
+        case 'approved':
+            return styles.structuredTimelineSuccess;
+        case 'denied':
+            return styles.structuredTimelineFailed;
+        default:
+            return styles.structuredTimelinePending;
     }
 }
 
@@ -39,16 +139,46 @@ function getSeverityClass(severity: 'low' | 'medium' | 'high' | 'critical'): str
     }
 }
 
-function getTaskStatusClass(status: 'idle' | 'running' | 'finished' | 'failed'): string {
+function getPatchTimelineClass(status: 'proposed' | 'applied' | 'rejected'): string {
+    switch (status) {
+        case 'applied':
+            return styles.structuredTimelineSuccess;
+        case 'rejected':
+            return styles.structuredTimelineFailed;
+        default:
+            return styles.structuredTimelinePending;
+    }
+}
+
+function getTaskStatusClass(status: 'idle' | 'running' | 'finished' | 'failed' | 'suspended'): string {
     switch (status) {
         case 'finished':
             return styles.statusPillSuccess;
         case 'failed':
+        case 'suspended':
             return styles.statusPillFailed;
         case 'running':
             return styles.statusPillRunning;
         default:
             return styles.statusPillPending;
+    }
+}
+
+function getTaskStatusLabel(
+    status: 'idle' | 'running' | 'finished' | 'failed' | 'suspended',
+    t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+    switch (status) {
+        case 'finished':
+            return t('assistantUi.statusCompleted', { defaultValue: 'Completed' });
+        case 'failed':
+            return t('assistantUi.statusFailed', { defaultValue: 'Failed' });
+        case 'suspended':
+            return t('assistantUi.statusSuspended', { defaultValue: 'Suspended' });
+        case 'running':
+            return t('assistantUi.statusRunning', { defaultValue: 'Running' });
+        default:
+            return t('assistantUi.statusPending', { defaultValue: 'Pending' });
     }
 }
 
@@ -60,6 +190,20 @@ function getPatchStatusClass(status: 'proposed' | 'applied' | 'rejected'): strin
             return styles.statusPillFailed;
         default:
             return styles.statusPillPending;
+    }
+}
+
+function getPatchStatusLabel(
+    status: 'proposed' | 'applied' | 'rejected',
+    t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+    switch (status) {
+        case 'applied':
+            return t('assistantUi.patchApplied', { defaultValue: 'Applied' });
+        case 'rejected':
+            return t('assistantUi.patchRejected', { defaultValue: 'Rejected' });
+        default:
+            return t('assistantUi.patchProposed', { defaultValue: 'Proposed' });
     }
 }
 
@@ -141,71 +285,85 @@ const AssistantUiApprovalItem: React.FC<AssistantUiApprovalItemProps> = ({
     const normalizedNote = note.trim();
 
     return (
-        <li className={styles.structuredItem}>
-            <strong className={styles.structuredPrimaryText}>{approval.effectType}</strong>
-            <span className={`${styles.severityBadge} ${getSeverityClass(approval.severity)}`}>
-                {approval.severity}
-            </span>
-            <span className={styles.structuredMeta}>
-                {`${t('assistantUi.risk', { defaultValue: 'risk' })} ${approval.risk}`}
-            </span>
-            <span
-                className={`${styles.statusPill} ${getDecisionClass(approval.decision)}`}
-                aria-label={`approval decision ${approval.decision}`}
-            >
-                {approval.decision}
-            </span>
-            {approval.decision === 'pending' ? (
-                <div className={styles.approvalActions}>
-                    <button
-                        type="button"
-                        className={`${styles.approvalButton} ${styles.approvalButtonApprove}`}
-                        onClick={() => onApprove(approval.requestId)}
-                        disabled={!canResolveApproval || pending}
+        <li className={`${styles.structuredItem} ${styles.structuredItemTimeline} ${styles.approvalItem} ${getDecisionTimelineClass(approval.decision)}`}>
+            <span className={styles.structuredTimelineDot} aria-hidden="true" />
+            <div className={styles.structuredItemBody}>
+                <div className={styles.approvalItemHeader}>
+                    <strong className={styles.structuredPrimaryText}>{approval.effectType}</strong>
+                    <span className={`${styles.severityBadge} ${getSeverityClass(approval.severity)}`}>
+                        {approval.severity}
+                    </span>
+                    <span
+                        className={`${styles.statusPill} ${getDecisionClass(approval.decision)}`}
+                        aria-label={`approval decision ${approval.decision}`}
                     >
-                        {t('assistantUi.approve', { defaultValue: 'Approve' })}
-                    </button>
-                    <button
-                        type="button"
-                        className={`${styles.approvalButton} ${styles.approvalButtonModify}`}
-                        onClick={() => onToggleEdit(approval.requestId)}
-                        disabled={!canResolveApproval || pending}
-                    >
-                        {t('assistantUi.modifyApprove', { defaultValue: 'Modify & Approve' })}
-                    </button>
-                    <button
-                        type="button"
-                        className={`${styles.approvalButton} ${styles.approvalButtonDeny}`}
-                        onClick={() => onDeny(approval.requestId)}
-                        disabled={!canResolveApproval || pending}
-                    >
-                        {t('assistantUi.deny', { defaultValue: 'Deny' })}
-                    </button>
+                        {approval.decision}
+                    </span>
                 </div>
-            ) : null}
-            {approval.decision === 'pending' && isEditing ? (
-                <div className={styles.approvalModifyRow}>
-                    <input
-                        className={styles.approvalInput}
-                        placeholder={t('assistantUi.modifyPlaceholder', { defaultValue: 'Describe required changes before approval...' })}
-                        value={note}
-                        onChange={(event) => onNoteChange(approval.requestId, event.target.value)}
-                    />
-                    <button
-                        type="button"
-                        className={`${styles.approvalButton} ${styles.approvalButtonApprove}`}
-                        onClick={() => onModifyApprove(approval.requestId)}
-                        disabled={!canResolveApproval || pending || normalizedNote.length === 0}
-                    >
-                        {t('assistantUi.submit', { defaultValue: 'Submit' })}
-                    </button>
+                <div className={styles.approvalItemMeta}>
+                    <span className={styles.structuredMeta}>
+                        {`${t('assistantUi.risk', { defaultValue: 'risk' })} ${approval.risk}`}
+                    </span>
+                    {approval.blocking ? (
+                        <span className={styles.approvalBlockingHint}>
+                            {t('assistantUi.approvalBlocking', { defaultValue: 'Blocks execution until resolved' })}
+                        </span>
+                    ) : null}
                 </div>
-            ) : null}
+                {approval.decision === 'pending' ? (
+                    <div className={styles.approvalActions}>
+                        <button
+                            type="button"
+                            className={`${styles.approvalButton} ${styles.approvalButtonApprove}`}
+                            onClick={() => onApprove(approval.requestId)}
+                            disabled={!canResolveApproval || pending}
+                        >
+                            {t('assistantUi.approve', { defaultValue: 'Approve' })}
+                        </button>
+                        <button
+                            type="button"
+                            className={`${styles.approvalButton} ${styles.approvalButtonModify}`}
+                            onClick={() => onToggleEdit(approval.requestId)}
+                            disabled={!canResolveApproval || pending}
+                        >
+                            {t('assistantUi.modifyApprove', { defaultValue: 'Modify & Approve' })}
+                        </button>
+                        <button
+                            type="button"
+                            className={`${styles.approvalButton} ${styles.approvalButtonDeny}`}
+                            onClick={() => onDeny(approval.requestId)}
+                            disabled={!canResolveApproval || pending}
+                        >
+                            {t('assistantUi.deny', { defaultValue: 'Deny' })}
+                        </button>
+                    </div>
+                ) : null}
+                {approval.decision === 'pending' && isEditing ? (
+                    <div className={styles.approvalModifyRow}>
+                        <input
+                            className={styles.approvalInput}
+                            placeholder={t('assistantUi.modifyPlaceholder', { defaultValue: 'Describe required changes before approval...' })}
+                            value={note}
+                            onChange={(event) => onNoteChange(approval.requestId, event.target.value)}
+                        />
+                        <button
+                            type="button"
+                            className={`${styles.approvalButton} ${styles.approvalButtonApprove}`}
+                            onClick={() => onModifyApprove(approval.requestId)}
+                            disabled={!canResolveApproval || pending || normalizedNote.length === 0}
+                        >
+                            {t('assistantUi.submit', { defaultValue: 'Submit' })}
+                        </button>
+                    </div>
+                ) : null}
+            </div>
         </li>
     );
 };
 
 interface AssistantStructuredDetailsProps {
+    structured: AssistantUiStructuredPayload | null;
+    suppressRuntimeCard?: boolean;
     onApprovalDecision?: (input: {
         requestId: string;
         decision: 'approve' | 'deny' | 'modify_approve';
@@ -213,25 +371,36 @@ interface AssistantStructuredDetailsProps {
     }) => Promise<void> | void;
 }
 
-const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({ onApprovalDecision }) => {
+const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
+    structured,
+    suppressRuntimeCard = false,
+    onApprovalDecision,
+}) => {
     const { t } = useTranslation();
-    const role = useAuiState((state) => state.message.role);
-    const customValue = useAuiState((state) => state.message.metadata?.custom);
-    const structured = React.useMemo(
-        () => readAssistantUiStructuredPayload(customValue),
-        [customValue],
-    );
     const [editingApprovalId, setEditingApprovalId] = React.useState<string | null>(null);
     const [approvalNotes, setApprovalNotes] = React.useState<Record<string, string>>({});
     const [pendingApprovalIds, setPendingApprovalIds] = React.useState<Record<string, boolean>>({});
 
-    if (role !== 'assistant' || !structured) {
+    if (!structured) {
         return null;
     }
 
+    const runtimeDescriptor = getRuntimePhaseDescriptor(structured.runtime, t);
     const highRiskApprovals = structured.approvals.filter((approval) => approval.blocking);
     const hasCriticalHighRisk = highRiskApprovals.some((approval) => approval.severity === 'critical');
     const regularApprovals = structured.approvals.filter((approval) => !approval.blocking);
+    const shouldRenderRuntimeCard = Boolean(runtimeDescriptor) && !suppressRuntimeCard;
+    const hasNonRuntimeSections = (
+        highRiskApprovals.length > 0
+        || structured.events.length > 0
+        || structured.tools.length > 0
+        || regularApprovals.length > 0
+        || Boolean(structured.task)
+        || structured.patches.length > 0
+    );
+    if (!shouldRenderRuntimeCard && !hasNonRuntimeSections) {
+        return null;
+    }
     const canResolveApproval = Boolean(onApprovalDecision);
     const runApprovalDecision = async (input: {
         requestId: string;
@@ -292,11 +461,12 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
             return null;
         }
 
+        const mergedClassName = [styles.approvalDecisionCard, className].filter(Boolean).join(' ');
         return (
             <AssistantUiStructuredCard
                 title={title}
                 count={approvals.length}
-                className={className}
+                className={mergedClassName}
             >
                 <AssistantUiStructuredList
                     items={approvals.map((approval, index) => (
@@ -330,17 +500,22 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
 
     return (
         <div className={styles.structuredBlock}>
-            {structured.runtime?.pendingLabel && (
-                <AssistantUiStructuredCard title={t('assistantUi.runtimeStatus', { defaultValue: 'Runtime status' })}>
-                    <div className={styles.structuredItem}>
-                        <span className={styles.runtimePulseDot} aria-hidden="true" />
-                        <span
-                            className={`${styles.statusPill} ${styles.statusPillRunning}`}
-                            aria-label={t('assistantUi.runtimeStatusAriaRunning', { defaultValue: 'runtime status running' })}
-                        >
-                            {t('assistantUi.statusRunning', { defaultValue: 'running' })}
-                        </span>
-                        <span className={styles.structuredPrimaryText}>{structured.runtime.pendingLabel}</span>
+            {shouldRenderRuntimeCard && runtimeDescriptor && (
+                <AssistantUiStructuredCard
+                    title={t('assistantUi.runtimeStatus', { defaultValue: 'Runtime status' })}
+                    className={styles.runtimeStatusCard}
+                >
+                    <div className={styles.runtimeStatusBody}>
+                        <span className={styles.runtimeStatusDot} aria-hidden="true" />
+                        <div className={styles.runtimeStatusTextCol}>
+                            <div className={styles.runtimeStatusTitleRow}>
+                                <strong className={styles.structuredPrimaryText}>{runtimeDescriptor.label}</strong>
+                            </div>
+                            <p className={styles.runtimeStatusDetail}>{runtimeDescriptor.detail}</p>
+                            <span className={styles.runtimeStatusTrack} aria-hidden="true">
+                                <span className={styles.runtimeStatusTrackBar} />
+                            </span>
+                        </div>
                     </div>
                 </AssistantUiStructuredCard>
             )}
@@ -354,35 +529,81 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                 )
             )}
 
-            {structured.tools.length > 0 && (
-                <AssistantUiStructuredCard title={t('assistantUi.tools', { defaultValue: 'Tools' })} count={structured.tools.length}>
+            {structured.events.length > 0 && (
+                <AssistantUiStructuredCard
+                    title={t('assistantUi.events', { defaultValue: 'Events' })}
+                    count={structured.events.length}
+                    className={styles.eventCard}
+                >
                     <AssistantUiStructuredList
-                        items={structured.tools.map((tool, index) => (
-                            <li key={`tool-${index}`} className={styles.structuredItem}>
+                        items={structured.events.map((event, index) => (
+                            <li key={`event-${index}`} className={`${styles.structuredItem} ${styles.eventItem}`}>
+                                <span className={styles.eventDot} aria-hidden="true" />
                                 <div className={styles.structuredItemBody}>
-                                    <div className={styles.structuredItemMain}>
-                                        <strong className={styles.structuredPrimaryText}>{tool.toolName}</strong>
-                                        <span
-                                            className={`${styles.statusPill} ${getToolStatusClass(tool.status)}`}
-                                            aria-label={`tool status ${tool.status}`}
-                                        >
-                                            {tool.status}
-                                        </span>
-                                    </div>
-                                    {tool.inputSummary ? (
-                                        <div className={styles.structuredSubline}>
-                                            {`${t('assistantUi.args', { defaultValue: 'args' })}: ${tool.inputSummary}`}
-                                        </div>
-                                    ) : null}
-                                    {tool.resultSummary ? (
-                                        <div className={styles.structuredSubline}>
-                                            {`${t('assistantUi.result', { defaultValue: 'result' })}: ${tool.resultSummary}`}
-                                        </div>
-                                    ) : null}
+                                    <span className={styles.eventText}>{event}</span>
                                 </div>
                             </li>
                         ))}
                     />
+                </AssistantUiStructuredCard>
+            )}
+
+            {structured.tools.length > 0 && (
+                <AssistantUiStructuredCard title={t('assistantUi.tools', { defaultValue: 'Tools' })} count={structured.tools.length}>
+                    {(() => {
+                        const hasRunningTool = structured.tools.some((tool) => tool.status === 'running');
+                        const toolItems = structured.tools.map((tool, index) => (
+                            <li key={`tool-${index}`} className={`${styles.structuredItem} ${styles.toolEventItem}`}>
+                                <span
+                                    className={`${styles.toolEventMarker} ${getToolEventMarkerClass(tool.status)}`}
+                                    aria-hidden="true"
+                                />
+                                <details className={styles.toolEventDetails} open={tool.status === 'running' ? true : undefined}>
+                                    <summary className={styles.toolEventSummary}>
+                                        <div className={styles.structuredItemMain}>
+                                            <strong className={styles.structuredPrimaryText}>{tool.toolName}</strong>
+                                            <span
+                                                className={`${styles.statusPill} ${getToolStatusClass(tool.status)}`}
+                                                aria-label={`tool status ${tool.status}`}
+                                            >
+                                                {getToolStatusLabel(tool.status, t)}
+                                            </span>
+                                        </div>
+                                    </summary>
+                                    <div className={`${styles.structuredItemBody} ${styles.toolEventBody}`}>
+                                        {tool.inputSummary ? (
+                                            <div className={styles.structuredSubline}>
+                                                {`${t('assistantUi.args', { defaultValue: 'args' })}: ${tool.inputSummary}`}
+                                            </div>
+                                        ) : null}
+                                        {tool.resultSummary ? (
+                                            <div className={styles.structuredSubline}>
+                                                {`${t('assistantUi.result', { defaultValue: 'result' })}: ${tool.resultSummary}`}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                </details>
+                            </li>
+                        ));
+
+                        if (structured.tools.length <= 1) {
+                            return <AssistantUiStructuredList items={toolItems} />;
+                        }
+
+                        return (
+                            <details className={styles.toolsGroupDetails} open={hasRunningTool}>
+                                <summary className={styles.toolsGroupSummary}>
+                                    <span className={styles.toolsGroupSummaryLabel}>
+                                        {t('assistantUi.toolsExecuted', { count: structured.tools.length, defaultValue: `${structured.tools.length} tools executed` })}
+                                    </span>
+                                    <span className={styles.toolsGroupSummaryCount}>{structured.tools.length}</span>
+                                </summary>
+                                <div className={styles.toolsGroupBody}>
+                                    <AssistantUiStructuredList items={toolItems} />
+                                </div>
+                            </details>
+                        );
+                    })()}
                 </AssistantUiStructuredCard>
             )}
 
@@ -403,7 +624,7 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                                 className={`${styles.statusPill} ${getTaskStatusClass(structured.task.status)}`}
                                 aria-label={`task status ${structured.task.status}`}
                             >
-                                {structured.task.status}
+                                {getTaskStatusLabel(structured.task.status, t)}
                             </span>
                         </div>
                         {structured.task.progress ? (
@@ -437,14 +658,19 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                 <AssistantUiStructuredCard title={t('assistantUi.patches', { defaultValue: 'Patches' })} count={structured.patches.length}>
                     <AssistantUiStructuredList
                         items={structured.patches.map((patch, index) => (
-                            <li key={`patch-${index}`} className={styles.structuredItem}>
-                                <strong className={styles.structuredPrimaryText}>{patch.filePath}</strong>
-                                <span
-                                    className={`${styles.statusPill} ${getPatchStatusClass(patch.status)}`}
-                                    aria-label={`patch status ${patch.status}`}
-                                >
-                                    {patch.status}
-                                </span>
+                            <li key={`patch-${index}`} className={`${styles.structuredItem} ${styles.structuredItemTimeline} ${getPatchTimelineClass(patch.status)}`}>
+                                <span className={styles.structuredTimelineDot} aria-hidden="true" />
+                                <div className={styles.structuredItemBody}>
+                                    <div className={styles.structuredItemMain}>
+                                        <strong className={styles.structuredPrimaryText}>{patch.filePath}</strong>
+                                        <span
+                                            className={`${styles.statusPill} ${getPatchStatusClass(patch.status)}`}
+                                            aria-label={`patch status ${patch.status}`}
+                                        >
+                                            {getPatchStatusLabel(patch.status, t)}
+                                        </span>
+                                    </div>
+                                </div>
                             </li>
                         ))}
                     />
@@ -462,14 +688,118 @@ interface AssistantUiMessageProps {
     }) => Promise<void> | void;
 }
 
+const MarkdownTextPart = ({ text }: { text: string }) => {
+    const content = processMessageContent(text);
+    if (!content) {
+        return null;
+    }
+
+    return (
+        <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+                a(props) {
+                    const { href, children, ...rest } = props;
+                    const isExternal = isExternalHref(href);
+                    return (
+                        <a
+                            {...rest}
+                            href={href}
+                            target={isExternal ? '_blank' : undefined}
+                            rel={isExternal ? 'noopener noreferrer' : undefined}
+                        >
+                            {children}
+                        </a>
+                    );
+                },
+            }}
+        >
+            {content}
+        </ReactMarkdown>
+    );
+};
+
 const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecision }) => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
+    const customValue = useAuiState((state) => state.message.metadata?.custom);
+    const messageCreatedAt = useAuiState((state) => state.message.createdAt as Date | string | number | null | undefined);
+    const messageText = useAuiState((state) => state.message.parts
+        .map((part) => {
+            const candidate = part as { type?: unknown; text?: unknown };
+            if (candidate.type !== 'text' || typeof candidate.text !== 'string') {
+                return '';
+            }
+            return candidate.text;
+        })
+        .filter((text) => text.length > 0)
+        .join('\n\n')
+        .trim());
+    const structured = React.useMemo(
+        () => readAssistantUiStructuredPayload(customValue),
+        [customValue],
+    );
+    const timestampLabel = React.useMemo(
+        () => formatAssistantUiTimestamp(messageCreatedAt, i18n.language),
+        [i18n.language, messageCreatedAt],
+    );
+    const timestampIso = React.useMemo(
+        () => toTimestampIsoString(messageCreatedAt),
+        [messageCreatedAt],
+    );
+    const runtimeDescriptor = React.useMemo(
+        () => getRuntimePhaseDescriptor(structured?.runtime, t),
+        [structured?.runtime, t],
+    );
+    const runtimePendingLabel = (structured?.runtime?.pendingLabel ?? '').trim();
+    const normalizedMessageText = messageText.toLowerCase();
+    const isRuntimePlaceholderText = (
+        messageText.length === 0
+        || (runtimePendingLabel.length > 0 && messageText === runtimePendingLabel)
+        || messageText === runtimeDescriptor?.label
+        || normalizedMessageText === 'runtime'
+        || normalizedMessageText.startsWith('runtime:')
+        || normalizedMessageText.startsWith('structured update: runtime')
+    );
+    const isPendingOnlyAssistant = Boolean(runtimeDescriptor)
+        && (structured?.tools.length ?? 0) === 0
+        && (structured?.approvals.length ?? 0) === 0
+        && !structured?.task
+        && (structured?.patches.length ?? 0) === 0
+        && isRuntimePlaceholderText;
+    const suppressRuntimeCard = Boolean(runtimeDescriptor);
+
     return (
         <MessagePrimitive.Root className={styles.messageRow}>
             <MessagePrimitive.If user>
                 <div className={`${styles.messageRow} ${styles.messageRowUser}`}>
                     <div className={styles.messageRail}>
                         <div className={`${styles.messageBubble} ${styles.userBubble}`}>
+                            <div className={styles.messageMetaRow}>
+                                <span className={styles.messageRoleLabel}>
+                                    {t('assistantUi.userLabel', { defaultValue: 'User' })}
+                                </span>
+                                <span className={styles.messageMetaSpacer} />
+                                {timestampLabel ? (
+                                    <time className={styles.messageTimestamp} dateTime={timestampIso || undefined}>
+                                        {timestampLabel}
+                                    </time>
+                                ) : null}
+                                <MessagePrimitive.If hasContent>
+                                    <ActionBarPrimitive.Root
+                                        className={`${styles.messageActions} ${styles.messageActionsUser}`}
+                                        autohide="never"
+                                    >
+                                        <ActionBarPrimitive.Copy
+                                            className={styles.messageActionButton}
+                                            copiedDuration={1400}
+                                            title={t('chat.copyMessage')}
+                                            aria-label={t('chat.copyMessage')}
+                                        >
+                                            <span className={styles.messageActionGlyph} aria-hidden="true">⧉</span>
+                                        </ActionBarPrimitive.Copy>
+                                    </ActionBarPrimitive.Root>
+                                </MessagePrimitive.If>
+                            </div>
                             <MessagePrimitive.Parts />
                         </div>
                     </div>
@@ -479,15 +809,70 @@ const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecis
             <MessagePrimitive.If assistant>
                 <div className={`${styles.messageRow} ${styles.messageRowAssistant}`}>
                     <div className={styles.messageRail}>
-                        <span className={`${styles.roleBadge} ${styles.roleBadgeAssistant}`} aria-hidden="true">AI</span>
-                        <div className={`${styles.messageBubble} ${styles.assistantBubble}`}>
+                        <div className={`${styles.messageBubble} ${styles.assistantBubble}${isPendingOnlyAssistant ? ` ${styles.assistantBubblePending}` : ''}`}>
                             <div className={styles.messageMetaRow}>
                                 <span className={styles.messageRoleLabel}>
                                     {t('assistantUi.assistantLabel', { defaultValue: 'CoworkAny' })}
                                 </span>
+                                <span className={styles.messageMetaSpacer} />
+                                {runtimeDescriptor && !isPendingOnlyAssistant ? (
+                                    <span className={`${styles.statusPill} ${runtimeDescriptor.tone === 'pending' ? styles.statusPillPending : styles.statusPillRunning}`}>
+                                        {runtimeDescriptor.label}
+                                    </span>
+                                ) : null}
+                                {timestampLabel ? (
+                                    <time className={styles.messageTimestamp} dateTime={timestampIso || undefined}>
+                                        {timestampLabel}
+                                    </time>
+                                ) : null}
+                                <MessagePrimitive.If hasContent>
+                                    <ActionBarPrimitive.Root
+                                        className={`${styles.messageActions} ${styles.messageActionsAssistant}`}
+                                        autohide="never"
+                                    >
+                                        <ActionBarPrimitive.Copy
+                                            className={styles.messageActionButton}
+                                            copiedDuration={1400}
+                                            title={t('chat.copyMessage')}
+                                            aria-label={t('chat.copyMessage')}
+                                        >
+                                            <span className={styles.messageActionGlyph} aria-hidden="true">⧉</span>
+                                        </ActionBarPrimitive.Copy>
+                                        <MessagePrimitive.If last>
+                                            <ActionBarPrimitive.Reload
+                                                className={styles.messageActionButton}
+                                                title={t('common.retry')}
+                                                aria-label={t('common.retry')}
+                                            >
+                                                <span className={styles.messageActionGlyph} aria-hidden="true">↻</span>
+                                            </ActionBarPrimitive.Reload>
+                                        </MessagePrimitive.If>
+                                    </ActionBarPrimitive.Root>
+                                </MessagePrimitive.If>
                             </div>
-                            <MessagePrimitive.Parts />
-                            <AssistantStructuredDetails onApprovalDecision={onApprovalDecision} />
+                            {isPendingOnlyAssistant ? (
+                                <div className={styles.pendingResponseShimmer} aria-live="polite">
+                                    <span className={styles.pendingResponseDot} />
+                                    <span className={styles.pendingResponseDot} />
+                                    <span className={styles.pendingResponseDot} />
+                                    <span className={styles.pendingResponseLabel}>
+                                        {runtimeDescriptor?.label || t('assistantUi.runtimeThinking', { defaultValue: 'Thinking' })}
+                                    </span>
+                                    <span className={styles.pendingResponseShimmerLine} aria-hidden="true" />
+                                </div>
+                            ) : null}
+                            {!isPendingOnlyAssistant ? (
+                                <MessagePrimitive.Parts
+                                    components={{
+                                        Text: MarkdownTextPart,
+                                    }}
+                                />
+                            ) : null}
+                            <AssistantStructuredDetails
+                                structured={structured}
+                                suppressRuntimeCard={suppressRuntimeCard}
+                                onApprovalDecision={onApprovalDecision}
+                            />
                         </div>
                     </div>
                 </div>
@@ -496,14 +881,23 @@ const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecis
             <MessagePrimitive.If system>
                 <div className={`${styles.messageRow} ${styles.messageRowSystem}`}>
                     <div className={styles.messageRail}>
-                        <span className={`${styles.roleBadge} ${styles.roleBadgeSystem}`} aria-hidden="true">SYS</span>
                         <div className={`${styles.messageBubble} ${styles.systemBubble}`}>
                             <div className={styles.messageMetaRow}>
                                 <span className={styles.messageRoleLabel}>
                                     {t('assistantUi.systemLabel', { defaultValue: 'System' })}
                                 </span>
+                                <span className={styles.messageMetaSpacer} />
+                                {timestampLabel ? (
+                                    <time className={styles.messageTimestamp} dateTime={timestampIso || undefined}>
+                                        {timestampLabel}
+                                    </time>
+                                ) : null}
                             </div>
-                            <MessagePrimitive.Parts />
+                            <MessagePrimitive.Parts
+                                components={{
+                                    Text: MarkdownTextPart,
+                                }}
+                            />
                         </div>
                     </div>
                 </div>
@@ -521,9 +915,35 @@ interface AssistantUiThreadViewProps {
 }
 
 export const AssistantUiThreadView: React.FC<AssistantUiThreadViewProps> = ({ onApprovalDecision }) => {
+    const [isViewportScrolling, setIsViewportScrolling] = React.useState(false);
+    const hideScrollbarTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const markViewportScrolling = React.useCallback(() => {
+        setIsViewportScrolling(true);
+        if (hideScrollbarTimerRef.current) {
+            clearTimeout(hideScrollbarTimerRef.current);
+        }
+        hideScrollbarTimerRef.current = setTimeout(() => {
+            setIsViewportScrolling(false);
+            hideScrollbarTimerRef.current = null;
+        }, 900);
+    }, []);
+
+    React.useEffect(() => {
+        return () => {
+            if (hideScrollbarTimerRef.current) {
+                clearTimeout(hideScrollbarTimerRef.current);
+                hideScrollbarTimerRef.current = null;
+            }
+        };
+    }, []);
+
     return (
         <ThreadPrimitive.Root className={styles.threadRoot}>
-            <ThreadPrimitive.Viewport className={styles.viewport}>
+            <ThreadPrimitive.Viewport
+                className={`${styles.viewport}${isViewportScrolling ? ` ${styles.viewportScrolling}` : ''}`}
+                onScroll={markViewportScrolling}
+            >
                 <ThreadPrimitive.Messages
                     components={{
                         Message: () => <AssistantUiMessage onApprovalDecision={onApprovalDecision} />,

@@ -2,12 +2,16 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    padding: 8px;
-    gap: 8px;
+    padding: var(--shell-panel-padding) calc(var(--shell-panel-padding) - 1px);
+    gap: calc(var(--surface-stack-gap) - 1px);
     width: 100%;
     overflow: hidden;
     box-sizing: border-box;
-    background: var(--bg-sidebar);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-sidebar) 95%, transparent),
+        color-mix(in srgb, var(--bg-panel) 92%, transparent)
+    );
 }
 
 .sidebar-header-collapsed {
@@ -21,17 +25,20 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-panel);
+    padding: 10px 12px;
+    border-radius: calc(var(--surface-card-radius) + 1px);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 92%, transparent);
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--text-primary) 8%, transparent);
 }
 
 .sidebar-logo {
     height: 32px;
     width: 32px;
-    border-radius: 10px;
+    border-radius: 9px;
     flex-shrink: 0;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
+    background: color-mix(in srgb, var(--bg-subtle) 80%, transparent);
 }
 
 .sidebar-brand-copy {
@@ -42,15 +49,17 @@
 
 .sidebar-brand-title {
     font-family: var(--font-heading);
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
     line-height: 1.2;
+    letter-spacing: 0.01em;
 }
 
 .sidebar-brand-subtitle {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-muted);
+    letter-spacing: 0.03em;
 }
 
 .task-section,
@@ -58,7 +67,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    gap: 6px;
+    gap: calc(var(--surface-stack-gap-tight) - 1px);
 }
 
 .task-section {
@@ -74,7 +83,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 2px;
+    padding: 0 1px;
 }
 
 .nav-label {
@@ -84,7 +93,7 @@
     font-family: var(--font-code);
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     color: var(--text-muted);
 }
 
@@ -100,19 +109,25 @@
     font-family: var(--font-code);
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
+    transition: color var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast);
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
 }
 
 .section-anchor:hover,
 .section-anchor.active {
     color: var(--text-primary);
+    background: color-mix(in srgb, var(--bg-element) 74%, transparent);
+    border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
 }
 
 .task-list,
 .workspace-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: calc(var(--surface-stack-gap-tight) - 3px);
     min-height: 0;
     overflow-y: auto;
     padding-right: 2px;
@@ -130,14 +145,14 @@
     align-items: center;
     justify-content: center;
     min-width: 28px;
-    min-height: 28px;
+    min-height: var(--control-height-compact);
     padding: 0;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-element);
+    border-radius: var(--surface-chip-radius);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 74%, transparent);
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
 .workspace-add-btn:hover,
@@ -145,24 +160,25 @@
     background: var(--bg-element-hover);
     border-color: var(--border-strong);
     color: var(--text-primary);
+    transform: translateY(-1px);
 }
 
 .workspace-create-form {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 8px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    background: var(--bg-element);
+    gap: var(--surface-stack-gap-tight);
+    padding: var(--shell-panel-padding);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    border-radius: var(--surface-card-radius);
+    background: color-mix(in srgb, var(--bg-element) 74%, transparent);
 }
 
 .workspace-input {
-    min-height: 34px;
+    min-height: calc(var(--control-height-compact) + 2px);
     padding: 8px 10px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 94%, transparent);
+    border-radius: 10px;
     color: var(--text-primary);
     font-size: 12px;
     outline: none;
@@ -183,19 +199,19 @@
 }
 
 .workspace-create-btn {
-    min-height: 34px;
+    min-height: calc(var(--control-height-compact) + 2px);
     padding: 8px 10px;
-    background: linear-gradient(135deg, var(--brand-400), var(--accent-primary));
-    color: white;
-    border: none;
-    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-primary) 88%, white 12%);
+    color: var(--text-on-dark);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 74%, white 26%);
+    border-radius: 10px;
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
 }
 
 .workspace-create-btn:hover {
-    opacity: 0.95;
+    filter: brightness(1.03);
 }
 
 .workspace-loading-list {
@@ -230,12 +246,13 @@
 .workspace-item,
 .session-item {
     width: 100%;
-    border: 1px solid transparent;
-    background: var(--bg-element);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 85%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 72%, transparent);
     color: var(--text-secondary);
-    border-radius: 8px;
+    border-radius: var(--surface-card-radius);
     text-align: left;
     cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
 .session-row {
@@ -249,9 +266,9 @@
     justify-content: center;
     width: 28px;
     min-height: 28px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-element);
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 72%, transparent);
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
@@ -265,9 +282,7 @@
 }
 
 .session-row:hover .session-delete-btn,
-.session-row:focus-within .session-delete-btn,
-.session-row.active .session-delete-btn,
-.session-delete-btn:focus-visible {
+.session-delete-btn:hover {
     opacity: 1;
     pointer-events: auto;
 }
@@ -279,12 +294,17 @@
     color: var(--status-error);
 }
 
+.session-delete-btn:not(:disabled):active {
+    transform: translateY(-50%) scale(0.96);
+    filter: brightness(0.96);
+}
+
 .workspace-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 34px;
-    padding: 7px 40px 7px 10px;
+    min-height: calc(var(--control-height-compact) + 5px);
+    padding: 8px 40px 8px 10px;
     flex: 1;
     min-width: 0;
     position: relative;
@@ -301,9 +321,9 @@
     justify-content: center;
     width: 28px;
     min-height: 28px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-element);
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 72%, transparent);
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
@@ -330,6 +350,11 @@
     color: var(--status-error);
 }
 
+.workspace-delete-btn:not(:disabled):active {
+    transform: translateY(-50%) scale(0.96);
+    filter: brightness(0.96);
+}
+
 .workspace-rename-input {
     flex: 1;
     min-width: 0;
@@ -345,8 +370,20 @@
 .workspace-sessions {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding-left: 12px;
+    gap: calc(var(--surface-stack-gap-tight) - 3px);
+    padding-left: calc(var(--timeline-rail-inset) - 3px);
+    position: relative;
+}
+
+.workspace-sessions::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 1px;
+    bottom: 2px;
+    width: 1px;
+    background: color-mix(in srgb, var(--border-subtle) 66%, transparent);
+    pointer-events: none;
 }
 
 .workspace-sessions-empty {
@@ -358,15 +395,19 @@
 .workspace-item:hover,
 .session-item:hover {
     background: var(--bg-element-hover);
-    border-color: var(--border-subtle);
+    border-color: var(--border-strong);
     color: var(--text-primary);
+    transform: translateX(0.5px);
 }
 
 .workspace-item.active,
 .session-item.active {
-    background: var(--accent-subtle);
-    border-color: var(--border-strong);
+    background: color-mix(in srgb, var(--accent-subtle) 86%, var(--bg-element));
+    border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-strong));
     color: var(--text-primary);
+    box-shadow:
+        inset 2px 0 0 color-mix(in srgb, var(--accent-primary) 65%, white),
+        0 6px 18px color-mix(in srgb, var(--accent-primary) 15%, transparent);
 }
 
 .workspace-name {
@@ -393,9 +434,17 @@
 }
 
 .session-item {
-    min-height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: calc(var(--control-height-compact) + 5px);
     padding: 8px 40px 8px 10px;
     font-size: 12px;
+}
+
+.session-title {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -403,6 +452,36 @@
 
 .session-item.running {
     color: #bfdbfe;
+}
+
+.session-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+    background: color-mix(in srgb, var(--text-muted) 58%, transparent);
+}
+
+.session-status-dot.idle {
+    background: color-mix(in srgb, var(--text-muted) 58%, transparent);
+    box-shadow: none;
+}
+
+.session-status-dot.waiting {
+    background: color-mix(in srgb, var(--status-info) 86%, var(--accent-primary));
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 38%, transparent);
+    animation: session-status-breathe 1.6s ease-in-out infinite;
+}
+
+.session-status-dot.error {
+    background: color-mix(in srgb, var(--status-error) 86%, var(--text-primary));
+    box-shadow: 0 0 7px color-mix(in srgb, var(--status-error) 34%, transparent);
+}
+
+.session-status-dot.success {
+    background: color-mix(in srgb, var(--status-success) 90%, var(--text-primary));
+    box-shadow: 0 0 8px color-mix(in srgb, var(--status-success) 34%, transparent);
 }
 
 .workspace-session-empty,
@@ -414,8 +493,8 @@
 }
 
 .sidebar-footer-collapsed {
-    padding-top: 8px;
-    border-top: 1px solid var(--border-subtle);
+    padding-top: calc(var(--surface-stack-gap) - 1px);
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 94%, transparent);
     display: flex;
     flex-shrink: 0;
 }
@@ -424,23 +503,24 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: calc(var(--surface-stack-gap-tight) - 2px);
 }
 
 .sidebar-settings-btn,
 .connection-status {
     width: 100%;
-    min-height: 34px;
+    min-height: calc(var(--control-height-compact) + 2px);
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
     gap: 8px;
     padding: 7px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-element);
+    border-radius: var(--surface-card-radius);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 76%, transparent);
     color: var(--text-secondary);
     box-sizing: border-box;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
 .sidebar-settings-btn {
@@ -451,6 +531,7 @@
     background: var(--bg-element-hover);
     color: var(--text-primary);
     border-color: var(--border-strong);
+    transform: translateY(-1px);
 }
 
 .connection-status {
@@ -474,12 +555,12 @@
 
 .status-dot.connected {
     background-color: var(--status-success);
-    box-shadow: 0 0 10px rgba(52, 211, 153, 0.4);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--status-success) 45%, transparent);
 }
 
 .status-dot.disconnected {
     background-color: var(--status-error);
-    box-shadow: 0 0 10px rgba(251, 113, 133, 0.35);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--status-error) 40%, transparent);
 }
 
 @keyframes workspace-loading-pulse {
@@ -491,6 +572,24 @@
     }
     100% {
         opacity: 0.45;
+    }
+}
+
+@keyframes session-status-breathe {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 32%, transparent);
+        opacity: 0.85;
+    }
+    50% {
+        transform: scale(1.08);
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--status-info) 0%, transparent);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-info) 0%, transparent);
+        opacity: 0.85;
     }
 }
 

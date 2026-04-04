@@ -12,6 +12,7 @@ import type {
     AssistantTurnItem,
     TimelineItemType,
     TaskSession,
+    UserMessageItem,
 } from '../../../types';
 import { useTimelineItems } from './hooks/useTimelineItems';
 import { getPendingTaskStatus } from './pendingTaskStatus';
@@ -39,6 +40,11 @@ const LazyAssistantUiThreadView = React.lazy(async () => {
 
 interface TimelineProps {
     session: TaskSession;
+    optimisticUserEntry?: {
+        id: string;
+        content: string;
+        timestamp: string;
+    } | null;
     onTaskCollaborationSubmit?: (input: {
         taskId?: string;
         cardId: string;
@@ -128,6 +134,62 @@ export function buildDisplayItemsWithPendingState(
     return [...visibleItems, pendingTurn];
 }
 
+function normalizeComparableText(value: string): string {
+    return value.trim().replace(/\s+/g, ' ');
+}
+
+export function appendOptimisticUserEntry(
+    items: TimelineItemType[],
+    optimisticUserEntry?: TimelineProps['optimisticUserEntry']
+): TimelineItemType[] {
+    if (!optimisticUserEntry) {
+        return items;
+    }
+
+    const content = optimisticUserEntry.content.trim();
+    if (!content) {
+        return items;
+    }
+
+    const normalizedOptimisticContent = normalizeComparableText(content);
+    const hasEquivalentUserMessage = items.some((item) => (
+        item.type === 'user_message'
+        && normalizeComparableText(item.content) === normalizedOptimisticContent
+    ));
+
+    if (hasEquivalentUserMessage) {
+        return items;
+    }
+
+    const optimisticItem: UserMessageItem = {
+        type: 'user_message',
+        id: optimisticUserEntry.id,
+        content,
+        timestamp: optimisticUserEntry.timestamp,
+    };
+
+    return [...items, optimisticItem];
+}
+
+export function buildAssistantUiDisplayItems(
+    timelineItems: TimelineItemType[],
+    optimisticUserEntry: TimelineProps['optimisticUserEntry'] | undefined,
+    pendingLabel: string,
+    session: Pick<TaskSession, 'taskId' | 'updatedAt'>,
+): { items: TimelineItemType[]; resolvedPendingLabel: string } {
+    const itemsWithOptimistic = appendOptimisticUserEntry(timelineItems, optimisticUserEntry);
+    const resolvedPendingLabel = resolveAssistantUiPendingLabel(itemsWithOptimistic, pendingLabel);
+    const items = buildDisplayItemsWithPendingState(
+        itemsWithOptimistic,
+        resolvedPendingLabel,
+        session,
+    );
+    return {
+        items,
+        resolvedPendingLabel,
+    };
+}
+
 function hasRenderableAssistantNarrative(turn: AssistantTurnItem): boolean {
     const hasMessageText = (turn.lead?.trim().length ?? 0) > 0
         || turn.messages.some((line) => line.trim().length > 0)
@@ -158,12 +220,9 @@ export function resolveAssistantUiPendingLabel(
         return '';
     }
 
-    for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
-        const item = visibleItems[index];
-        if (item.type !== 'assistant_turn') {
-            continue;
-        }
-        return hasRenderableAssistantNarrative(item) ? '' : pendingLabel;
+    const lastItem = visibleItems[visibleItems.length - 1];
+    if (lastItem?.type === 'assistant_turn') {
+        return hasRenderableAssistantNarrative(lastItem) ? '' : pendingLabel;
     }
 
     return pendingLabel;
@@ -171,6 +230,7 @@ export function resolveAssistantUiPendingLabel(
 
 const TimelineComponent: React.FC<TimelineProps> = ({
     session,
+    optimisticUserEntry,
     onTaskCollaborationSubmit,
 }) => {
     const { t } = useTranslation();
@@ -189,13 +249,14 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 return '';
         }
     }, [pendingStatus, t]);
-    const resolvedPendingLabel = React.useMemo(
-        () => resolveAssistantUiPendingLabel(timelineItems, pendingLabel),
-        [pendingLabel, timelineItems],
-    );
-    const displayItems = React.useMemo<TimelineItemType[]>(
-        () => buildDisplayItemsWithPendingState(timelineItems, resolvedPendingLabel, session),
-        [resolvedPendingLabel, session, timelineItems],
+    const { items: displayItems, resolvedPendingLabel } = React.useMemo(
+        () => buildAssistantUiDisplayItems(
+            timelineItems,
+            optimisticUserEntry,
+            pendingLabel,
+            session,
+        ),
+        [optimisticUserEntry, pendingLabel, session, timelineItems],
     );
     const turnRoundViewModel = React.useMemo(
         () => buildTimelineTurnRoundViewModel(displayItems),
@@ -231,7 +292,8 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 sessionId={session.taskId}
                 rounds={turnRoundViewModel.rounds}
                 pendingLabel={resolvedPendingLabel}
-                isRunning={Boolean(resolvedPendingLabel)}
+                pendingStatus={pendingStatus}
+                isRunning={Boolean(pendingStatus)}
             >
                 <LazyAssistantUiThreadView onApprovalDecision={handleAssistantUiApprovalDecision} />
             </LazyAssistantUiRuntimeBridge>
@@ -241,6 +303,9 @@ const TimelineComponent: React.FC<TimelineProps> = ({
 
 export const Timeline = React.memo(TimelineComponent, (prevProps, nextProps) => (
     prevProps.session === nextProps.session
+    && prevProps.optimisticUserEntry?.id === nextProps.optimisticUserEntry?.id
+    && prevProps.optimisticUserEntry?.content === nextProps.optimisticUserEntry?.content
+    && prevProps.optimisticUserEntry?.timestamp === nextProps.optimisticUserEntry?.timestamp
     && prevProps.onTaskCollaborationSubmit === nextProps.onTaskCollaborationSubmit
 ));
 

@@ -14,12 +14,44 @@ interface AssistantTurnCardStackProps {
         actionId?: string;
         value: string;
     }) => void;
+    onApprovalDecision?: (input: {
+        requestId: string;
+        decision: 'approve' | 'deny' | 'modify_approve';
+        note?: string;
+    }) => Promise<void> | void;
 }
 
 const AssistantTurnCardStackComponent: React.FC<AssistantTurnCardStackProps> = ({
     cards,
     onTaskCollaborationSubmit,
+    onApprovalDecision,
 }) => {
+    const [editingApprovalId, setEditingApprovalId] = React.useState<string | null>(null);
+    const [approvalNotes, setApprovalNotes] = React.useState<Record<string, string>>({});
+    const [pendingApprovalIds, setPendingApprovalIds] = React.useState<Record<string, boolean>>({});
+
+    const runApprovalDecision = React.useCallback(async (input: {
+        requestId: string;
+        decision: 'approve' | 'deny' | 'modify_approve';
+        note?: string;
+    }) => {
+        if (!onApprovalDecision) {
+            return;
+        }
+        setPendingApprovalIds((current) => ({
+            ...current,
+            [input.requestId]: true,
+        }));
+        try {
+            await onApprovalDecision(input);
+        } finally {
+            setPendingApprovalIds((current) => ({
+                ...current,
+                [input.requestId]: false,
+            }));
+        }
+    }, [onApprovalDecision]);
+
     if (cards.length === 0) {
         return null;
     }
@@ -28,6 +60,11 @@ const AssistantTurnCardStackComponent: React.FC<AssistantTurnCardStackProps> = (
         <div className={styles.assistantTurnCardStack}>
             {cards.map((card) => {
                 if (card.type === 'runtime-status') {
+                    const pendingStatusClass = card.indicator === 'running-tool'
+                        ? styles.pendingStatusRunningTool
+                        : card.indicator === 'retrying'
+                            ? styles.pendingStatusRetrying
+                            : styles.pendingStatusThinking;
                     return (
                         <div key={card.id} role="status" aria-live="polite">
                             <StructuredMessageCard
@@ -39,7 +76,15 @@ const AssistantTurnCardStackComponent: React.FC<AssistantTurnCardStackProps> = (
                                 statusTone={card.summary.statusTone}
                                 className={styles.assistantPendingCard}
                             >
-                                <div className={styles.pendingStatusCardBody}>
+                                <div className={`${styles.pendingStatusCardBody} ${pendingStatusClass}`}>
+                                    <div className={styles.pendingStatusLabelRow}>
+                                        <span className={styles.pendingStatusLabel}>
+                                            {card.summary.statusLabel || 'Running'}
+                                        </span>
+                                        {card.toolName ? (
+                                            <span className={styles.pendingStatusToolChip}>{card.toolName}</span>
+                                        ) : null}
+                                    </div>
                                     <span className={styles.pendingStatusDots} aria-hidden="true">
                                         <span className={styles.pendingStatusDot} />
                                         <span className={styles.pendingStatusDot} />
@@ -96,6 +141,139 @@ const AssistantTurnCardStackComponent: React.FC<AssistantTurnCardStackProps> = (
 
                 if (card.type === 'tool-call') {
                     return <ToolCard key={card.id} viewModel={card.viewModel} />;
+                }
+
+                if (card.type === 'approval-request') {
+                    const approval = card.approval;
+                    const isPendingDecision = approval.decision === 'pending';
+                    const note = approvalNotes[approval.requestId] ?? '';
+                    const isEditing = isPendingDecision && editingApprovalId === approval.requestId;
+                    const isSubmitting = Boolean(pendingApprovalIds[approval.requestId]);
+                    const severityClass = approval.severity === 'critical'
+                        ? styles.approvalSeverityCritical
+                        : approval.severity === 'high'
+                            ? styles.approvalSeverityHigh
+                            : approval.severity === 'medium'
+                                ? styles.approvalSeverityMedium
+                                : styles.approvalSeverityLow;
+                    const decisionClass = approval.decision === 'approved'
+                        ? styles.approvalDecisionApproved
+                        : approval.decision === 'denied'
+                            ? styles.approvalDecisionDenied
+                            : styles.approvalDecisionPending;
+
+                    return (
+                        <StructuredMessageCard
+                            key={card.id}
+                            kind={card.summary.kind}
+                            kicker={card.summary.kicker}
+                            title={card.summary.title}
+                            subtitle={card.summary.subtitle}
+                            statusLabel={card.summary.statusLabel}
+                            statusTone={card.summary.statusTone}
+                            className={styles.approvalDecisionCard}
+                        >
+                            <div className={styles.approvalDecisionBody}>
+                                <div className={styles.approvalDecisionMetaRow}>
+                                    <span className={`${styles.approvalSeverityBadge} ${severityClass}`}>
+                                        {approval.severity}
+                                    </span>
+                                    <span className={`${styles.approvalDecisionBadge} ${decisionClass}`}>
+                                        {approval.decision}
+                                    </span>
+                                    <span className={styles.approvalRiskText}>Risk {approval.risk}</span>
+                                </div>
+                                {approval.blocking ? (
+                                    <p className={styles.approvalBlockingText}>
+                                        Blocks execution until a decision is submitted.
+                                    </p>
+                                ) : null}
+
+                                {isPendingDecision ? (
+                                    <div className={styles.approvalActionRow}>
+                                        <button
+                                            type="button"
+                                            className={`${styles.approvalActionButton} ${styles.approvalActionButtonApprove}`}
+                                            onClick={() => {
+                                                void runApprovalDecision({
+                                                    requestId: approval.requestId,
+                                                    decision: 'approve',
+                                                });
+                                            }}
+                                            disabled={!onApprovalDecision || isSubmitting}
+                                        >
+                                            Approve
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={`${styles.approvalActionButton} ${styles.approvalActionButtonModify}`}
+                                            onClick={() => {
+                                                setEditingApprovalId((current) => (
+                                                    current === approval.requestId ? null : approval.requestId
+                                                ));
+                                            }}
+                                            disabled={!onApprovalDecision || isSubmitting}
+                                        >
+                                            Modify & Approve
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={`${styles.approvalActionButton} ${styles.approvalActionButtonDeny}`}
+                                            onClick={() => {
+                                                void runApprovalDecision({
+                                                    requestId: approval.requestId,
+                                                    decision: 'deny',
+                                                });
+                                            }}
+                                            disabled={!onApprovalDecision || isSubmitting}
+                                        >
+                                            Deny
+                                        </button>
+                                    </div>
+                                ) : null}
+
+                                {isPendingDecision && isEditing ? (
+                                    <div className={styles.approvalModifyBox}>
+                                        <input
+                                            className={styles.approvalModifyInput}
+                                            value={note}
+                                            onChange={(event) => {
+                                                const value = event.target.value;
+                                                setApprovalNotes((current) => ({
+                                                    ...current,
+                                                    [approval.requestId]: value,
+                                                }));
+                                            }}
+                                            placeholder="Describe required changes before approval..."
+                                        />
+                                        <button
+                                            type="button"
+                                            className={`${styles.approvalActionButton} ${styles.approvalActionButtonApprove}`}
+                                            onClick={() => {
+                                                const normalizedNote = note.trim();
+                                                if (!normalizedNote) {
+                                                    return;
+                                                }
+                                                void runApprovalDecision({
+                                                    requestId: approval.requestId,
+                                                    decision: 'modify_approve',
+                                                    note: normalizedNote,
+                                                });
+                                                setEditingApprovalId(null);
+                                                setApprovalNotes((current) => ({
+                                                    ...current,
+                                                    [approval.requestId]: '',
+                                                }));
+                                            }}
+                                            disabled={!onApprovalDecision || isSubmitting || note.trim().length === 0}
+                                        >
+                                            Submit
+                                        </button>
+                                    </div>
+                                ) : null}
+                            </div>
+                        </StructuredMessageCard>
+                    );
                 }
 
                 const taskCard = (

@@ -20,6 +20,7 @@ export interface ToolCardViewModel {
         kicker: string;
         title: string;
         preview?: string;
+        eventDetail?: string;
         statusLabel: string;
         statusTone: 'running' | 'success' | 'failed';
     };
@@ -45,6 +46,11 @@ export function buildToolCardViewModel(
             const cleaned = raw.replace(/[#*`]/g, '').replace(/\s+/g, ' ').trim();
             return cleaned.length > 60 ? `${cleaned.slice(0, 60)}...` : cleaned;
         })();
+    const eventDetail = displayStatus === 'running'
+        ? `Waiting for ${item.toolName || 'tool'} result`
+        : displayStatus === 'success'
+            ? (preview ? `Result: ${preview}` : 'Tool call completed')
+            : (preview ? `Error: ${preview}` : 'Tool call failed');
 
     const sections: ToolCardSectionViewModel[] = [];
     if (item.args) {
@@ -75,9 +81,10 @@ export function buildToolCardViewModel(
         id: item.id,
         summary: {
             kind: 'tool',
-            kicker: 'Tool',
+            kicker: 'Tool event',
             title: item.toolName,
             preview: preview || undefined,
+            eventDetail,
             statusLabel: displayStatus === 'running'
                 ? 'Running'
                 : displayStatus === 'success'

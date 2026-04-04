@@ -27,6 +27,7 @@ export interface StartTaskConfig {
     modelId?: string;
     maxTokens?: number;
     maxHistoryMessages?: number;
+    executionPath?: 'direct' | 'workflow';
     enabledClaudeSkills?: string[];
     enabledToolpacks?: string[];
     enabledSkills?: string[];

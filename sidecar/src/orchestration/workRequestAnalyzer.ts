@@ -21,6 +21,11 @@ import {
     detectScheduledIntent,
     type ParsedScheduledIntent,
 } from '../scheduling/scheduledTasks';
+import {
+    parseRoutedInput,
+    resolveForcedWorkMode,
+    type ForcedRouteMode,
+} from './routedInput';
 import type { PlatformRuntimeContext } from '../protocol/commands';
 const URL_PATTERN = /\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gi;
 const CHAT_PATTERN = /^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i;
@@ -33,6 +38,8 @@ const HIGH_RISK_ACTION_PATTERN = /(删除|移除|drop\s+table|rm\s+-rf|publish|�
 const MANUAL_ACTION_PATTERN = /(登录|验证码|captcha|手动|人工|approve|approval|确认后再|先让我看)/i;
 const AUTH_PATTERN = /(登录|授权|auth|oauth|token|session|cookie|验证码|captcha)/i;
 const SELF_MANAGEMENT_PATTERN = /toolpack|skill|workspace 管理|workspace management/i;
+const PARALLEL_PATTERN = /(并行|同时|parallel|concurrently|in parallel)/i;
+const CHAIN_PATTERN = /(然后|接着|随后|之后|再(?:执行|做|进行)?|first\b[\s\S]{0,80}\bthen|then\b[\s\S]{0,40}\bfinally)/i;
 const WEB_URGENT_PATTERN = /latest|最新|today|新闻|news/i;
 type IntentSignals = {
     code: boolean;
@@ -44,6 +51,8 @@ type IntentSignals = {
     manualAction: boolean;
     auth: boolean;
     selfManagement: boolean;
+    parallel: boolean;
+    chain: boolean;
 };
 const dedupe = <T extends string>(values: T[]): T[] =>
     Array.from(new Set(values.filter((value) => value.trim().length > 0))) as T[];
@@ -67,6 +76,8 @@ function collectSignals(text: string): IntentSignals {
         manualAction: MANUAL_ACTION_PATTERN.test(text),
         auth: AUTH_PATTERN.test(text),
         selfManagement: SELF_MANAGEMENT_PATTERN.test(text),
+        parallel: PARALLEL_PATTERN.test(text),
+        chain: CHAIN_PATTERN.test(text),
     };
 }
 function inferPublishIntent(text: string): PublishIntent | undefined {
@@ -301,11 +312,16 @@ function buildUserActions(input: {
 function resolveMode(input: {
     text: string;
     scheduledIntent: ParsedScheduledIntent | null;
+    forcedRouteMode?: ForcedRouteMode | null;
 }): NormalizedWorkRequest['mode'] {
-    if (input.scheduledIntent) {
+    const forcedMode = resolveForcedWorkMode(input.forcedRouteMode);
+    if (input.scheduledIntent && forcedMode !== 'chat') {
         return (input.scheduledIntent.chainedStages?.length ?? 0) > 0
             ? 'scheduled_multi_task'
             : 'scheduled_task';
+    }
+    if (forcedMode) {
+        return forcedMode;
     }
     if (!input.text || CHAT_PATTERN.test(input.text) || input.text.length <= 16) {
         return 'chat';
@@ -378,14 +394,24 @@ export function analyzeWorkRequest(input: {
     followUpContext?: WorkRequestFollowUpContext;
     now?: Date;
     environmentContext?: PlatformRuntimeContext;
+    forcedRouteMode?: ForcedRouteMode | null;
 }): NormalizedWorkRequest {
+    const routedInput = parseRoutedInput(input.sourceText);
+    const baseSourceText = routedInput.cleanText.trim().length > 0
+        ? routedInput.cleanText
+        : input.sourceText;
     const sourceText = maybeInjectFollowUpContext({
-        sourceText: input.sourceText,
+        sourceText: baseSourceText,
         followUpContext: input.followUpContext,
     });
     const scheduledIntent = detectScheduledIntent(sourceText, input.now);
     const publishIntent = inferPublishIntent(sourceText);
-    const mode = resolveMode({ text: sourceText, scheduledIntent });
+    const forcedRouteMode = input.forcedRouteMode ?? routedInput.forcedRouteMode;
+    const mode = resolveMode({
+        text: sourceText,
+        scheduledIntent,
+        forcedRouteMode,
+    });
     const tasks = scheduledIntent
         ? buildTasksFromScheduledIntent({ scheduledIntent, mode, publishIntent })
         : [buildTask({ objective: sourceText, mode, publishIntent })];
@@ -410,7 +436,7 @@ export function analyzeWorkRequest(input: {
         explicitAuthRequired: signals.auth,
         hostAccessRequired: false,
         hasPreferredWorkflow: false,
-        isComplexTask: tasks.length > 1,
+        isComplexTask: tasks.length > 1 || signals.parallel || signals.chain,
         codeChangeTask: signals.code,
         selfManagementTask: signals.selfManagement,
     });
@@ -437,9 +463,11 @@ export function analyzeWorkRequest(input: {
         confidence: scheduledIntent ? 0.95 : mode === 'chat' ? 0.75 : 0.85,
         reasonCodes: dedupe([
             scheduledIntent ? 'scheduled_intent_detected' : '',
+            forcedRouteMode ? `forced_route_${forcedRouteMode}` : '',
             clarification.required ? 'clarification_required' : 'clarification_not_required',
         ]),
         needsDisambiguation: clarification.required,
+        forcedByUserSelection: Boolean(forcedRouteMode),
     };
     return {
         schemaVersion: 1,

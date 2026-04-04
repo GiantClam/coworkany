@@ -10,11 +10,13 @@ import {
     buildAssistantUiExternalMessages,
     toAssistantUiThreadMessageLike,
 } from './messageAdapter';
+import type { PendingTaskStatus } from '../Timeline/pendingTaskStatus';
 
 interface AssistantUiRuntimeBridgeProps {
     sessionId: string;
     rounds: TimelineTurnRound[];
     pendingLabel?: string;
+    pendingStatus?: PendingTaskStatus | null;
     isRunning?: boolean;
     onSubmitText?: (text: string) => Promise<void> | void;
     children: React.ReactNode;
@@ -32,13 +34,14 @@ export const AssistantUiRuntimeBridge: React.FC<AssistantUiRuntimeBridgeProps> =
     sessionId,
     rounds,
     pendingLabel,
+    pendingStatus = null,
     isRunning = false,
     onSubmitText,
     children,
 }) => {
     const externalMessages = React.useMemo(
-        () => buildAssistantUiExternalMessages(rounds, { pendingLabel }),
-        [pendingLabel, rounds],
+        () => buildAssistantUiExternalMessages(rounds, { pendingLabel, pendingStatus }),
+        [pendingLabel, pendingStatus, rounds],
     );
     const [messages, setMessages] = React.useState<readonly AssistantUiExternalMessage[]>(externalMessages);
 

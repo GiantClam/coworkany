@@ -57,11 +57,13 @@ export type TaskFinishedPayload = {
     summary?: string;
     artifacts?: string[];
     files?: string[];
+    turnId?: string;
 };
 
 export type TaskFailedPayload = {
     error?: string;
     suggestion?: string;
+    turnId?: string;
 };
 
 export type TaskStatusPayload = {
@@ -104,6 +106,7 @@ export type TextDeltaPayload = {
     role?: 'assistant' | 'thinking';
     messageId?: string;
     correlationId?: string;
+    turnId?: string;
 };
 
 export type ToolCalledPayload = {

@@ -333,6 +333,12 @@ test.describe('desktop message protocol regression', () => {
             || postLogs.includes('rate_limit')
             || postLogs.includes('quota')
             || postLogs.includes('insufficient credits')
+            || postLogs.includes('generate_fallback_timeout')
+            || postLogs.includes('stream_start_timeout')
+            || postLogs.includes('stream_idle_timeout')
+            || postLogs.includes('stream_progress_timeout')
+            || postLogs.includes('stream_max_duration_timeout')
+            || postLogs.includes('Model response timed out')
         );
         if (externalDependencyFailure) {
             const reason = seededAibermConfig
@@ -355,6 +361,133 @@ test.describe('desktop message protocol regression', () => {
 
         await assertChatInputEditableAfterTaskTerminal(page, {
             terminalTimeoutMs: 90_000,
+            editableTimeoutMs: 20_000,
+        });
+    });
+
+    test('@critical @regression keeps two consecutive chat turns in separate assistant bubbles (full chain)', async ({ page, tauriLogs }) => {
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(15_000);
+        const seededAibermConfig = await seedAibermLlmConfigIfAvailable(page);
+
+        const input = await findChatInput(page);
+        const promptOne = '你好，请简单问候我一下。';
+        const promptTwo = '再补充一句新的问候。';
+        tauriLogs.setBaseline();
+        const responseWaitMs = 90_000;
+        const hasExternalDependencyFailure = (logs: string): boolean => (
+            logs.includes('missing_api_key')
+            || logs.includes('ANTHROPIC_API_KEY')
+            || logs.includes('OPENAI_API_KEY')
+            || logs.includes('OPENROUTER_API_KEY')
+            || logs.includes('E2E_AIBERM_API_KEY')
+            || logs.includes('Provider returned status 401')
+            || logs.includes('rate_limit')
+            || logs.includes('quota')
+            || logs.includes('insufficient credits')
+            || logs.includes('generate_fallback_timeout')
+            || logs.includes('stream_start_timeout')
+            || logs.includes('stream_idle_timeout')
+            || logs.includes('stream_progress_timeout')
+            || logs.includes('stream_max_duration_timeout')
+            || logs.includes('Model response timed out')
+        );
+
+        await input.fill(promptOne);
+        await input.press('Enter');
+
+        let sawTaskFailed = false;
+        let sawFirstAssistantMessage = false;
+        let externalDependencyFailure = false;
+        let firstAssistantMessageCount = 0;
+        const firstDeadline = Date.now() + responseWaitMs;
+        while (Date.now() < firstDeadline) {
+            await page.waitForTimeout(2_000);
+            const logs = tauriLogs.getRawSinceBaseline();
+            if (!sawTaskFailed && logs.includes('"type":"TASK_FAILED"')) {
+                sawTaskFailed = true;
+            }
+            if (sawTaskFailed && hasExternalDependencyFailure(logs)) {
+                externalDependencyFailure = true;
+                break;
+            }
+
+            const snapshot = await readActiveSessionSnapshot(page);
+            const assistantMessages = (snapshot?.messages ?? [])
+                .filter((message: any) => message.role === 'assistant')
+                .map((message: any) => String(message.content ?? '').trim())
+                .filter((content: string) => content.length > 0);
+            if (assistantMessages.length > 0) {
+                sawFirstAssistantMessage = true;
+                firstAssistantMessageCount = assistantMessages.length;
+                break;
+            }
+        }
+
+        if (!externalDependencyFailure) {
+            await assertChatInputEditableAfterTaskTerminal(page, {
+                terminalTimeoutMs: 90_000,
+                editableTimeoutMs: 20_000,
+            });
+            await input.fill(promptTwo);
+            await input.press('Enter');
+        }
+
+        let sawSecondAssistantBubble = false;
+        let sawSecondUserMessage = false;
+        const secondDeadline = Date.now() + responseWaitMs;
+        while (!externalDependencyFailure && Date.now() < secondDeadline) {
+            await page.waitForTimeout(2_000);
+            const logs = tauriLogs.getRawSinceBaseline();
+            if (!sawTaskFailed && logs.includes('"type":"TASK_FAILED"')) {
+                sawTaskFailed = true;
+            }
+            if (sawTaskFailed && hasExternalDependencyFailure(logs)) {
+                externalDependencyFailure = true;
+                break;
+            }
+
+            const snapshot = await readActiveSessionSnapshot(page);
+            const userMessages = (snapshot?.messages ?? [])
+                .filter((message: any) => message.role === 'user')
+                .map((message: any) => String(message.content ?? '').trim())
+                .filter((content: string) => content.length > 0);
+            const assistantMessages = (snapshot?.messages ?? [])
+                .filter((message: any) => message.role === 'assistant')
+                .map((message: any) => String(message.content ?? '').trim())
+                .filter((content: string) => content.length > 0);
+            if (userMessages.length >= 2) {
+                sawSecondUserMessage = true;
+            }
+            if (assistantMessages.length >= firstAssistantMessageCount + 1) {
+                sawSecondAssistantBubble = true;
+                break;
+            }
+        }
+
+        const postLogs = tauriLogs.getRawSinceBaseline();
+        externalDependencyFailure = externalDependencyFailure || (sawTaskFailed && hasExternalDependencyFailure(postLogs));
+        if (externalDependencyFailure) {
+            const reason = seededAibermConfig
+                ? 'External model quota/endpoint failure detected after seeding Aiberm settings.'
+                : 'External model configuration/quota failure detected during two-turn assistant bubble isolation validation (Aiberm seed unavailable).';
+            test.skip(true, reason);
+        }
+
+        expect(sawTaskFailed, 'two-turn full-chain regression should not fail while validating turn isolation').toBe(false);
+        expect(sawFirstAssistantMessage, 'first turn should produce assistant output').toBe(true);
+        expect(sawSecondUserMessage, 'second turn should be submitted into session messages').toBe(true);
+        expect(sawSecondAssistantBubble, 'second turn should create a new assistant bubble instead of merging into the first one').toBe(true);
+
+        const snapshot = await readActiveSessionSnapshot(page);
+        const assistantMessages = (snapshot?.messages ?? [])
+            .filter((message: any) => message.role === 'assistant')
+            .map((message: any) => String(message.content ?? ''))
+            .filter((content: string) => content.trim().length > 0);
+        expect(assistantMessages.length >= 2, 'assistant replies should remain in separate bubbles after two turns').toBe(true);
+
+        await assertChatInputEditableAfterTaskTerminal(page, {
+            terminalTimeoutMs: 120_000,
             editableTimeoutMs: 20_000,
         });
     });

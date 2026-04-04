@@ -644,6 +644,7 @@ function buildCanonicalTimelineItems(
     let phaseLines = createEmptyPhaseLines();
     let taskById = new Map<string, TaskCardTask>();
     let activeTaskTurnIndex: number | null = null;
+    const isChatSession = session.taskMode === 'chat';
     const scheduledSession = isScheduledMode(session.taskMode) || normalizeText(session.title).startsWith('[Scheduled]');
 
     const getActiveTaskTurn = (): AssistantTurnItem | null => {
@@ -743,6 +744,17 @@ function buildCanonicalTimelineItems(
             .map((part) => sanitizeNoiseText(part.text))
             .filter((text) => text.length > 0);
 
+        const canonicalAssistantTurnId = `assistant-turn-canonical-${message.id}`;
+        if (
+            message.role === 'assistant'
+            && textParts.length > 0
+            && currentAssistantTurn
+            && currentAssistantTurn.id !== canonicalAssistantTurnId
+            && currentAssistantTurn.messages.length > 0
+        ) {
+            flushAssistantTurn();
+        }
+
         if (message.role === 'user') {
             if (scheduledSession) {
                 continue;
@@ -805,7 +817,7 @@ function buildCanonicalTimelineItems(
                             currentAssistantTurn.taskCard.collaboration = undefined;
                         }
                     }
-                    if (part.label) {
+                    if (part.label && !isChatSession) {
                         currentAssistantTurn = ensureCanonicalAssistantTurn(currentAssistantTurn, message);
                         appendCanonicalSystemEvent(currentAssistantTurn, part.label);
                     }
@@ -1253,7 +1265,7 @@ function normalizeTimelineToTurnRounds(items: TimelineItemType[]): TimelineItemT
                 break;
             case 'assistant_turn': {
                 const last = output[output.length - 1];
-                if (last?.type === 'assistant_turn') {
+                if (last?.type === 'assistant_turn' && last.id === item.id) {
                     output[output.length - 1] = mergeAssistantTurn(last, item);
                 } else {
                     output.push(cloneAssistantTurn(item));
@@ -1387,6 +1399,42 @@ function buildCanonicalMessagesFromSessionMessages(session: TaskSession): Canoni
         .filter((message): message is CanonicalTaskMessage => message !== null);
 }
 
+function applyHistoryClearBoundaryToCanonicalMessages(
+    events: TaskSession['events'],
+    messages: CanonicalTaskMessage[] | undefined,
+): CanonicalTaskMessage[] | undefined {
+    if (!messages || messages.length === 0) {
+        return messages;
+    }
+
+    const latestClearEvent = [...events]
+        .reverse()
+        .find((event) => event.type === 'TASK_HISTORY_CLEARED');
+    if (!latestClearEvent) {
+        return messages;
+    }
+
+    const clearTimestamp = latestClearEvent.timestamp;
+    const clearTimestampMs = Date.parse(clearTimestamp);
+    const clearSequence = latestClearEvent.sequence;
+    return messages.filter((message) => {
+        const messageTimestampMs = Date.parse(message.timestamp);
+        const timestampAfterClear = (
+            !Number.isNaN(clearTimestampMs)
+            && !Number.isNaN(messageTimestampMs)
+            && messageTimestampMs >= clearTimestampMs
+        ) || message.timestamp >= clearTimestamp;
+        const sequenceAfterClear = typeof clearSequence === 'number' && message.sequence > clearSequence;
+        return sequenceAfterClear || timestampAfterClear;
+    });
+}
+
+// Keep helper symbols referenced for replay/debug parity during staged migration.
+void shouldPreserveTaskMessageTrajectory;
+void buildRawConversationTrajectoryItems;
+void appendLatestStructuredAssistantTurn;
+void buildCanonicalMessagesFromSessionMessages;
+
 export function buildTimelineItems(
     session: TaskSession,
     maxRecentEvents?: number,
@@ -1399,16 +1447,11 @@ export function buildTimelineItems(
     const providedCanonicalMessages = canonicalMessages && canonicalMessages.length > 0
         ? canonicalMessages
         : undefined;
+    const scopedCanonicalMessages = applyHistoryClearBoundaryToCanonicalMessages(sourceEvents, providedCanonicalMessages);
     const localCanonicalMessages = buildCanonicalMessagesFromTaskEvents(session.taskId, sourceEvents);
-    const effectiveCanonicalMessages = providedCanonicalMessages
-        ?? (localCanonicalMessages.length > 0
-            ? localCanonicalMessages
-            : buildCanonicalMessagesFromSessionMessages(session));
+    const effectiveCanonicalMessages = scopedCanonicalMessages ?? localCanonicalMessages;
     const standardItems = buildCanonicalTimelineItems(session, effectiveCanonicalMessages);
-    const rawItems = shouldPreserveTaskMessageTrajectory(session)
-        ? appendLatestStructuredAssistantTurn(buildRawConversationTrajectoryItems(session), standardItems)
-        : standardItems;
-    const turnRoundItems = normalizeTimelineToTurnRounds(rawItems);
+    const turnRoundItems = normalizeTimelineToTurnRounds(standardItems);
     const items = ensureVisibleUserEntry(turnRoundItems, session);
 
     return {

@@ -8,6 +8,8 @@ export type TaskRuntimeStatus =
     | 'suspended'
     | 'scheduled';
 
+export type TaskRuntimeExecutionPath = 'direct' | 'workflow' | 'workflow_fallback';
+
 export type TaskRuntimeCheckpoint = {
     id: string;
     label: string;
@@ -59,6 +61,7 @@ export type TaskRuntimeState = {
     checkpointVersion?: number;
     retry?: TaskRuntimeRetryState;
     operationLog?: TaskRuntimeOperationRecord[];
+    executionPath?: TaskRuntimeExecutionPath;
 };
 
 const VALID_STATUSES = new Set<TaskRuntimeStatus>([
@@ -85,6 +88,12 @@ const VALID_OPERATION_RESULTS = new Set<TaskRuntimeOperationResult>([
     'deduplicated',
     'skipped',
     'failed',
+]);
+
+const VALID_EXECUTION_PATHS = new Set<TaskRuntimeExecutionPath>([
+    'direct',
+    'workflow',
+    'workflow_fallback',
 ]);
 
 function pickNonEmptyString(value: unknown): string | undefined {
@@ -235,6 +244,9 @@ export function toTaskRuntimeState(value: unknown): TaskRuntimeState | null {
         checkpointVersion,
         retry: normalizeRetry(raw.retry),
         operationLog: normalizeOperationLog(raw.operationLog),
+        executionPath: VALID_EXECUTION_PATHS.has(raw.executionPath as TaskRuntimeExecutionPath)
+            ? raw.executionPath as TaskRuntimeExecutionPath
+            : undefined,
     };
 }
 

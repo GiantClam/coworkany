@@ -76,7 +76,6 @@ interface TaskEventStoreState {
 }
 
 const sessionEventIds = new Map<string, Set<string>>();
-const LOCAL_ECHO_PAYLOAD_KEY = '__localEcho';
 
 // ============================================================================
 // Create Empty Session
@@ -204,12 +203,6 @@ const HIGH_PRIORITY_PERSIST_EVENT_TYPES = new Set<TaskEvent['type']>([
 ]);
 
 function shouldPersistEvent(event: TaskEvent): boolean {
-    if (
-        event.type === 'CHAT_MESSAGE'
-        && (event.payload as Record<string, unknown> | undefined)?.[LOCAL_ECHO_PAYLOAD_KEY] === true
-    ) {
-        return false;
-    }
     return !TRANSIENT_EVENT_TYPES.has(event.type);
 }
 
@@ -240,6 +233,21 @@ function isKnownTaskMode(value: unknown): value is NonNullable<TaskSession['task
         || value === 'scheduled_multi_task';
 }
 
+function inferTaskModeFromRoutedEnvelope(value: unknown): TaskSession['taskMode'] {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const matched = value.match(/^\s*__route_(chat|task)__\b/iu);
+    const mode = matched?.[1]?.toLowerCase();
+    if (mode === 'chat') {
+        return 'chat';
+    }
+    if (mode === 'task') {
+        return 'immediate_task';
+    }
+    return undefined;
+}
+
 function inferTaskModeFromSession(session: TaskSession): TaskSession['taskMode'] {
     if (isKnownTaskMode(session.taskMode)) {
         return session.taskMode;
@@ -265,6 +273,11 @@ function inferTaskModeFromSession(session: TaskSession): TaskSession['taskMode']
             if (isKnownTaskMode(mode)) {
                 return mode;
             }
+            const routeMode = inferTaskModeFromRoutedEnvelope(context?.userQuery)
+                ?? inferTaskModeFromRoutedEnvelope((event.payload as Record<string, unknown> | undefined)?.description);
+            if (routeMode) {
+                return routeMode;
+            }
         }
         if (event.type === 'TASK_FINISHED') {
             const finishReason = (event.payload as Record<string, unknown> | undefined)?.finishReason;
@@ -277,8 +290,8 @@ function inferTaskModeFromSession(session: TaskSession): TaskSession['taskMode']
     return undefined;
 }
 
-function isTerminalTaskStatus(status: TaskStatus | undefined): status is 'finished' | 'failed' {
-    return status === 'finished' || status === 'failed';
+function isTerminalTaskStatus(status: TaskStatus | undefined): status is 'finished' | 'failed' | 'suspended' {
+    return status === 'finished' || status === 'failed' || status === 'suspended';
 }
 
 function resolveSessionStatus(
@@ -339,6 +352,77 @@ function mergeMessages(
     return [...deduped.values()];
 }
 
+function normalizeComparableContent(value: string): string {
+    return value.trim().replace(/\s+/g, ' ');
+}
+
+function extractConfirmedUserContent(event: TaskEvent): string | null {
+    const payload = normalizeEventPayload(event.payload);
+    if (event.type === 'CHAT_MESSAGE') {
+        if (payload.role !== 'user' || payload.__localEcho === true) {
+            return null;
+        }
+        const content = typeof payload.content === 'string' ? payload.content : '';
+        const normalized = normalizeComparableContent(content);
+        return normalized.length > 0 ? normalized : null;
+    }
+
+    if (event.type === 'TASK_STARTED') {
+        const context = normalizeEventPayload(payload.context);
+        const displayText = typeof context.displayText === 'string' ? context.displayText : '';
+        const normalizedDisplay = normalizeComparableContent(displayText);
+        if (normalizedDisplay.length > 0) {
+            return normalizedDisplay;
+        }
+
+        const userQuery = typeof context.userQuery === 'string' ? context.userQuery : '';
+        const routedMatch = userQuery.match(/^\s*__route_(?:chat|task)__\s*(?:\n+|[\t ]+)([\s\S]*)$/iu);
+        const legacyMatch = userQuery.match(/^\s*(?:原始任务|original task)[:：]\s*(.+?)(?:\n|$)/iu);
+        const extracted = routedMatch?.[1] ?? legacyMatch?.[1] ?? userQuery;
+        const normalized = normalizeComparableContent(extracted);
+        return normalized.length > 0 ? normalized : null;
+    }
+
+    return null;
+}
+
+function pruneConfirmedLocalUserEcho(
+    session: TaskSession,
+    confirmedContent: string | null,
+): { session: TaskSession; removedEventIds: string[] } {
+    if (!confirmedContent) {
+        return { session, removedEventIds: [] };
+    }
+
+    const removedEventIds = session.events
+        .filter((entry) => {
+            if (entry.type !== 'CHAT_MESSAGE') {
+                return false;
+            }
+            const payload = normalizeEventPayload(entry.payload);
+            if (payload.role !== 'user' || payload.__localEcho !== true) {
+                return false;
+            }
+            const content = typeof payload.content === 'string' ? payload.content : '';
+            return normalizeComparableContent(content) === confirmedContent;
+        })
+        .map((entry) => entry.id);
+
+    if (removedEventIds.length === 0) {
+        return { session, removedEventIds: [] };
+    }
+
+    const removed = new Set(removedEventIds);
+    return {
+        session: {
+            ...session,
+            events: session.events.filter((entry) => !removed.has(entry.id)),
+            messages: session.messages.filter((entry) => !removed.has(entry.id)),
+        },
+        removedEventIds,
+    };
+}
+
 function persistStateSnapshot(
     sessions: Map<string, TaskSession>,
     activeTaskId: string | null,
@@ -355,11 +439,10 @@ function persistStateSnapshot(
 // ============================================================================
 
 function applyEvent(session: TaskSession, event: TaskEvent): TaskSession {
-    const reconciledSession = reconcileOptimisticUserEcho(session, event);
     // Add event to session and update timestamp
     let updated: TaskSession = {
-        ...reconciledSession,
-        events: [...reconciledSession.events, event],
+        ...session,
+        events: [...session.events, event],
         updatedAt: new Date().toISOString(),
     };
 
@@ -393,61 +476,6 @@ function applyEvent(session: TaskSession, event: TaskEvent): TaskSession {
     }
 
     return updated;
-}
-
-function normalizeEchoContent(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
-function getConfirmedUserEchoContent(event: TaskEvent): string | null {
-    const payload = event.payload as Record<string, unknown>;
-    if (event.type === 'CHAT_MESSAGE') {
-        if (payload.role !== 'user' || payload[LOCAL_ECHO_PAYLOAD_KEY] === true) {
-            return null;
-        }
-        return normalizeEchoContent(payload.content);
-    }
-
-    if (event.type === 'TASK_STARTED') {
-        const context = (payload.context as Record<string, unknown> | undefined) ?? {};
-        return normalizeEchoContent(context.displayText ?? context.userQuery ?? payload.description);
-    }
-
-    return null;
-}
-
-function reconcileOptimisticUserEcho(session: TaskSession, event: TaskEvent): TaskSession {
-    const confirmedContent = getConfirmedUserEchoContent(event);
-    if (!confirmedContent) {
-        return session;
-    }
-
-    let optimisticEventId: string | null = null;
-    for (let index = session.events.length - 1; index >= 0; index -= 1) {
-        const candidate = session.events[index];
-        if (candidate.type !== 'CHAT_MESSAGE') {
-            continue;
-        }
-        const payload = candidate.payload as Record<string, unknown>;
-        if (payload.role !== 'user' || payload[LOCAL_ECHO_PAYLOAD_KEY] !== true) {
-            continue;
-        }
-        if (normalizeEchoContent(payload.content) !== confirmedContent) {
-            continue;
-        }
-        optimisticEventId = candidate.id;
-        break;
-    }
-
-    if (!optimisticEventId) {
-        return session;
-    }
-
-    return {
-        ...session,
-        events: session.events.filter((entry) => entry.id !== optimisticEventId),
-        messages: session.messages.filter((entry) => entry.id !== optimisticEventId),
-    };
 }
 
 function applyEventsBatch(
@@ -486,7 +514,16 @@ function applyEventsBatch(
             continue;
         }
 
-        const updated = applyEvent(existing, normalizedEvent);
+        const confirmedUserContent = extractConfirmedUserContent(normalizedEvent);
+        const pruned = pruneConfirmedLocalUserEcho(existing, confirmedUserContent);
+        if (pruned.removedEventIds.length > 0) {
+            const eventIdSet = getOrCreateEventIdSet(taskId, pruned.session);
+            for (const removedId of pruned.removedEventIds) {
+                eventIdSet.delete(removedId);
+            }
+        }
+
+        const updated = applyEvent(pruned.session, normalizedEvent);
         sessions.set(taskId, updated);
         if (normalizedEvent.type === 'TASK_HISTORY_CLEARED') {
             sessionEventIds.set(taskId, new Set(updated.events.map((entry) => entry.id)));

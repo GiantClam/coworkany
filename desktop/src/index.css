@@ -5,12 +5,12 @@
 @import './styles/animations.css';
 
 :root {
-    font-family: 'Manrope', 'Segoe UI', sans-serif;
+    font-family: var(--font-body);
     line-height: 1.5;
     font-weight: 400;
 
-    color-scheme: dark;
-    color: rgba(255, 255, 255, 0.87);
+    color-scheme: light dark;
+    color: var(--text-primary);
     background-color: var(--bg-app);
 
     font-synthesis: none;
@@ -30,9 +30,14 @@ body {
     z-index: 99999;
     pointer-events: none;
     background:
-        radial-gradient(1000px 540px at 8% -8%, rgba(62, 180, 255, 0.18), transparent 62%),
-        radial-gradient(860px 520px at 98% 2%, rgba(80, 255, 226, 0.14), transparent 56%),
-        linear-gradient(140deg, #040d1b 0%, #071427 45%, #081a2f 100%);
+        radial-gradient(1000px 540px at 8% -8%, color-mix(in srgb, var(--accent-primary) 22%, transparent), transparent 62%),
+        radial-gradient(860px 520px at 98% 2%, color-mix(in srgb, var(--brand-500) 16%, transparent), transparent 56%),
+        linear-gradient(
+            140deg,
+            color-mix(in srgb, var(--bg-app) 96%, white 4%) 0%,
+            var(--bg-app) 45%,
+            color-mix(in srgb, var(--bg-subtle) 94%, transparent) 100%
+        );
     opacity: 1;
     transition: opacity 0.18s ease;
 }
@@ -52,7 +57,7 @@ body {
     height: 280px;
     top: -70px;
     left: -80px;
-    background: radial-gradient(circle at 35% 35%, rgba(84, 202, 255, 0.9), rgba(84, 202, 255, 0));
+    background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--accent-primary) 56%, white 44%), transparent);
 }
 
 .boot-skeleton__halo--two {
@@ -60,7 +65,7 @@ body {
     height: 320px;
     right: -90px;
     top: 100px;
-    background: radial-gradient(circle at 55% 45%, rgba(98, 255, 214, 0.74), rgba(98, 255, 214, 0));
+    background: radial-gradient(circle at 55% 45%, color-mix(in srgb, var(--brand-500) 46%, white 54%), transparent);
 }
 
 .boot-skeleton__panel {
@@ -70,11 +75,11 @@ body {
     transform: translate(-50%, -50%);
     width: min(680px, calc(100vw - 56px));
     border-radius: 18px;
-    border: 1px solid rgba(120, 177, 231, 0.28);
-    background: rgba(14, 26, 44, 0.56);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
     backdrop-filter: blur(14px) saturate(128%);
     -webkit-backdrop-filter: blur(14px) saturate(128%);
-    box-shadow: 0 16px 48px rgba(0, 8, 26, 0.48);
+    box-shadow: var(--shadow-lg);
     padding: 20px;
     animation: boot-pulse 1.15s ease-in-out infinite;
 }
@@ -83,7 +88,12 @@ body {
     height: 16px;
     width: 210px;
     border-radius: 999px;
-    background: linear-gradient(90deg, rgba(115, 182, 236, 0.45), rgba(206, 236, 255, 0.65), rgba(115, 182, 236, 0.45));
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--text-secondary) 32%, transparent),
+        color-mix(in srgb, var(--text-primary) 42%, transparent),
+        color-mix(in srgb, var(--text-secondary) 32%, transparent)
+    );
     margin-bottom: 14px;
 }
 
@@ -91,8 +101,20 @@ body {
     height: 12px;
     width: 100%;
     border-radius: 999px;
-    background: rgba(157, 198, 232, 0.3);
+    background: color-mix(in srgb, var(--text-muted) 24%, transparent);
     margin-bottom: 10px;
+}
+
+[data-theme="dark"] .boot-skeleton {
+    background:
+        radial-gradient(1000px 540px at 8% -8%, color-mix(in srgb, var(--accent-primary) 24%, transparent), transparent 62%),
+        radial-gradient(860px 520px at 98% 2%, color-mix(in srgb, var(--brand-500) 14%, transparent), transparent 56%),
+        linear-gradient(
+            140deg,
+            color-mix(in srgb, var(--bg-app) 96%, black 4%) 0%,
+            var(--bg-app) 45%,
+            color-mix(in srgb, var(--bg-subtle) 92%, transparent) 100%
+        );
 }
 
 .boot-skeleton__line--short {

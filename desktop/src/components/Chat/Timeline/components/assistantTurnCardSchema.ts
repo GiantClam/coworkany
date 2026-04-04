@@ -5,11 +5,14 @@ import type {
     TaskCardItem,
 } from '../../../../types';
 import { sanitizeDisplayText } from '../textSanitizer';
+import type { PendingTaskStatus } from '../pendingTaskStatus';
 import { buildTaskCardViewModel, type TaskCardViewModel } from './taskCardViewModel';
 import { buildToolCardViewModel, type ToolCardViewModel } from './toolCardViewModel';
 
 export type StructuredCardKind = 'assistant' | 'runtime' | 'task' | 'tool';
 export type StructuredCardTone = 'neutral' | 'running' | 'success' | 'failed';
+export type ApprovalSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type ApprovalDecision = 'pending' | 'approved' | 'denied';
 
 interface StructuredCardSummary {
     kind: StructuredCardKind;
@@ -25,7 +28,8 @@ export type AssistantTurnCardSchema =
         type: 'runtime-status';
         id: string;
         summary: StructuredCardSummary;
-        indicator: 'pending';
+        indicator: 'pending' | 'thinking' | 'running-tool' | 'retrying';
+        toolName?: string;
     }
     | {
         type: 'assistant-response';
@@ -40,27 +44,43 @@ export type AssistantTurnCardSchema =
         viewModel: ToolCardViewModel;
     }
     | {
+        type: 'approval-request';
+        id: string;
+        summary: StructuredCardSummary;
+        approval: {
+            requestId: string;
+            effectType: string;
+            risk: number;
+            severity: ApprovalSeverity;
+            decision: ApprovalDecision;
+            blocking: boolean;
+        };
+    }
+    | {
         type: 'task-card';
         id: string;
         viewModel: TaskCardViewModel;
         placement: 'inline' | 'primary';
     };
 
-function toEffectTaskCardItem(item: EffectRequestItem): TaskCardItem {
-    const decision = item.approved === undefined ? 'Pending' : (item.approved ? 'Approved' : 'Denied');
-    return {
-        type: 'task_card',
-        id: `${item.id}-effect-card`,
-        title: `Effect request · ${item.effectType}`,
-        subtitle: `Risk level: ${item.risk}`,
-        sections: [
-            {
-                label: 'Decision',
-                lines: [decision],
-            },
-        ],
-        timestamp: item.timestamp,
-    };
+function toRiskSeverity(risk: number): ApprovalSeverity {
+    if (risk >= 9) {
+        return 'critical';
+    }
+    if (risk >= 7) {
+        return 'high';
+    }
+    if (risk >= 4) {
+        return 'medium';
+    }
+    return 'low';
+}
+
+function toDecisionStatus(approved: EffectRequestItem['approved']): ApprovalDecision {
+    if (approved === undefined) {
+        return 'pending';
+    }
+    return approved ? 'approved' : 'denied';
 }
 
 function toPatchTaskCardItem(item: PatchItem): TaskCardItem {
@@ -87,9 +107,11 @@ function toPatchTaskCardItem(item: PatchItem): TaskCardItem {
 export function buildAssistantTurnCardSchemas(
     item: AssistantTurnItem,
     pendingLabel?: string,
+    pendingStatus?: PendingTaskStatus | null,
 ): AssistantTurnCardSchema[] {
     const cards: AssistantTurnCardSchema[] = [];
     const safePendingLabel = sanitizeDisplayText(pendingLabel || '');
+    const safePendingToolName = sanitizeDisplayText(pendingStatus?.toolName || '');
     const safeLead = sanitizeDisplayText(item.lead || '');
     const safeMessages = (item.messages || [])
         .map((message) => message.trim())
@@ -97,9 +119,9 @@ export function buildAssistantTurnCardSchemas(
     const safeSystemEvents = (item.systemEvents || [])
         .map((entry) => sanitizeDisplayText(entry))
         .filter((entry) => entry.length > 0);
-    const hasRenderedAssistantMessages = safeMessages.length > 0;
+    const hasRenderedAssistantMessages = safeLead.length > 0 || safeMessages.length > 0;
 
-    if (safeMessages.length > 0 || safeSystemEvents.length > 0) {
+    if (safeLead.length > 0 || safeMessages.length > 0 || safeSystemEvents.length > 0) {
         cards.push({
             type: 'assistant-response',
             id: `${item.id}-response`,
@@ -114,18 +136,48 @@ export function buildAssistantTurnCardSchemas(
         });
     }
 
-    if (safePendingLabel) {
+    if (safePendingLabel || pendingStatus?.phase) {
+        const runtimeIndicator = pendingStatus?.phase === 'running_tool'
+            ? 'running-tool'
+            : pendingStatus?.phase === 'retrying'
+                ? 'retrying'
+                : pendingStatus?.phase === 'waiting_for_model'
+                    ? 'thinking'
+                    : 'pending';
+        const runtimeTitle = runtimeIndicator === 'running-tool'
+            ? safePendingLabel || `Using ${safePendingToolName || 'tool'}`
+            : runtimeIndicator === 'retrying'
+                ? safePendingLabel || 'Retrying request'
+                : runtimeIndicator === 'thinking'
+                    ? safePendingLabel || 'Thinking'
+                    : safePendingLabel || 'Running';
+        const runtimeSubtitle = runtimeIndicator === 'running-tool'
+            ? `Executing ${safePendingToolName || 'tool'} and waiting for result.`
+            : runtimeIndicator === 'retrying'
+                ? 'Rate limited previously. Retrying automatically.'
+                : runtimeIndicator === 'thinking'
+                    ? 'Model is reasoning and preparing the next response.'
+                    : undefined;
+        const runtimeStatusLabel = runtimeIndicator === 'running-tool'
+            ? 'Using tool'
+            : runtimeIndicator === 'retrying'
+                ? 'Retrying'
+                : runtimeIndicator === 'thinking'
+                    ? 'Thinking'
+                    : 'Running';
         cards.push({
             type: 'runtime-status',
             id: `${item.id}-runtime-pending`,
             summary: {
                 kind: 'runtime',
                 kicker: 'Runtime',
-                title: safePendingLabel,
-                statusLabel: 'Running',
+                title: runtimeTitle,
+                subtitle: runtimeSubtitle,
+                statusLabel: runtimeStatusLabel,
                 statusTone: 'running',
             },
-            indicator: 'pending',
+            indicator: runtimeIndicator,
+            toolName: runtimeIndicator === 'running-tool' ? safePendingToolName || undefined : undefined,
         });
     }
 
@@ -138,11 +190,37 @@ export function buildAssistantTurnCardSchemas(
     }
 
     for (const effect of item.effectRequests || []) {
+        const risk = Number.isFinite(effect.risk) ? effect.risk : 0;
+        const severity = toRiskSeverity(risk);
+        const decision = toDecisionStatus(effect.approved);
+        const statusTone: StructuredCardTone = decision === 'approved'
+            ? 'success'
+            : decision === 'denied'
+                ? 'failed'
+                : 'running';
         cards.push({
-            type: 'task-card',
+            type: 'approval-request',
             id: `${effect.id}-effect`,
-            viewModel: buildTaskCardViewModel(toEffectTaskCardItem(effect)),
-            placement: 'inline',
+            summary: {
+                kind: 'task',
+                kicker: 'Approval',
+                title: sanitizeDisplayText(effect.effectType) || 'Effect request',
+                subtitle: `Risk ${risk} (${severity})`,
+                statusLabel: decision === 'pending'
+                    ? 'Pending decision'
+                    : decision === 'approved'
+                        ? 'Approved'
+                        : 'Denied',
+                statusTone,
+            },
+            approval: {
+                requestId: effect.id,
+                effectType: sanitizeDisplayText(effect.effectType) || 'effect',
+                risk,
+                severity,
+                decision,
+                blocking: severity === 'high' || severity === 'critical',
+            },
         });
     }
 

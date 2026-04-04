@@ -222,6 +222,148 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
+    test('handleUserMessage sets openai providerOptions.store=true by default', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousOpenAiKey = process.env.OPENAI_API_KEY;
+        const previousStore = process.env.COWORKANY_OPENAI_RESPONSES_STORE;
+        let capturedOptions: Record<string, unknown> | undefined;
+
+        try {
+            process.env.COWORKANY_MODEL = 'openai/gpt-5.3-codex';
+            process.env.OPENAI_API_KEY = 'test-key';
+            delete process.env.COWORKANY_OPENAI_RESPONSES_STORE;
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async (
+                _message: string,
+                options?: Record<string, unknown>,
+            ) => {
+                capturedOptions = options;
+                return {
+                    runId: 'run-phase3-openai-provider-options',
+                    fullStream: (async function* () {
+                        // no-op
+                    })(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            await handleUserMessage(
+                'openai provider options',
+                'thread-openai-provider-options',
+                'employee-openai-provider-options',
+                () => undefined,
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            const providerOptions = (capturedOptions?.providerOptions ?? {}) as {
+                openai?: {
+                    store?: boolean;
+                };
+            };
+            expect(providerOptions.openai?.store).toBe(true);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousOpenAiKey === 'string') {
+                process.env.OPENAI_API_KEY = previousOpenAiKey;
+            } else {
+                delete process.env.OPENAI_API_KEY;
+            }
+            if (typeof previousStore === 'string') {
+                process.env.COWORKANY_OPENAI_RESPONSES_STORE = previousStore;
+            } else {
+                delete process.env.COWORKANY_OPENAI_RESPONSES_STORE;
+            }
+        }
+    });
+
+    test('chat-mode turn timeout budget stops long startup retries and emits terminal error', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousFallback = process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+        const previousChatStartRetry = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT;
+        const previousChatStartTimeout = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+        const previousChatStartRetryDelay = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS;
+        const previousChatTurnBudget = process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = 'false';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT = '2';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = '4000';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS = '2000';
+            process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS = '1500';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                await new Promise(() => undefined);
+                throw new Error('unreachable');
+            }) as typeof supervisor.stream;
+
+            const startedAt = Date.now();
+            const result = await handleUserMessage(
+                'budget timeout test',
+                'thread-timeout-budget',
+                'employee-timeout-budget',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+            const elapsedMs = Date.now() - startedAt;
+
+            expect(result.runId.startsWith('start-failed-')).toBe(true);
+            expect(elapsedMs).toBeLessThan(5_000);
+            expect(events.some((event) => (
+                event.type === 'error'
+                && String(event.message ?? '').includes('chat_turn_timeout_budget_exhausted')
+            ))).toBe(true);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousFallback === 'string') {
+                process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = previousFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+            }
+            if (typeof previousChatStartRetry === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT = previousChatStartRetry;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT;
+            }
+            if (typeof previousChatStartTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = previousChatStartTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+            }
+            if (typeof previousChatStartRetryDelay === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS = previousChatStartRetryDelay;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS;
+            }
+            if (typeof previousChatTurnBudget === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS = previousChatTurnBudget;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS;
+            }
+        }
+    });
+
     test('handleUserMessage retries transient stream-start failures before succeeding', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -271,6 +413,143 @@ describe('Phase 3: Agent Loop', () => {
                 process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT = previousRetryCount;
             } else {
                 delete process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT;
+            }
+        }
+    });
+
+    test('chat-mode startup timeout emits staged rate-limit telemetry before failing', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousFallback = process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+        const previousChatStartRetry = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT;
+        const previousChatStartTimeout = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = 'false';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT = '1';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = '1000';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                throw new Error('stream_start_timeout:1000');
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'timeout stage test',
+                'thread-timeout-stage',
+                'employee-timeout-stage',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId.startsWith('start-failed-')).toBe(true);
+            const rateLimitedEvents = events.filter((event) => event.type === 'rate_limited');
+            expect(rateLimitedEvents.length).toBeGreaterThan(0);
+            const finalRateLimited = rateLimitedEvents.at(-1) as Record<string, unknown>;
+            expect(finalRateLimited.stage).toBe('ttfb');
+            const timings = finalRateLimited.timings as Record<string, unknown>;
+            expect(typeof timings.elapsedMs).toBe('number');
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousFallback === 'string') {
+                process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = previousFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+            }
+            if (typeof previousChatStartRetry === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT = previousChatStartRetry;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT;
+            }
+            if (typeof previousChatStartTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = previousChatStartTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('chat-mode tail stream interruption emits last-token retry telemetry and completes', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousTailRetryCount = process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_COUNT;
+        const previousTailRetryDelay = process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_DELAY_MS;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_COUNT = '1';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_DELAY_MS = '1';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                async function* interruptedStream() {
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: 'hello' },
+                    };
+                    throw new Error('socket hang up');
+                }
+                return {
+                    runId: 'run-phase3-tail-retry',
+                    fullStream: interruptedStream(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'tail retry',
+                'thread-tail-retry',
+                'employee-tail-retry',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-tail-retry');
+            expect(events.some((event) => event.type === 'text_delta')).toBe(true);
+            const retryEvent = events.find((event) => event.type === 'rate_limited') as Record<string, unknown> | undefined;
+            expect(retryEvent?.stage).toBe('last_token');
+            const completed = events.find((event) => event.type === 'complete') as Record<string, unknown> | undefined;
+            expect(
+                completed?.finishReason === 'assistant_text_stream_interrupted'
+                || completed?.finishReason === 'stream_exhausted',
+            ).toBe(true);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousTailRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_COUNT = previousTailRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_COUNT;
+            }
+            if (typeof previousTailRetryDelay === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_DELAY_MS = previousTailRetryDelay;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_DELAY_MS;
             }
         }
     });

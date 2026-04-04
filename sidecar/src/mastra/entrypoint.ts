@@ -8,14 +8,23 @@ import type { RemoteSessionConflictStrategy, RemoteSessionGovernancePolicy } fro
 import {
     recoverTaskRuntimeStateAfterRestart,
     type TaskRuntimeCheckpoint,
+    type TaskRuntimeExecutionPath,
     type TaskRuntimeOperationAction,
     type TaskRuntimeOperationRecord,
     type TaskRuntimeRetryState,
     type TaskRuntimeState,
 } from './taskRuntimeState';
+import { classifyRuntimeErrorMessage } from './runtimeErrorClassifier';
+import { handleStartOrSendTaskCommand } from './entrypointTaskCommands';
+import { handleRecoveryAndCheckpointCommands } from './entrypointRecoveryCommands';
+import { handleTaskControlCommands } from './entrypointTaskControlCommands';
+import { handleRemoteSessionCommands } from './entrypointRemoteSessionCommands';
+import { failGuard, passGuard, runGuardPipeline } from './entrypointGuardPipeline';
+import { buildRuntimeConfigDoctorSummary } from '../config/runtimeConfig';
 type OutgoingMessage = Record<string, unknown>;
 type UserMessageExecutionOptions = {
     taskId?: string;
+    turnId?: string;
     workspacePath?: string;
     enabledSkills?: string[];
     skillPrompt?: string;
@@ -23,6 +32,9 @@ type UserMessageExecutionOptions = {
     autoResumeSuspendedTools?: boolean;
     toolCallConcurrency?: number;
     maxSteps?: number;
+    executionPath?: 'direct' | 'workflow';
+    forcedRouteMode?: 'chat' | 'task';
+    forcePostAssistantCompletion?: boolean;
     onPreCompact?: (payload: {
         taskId: string;
         threadId: string;
@@ -41,6 +53,20 @@ type UserMessageExecutionOptions = {
         structuredSummary: string;
         recalledMemoryFiles: string[];
     }) => void;
+};
+export type TaskMessageExecutionDelegateInput = {
+    taskId: string;
+    turnId: string;
+    message: string;
+    resourceId: string;
+    preferredThreadId: string;
+    workspacePath?: string;
+    executionOptions?: UserMessageExecutionOptions;
+    emitDesktopEvent: (event: DesktopEvent) => Promise<void>;
+    runDirect: () => Promise<void>;
+};
+export type TaskMessageExecutionDelegateResult = {
+    executionPath: TaskRuntimeExecutionPath;
 };
 type ProtocolCommand = {
     id?: string;
@@ -83,6 +109,15 @@ type ForwardBridgeStats = {
     retries: number;
     transportClosedRejects: number;
     invalidResponses: number;
+};
+type EnqueueTaskExecutionInput = {
+    taskId: string;
+    turnId: string;
+    run: () => Promise<TaskRuntimeExecutionPath>;
+};
+type EnqueueTaskExecutionResult = {
+    queuePosition: number;
+    completion: Promise<TaskRuntimeExecutionPath>;
 };
 type TaskStateStore = {
     list: () => TaskRuntimeState[];
@@ -283,6 +318,9 @@ type ProcessorDeps = {
     remoteSessionGovernancePolicy?: Partial<RemoteSessionGovernancePolicy>;
     policyGateResponseTimeoutMs?: number;
     policyGateTimeoutRetryCount?: number;
+    executeTaskMessage?: (
+        input: TaskMessageExecutionDelegateInput,
+    ) => Promise<TaskMessageExecutionDelegateResult>;
 };
 const DEFAULT_POLICY_GATE_TIMEOUT_MS = 30_000;
 const REQUEST_EFFECT_TIMEOUT_MS = 300_000;
@@ -320,6 +358,13 @@ function getNonNegativeInteger(value: unknown): number | null {
         return null;
     }
     return Math.floor(value);
+}
+
+function getOptionalFiniteNumber(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return null;
+    }
+    return value;
 }
 function parseVoiceProviderMode(value: unknown): 'auto' | 'system' | 'custom' | undefined {
     return value === 'auto' || value === 'system' || value === 'custom'
@@ -411,6 +456,15 @@ function isScheduledCancellationRequest(text: string): boolean {
 }
 function isStoreDisabledHistoryReferenceError(message: string): boolean {
     const normalized = message.toLowerCase();
+    const mentionsStoreDisabled = normalized.includes('store')
+        && normalized.includes('false')
+        && (
+            normalized.includes('not persisted')
+            || normalized.includes('store is set to false')
+        );
+    if (mentionsStoreDisabled) {
+        return true;
+    }
     return normalized.includes('item with id')
         && normalized.includes('not found')
         && normalized.includes('store')
@@ -584,9 +638,18 @@ function pickTaskRuntimeRetryConfig(config: Record<string, unknown>): TaskRuntim
     };
 }
 
-function isRetryableTaskStatus(status: TaskRuntimeState['status']): boolean {
-    return status === 'failed' || status === 'interrupted' || status === 'suspended';
+function pickTaskExecutionPath(config: Record<string, unknown>): 'direct' | 'workflow' | undefined {
+    const value = getString(config.executionPath);
+    if (value === 'direct' || value === 'workflow') {
+        return value;
+    }
+    return undefined;
 }
+
+function toUserMessageExecutionPath(path?: TaskRuntimeExecutionPath): 'direct' | 'workflow' {
+    return path === 'direct' ? 'direct' : 'workflow';
+}
+
 function buildResponse(
     commandId: string,
     type: string,
@@ -651,6 +714,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     );
     let transportClosed = false;
     const taskStates = new Map<string, TaskRuntimeState>();
+    const taskExecutionTailByTaskId = new Map<string, Promise<void>>();
+    const taskExecutionDepthByTaskId = new Map<string, number>();
     const remoteSessionToTaskId = new Map<string, string>();
     const channelDeliveryEvents = new Map<string, ChannelDeliveryEvent>();
     if (deps.taskStateStore) {
@@ -696,6 +761,40 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 pendingApprovals.delete(requestId);
             }
         }
+    };
+    const enqueueTaskExecution = (input: EnqueueTaskExecutionInput): EnqueueTaskExecutionResult => {
+        const pendingDepth = taskExecutionDepthByTaskId.get(input.taskId) ?? 0;
+        const queuePosition = pendingDepth;
+        taskExecutionDepthByTaskId.set(input.taskId, pendingDepth + 1);
+
+        const previousTail = taskExecutionTailByTaskId.get(input.taskId) ?? Promise.resolve();
+        const completion = previousTail
+            .catch(() => undefined)
+            .then(async () => {
+                return await input.run();
+            });
+
+        taskExecutionTailByTaskId.set(
+            input.taskId,
+            completion
+                .then(() => undefined)
+                .catch(() => undefined),
+        );
+
+        void completion.finally(() => {
+            const remaining = (taskExecutionDepthByTaskId.get(input.taskId) ?? 1) - 1;
+            if (remaining <= 0) {
+                taskExecutionDepthByTaskId.delete(input.taskId);
+                taskExecutionTailByTaskId.delete(input.taskId);
+            } else {
+                taskExecutionDepthByTaskId.set(input.taskId, remaining);
+            }
+        });
+
+        return {
+            queuePosition,
+            completion,
+        };
     };
     const resolveTaskResourceId = (
         taskId: string,
@@ -788,6 +887,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const hasCheckpointVersion = Object.prototype.hasOwnProperty.call(patch, 'checkpointVersion');
         const hasRetry = Object.prototype.hasOwnProperty.call(patch, 'retry');
         const hasOperationLog = Object.prototype.hasOwnProperty.call(patch, 'operationLog');
+        const hasExecutionPath = Object.prototype.hasOwnProperty.call(patch, 'executionPath');
         const fallbackCheckpointVersion = resolveTaskCheckpointVersion(existing);
         const next: TaskRuntimeState = {
             taskId,
@@ -808,6 +908,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 : fallbackCheckpointVersion,
             retry: hasRetry ? patch.retry : existing?.retry,
             operationLog: hasOperationLog ? patch.operationLog : existing?.operationLog,
+            executionPath: hasExecutionPath ? patch.executionPath : existing?.executionPath,
         };
         taskStates.set(taskId, next);
         if (deps.taskStateStore) {
@@ -836,6 +937,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             checkpointVersion: task.checkpointVersion ?? resolveTaskCheckpointVersion(task),
             retry: task.retry,
             operationLog: task.operationLog ?? [],
+            executionPath: task.executionPath ?? 'workflow',
         }));
         const remoteSessions = deps.remoteSessionStore
             ? deps.remoteSessionStore.list()
@@ -915,6 +1017,24 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             linkedAt: getNowIso(),
             lastSeenAt: getNowIso(),
         };
+    };
+    const listRemoteSessions = (input?: {
+        taskId?: string;
+        status?: RemoteSessionStatus;
+    }): RemoteSessionState[] => {
+        if (deps.remoteSessionStore) {
+            return deps.remoteSessionStore.list(input);
+        }
+        return Array.from(remoteSessionToTaskId.entries())
+            .map(([remoteSessionId, mappedTaskId]) => ({
+                remoteSessionId,
+                taskId: mappedTaskId,
+                status: 'active' as const,
+                linkedAt: getNowIso(),
+                lastSeenAt: getNowIso(),
+            }))
+            .filter((session) => !input?.taskId || session.taskId === input.taskId)
+            .filter((session) => !input?.status || session.status === input.status);
     };
     const evaluateRemoteSessionGovernance = (input: {
         remoteSessionId: string;
@@ -1452,7 +1572,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         taskId: string,
         event: DesktopEvent,
         emit: (message: OutgoingMessage) => void,
+        enforcedTurnId?: string,
     ): Promise<void> => {
+        const turnId = event.turnId ?? enforcedTurnId;
         const traceId = event.traceId ?? null;
         if (typeof event.traceId === 'string' && event.traceId.length > 0) {
             upsertTaskState(taskId, {
@@ -1463,13 +1585,19 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             if (event.role !== 'thinking' && typeof event.content === 'string') {
                 appendTranscript(taskId, 'assistant', event.content);
             }
+            const streamCorrelationId = typeof event.runId === 'string' && event.runId.length > 0
+                ? `stream:${event.runId}:assistant`
+                : undefined;
             emit({
                 type: 'TEXT_DELTA',
                 taskId,
                 payload: {
                     delta: event.content,
                     role: event.role ?? 'assistant',
+                    messageId: streamCorrelationId,
+                    correlationId: streamCorrelationId,
                     traceId,
+                    turnId,
                 },
             });
             return;
@@ -1572,11 +1700,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     summary: 'Task completed via Mastra runtime.',
                     finishReason: event.finishReason ?? 'stop',
                     traceId,
+                    turnId,
                 },
             });
             return;
         }
         if (event.type === 'error') {
+            const classification = classifyRuntimeErrorMessage(event.message);
             clearPendingApprovalsForTask(taskId);
             const existingRetry = taskStates.get(taskId)?.retry;
             upsertTaskState(taskId, {
@@ -1596,6 +1726,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 traceId: typeof traceId === 'string' ? traceId : undefined,
                 payload: {
                     message: event.message,
+                    errorCode: classification.errorCode,
+                    recoverable: classification.recoverable,
+                    failureClass: classification.failureClass,
                 },
             });
             emit({
@@ -1603,8 +1736,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 taskId,
                 payload: {
                     error: event.message,
-                    errorCode: 'MASTRA_RUNTIME_ERROR',
+                    errorCode: classification.errorCode,
+                    recoverable: classification.recoverable,
+                    suggestion: classification.suggestion,
+                    failureClass: classification.failureClass,
                     traceId,
+                    turnId,
                 },
             });
             return;
@@ -1643,6 +1780,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     retry: event.retry === true,
                     metadata: event.metadata ?? null,
                     traceId,
+                    turnId,
                 },
             });
             return;
@@ -1666,6 +1804,67 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     status: 'idle',
                     blockingReason: 'Waiting for user input to resume Mastra task.',
                     traceId,
+                    turnId,
+                },
+            });
+            return;
+        }
+        if (event.type === 'rate_limited') {
+            const existingRetry = taskStates.get(taskId)?.retry;
+            const parsedAttempt = typeof event.attempt === 'number' && Number.isFinite(event.attempt)
+                ? Math.max(1, Math.floor(event.attempt))
+                : (existingRetry?.attempts ?? 0) + 1;
+            const parsedMaxAttempts = typeof event.maxAttempts === 'number' && Number.isFinite(event.maxAttempts)
+                ? Math.max(parsedAttempt, Math.floor(event.maxAttempts))
+                : existingRetry?.maxAttempts;
+            const retryMessage = typeof event.message === 'string' && event.message.trim().length > 0
+                ? event.message
+                : `Model response delayed. Retrying (${parsedAttempt}/${parsedMaxAttempts ?? '?'})...`;
+            const timeoutStage = (
+                event.stage === 'dns'
+                || event.stage === 'connect'
+                || event.stage === 'ttfb'
+                || event.stage === 'first_token'
+                || event.stage === 'last_token'
+                || event.stage === 'unknown'
+            )
+                ? event.stage
+                : null;
+            const rawTimings = toOptionalRecord(event.timings);
+            const timings = rawTimings
+                ? {
+                    elapsedMs: getOptionalFiniteNumber(rawTimings.elapsedMs),
+                    dnsMs: getOptionalFiniteNumber(rawTimings.dnsMs),
+                    connectMs: getOptionalFiniteNumber(rawTimings.connectMs),
+                    ttfbMs: getOptionalFiniteNumber(rawTimings.ttfbMs),
+                    firstTokenMs: getOptionalFiniteNumber(rawTimings.firstTokenMs),
+                    lastTokenMs: getOptionalFiniteNumber(rawTimings.lastTokenMs),
+                }
+                : null;
+            upsertTaskState(taskId, {
+                status: 'running',
+                suspended: false,
+                suspensionReason: undefined,
+                retry: {
+                    attempts: parsedAttempt,
+                    maxAttempts: parsedMaxAttempts,
+                    lastRetryAt: getNowIso(),
+                    lastError: typeof event.error === 'string' ? event.error : existingRetry?.lastError,
+                },
+            });
+            emit({
+                type: 'RATE_LIMITED',
+                taskId,
+                payload: {
+                    message: retryMessage,
+                    attempt: parsedAttempt,
+                    maxRetries: parsedMaxAttempts,
+                    retryAfterMs: typeof event.retryAfterMs === 'number' ? event.retryAfterMs : null,
+                    error: typeof event.error === 'string' ? event.error : null,
+                    stage: timeoutStage,
+                    timings,
+                    traceId,
+                    turnId,
                 },
             });
             return;
@@ -1930,17 +2129,21 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 title: string;
                 message: string;
                 workspacePath: string;
+                mode: 'chat' | 'immediate_task' | 'scheduled_task';
                 scheduled?: boolean;
+                turnId?: string;
             }): void => {
                 emit({
                     type: 'TASK_STARTED',
                     taskId: input.taskId,
                     payload: {
+                        turnId: input.turnId,
                         title: input.title,
                         description: input.message,
                         context: {
                             workspacePath: input.workspacePath,
                             userQuery: input.message,
+                            mode: input.mode,
                             ...(input.scheduled ? { scheduled: true } : {}),
                         },
                     },
@@ -1950,6 +2153,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 taskId: string;
                 summary: string;
                 finishReason: string;
+                turnId?: string;
             }): void => {
                 emit({
                     type: 'TEXT_DELTA',
@@ -1957,6 +2161,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     payload: {
                         delta: input.summary,
                         role: 'assistant',
+                        turnId: input.turnId,
                     },
                 });
                 emit({
@@ -1965,11 +2170,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     payload: {
                         summary: input.summary,
                         finishReason: input.finishReason,
+                        turnId: input.turnId,
                     },
                 });
             };
             const runUserMessageWithThreadRecovery = async (input: {
                 taskId: string;
+                turnId: string;
                 message: string;
                 resourceId: string;
                 preferredThreadId: string;
@@ -1981,6 +2188,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     || event.type === 'tool_call'
                     || event.type === 'approval_required'
                     || event.type === 'tool_result'
+                );
+                const isAssistantNarrativeEvent = (event: DesktopEvent): boolean => (
+                    event.type === 'text_delta'
+                    && event.role !== 'thinking'
+                    && typeof event.content === 'string'
+                    && event.content.trim().length > 0
                 );
                 const executeAttempt = async (
                     threadId: string,
@@ -1994,6 +2207,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         {
                             ...input.executionOptions,
                             taskId: input.taskId,
+                            turnId: input.turnId,
                             workspacePath: input.workspacePath,
                             onPreCompact: (compactPayload) => {
                                 emitHookEvent('PreCompact', {
@@ -2027,6 +2241,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
 
                 let hasRecoverableHistoryError = false;
                 let hasAssistantProgress = false;
+                let hasAssistantNarrative = false;
                 let suppressRecoverableAttempt = false;
                 const suppressedRecoverableEvents: DesktopEvent[] = [];
 
@@ -2035,19 +2250,22 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     if (isProgressEvent) {
                         hasAssistantProgress = true;
                     }
-                    if (suppressRecoverableAttempt && !hasAssistantProgress) {
+                    if (isAssistantNarrativeEvent(event)) {
+                        hasAssistantNarrative = true;
+                    }
+                    if (suppressRecoverableAttempt && !hasAssistantNarrative) {
                         suppressedRecoverableEvents.push(event);
                         return;
                     }
-                    if (suppressRecoverableAttempt && hasAssistantProgress) {
+                    if (suppressRecoverableAttempt && hasAssistantNarrative) {
                         suppressRecoverableAttempt = false;
                         for (const suppressedEvent of suppressedRecoverableEvents) {
-                            emitDesktopEvent(input.taskId, suppressedEvent, emit);
+                            emitDesktopEvent(input.taskId, suppressedEvent, emit, input.turnId);
                         }
                         suppressedRecoverableEvents.length = 0;
                     }
                     if (
-                        !hasAssistantProgress
+                        !hasAssistantNarrative
                         && event.type === 'error'
                         && isStoreDisabledHistoryReferenceError(event.message)
                     ) {
@@ -2056,25 +2274,67 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         suppressedRecoverableEvents.push(event);
                         return;
                     }
-                    emitDesktopEvent(input.taskId, event, emit);
+                    emitDesktopEvent(input.taskId, event, emit, input.turnId);
                 });
 
-                if (hasRecoverableHistoryError && !hasAssistantProgress) {
+                if (hasRecoverableHistoryError && !hasAssistantNarrative) {
                     const recoveryThreadId = `${input.taskId}-recovery-${createId()}`;
                     upsertTaskState(input.taskId, {
                         conversationThreadId: recoveryThreadId,
                     });
                     await executeAttempt(recoveryThreadId, (event) => {
-                        emitDesktopEvent(input.taskId, event, emit);
+                        emitDesktopEvent(input.taskId, event, emit, input.turnId);
                     });
                     return;
                 }
 
                 if (suppressedRecoverableEvents.length > 0) {
                     for (const event of suppressedRecoverableEvents) {
-                        emitDesktopEvent(input.taskId, event, emit);
+                        emitDesktopEvent(input.taskId, event, emit, input.turnId);
                     }
                 }
+            };
+            const executeTaskMessage = async (input: {
+                taskId: string;
+                turnId: string;
+                message: string;
+                resourceId: string;
+                preferredThreadId: string;
+                workspacePath?: string;
+                executionOptions?: UserMessageExecutionOptions;
+            }): Promise<TaskRuntimeExecutionPath> => {
+                const mode = input.executionOptions?.executionPath === 'direct'
+                    ? 'direct'
+                    : 'workflow';
+                const runDirect = async (): Promise<void> => {
+                    await runUserMessageWithThreadRecovery(input);
+                };
+                if (!deps.executeTaskMessage) {
+                    await runDirect();
+                    return 'direct';
+                }
+                const delegateResult = await deps.executeTaskMessage({
+                    taskId: input.taskId,
+                    turnId: input.turnId,
+                    message: input.message,
+                    resourceId: input.resourceId,
+                    preferredThreadId: input.preferredThreadId,
+                    workspacePath: input.workspacePath,
+                    executionOptions: input.executionOptions,
+                    runDirect,
+                    emitDesktopEvent: async (event: DesktopEvent) => {
+                        await emitDesktopEvent(input.taskId, event, emit, input.turnId);
+                    },
+                });
+                const executionPath = delegateResult?.executionPath;
+                if (
+                    executionPath === 'workflow'
+                    || executionPath === 'workflow_fallback'
+                    || executionPath === 'direct'
+                ) {
+                    return executionPath;
+                }
+                return mode;
             };
             if (command.type === 'bootstrap_runtime_context') {
                 bootstrapRuntimeContext = toRecord(payload.runtimeContext);
@@ -2103,14 +2363,27 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 return;
             }
             if (command.type === 'doctor_preflight') {
+                const runtimeConfig = buildRuntimeConfigDoctorSummary();
                 emitFor('doctor_preflight_response', {
                     success: true,
                     report: {
                         runtime: 'mastra',
                         status: 'ok',
                         hasRuntimeContext: Boolean(bootstrapRuntimeContext),
+                        runtimeConfig,
                     },
-                    markdown: '# Doctor Preflight\n\nMastra runtime is healthy.',
+                    markdown: [
+                        '# Doctor Preflight',
+                        '',
+                        'Mastra runtime is healthy.',
+                        '',
+                        `- Runtime config: ${runtimeConfig.loadedFromPath ?? 'not found'}`,
+                        `- Search provider: ${runtimeConfig.search.provider.value} (${runtimeConfig.search.provider.source})`,
+                        `- Search credentials: serper=${runtimeConfig.search.credentials.serperApiKeyConfigured ? 'on' : 'off'}, searxngUrl=${runtimeConfig.search.credentials.searxngUrlConfigured ? 'on' : 'off'}, tavily=${runtimeConfig.search.credentials.tavilyApiKeyConfigured ? 'on' : 'off'}, brave=${runtimeConfig.search.credentials.braveApiKeyConfigured ? 'on' : 'off'}`,
+                        ...(runtimeConfig.conflicts.length > 0
+                            ? ['', `- Conflicts: ${runtimeConfig.conflicts.join(' | ')}`]
+                            : []),
+                    ].join('\n'),
                 });
                 return;
             }
@@ -2141,6 +2414,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         workspacePath: task.workspacePath,
                         status: task.status,
                         createdAt: task.createdAt,
+                        executionPath: task.executionPath ?? 'workflow',
                     }));
                 const tasks = limit ? all.slice(0, limit) : all;
                 emitFor('get_tasks_response', {
@@ -2181,948 +2455,56 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             checkpointVersion: state.checkpointVersion ?? resolveTaskCheckpointVersion(state),
                             retry: state.retry ?? null,
                             operationLog: state.operationLog ?? [],
+                            executionPath: state.executionPath ?? 'workflow',
                         }
                         : null,
                     error: state ? null : 'task_not_found',
                 });
                 return;
             }
-            if (command.type === 'list_remote_sessions') {
-                const taskId = getString(payload.taskId) ?? undefined;
-                const statusRaw = getString(payload.status);
-                const status = statusRaw === 'active' || statusRaw === 'closed'
-                    ? statusRaw
-                    : undefined;
-                const sessions = deps.remoteSessionStore
-                    ? deps.remoteSessionStore.list({ taskId, status })
-                    : Array.from(remoteSessionToTaskId.entries()).map(([remoteSessionId, mappedTaskId]) => ({
-                        remoteSessionId,
-                        taskId: mappedTaskId,
-                        status: 'active' as const,
-                        linkedAt: getNowIso(),
-                        lastSeenAt: getNowIso(),
-                    }));
-                emitFor('list_remote_sessions_response', {
-                    success: true,
-                    sessions,
-                    count: sessions.length,
-                    taskId: taskId ?? null,
-                    status: status ?? null,
-                });
-                return;
-            }
-            if (command.type === 'open_remote_session') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('open_remote_session_response', { taskId });
-                    return;
-                }
-                const remoteSessionId = getString(payload.remoteSessionId) ?? `remote-${createId()}`;
-                const metadata = toOptionalRecord(payload.metadata);
-                const scope = parseRemoteSessionScope(payload, metadata);
-                const scopedMetadata = withRemoteSessionScopeMetadata(metadata, scope);
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('open_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId,
-                    source: 'remote_session_open',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('open_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const governance = evaluateRemoteSessionGovernance({
-                    remoteSessionId,
-                    targetTaskId: taskId,
-                    scope,
-                    metadata: scopedMetadata,
-                });
-                if (!governance.allowed) {
-                    emitFor('open_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: governance.error ?? 'remote_session_governance_denied',
-                        remoteSession: governance.existingState ?? null,
-                    });
-                    return;
-                }
-                const arbitration = governance.arbitration ?? { action: 'none' as const };
-                if (
-                    arbitration.action !== 'none'
-                    && governance.existingState
-                    && governance.existingState.taskId !== taskId
-                ) {
-                    closeRemoteSessionRecord(remoteSessionId);
-                    unbindRemoteSession(remoteSessionId);
-                }
-                const upserted = upsertRemoteSessionRecord({
-                    remoteSessionId,
-                    taskId,
-                    channel: getString(payload.channel) ?? undefined,
-                    metadata: scopedMetadata,
-                });
-                if (!upserted.success) {
-                    emitFor('open_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: upserted.conflict ? 'remote_session_task_conflict' : 'remote_session_open_failed',
-                        remoteSession: upserted.state ?? null,
-                        arbitration,
-                    });
-                    return;
-                }
-                bindRemoteSessionToTask(taskId, remoteSessionId);
-                appendTranscript(taskId, 'system', `Remote session opened: ${remoteSessionId}`);
-                emitHookEvent('RemoteSessionLinked', {
-                    taskId,
-                    payload: {
-                        remoteSessionId,
-                        channel: getString(payload.channel) ?? null,
-                        source: 'open_remote_session',
-                    },
-                });
-                emit({
-                    type: 'TASK_EVENT',
-                    taskId,
-                    payload: {
-                        type: 'remote_session',
-                        action: arbitration.action === 'none' ? 'opened' : 'rebound',
-                        remoteSessionId,
-                        channel: getString(payload.channel) ?? null,
-                        scope,
-                        arbitration,
-                        at: getNowIso(),
-                    },
-                });
-                emitFor('open_remote_session_response', {
-                    success: true,
-                    taskId,
-                    remoteSessionId,
-                    remoteSession: upserted.state ?? null,
-                    scope,
-                    arbitration,
-                });
-                return;
-            }
-            if (command.type === 'heartbeat_remote_session') {
-                const remoteSessionId = getString(payload.remoteSessionId) ?? '';
-                if (!remoteSessionId) {
-                    emitInvalidPayload('heartbeat_remote_session_response', { remoteSessionId });
-                    return;
-                }
-                const state = deps.remoteSessionStore?.get(remoteSessionId);
-                const taskId = getString(payload.taskId)
-                    ?? state?.taskId
-                    ?? remoteSessionToTaskId.get(remoteSessionId)
-                    ?? '';
-                if (!taskId) {
-                    emitFor('heartbeat_remote_session_response', {
-                        success: false,
-                        remoteSessionId,
-                        error: 'remote_session_not_found',
-                    });
-                    return;
-                }
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('heartbeat_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId,
-                    source: 'remote_session_heartbeat',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('heartbeat_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const heartbeated = heartbeatRemoteSessionRecord(remoteSessionId, toOptionalRecord(payload.metadata));
-                if (!heartbeated.success) {
-                    emitFor('heartbeat_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: 'remote_session_not_found',
-                    });
-                    return;
-                }
-                bindRemoteSessionToTask(taskId, remoteSessionId);
-                emitFor('heartbeat_remote_session_response', {
-                    success: true,
-                    taskId,
-                    remoteSessionId,
-                    remoteSession: heartbeated.state ?? null,
-                });
-                return;
-            }
-            if (command.type === 'sync_remote_session') {
-                const remoteSessionId = getString(payload.remoteSessionId) ?? '';
-                if (!remoteSessionId) {
-                    emitInvalidPayload('sync_remote_session_response', { remoteSessionId });
-                    return;
-                }
-                const existingRemoteState = resolveRemoteSessionState(remoteSessionId);
-                const taskId = getString(payload.taskId)
-                    ?? existingRemoteState?.taskId
-                    ?? remoteSessionToTaskId.get(remoteSessionId)
-                    ?? '';
-                if (!taskId) {
-                    emitFor('sync_remote_session_response', {
-                        success: false,
-                        remoteSessionId,
-                        error: 'remote_session_not_found',
-                    });
-                    return;
-                }
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('sync_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId,
-                    source: 'remote_session_sync',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('sync_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const syncMetadata = toOptionalRecord(payload.metadata);
-                const scope = parseRemoteSessionScope(payload, syncMetadata);
-                const scopedMetadata = withRemoteSessionScopeMetadata(syncMetadata, scope);
-                const governance = evaluateRemoteSessionGovernance({
-                    remoteSessionId,
-                    targetTaskId: taskId,
-                    scope,
-                    metadata: scopedMetadata,
-                });
-                if (!governance.allowed) {
-                    emitFor('sync_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: governance.error ?? 'remote_session_governance_denied',
-                        remoteSession: governance.existingState ?? null,
-                    });
-                    return;
-                }
-                const arbitration = governance.arbitration ?? { action: 'none' as const };
-                if (
-                    arbitration.action !== 'none'
-                    && governance.existingState
-                    && governance.existingState.taskId !== taskId
-                ) {
-                    closeRemoteSessionRecord(remoteSessionId);
-                    unbindRemoteSession(remoteSessionId);
-                }
-                const syncChannel = getString(payload.channel) ?? existingRemoteState?.channel;
-                const upserted = upsertRemoteSessionRecord({
-                    remoteSessionId,
-                    taskId,
-                    channel: syncChannel ?? undefined,
-                    metadata: scopedMetadata,
-                });
-                if (!upserted.success) {
-                    emitFor('sync_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: upserted.conflict ? 'remote_session_task_conflict' : 'remote_session_sync_failed',
-                        remoteSession: upserted.state ?? null,
-                        arbitration,
-                    });
-                    return;
-                }
-                bindRemoteSessionToTask(taskId, remoteSessionId);
-                const heartbeated = heartbeatRemoteSessionRecord(remoteSessionId, scopedMetadata);
-                const replayPending = payload.replayPending !== false;
-                const onlyRemoteSessionPending = payload.onlyRemoteSessionPending === true;
-                const ackReplayed = payload.ackReplayed === true;
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.min(200, Math.floor(payload.limit))
-                    : 50;
-                const allPending = replayPending
-                    ? listChannelDeliveryEvents({
-                        taskId,
-                        status: 'pending',
-                        limit,
-                    })
-                    : [];
-                const pendingEvents = onlyRemoteSessionPending
-                    ? allPending.filter((event) => event.remoteSessionId === remoteSessionId)
-                    : allPending;
-                const replayedEventIds: string[] = [];
-                let ackedCount = 0;
-                if (replayPending) {
-                    for (const event of pendingEvents) {
-                        const delivered = markChannelDeliveryDelivered({
-                            eventId: event.id,
-                            taskId: event.taskId,
-                            remoteSessionId: event.remoteSessionId ?? remoteSessionId,
-                        });
-                        const replayEvent = delivered.event ?? event;
-                        replayedEventIds.push(replayEvent.id);
-                        emit({
-                            type: 'TASK_EVENT',
-                            taskId: replayEvent.taskId,
-                            payload: {
-                                type: 'channel_event',
-                                action: 'replayed_on_sync',
-                                deliveryId: replayEvent.id,
-                                channel: replayEvent.channel,
-                                eventType: replayEvent.eventType,
-                                content: replayEvent.content ?? '',
-                                remoteSessionId: replayEvent.remoteSessionId ?? null,
-                                metadata: replayEvent.metadata ?? {},
-                                deliveryAttempts: replayEvent.deliveryAttempts ?? 0,
-                                replayedAt: getNowIso(),
-                            },
-                        });
-                        if (ackReplayed) {
-                            const acked = ackChannelDeliveryEvent({
-                                eventId: replayEvent.id,
-                                taskId: replayEvent.taskId,
-                                remoteSessionId: replayEvent.remoteSessionId,
-                                metadata: {
-                                    source: 'sync_remote_session',
-                                    remoteSessionId,
-                                },
-                            });
-                            if (acked.success) {
-                                ackedCount += 1;
-                            }
-                        }
-                    }
-                }
-                emit({
-                    type: 'TASK_EVENT',
-                    taskId,
-                    payload: {
-                        type: 'remote_session',
-                        action: 'synced',
-                        remoteSessionId,
-                        channel: syncChannel ?? null,
-                        scope,
-                        arbitration,
-                        pendingCount: pendingEvents.length,
-                        replayedCount: replayedEventIds.length,
-                        ackedCount,
-                        at: getNowIso(),
-                    },
-                });
-                emitFor('sync_remote_session_response', {
-                    success: true,
-                    taskId,
-                    remoteSessionId,
-                    remoteSession: heartbeated.state ?? upserted.state ?? null,
-                    replayPending,
-                    onlyRemoteSessionPending,
-                    ackReplayed,
-                    pendingCount: pendingEvents.length,
-                    replayedCount: replayedEventIds.length,
-                    replayedEventIds,
-                    ackedCount,
-                    scope,
-                    arbitration,
-                });
-                return;
-            }
-            if (command.type === 'close_remote_session') {
-                const remoteSessionId = getString(payload.remoteSessionId) ?? '';
-                if (!remoteSessionId) {
-                    emitInvalidPayload('close_remote_session_response', { remoteSessionId });
-                    return;
-                }
-                const state = deps.remoteSessionStore?.get(remoteSessionId);
-                const taskId = getString(payload.taskId)
-                    ?? state?.taskId
-                    ?? remoteSessionToTaskId.get(remoteSessionId)
-                    ?? '';
-                if (!taskId) {
-                    emitFor('close_remote_session_response', {
-                        success: false,
-                        remoteSessionId,
-                        error: 'remote_session_not_found',
-                    });
-                    return;
-                }
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('close_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId,
-                    source: 'remote_session_close',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('close_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const closed = closeRemoteSessionRecord(remoteSessionId);
-                if (!closed.success) {
-                    emitFor('close_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: 'remote_session_not_found',
-                    });
-                    return;
-                }
-                unbindRemoteSession(remoteSessionId);
-                appendTranscript(taskId, 'system', `Remote session closed: ${remoteSessionId}`);
-                emit({
-                    type: 'TASK_EVENT',
-                    taskId,
-                    payload: {
-                        type: 'remote_session',
-                        action: 'closed',
-                        remoteSessionId,
-                        at: getNowIso(),
-                    },
-                });
-                emitFor('close_remote_session_response', {
-                    success: true,
-                    taskId,
-                    remoteSessionId,
-                    remoteSession: closed.state ?? null,
-                });
-                return;
-            }
-            if (command.type === 'bind_remote_session') {
-                const taskId = getString(payload.taskId) ?? '';
-                const remoteSessionId = getString(payload.remoteSessionId) ?? '';
-                if (!taskId || !remoteSessionId) {
-                    emitInvalidPayload('bind_remote_session_response', { taskId, remoteSessionId });
-                    return;
-                }
-                const metadata = toOptionalRecord(payload.metadata);
-                const scope = parseRemoteSessionScope(payload, metadata);
-                const scopedMetadata = withRemoteSessionScopeMetadata(metadata, scope);
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('bind_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId,
-                    source: 'remote_session_bind',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('bind_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const governance = evaluateRemoteSessionGovernance({
-                    remoteSessionId,
-                    targetTaskId: taskId,
-                    scope,
-                    metadata: scopedMetadata,
-                });
-                if (!governance.allowed) {
-                    emitFor('bind_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: governance.error ?? 'remote_session_governance_denied',
-                        remoteSession: governance.existingState ?? null,
-                    });
-                    return;
-                }
-                const arbitration = governance.arbitration ?? { action: 'none' as const };
-                if (
-                    arbitration.action !== 'none'
-                    && governance.existingState
-                    && governance.existingState.taskId !== taskId
-                ) {
-                    closeRemoteSessionRecord(remoteSessionId);
-                    unbindRemoteSession(remoteSessionId);
-                }
-                const existing = taskStates.get(taskId);
-                upsertTaskState(taskId, {
-                    title: getString(payload.title) ?? existing?.title ?? 'Task',
-                    workspacePath: getString(payload.workspacePath) ?? existing?.workspacePath ?? process.cwd(),
-                    status: existing?.status ?? 'idle',
-                    suspended: existing?.suspended,
-                    suspensionReason: existing?.suspensionReason,
-                    resourceId: resolveTaskResourceId(taskId, payload, existing?.resourceId),
-                });
-                const upserted = upsertRemoteSessionRecord({
-                    remoteSessionId,
-                    taskId,
-                    channel: getString(payload.channel) ?? undefined,
-                    metadata: scopedMetadata,
-                });
-                if (!upserted.success) {
-                    emitFor('bind_remote_session_response', {
-                        success: false,
-                        taskId,
-                        remoteSessionId,
-                        error: upserted.conflict ? 'remote_session_task_conflict' : 'remote_session_bind_failed',
-                        remoteSession: upserted.state ?? null,
-                        arbitration,
-                    });
-                    return;
-                }
-                bindRemoteSessionToTask(taskId, remoteSessionId);
-                appendTranscript(taskId, 'system', `Remote session linked: ${remoteSessionId}`);
-                emitHookEvent('RemoteSessionLinked', {
-                    taskId,
-                    payload: {
-                        remoteSessionId,
-                        channel: getString(payload.channel) ?? null,
-                        source: 'bind_remote_session',
-                        scope,
-                        arbitration,
-                    },
-                });
-                emitFor('bind_remote_session_response', {
-                    success: true,
-                    taskId,
-                    remoteSessionId,
-                    remoteSession: upserted.state ?? null,
-                    scope,
-                    arbitration,
-                });
-                return;
-            }
-            if (command.type === 'inject_channel_event') {
-                const resolvedTaskId = resolveTaskIdForExternalEvent(payload);
-                const channel = getString(payload.channel) ?? '';
-                if (!resolvedTaskId || !channel) {
-                    emitInvalidPayload('inject_channel_event_response', {
-                        taskId: resolvedTaskId ?? '',
-                        channel,
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId: resolvedTaskId,
-                    source: 'channel_injection',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('inject_channel_event_response', {
-                        success: false,
-                        taskId: resolvedTaskId,
-                        channel,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const existing = taskStates.get(resolvedTaskId);
-                upsertTaskState(resolvedTaskId, {
-                    title: existing?.title ?? 'Task',
-                    workspacePath: existing?.workspacePath ?? process.cwd(),
-                    status: existing?.status ?? 'idle',
-                    suspended: existing?.suspended,
-                    suspensionReason: existing?.suspensionReason,
-                    resourceId: existing?.resourceId ?? resolveTaskResourceId(resolvedTaskId, payload, undefined),
-                });
-                const eventType = getString(payload.eventType) ?? 'message';
-                const content = getString(payload.content) ?? '';
-                const remoteSessionId = getString(payload.remoteSessionId) ?? undefined;
-                const metadata = toOptionalRecord(payload.metadata);
-                const remoteScope = parseRemoteSessionScope(payload, metadata);
-                const scopedMetadata = withRemoteSessionScopeMetadata(metadata, remoteScope);
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('inject_channel_event_response', {
-                        success: false,
-                        taskId: resolvedTaskId,
-                        channel,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                const eventId = getString(payload.eventId) ?? getString(payload.deliveryId) ?? undefined;
-                const forceRequeue = payload.forceRequeue === true;
-                const delivery = enqueueChannelDeliveryEvent({
-                    taskId: resolvedTaskId,
-                    remoteSessionId,
-                    channel,
-                    eventType,
-                    content,
-                    metadata: scopedMetadata,
-                    eventId,
-                    forceRequeue,
-                });
-                if (remoteSessionId) {
-                    const upserted = upsertRemoteSessionRecord({
-                        remoteSessionId,
-                        taskId: resolvedTaskId,
-                        channel,
-                        metadata: scopedMetadata,
-                    });
-                    if (upserted.success) {
-                        bindRemoteSessionToTask(resolvedTaskId, remoteSessionId);
-                        heartbeatRemoteSessionRecord(remoteSessionId, scopedMetadata);
-                    }
-                }
-                if (!delivery.deduplicated || forceRequeue) {
-                    appendTranscript(
-                        resolvedTaskId,
-                        'system',
-                        `[Channel:${channel}] ${eventType}${content ? ` — ${content}` : ''}`,
-                    );
-                    emitHookEvent('ChannelEventInjected', {
-                        taskId: resolvedTaskId,
-                        payload: {
-                            channel,
-                            eventType,
-                            content,
-                            remoteSessionId,
-                            metadata: scopedMetadata ?? {},
-                            deliveryId: delivery.event.id,
-                        },
-                    });
+            if (await handleRemoteSessionCommands({
+                commandType: command.type,
+                commandId,
+                payload,
+                taskStates,
+                getString,
+                toRecord,
+                toOptionalRecord,
+                getNowIso,
+                createId,
+                listRemoteSessions,
+                parseRemoteSessionScope,
+                withRemoteSessionScopeMetadata,
+                evaluateManagedTenantCommandGovernance,
+                evaluateRemoteSessionGovernance,
+                resolveTaskIdForExternalEvent,
+                resolveRemoteSessionState,
+                resolveTaskIdForRemoteSessionId: (remoteSessionId) => remoteSessionToTaskId.get(remoteSessionId),
+                upsertRemoteSessionRecord,
+                bindRemoteSessionToTask,
+                unbindRemoteSession,
+                heartbeatRemoteSessionRecord,
+                closeRemoteSessionRecord,
+                enqueueChannelDeliveryEvent,
+                listChannelDeliveryEvents,
+                ackChannelDeliveryEvent,
+                getChannelDeliveryEvent,
+                markChannelDeliveryDelivered,
+                upsertTaskState,
+                resolveTaskResourceId,
+                appendTranscript,
+                emitHookEvent,
+                applyPolicyDecision,
+                emitInvalidPayload,
+                emitFor,
+                emitTaskEvent: (taskId, taskEventPayload) => {
                     emit({
                         type: 'TASK_EVENT',
-                        taskId: resolvedTaskId,
-                        payload: {
-                            type: 'channel_event',
-                            action: delivery.requeued ? 'requeued' : 'injected',
-                            deduplicated: false,
-                            deliveryId: delivery.event.id,
-                            channel,
-                            eventType,
-                            content,
-                            remoteSessionId: remoteSessionId ?? null,
-                            metadata: scopedMetadata ?? {},
-                            injectedAt: getNowIso(),
-                        },
+                        taskId,
+                        payload: taskEventPayload,
                     });
-                }
-                emitFor('inject_channel_event_response', {
-                    success: true,
-                    taskId: resolvedTaskId,
-                    channel,
-                    eventType,
-                    deduplicated: delivery.deduplicated,
-                    requeued: delivery.requeued,
-                    delivery: delivery.event,
-                });
-                return;
-            }
-            if (command.type === 'list_channel_delivery_events') {
-                const taskId = getString(payload.taskId) ?? undefined;
-                const remoteSessionId = getString(payload.remoteSessionId) ?? undefined;
-                const statusRaw = getString(payload.status);
-                const status = statusRaw === 'pending' || statusRaw === 'acked'
-                    ? statusRaw
-                    : undefined;
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.min(1000, Math.floor(payload.limit))
-                    : undefined;
-                const resolvedTaskId = taskId
-                    ?? (remoteSessionId ? remoteSessionToTaskId.get(remoteSessionId) : undefined);
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('list_channel_delivery_events_response', {
-                        success: false,
-                        taskId: resolvedTaskId ?? taskId ?? null,
-                        remoteSessionId: remoteSessionId ?? null,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                if (resolvedTaskId) {
-                    const policyDecision = applyPolicyDecision({
-                        requestId: commandId,
-                        action: 'task_command',
-                        commandType: command.type,
-                        taskId: resolvedTaskId,
-                        source: 'channel_delivery_list',
-                        payload,
-                    });
-                    if (!policyDecision.allowed) {
-                        emitFor('list_channel_delivery_events_response', {
-                            success: false,
-                            taskId: resolvedTaskId,
-                            remoteSessionId: remoteSessionId ?? null,
-                            error: `policy_denied:${policyDecision.reason}`,
-                        });
-                        return;
-                    }
-                }
-                const events = listChannelDeliveryEvents({
-                    taskId: resolvedTaskId ?? taskId,
-                    remoteSessionId,
-                    status,
-                    limit,
-                });
-                emitFor('list_channel_delivery_events_response', {
-                    success: true,
-                    taskId: resolvedTaskId ?? taskId ?? null,
-                    remoteSessionId: remoteSessionId ?? null,
-                    status: status ?? null,
-                    events,
-                    count: events.length,
-                });
-                return;
-            }
-            if (command.type === 'ack_channel_delivery_event') {
-                const eventId = getString(payload.eventId) ?? '';
-                if (!eventId) {
-                    emitInvalidPayload('ack_channel_delivery_event_response', { eventId });
-                    return;
-                }
-                const taskId = getString(payload.taskId) ?? undefined;
-                const remoteSessionId = getString(payload.remoteSessionId) ?? undefined;
-                const existingEvent = getChannelDeliveryEvent(eventId);
-                const governanceRemoteSessionId = remoteSessionId ?? existingEvent?.remoteSessionId;
-                const resolvedTaskId = taskId
-                    ?? existingEvent?.taskId
-                    ?? (remoteSessionId ? remoteSessionToTaskId.get(remoteSessionId) : undefined);
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, governanceRemoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('ack_channel_delivery_event_response', {
-                        success: false,
-                        taskId: resolvedTaskId ?? taskId ?? null,
-                        remoteSessionId: governanceRemoteSessionId ?? null,
-                        eventId,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                if (resolvedTaskId) {
-                    const policyDecision = applyPolicyDecision({
-                        requestId: commandId,
-                        action: 'task_command',
-                        commandType: command.type,
-                        taskId: resolvedTaskId,
-                        source: 'channel_delivery_ack',
-                        payload,
-                    });
-                    if (!policyDecision.allowed) {
-                        emitFor('ack_channel_delivery_event_response', {
-                            success: false,
-                            taskId: resolvedTaskId,
-                            remoteSessionId: remoteSessionId ?? null,
-                            eventId,
-                            error: `policy_denied:${policyDecision.reason}`,
-                        });
-                        return;
-                    }
-                }
-                const acked = ackChannelDeliveryEvent({
-                    eventId,
-                    taskId: resolvedTaskId ?? taskId,
-                    remoteSessionId: remoteSessionId ?? existingEvent?.remoteSessionId,
-                    metadata: toRecord(payload.metadata),
-                });
-                if (!acked.success) {
-                    emitFor('ack_channel_delivery_event_response', {
-                        success: false,
-                        taskId: resolvedTaskId ?? taskId ?? null,
-                        remoteSessionId: remoteSessionId ?? null,
-                        eventId,
-                        error: 'channel_delivery_event_not_found',
-                    });
-                    return;
-                }
-                if (acked.event?.taskId) {
-                    emit({
-                        type: 'TASK_EVENT',
-                        taskId: acked.event.taskId,
-                        payload: {
-                            type: 'channel_event_delivery',
-                            action: 'acked',
-                            deliveryId: acked.event.id,
-                            remoteSessionId: acked.event.remoteSessionId ?? null,
-                            ackedAt: acked.event.ackedAt ?? getNowIso(),
-                        },
-                    });
-                }
-                emitFor('ack_channel_delivery_event_response', {
-                    success: true,
-                    taskId: acked.event?.taskId ?? resolvedTaskId ?? null,
-                    remoteSessionId: acked.event?.remoteSessionId ?? remoteSessionId ?? null,
-                    event: acked.event ?? null,
-                });
-                return;
-            }
-            if (command.type === 'replay_channel_delivery_events') {
-                const taskId = getString(payload.taskId) ?? undefined;
-                const remoteSessionId = getString(payload.remoteSessionId) ?? undefined;
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.min(100, Math.floor(payload.limit))
-                    : 20;
-                const ackOnReplay = payload.ackOnReplay === true;
-                const resolvedTaskId = taskId
-                    ?? (remoteSessionId ? remoteSessionToTaskId.get(remoteSessionId) : undefined);
-                const tenantGovernance = evaluateManagedTenantCommandGovernance(payload, remoteSessionId);
-                if (!tenantGovernance.allowed) {
-                    emitFor('replay_channel_delivery_events_response', {
-                        success: false,
-                        taskId: resolvedTaskId ?? taskId ?? null,
-                        remoteSessionId: remoteSessionId ?? null,
-                        error: tenantGovernance.error,
-                        remoteSession: tenantGovernance.remoteSession,
-                    });
-                    return;
-                }
-                if (!resolvedTaskId) {
-                    emitInvalidPayload('replay_channel_delivery_events_response', {
-                        taskId: taskId ?? '',
-                        remoteSessionId: remoteSessionId ?? '',
-                    });
-                    return;
-                }
-                const policyDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId: resolvedTaskId,
-                    source: 'channel_delivery_replay',
-                    payload,
-                });
-                if (!policyDecision.allowed) {
-                    emitFor('replay_channel_delivery_events_response', {
-                        success: false,
-                        taskId: resolvedTaskId,
-                        remoteSessionId: remoteSessionId ?? null,
-                        error: `policy_denied:${policyDecision.reason}`,
-                    });
-                    return;
-                }
-                const events = listChannelDeliveryEvents({
-                    taskId: resolvedTaskId,
-                    remoteSessionId,
-                    status: 'pending',
-                    limit,
-                });
-                let ackedCount = 0;
-                for (const event of events) {
-                    const delivered = markChannelDeliveryDelivered({
-                        eventId: event.id,
-                        taskId: event.taskId,
-                        remoteSessionId: event.remoteSessionId ?? remoteSessionId,
-                    });
-                    const replayEvent = delivered.event ?? event;
-                    emit({
-                        type: 'TASK_EVENT',
-                        taskId: event.taskId,
-                        payload: {
-                            type: 'channel_event',
-                            action: 'replayed',
-                            deliveryId: replayEvent.id,
-                            channel: replayEvent.channel,
-                            eventType: replayEvent.eventType,
-                            content: replayEvent.content ?? '',
-                            remoteSessionId: replayEvent.remoteSessionId ?? null,
-                            metadata: replayEvent.metadata ?? {},
-                            deliveryAttempts: replayEvent.deliveryAttempts ?? 0,
-                            replayedAt: getNowIso(),
-                        },
-                    });
-                    if (ackOnReplay) {
-                        const acked = ackChannelDeliveryEvent({
-                            eventId: replayEvent.id,
-                            taskId: replayEvent.taskId,
-                            remoteSessionId: replayEvent.remoteSessionId,
-                            metadata: {
-                                source: 'replay_channel_delivery_events',
-                            },
-                        });
-                        if (acked.success) {
-                            ackedCount += 1;
-                        }
-                    }
-                }
-                emitFor('replay_channel_delivery_events_response', {
-                    success: true,
-                    taskId: resolvedTaskId,
-                    remoteSessionId: remoteSessionId ?? null,
-                    replayedCount: events.length,
-                    replayedEventIds: events.map((event) => event.id),
-                    ackedCount,
-                });
+                },
+            })) {
                 return;
             }
             if (command.type === 'get_policy_decision_log') {
@@ -3192,6 +2574,30 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 const taskId = getString(payload.taskId) ?? '';
                 if (!taskId) {
                     emitInvalidPayload('rewind_task_response', { taskId });
+                    return;
+                }
+                const rewindGuard = await runGuardPipeline<undefined>([
+                    () => {
+                        const rewindDecision = applyPolicyDecision({
+                            requestId: commandId,
+                            action: 'task_command',
+                            commandType: command.type,
+                            taskId,
+                            source: 'rewind_task',
+                            payload,
+                        });
+                        if (!rewindDecision.allowed) {
+                            return failGuard(`policy_denied:${rewindDecision.reason}`, undefined);
+                        }
+                        return passGuard();
+                    },
+                ]);
+                if (!rewindGuard.ok) {
+                    emitFor('rewind_task_response', {
+                        success: false,
+                        taskId,
+                        error: rewindGuard.error,
+                    });
                     return;
                 }
                 const userTurns = typeof payload.userTurns === 'number' && Number.isFinite(payload.userTurns) && payload.userTurns > 0
@@ -3359,904 +2765,116 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
                 return;
             }
-            if (command.type === 'start_task' || command.type === 'send_task_message') {
-                const taskId = getString(payload.taskId) ?? '';
-                const message = command.type === 'start_task'
-                    ? getString(payload.userQuery)
-                    : getString(payload.content);
-                if (!taskId || !message) {
-                    emitCurrentInvalidPayload({ taskId });
-                    return;
-                }
-                const taskCommandDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'task_command',
-                    commandType: command.type,
-                    taskId,
-                    source: 'entrypoint',
-                    payload,
-                });
-                if (!taskCommandDecision.allowed) {
-                    emitCurrent({
-                        success: false,
-                        taskId,
-                        error: `policy_denied:${taskCommandDecision.reason}`,
-                    });
-                    return;
-                }
-                appendTranscript(taskId, 'user', message);
-                const workspacePath = getString(toRecord(payload.context).workspacePath) ?? process.cwd();
-                const commandConfig = toRecord(payload.config);
-                const explicitEnabledSkills = pickStringArrayConfigValue(commandConfig, 'enabledSkills');
-                const retryConfig = pickTaskRuntimeRetryConfig(commandConfig);
-                const resolvedSkillPrompt = deps.resolveSkillPrompt
-                    ? deps.resolveSkillPrompt({
-                        message,
-                        workspacePath,
-                        explicitEnabledSkills,
-                    })
-                    : {
-                        prompt: undefined,
-                        enabledSkillIds: explicitEnabledSkills ?? [],
-                    };
-                const executionOptions: UserMessageExecutionOptions = {
-                    enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                    skillPrompt: resolvedSkillPrompt.prompt,
-                    requireToolApproval: pickBooleanConfigValue(commandConfig, 'requireToolApproval'),
-                    autoResumeSuspendedTools: pickBooleanConfigValue(commandConfig, 'autoResumeSuspendedTools'),
-                    toolCallConcurrency: pickPositiveIntegerConfigValue(commandConfig, 'toolCallConcurrency', 1, 32),
-                    maxSteps: pickPositiveIntegerConfigValue(commandConfig, 'maxSteps', 1, 128),
-                };
-                const previousState = taskStates.get(taskId);
-                const resourceId = resolveTaskResourceId(taskId, payload, previousState?.resourceId);
-                const nextRetryState: TaskRuntimeRetryState | undefined = retryConfig
-                    ? retryConfig
-                    : (previousState?.retry
-                        ? {
-                            ...previousState.retry,
-                            attempts: 0,
-                            lastRetryAt: undefined,
-                            lastError: undefined,
-                        }
-                        : undefined);
-                if (
-                    command.type === 'send_task_message'
-                    && deps.cancelScheduledTasksForSourceTask
-                    && isScheduledCancellationRequest(message)
-                ) {
-                    const cancelled = await deps.cancelScheduledTasksForSourceTask({
-                        sourceTaskId: taskId,
-                        userMessage: message,
-                    });
-                    upsertTaskState(taskId, {
-                        title: getString(payload.title) ?? previousState?.title ?? 'Task',
-                        workspacePath,
-                        status: 'idle',
-                        suspended: false,
-                        suspensionReason: undefined,
-                        lastUserMessage: message,
-                        enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                        resourceId,
-                        checkpoint: undefined,
-                        retry: nextRetryState,
-                    });
-                    emitFor('send_task_message_response', {
-                        success: true,
-                        taskId,
-                    });
-                    const cancellationSummary = cancelled.cancelledCount > 0
-                        ? `已取消 ${cancelled.cancelledCount} 个定时任务。`
-                        : '没有可取消的定时任务。';
-                    emitTaskSummary({
-                        taskId,
-                        summary: cancellationSummary,
-                        finishReason: 'scheduled_cancel',
-                    });
-                    return;
-                }
-                if (deps.scheduleTaskIfNeeded) {
-                    const scheduleDecision = await deps.scheduleTaskIfNeeded({
-                        sourceTaskId: taskId,
-                        title: getString(payload.title) ?? undefined,
-                        message,
-                        workspacePath,
-                        config: toRecord(payload.config),
-                    });
-                    if (scheduleDecision.error) {
-                        emitCurrent({
-                            success: false,
-                            taskId,
-                            error: scheduleDecision.error,
-                        });
-                        return;
-                    }
-                    if (scheduleDecision.scheduled) {
-                        upsertTaskState(taskId, {
-                            title: getString(payload.title) ?? previousState?.title ?? 'Task',
-                            workspacePath,
-                            status: 'scheduled',
-                            suspended: false,
-                            suspensionReason: undefined,
-                            lastUserMessage: message,
-                            enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                            resourceId,
-                            checkpoint: undefined,
-                            retry: nextRetryState,
-                        });
-                        if (command.type === 'start_task') {
-                            emitTaskStarted({
-                                taskId,
-                                title: getString(payload.title) ?? 'Task',
-                                message,
-                                workspacePath,
-                                scheduled: true,
-                            });
-                        }
-                        emitCurrent({
-                            success: true,
-                            taskId,
-                        });
-                        const summary = scheduleDecision.summary ?? '已安排定时任务。';
-                        emitTaskSummary({
-                            taskId,
-                            summary,
-                            finishReason: 'scheduled',
-                        });
-                        return;
-                    }
-                }
-                const state = upsertTaskState(taskId, {
-                    title: getString(payload.title) ?? taskStates.get(taskId)?.title ?? 'Task',
-                    workspacePath,
-                    status: 'running',
-                    suspended: false,
-                    suspensionReason: undefined,
-                    lastUserMessage: message,
-                    enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                    resourceId,
-                    checkpoint: undefined,
-                    retry: nextRetryState,
-                });
-                if (command.type === 'start_task') {
-                    emitHookEvent('SessionStart', {
-                        taskId,
-                        payload: {
-                            threadId: state.conversationThreadId,
-                            workspacePath: state.workspacePath,
-                            resourceId: state.resourceId,
-                        },
-                    });
-                    emitHookEvent('TaskCreated', {
-                        taskId,
-                        payload: {
-                            title: state.title,
-                            workspacePath: state.workspacePath,
-                            enabledSkills: state.enabledSkills ?? [],
-                        },
-                    });
-                    emitTaskStarted({
-                        taskId,
-                        title: getString(payload.title) ?? 'Task',
-                        message,
-                        workspacePath,
-                    });
-                }
-                emitCurrent({
-                    success: true,
-                    taskId,
-                });
-                await runUserMessageWithThreadRecovery({
-                    taskId,
-                    message,
-                    resourceId,
-                    preferredThreadId: state.conversationThreadId,
-                    workspacePath: state.workspacePath,
-                    executionOptions,
-                });
+            if (await handleStartOrSendTaskCommand({
+                commandType: command.type,
+                commandId,
+                payload,
+                taskStates,
+                getString,
+                toRecord,
+                pickStringArrayConfigValue,
+                pickTaskRuntimeRetryConfig,
+                pickBooleanConfigValue,
+                pickPositiveIntegerConfigValue,
+                pickTaskExecutionPath,
+                toUserMessageExecutionPath,
+                resolveSkillPrompt: deps.resolveSkillPrompt,
+                resolveTaskResourceId,
+                upsertTaskState,
+                appendTranscript,
+                applyPolicyDecision,
+                emitCurrentInvalidPayload,
+                emitCurrent,
+                emitFor,
+                emitHookEvent,
+                emitTaskStarted,
+                emitTaskSummary,
+                enqueueTaskExecution,
+                executeTaskMessage,
+                isScheduledCancellationRequest,
+                scheduleTaskIfNeeded: deps.scheduleTaskIfNeeded,
+                cancelScheduledTasksForSourceTask: deps.cancelScheduledTasksForSourceTask,
+            })) {
                 return;
             }
-            if (command.type === 'resume_interrupted_task') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('resume_interrupted_task_response', { taskId });
-                    return;
-                }
-                const operationId = resolveTaskOperationId(payload, `resume:${commandId}:${taskId}`);
-                const existing = taskStates.get(taskId);
-                const currentCheckpointVersion = resolveTaskCheckpointVersion(existing);
-                const dedupedOperation = findTaskOperationRecord(existing, operationId, ['resume', 'recover_resume']);
-                if (dedupedOperation) {
-                    emitFor('resume_interrupted_task_response', {
-                        success: true,
+            if (await handleRecoveryAndCheckpointCommands({
+                commandType: command.type,
+                commandId,
+                payload,
+                taskStates,
+                getString,
+                toRecord,
+                getNowIso,
+                createId,
+                resolveTaskResourceId,
+                resolveTaskCheckpointVersion,
+                resolveTaskOperationId,
+                resolveExpectedCheckpointVersion,
+                findTaskOperationRecord,
+                appendTaskOperationRecord,
+                upsertTaskState,
+                appendTranscript,
+                applyPolicyDecision,
+                emitInvalidPayload,
+                emitFor,
+                emitTaskEvent: (taskId, taskEventPayload) => {
+                    emit({
+                        type: 'TASK_EVENT',
                         taskId,
-                        operationId,
-                        deduplicated: true,
-                        checkpointVersion: currentCheckpointVersion,
-                        status: existing?.status ?? null,
+                        payload: taskEventPayload,
                     });
-                    return;
-                }
-                const expectedCheckpointVersion = resolveExpectedCheckpointVersion(payload);
-                if (
-                    typeof expectedCheckpointVersion === 'number'
-                    && expectedCheckpointVersion !== currentCheckpointVersion
-                ) {
-                    emitFor('resume_interrupted_task_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'checkpoint_version_conflict',
-                        expectedCheckpointVersion,
-                        currentCheckpointVersion,
-                    });
-                    return;
-                }
-                if (
-                    typeof expectedCheckpointVersion === 'number'
-                    && !existing?.checkpoint
-                ) {
-                    emitFor('resume_interrupted_task_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'checkpoint_not_available',
-                        expectedCheckpointVersion,
-                        currentCheckpointVersion,
-                    });
-                    return;
-                }
-                const operationRecord: TaskRuntimeOperationRecord = {
-                    operationId,
-                    action: 'resume',
-                    at: getNowIso(),
-                    result: 'applied',
-                    checkpointVersion: currentCheckpointVersion,
-                };
-                const state = upsertTaskState(taskId, {
-                    status: 'running',
-                    suspended: false,
-                    suspensionReason: undefined,
-                    checkpoint: undefined,
-                    checkpointVersion: currentCheckpointVersion,
-                    operationLog: appendTaskOperationRecord(existing, operationRecord),
-                    resourceId: resolveTaskResourceId(taskId, payload, taskStates.get(taskId)?.resourceId),
-                });
-                const resumeMessage = state.lastUserMessage ?? 'Continue from the saved task context.';
-                emitFor('resume_interrupted_task_response', {
-                    success: true,
-                    taskId,
-                    operationId,
-                    deduplicated: false,
-                    checkpointVersion: currentCheckpointVersion,
-                });
-                appendTranscript(taskId, 'system', 'Task resumed after interruption.');
-                await runUserMessageWithThreadRecovery({
-                    taskId,
-                    message: resumeMessage,
-                    resourceId: state.resourceId,
-                    preferredThreadId: state.conversationThreadId,
-                    workspacePath: state.workspacePath,
-                    executionOptions: {
-                        enabledSkills: state.enabledSkills,
-                    },
-                });
+                },
+                executeTaskMessage,
+            })) {
                 return;
             }
-            if (command.type === 'set_task_checkpoint') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('set_task_checkpoint_response', { taskId });
-                    return;
-                }
-                const operationId = resolveTaskOperationId(payload, `set_checkpoint:${commandId}:${taskId}`);
-                const existing = taskStates.get(taskId);
-                const dedupedOperation = findTaskOperationRecord(existing, operationId, ['set_checkpoint']);
-                if (dedupedOperation) {
-                    emitFor('set_task_checkpoint_response', {
-                        success: true,
-                        taskId,
-                        operationId,
-                        deduplicated: true,
-                        state: existing
-                            ? {
-                                taskId: existing.taskId,
-                                status: existing.status,
-                                suspended: existing.suspended,
-                                suspensionReason: existing.suspensionReason,
-                                checkpoint: existing.checkpoint ?? null,
-                                checkpointVersion: resolveTaskCheckpointVersion(existing),
-                            }
-                            : null,
-                    });
-                    return;
-                }
-                const currentCheckpointVersion = resolveTaskCheckpointVersion(existing);
-                const expectedCheckpointVersion = resolveExpectedCheckpointVersion(payload);
-                if (
-                    typeof expectedCheckpointVersion === 'number'
-                    && expectedCheckpointVersion !== currentCheckpointVersion
-                ) {
-                    emitFor('set_task_checkpoint_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'checkpoint_version_conflict',
-                        expectedCheckpointVersion,
-                        currentCheckpointVersion,
-                    });
-                    return;
-                }
-                const nextCheckpointVersion = currentCheckpointVersion + 1;
-                const checkpointId = getString(payload.checkpointId) ?? `checkpoint:${createId()}`;
-                const checkpointLabel = getString(payload.label) ?? 'Manual checkpoint';
-                const checkpoint: TaskRuntimeCheckpoint = {
-                    id: checkpointId,
-                    label: checkpointLabel,
-                    at: getNowIso(),
-                    version: nextCheckpointVersion,
-                    metadata: toRecord(payload.metadata),
-                };
-                const operationRecord: TaskRuntimeOperationRecord = {
-                    operationId,
-                    action: 'set_checkpoint',
-                    at: getNowIso(),
-                    result: 'applied',
-                    checkpointVersion: nextCheckpointVersion,
-                };
-                const state = upsertTaskState(taskId, {
-                    title: getString(payload.title) ?? taskStates.get(taskId)?.title ?? 'Task',
-                    workspacePath: getString(payload.workspacePath) ?? taskStates.get(taskId)?.workspacePath ?? process.cwd(),
-                    status: 'suspended',
-                    suspended: true,
-                    suspensionReason: getString(payload.reason) ?? 'checkpoint',
-                    checkpoint,
-                    checkpointVersion: nextCheckpointVersion,
-                    operationLog: appendTaskOperationRecord(existing, operationRecord),
-                    resourceId: resolveTaskResourceId(taskId, payload, taskStates.get(taskId)?.resourceId),
-                });
-                appendTranscript(taskId, 'system', `Checkpoint set: ${checkpoint.label}`);
-                emit({
-                    type: 'TASK_EVENT',
-                    taskId,
-                    payload: {
-                        type: 'checkpoint',
-                        action: 'set',
-                        checkpoint,
-                    },
-                });
-                emitFor('set_task_checkpoint_response', {
-                    success: true,
-                    taskId,
-                    operationId,
-                    deduplicated: false,
-                    state: {
-                        taskId: state.taskId,
-                        status: state.status,
-                        suspended: state.suspended,
-                        suspensionReason: state.suspensionReason,
-                        checkpoint: state.checkpoint ?? null,
-                        checkpointVersion: state.checkpointVersion ?? resolveTaskCheckpointVersion(state),
-                    },
-                });
-                return;
-            }
-            if (command.type === 'retry_task') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('retry_task_response', { taskId });
-                    return;
-                }
-                const existing = taskStates.get(taskId);
-                if (!existing) {
-                    emitFor('retry_task_response', {
-                        success: false,
-                        taskId,
-                        operationId: resolveTaskOperationId(payload, `retry:${commandId}:${taskId}`),
-                        error: 'task_not_found',
-                    });
-                    return;
-                }
-                const operationId = resolveTaskOperationId(payload, `retry:${commandId}:${taskId}`);
-                const dedupedOperation = findTaskOperationRecord(existing, operationId, ['retry', 'recover_retry']);
-                if (dedupedOperation) {
-                    emitFor('retry_task_response', {
-                        success: true,
-                        taskId,
-                        operationId,
-                        deduplicated: true,
-                        checkpointVersion: resolveTaskCheckpointVersion(existing),
-                        attempt: existing.retry?.attempts ?? 0,
-                        retry: existing.retry ?? null,
-                    });
-                    return;
-                }
-                const currentCheckpointVersion = resolveTaskCheckpointVersion(existing);
-                const expectedCheckpointVersion = resolveExpectedCheckpointVersion(payload);
-                if (
-                    typeof expectedCheckpointVersion === 'number'
-                    && expectedCheckpointVersion !== currentCheckpointVersion
-                ) {
-                    emitFor('retry_task_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'checkpoint_version_conflict',
-                        expectedCheckpointVersion,
-                        currentCheckpointVersion,
-                    });
-                    return;
-                }
-                if (
-                    typeof expectedCheckpointVersion === 'number'
-                    && !existing.checkpoint
-                ) {
-                    emitFor('retry_task_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'checkpoint_not_available',
-                        expectedCheckpointVersion,
-                        currentCheckpointVersion,
-                    });
-                    return;
-                }
-                if (!isRetryableTaskStatus(existing.status)) {
-                    emitFor('retry_task_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'task_status_not_retryable',
-                        status: existing.status,
-                    });
-                    return;
-                }
-                const retry = existing.retry ?? { attempts: 0 };
-                const nextAttempts = retry.attempts + 1;
-                if (typeof retry.maxAttempts === 'number' && nextAttempts > retry.maxAttempts) {
-                    emitFor('retry_task_response', {
-                        success: false,
-                        taskId,
-                        operationId,
-                        error: 'retry_limit_reached',
-                        retry: retry,
-                    });
-                    return;
-                }
-                const retryMessage = getString(payload.message) ?? existing.lastUserMessage ?? 'Retry the last task context.';
-                const operationRecord: TaskRuntimeOperationRecord = {
-                    operationId,
-                    action: 'retry',
-                    at: getNowIso(),
-                    result: 'applied',
-                    checkpointVersion: currentCheckpointVersion,
-                    retryAttempts: nextAttempts,
-                };
-                const updated = upsertTaskState(taskId, {
-                    status: 'retrying',
-                    suspended: false,
-                    suspensionReason: undefined,
-                    checkpoint: undefined,
-                    checkpointVersion: currentCheckpointVersion,
-                    lastUserMessage: retryMessage,
-                    retry: {
-                        attempts: nextAttempts,
-                        maxAttempts: retry.maxAttempts,
-                        lastRetryAt: getNowIso(),
-                        lastError: undefined,
-                    },
-                    operationLog: appendTaskOperationRecord(existing, operationRecord),
-                });
-                appendTranscript(taskId, 'system', `Retry requested (attempt ${nextAttempts}).`);
-                emit({
-                    type: 'TASK_EVENT',
-                    taskId,
-                    payload: {
-                        type: 'retry',
-                        attempt: nextAttempts,
-                        maxAttempts: updated.retry?.maxAttempts ?? null,
-                        message: retryMessage,
-                    },
-                });
-                emitFor('retry_task_response', {
-                    success: true,
-                    taskId,
-                    operationId,
-                    deduplicated: false,
-                    checkpointVersion: currentCheckpointVersion,
-                    attempt: nextAttempts,
-                    retry: updated.retry ?? null,
-                });
-                await runUserMessageWithThreadRecovery({
-                    taskId,
-                    message: retryMessage,
-                    resourceId: updated.resourceId,
-                    preferredThreadId: updated.conversationThreadId,
-                    workspacePath: updated.workspacePath,
-                    executionOptions: {
-                        enabledSkills: updated.enabledSkills,
-                    },
-                });
-                return;
-            }
-            if (command.type === 'recover_tasks') {
-                const taskIdFilter = getString(payload.taskId) ?? undefined;
-                const workspacePathFilter = getString(payload.workspacePath) ?? undefined;
-                const recoveryOperationId = resolveTaskOperationId(payload, `recover:${commandId}`);
-                const mode = payload.mode === 'resume' || payload.mode === 'retry' || payload.mode === 'auto'
-                    ? payload.mode
-                    : 'auto';
-                const dryRun = payload.dryRun === true;
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.min(100, Math.floor(payload.limit))
-                    : 20;
-                const statusFilterSet = Array.isArray(payload.statuses)
-                    ? new Set(
-                        payload.statuses
-                            .filter((item): item is string => typeof item === 'string')
-                            .filter((item) =>
-                                item === 'interrupted'
-                                || item === 'suspended'
-                                || item === 'failed'
-                                || item === 'retrying',
-                            ),
-                    )
-                    : new Set(['interrupted', 'suspended', 'failed', 'retrying']);
-                const candidates = Array
-                    .from(taskStates.values())
-                    .filter((state) => !taskIdFilter || state.taskId === taskIdFilter)
-                    .filter((state) => !workspacePathFilter || state.workspacePath === workspacePathFilter)
-                    .filter((state) => statusFilterSet.has(state.status))
-                    .slice(0, limit);
-                if (candidates.length === 0) {
-                    emitFor('recover_tasks_response', {
-                        success: true,
-                        operationId: recoveryOperationId,
-                        mode,
-                        dryRun,
-                        count: 0,
-                        recoveredCount: 0,
-                        skippedCount: 0,
-                        items: [],
-                    });
-                    return;
-                }
-                const primaryTaskForPolicy = candidates[0]?.taskId;
-                if (primaryTaskForPolicy) {
-                    const policyDecision = applyPolicyDecision({
-                        requestId: commandId,
-                        action: 'task_command',
-                        commandType: command.type,
-                        taskId: primaryTaskForPolicy,
-                        source: 'recover_tasks',
-                        payload,
-                    });
-                    if (!policyDecision.allowed) {
-                        emitFor('recover_tasks_response', {
-                            success: false,
-                            operationId: recoveryOperationId,
-                            mode,
-                            dryRun,
-                            error: `policy_denied:${policyDecision.reason}`,
-                        });
-                        return;
-                    }
-                }
-                const results: Array<Record<string, unknown>> = [];
-                let recoveredCount = 0;
-                for (const state of candidates) {
-                    const latestState = taskStates.get(state.taskId) ?? state;
-                    const checkpoint = state.checkpoint;
-                    const retry = state.retry ?? { attempts: 0 };
-                    const canRetry =
-                        state.status === 'failed'
-                        || state.status === 'retrying'
-                        || state.status === 'interrupted'
-                        || state.status === 'suspended';
-                    const retryLimitReached = typeof retry.maxAttempts === 'number'
-                        && retry.attempts >= retry.maxAttempts;
-                    const shouldSkipSuspendedApproval =
-                        state.status === 'suspended' && state.suspensionReason === 'approval_required';
-
-                    let action: 'resume' | 'retry' | 'skip' = 'skip';
-                    let reason = 'no_recovery_action';
-                    if (mode === 'resume') {
-                        if (state.status === 'interrupted' || state.status === 'suspended') {
-                            if (shouldSkipSuspendedApproval) {
-                                reason = 'awaiting_manual_approval';
-                            } else {
-                                action = 'resume';
-                                reason = 'resume_mode';
-                            }
-                        } else {
-                            reason = 'status_not_resumable';
-                        }
-                    } else if (mode === 'retry') {
-                        if (!canRetry) {
-                            reason = 'status_not_retryable';
-                        } else if (retryLimitReached) {
-                            reason = 'retry_limit_reached';
-                        } else {
-                            action = 'retry';
-                            reason = 'retry_mode';
-                        }
-                    } else {
-                        if (state.status === 'failed' || state.status === 'retrying') {
-                            if (retryLimitReached) {
-                                reason = 'retry_limit_reached';
-                            } else {
-                                action = 'retry';
-                                reason = 'auto_retry_failed';
-                            }
-                        } else if (state.status === 'interrupted' || state.status === 'suspended') {
-                            if (shouldSkipSuspendedApproval) {
-                                reason = 'awaiting_manual_approval';
-                            } else {
-                                action = 'resume';
-                                reason = 'auto_resume_interrupted';
-                            }
-                        } else {
-                            reason = 'status_not_recoverable';
-                        }
-                    }
-
-                    const result: Record<string, unknown> = {
-                        taskId: state.taskId,
-                        statusBefore: state.status,
-                        action,
-                        reason,
-                        dryRun,
-                        checkpoint: checkpoint ?? null,
-                        checkpointVersion: resolveTaskCheckpointVersion(latestState),
-                    };
-                    const recoverAction: TaskRuntimeOperationAction | null = action === 'resume'
-                        ? 'recover_resume'
-                        : (action === 'retry' ? 'recover_retry' : null);
-                    const taskOperationId = recoverAction
-                        ? `${recoveryOperationId}:${state.taskId}:${recoverAction}`
-                        : null;
-                    if (taskOperationId && recoverAction) {
-                        result.operationId = taskOperationId;
-                        const dedupedOperation = findTaskOperationRecord(latestState, taskOperationId, [recoverAction]);
-                        if (dedupedOperation) {
-                            result.action = 'skip';
-                            result.reason = 'duplicate_operation';
-                            result.deduplicated = true;
-                            result.statusAfter = latestState.status;
-                            results.push(result);
-                            continue;
-                        }
-                    }
-                    if (action === 'skip' || dryRun) {
-                        results.push(result);
-                        continue;
-                    }
-
-                    try {
-                        if (action === 'resume') {
-                            const resumeState = taskStates.get(state.taskId) ?? state;
-                            const checkpointVersion = resolveTaskCheckpointVersion(resumeState);
-                            const operationRecord: TaskRuntimeOperationRecord = {
-                                operationId: taskOperationId ?? `${recoveryOperationId}:${state.taskId}:recover_resume`,
-                                action: 'recover_resume',
-                                at: getNowIso(),
-                                result: 'applied',
-                                checkpointVersion,
-                            };
-                            const resumed = upsertTaskState(state.taskId, {
-                                status: 'running',
-                                suspended: false,
-                                suspensionReason: undefined,
-                                checkpoint: undefined,
-                                checkpointVersion,
-                                operationLog: appendTaskOperationRecord(resumeState, operationRecord),
-                            });
-                            const resumeMessage = resumed.lastUserMessage ?? 'Continue from the saved task context.';
-                            appendTranscript(state.taskId, 'system', `Task auto-recovered by resume (${mode}).`);
-                            await runUserMessageWithThreadRecovery({
-                                taskId: state.taskId,
-                                message: resumeMessage,
-                                resourceId: resumed.resourceId,
-                                preferredThreadId: resumed.conversationThreadId,
-                                workspacePath: resumed.workspacePath,
-                                executionOptions: {
-                                    enabledSkills: resumed.enabledSkills,
-                                },
-                            });
-                            result.statusAfter = taskStates.get(state.taskId)?.status ?? resumed.status;
-                            result.deduplicated = false;
-                            recoveredCount += 1;
-                            results.push(result);
-                            continue;
-                        }
-                        const nextAttempts = retry.attempts + 1;
-                        const retryMessage = state.lastUserMessage ?? 'Retry the last task context.';
-                        const retryState = taskStates.get(state.taskId) ?? state;
-                        const checkpointVersion = resolveTaskCheckpointVersion(retryState);
-                        const operationRecord: TaskRuntimeOperationRecord = {
-                            operationId: taskOperationId ?? `${recoveryOperationId}:${state.taskId}:recover_retry`,
-                            action: 'recover_retry',
-                            at: getNowIso(),
-                            result: 'applied',
-                            checkpointVersion,
-                            retryAttempts: nextAttempts,
-                        };
-                        const retried = upsertTaskState(state.taskId, {
-                            status: 'retrying',
-                            suspended: false,
-                            suspensionReason: undefined,
-                            checkpoint: undefined,
-                            checkpointVersion,
-                            lastUserMessage: retryMessage,
-                            retry: {
-                                attempts: nextAttempts,
-                                maxAttempts: retry.maxAttempts,
-                                lastRetryAt: getNowIso(),
-                                lastError: undefined,
-                            },
-                            operationLog: appendTaskOperationRecord(retryState, operationRecord),
-                        });
-                        appendTranscript(state.taskId, 'system', `Task auto-recovered by retry (${mode}), attempt ${nextAttempts}.`);
-                        emit({
-                            type: 'TASK_EVENT',
-                            taskId: state.taskId,
-                            payload: {
-                                type: 'retry',
-                                attempt: nextAttempts,
-                                maxAttempts: retried.retry?.maxAttempts ?? null,
-                                message: retryMessage,
-                                source: 'recover_tasks',
-                            },
-                        });
-                        await runUserMessageWithThreadRecovery({
-                            taskId: state.taskId,
-                            message: retryMessage,
-                            resourceId: retried.resourceId,
-                            preferredThreadId: retried.conversationThreadId,
-                            workspacePath: retried.workspacePath,
-                            executionOptions: {
-                                enabledSkills: retried.enabledSkills,
-                            },
-                        });
-                        result.attempt = nextAttempts;
-                        result.statusAfter = taskStates.get(state.taskId)?.status ?? retried.status;
-                        result.deduplicated = false;
-                        recoveredCount += 1;
-                        results.push(result);
-                    } catch (error) {
-                        result.error = error instanceof Error ? error.message : String(error);
-                        result.statusAfter = taskStates.get(state.taskId)?.status ?? state.status;
-                        results.push(result);
-                    }
-                }
-                emitFor('recover_tasks_response', {
-                    success: true,
-                    operationId: recoveryOperationId,
-                    mode,
-                    dryRun,
-                    count: results.length,
-                    recoveredCount,
-                    skippedCount: results.length - recoveredCount,
-                    items: results,
-                });
-                return;
-            }
-            if (command.type === 'report_effect_result') {
-                const requestId = getString(payload.requestId);
-                const success = payload.success;
-                if (!requestId || typeof success !== 'boolean') {
-                    emitInvalidPayload('report_effect_result_response');
-                    return;
-                }
-                const pending = pendingApprovals.get(requestId);
-                if (!pending || !pending.runId) {
-                    emitFor('report_effect_result_response', {
-                        success: false,
-                        requestId,
-                        error: 'approval_request_not_found',
-                    });
-                    return;
-                }
-                pendingApprovals.delete(requestId);
-                const approvalDecision = applyPolicyDecision({
-                    requestId,
-                    action: 'approval_result',
-                    commandType: command.type,
-                    taskId: pending.taskId,
-                    source: 'effect_result',
-                    payload: {
-                        ...payload,
-                        toolName: pending.toolName,
-                        toolCallId: pending.toolCallId,
-                    },
-                    approved: success,
-                });
-                const approvedForRuntime = success && approvalDecision.allowed;
-                if (success && !approvedForRuntime) {
-                    appendTranscript(
-                        pending.taskId,
-                        'system',
-                        `Approval denied by policy (${approvalDecision.reason}) for ${pending.toolName}.`,
+            if (await handleTaskControlCommands({
+                commandType: command.type,
+                commandId,
+                payload,
+                getString,
+                pendingApprovals,
+                clearPendingApprovalsForTask,
+                cancelScheduledTasksForSourceTask: deps.cancelScheduledTasksForSourceTask,
+                taskStates,
+                upsertTaskState,
+                appendTranscript,
+                applyPolicyDecision,
+                handleApprovalResponse: async (input) => {
+                    await deps.handleApprovalResponse(
+                        input.runId,
+                        input.toolCallId,
+                        input.approved,
+                        (event) => emitDesktopEvent(input.taskId, event, emit),
                     );
-                }
-                await deps.handleApprovalResponse(
-                    pending.runId,
-                    pending.toolCallId,
-                    approvedForRuntime,
-                    (event) => emitDesktopEvent(pending.taskId, event, emit),
-                );
-                emitFor('report_effect_result_response', {
-                    success: true,
-                    requestId,
-                    appliedApproval: approvedForRuntime,
-                    policyDecision: {
-                        allowed: approvalDecision.allowed,
-                        reason: approvalDecision.reason,
-                        ruleId: approvalDecision.ruleId,
-                    },
-                });
-                return;
-            }
-            if (command.type === 'clear_task_history' || command.type === 'cancel_task') {
-                const taskId = getString(payload.taskId) ?? '';
-                let cancelledScheduledCount = 0;
-                if (taskId) {
-                    clearPendingApprovalsForTask(taskId);
-                    if (command.type === 'cancel_task') {
-                        if (deps.cancelScheduledTasksForSourceTask) {
-                            const cancelled = await deps.cancelScheduledTasksForSourceTask({
-                                sourceTaskId: taskId,
-                                userMessage: 'cancel_task',
-                            });
-                            cancelledScheduledCount = cancelled.cancelledCount;
-                        }
-                        upsertTaskState(taskId, {
-                            status: 'idle',
-                            suspended: false,
-                            suspensionReason: undefined,
-                            checkpoint: undefined,
-                        });
-                    } else {
-                        const existingRetry = taskStates.get(taskId)?.retry;
-                        upsertTaskState(taskId, {
-                            status: 'idle',
-                            suspended: false,
-                            suspensionReason: undefined,
-                            checkpoint: undefined,
-                            lastUserMessage: undefined,
-                            retry: existingRetry
-                                ? {
-                                    ...existingRetry,
-                                    attempts: 0,
-                                    lastRetryAt: undefined,
-                                    lastError: undefined,
-                                }
-                                : undefined,
-                        });
-                    }
-                }
-                const responsePayload: Record<string, unknown> = {
-                    success: true,
-                    taskId,
-                };
-                if (command.type === 'cancel_task') {
-                    responsePayload.cancelledScheduledCount = cancelledScheduledCount;
-                }
-                emitCurrent(responsePayload);
+                },
+                emitInvalidPayload,
+                emitFor,
+                emitCurrent,
+            })) {
                 return;
             }
             if (forwardedCommandTypes.has(command.type)) {
-                const forwardedCommandDecision = applyPolicyDecision({
-                    requestId: commandId,
-                    action: 'forward_command',
-                    commandType: command.type,
-                    taskId: getString(payload.taskId) ?? undefined,
-                    source: 'policy_gate_forward',
-                    payload,
-                });
-                if (!forwardedCommandDecision.allowed) {
+                const forwardedCommandGuard = await runGuardPipeline<undefined>([
+                    () => {
+                        const forwardedCommandDecision = applyPolicyDecision({
+                            requestId: commandId,
+                            action: 'forward_command',
+                            commandType: command.type,
+                            taskId: getString(payload.taskId) ?? undefined,
+                            source: 'policy_gate_forward',
+                            payload,
+                        });
+                        if (!forwardedCommandDecision.allowed) {
+                            return failGuard(`policy_denied:${forwardedCommandDecision.reason}`, undefined);
+                        }
+                        return passGuard();
+                    },
+                ]);
+                if (!forwardedCommandGuard.ok) {
                     emitCurrent({
                         success: false,
-                        error: `policy_denied:${forwardedCommandDecision.reason}`,
+                        error: forwardedCommandGuard.error,
                     });
                     return;
                 }

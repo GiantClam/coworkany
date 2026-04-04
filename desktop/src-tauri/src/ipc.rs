@@ -65,6 +65,8 @@ pub struct StartTaskInput {
 pub struct StartTaskConfigInput {
     #[serde(rename = "modelId")]
     pub model_id: Option<String>,
+    #[serde(rename = "executionPath")]
+    pub execution_path: Option<String>,
     #[serde(rename = "maxTokens")]
     pub max_tokens: Option<u32>,
     #[serde(rename = "maxHistoryMessages")]
@@ -260,6 +262,10 @@ pub struct StartTaskResult {
     pub success: bool,
     #[serde(rename = "taskId")]
     pub task_id: String,
+    #[serde(rename = "turnId", skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(rename = "queuePosition", skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<Value>,
     pub error: Option<String>,
@@ -286,6 +292,10 @@ pub struct SendTaskMessageResult {
     pub success: bool,
     #[serde(rename = "taskId")]
     pub task_id: String,
+    #[serde(rename = "turnId", skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(rename = "queuePosition", skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<u32>,
     pub error: Option<String>,
 }
 
@@ -1116,6 +1126,7 @@ pub async fn start_task(
 
     let config = input.config.map(|cfg| TaskConfig {
         model_id: cfg.model_id,
+        execution_path: cfg.execution_path,
         max_tokens: cfg.max_tokens,
         max_history_messages: cfg.max_history_messages,
         enabled_claude_skills: cfg.enabled_claude_skills,
@@ -1151,6 +1162,14 @@ pub async fn start_task(
         .unwrap_or(task_id.as_str())
         .to_string();
     let workspace = payload.get("workspace").cloned();
+    let turn_id = payload
+        .get("turnId")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let queue_position = payload
+        .get("queuePosition")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as u32);
     let error = payload
         .get("error")
         .and_then(|value| value.as_str())
@@ -1159,6 +1178,8 @@ pub async fn start_task(
     Ok(StartTaskResult {
         success,
         task_id: response_task_id,
+        turn_id,
+        queue_position,
         workspace,
         error,
     })
@@ -1680,7 +1701,9 @@ mod tests {
         OpenRouterProviderSettings, ProxySettings, ValidateLlmInput, ValidationAuthScheme,
         normalize_openai_compatible_model, resolve_openai_compatible_base_url,
         select_transcription_model_from_catalog, send_task_message_fingerprint, DoctorPreflightInput,
+        StartTaskConfigInput,
     };
+    use crate::sidecar::TaskConfig;
     use serde_json::json;
     use std::env;
     use std::time::{Duration, Instant};
@@ -1744,6 +1767,31 @@ mod tests {
             ),
             "https://api.minimaxi.com/v1"
         );
+    }
+
+    #[test]
+    fn start_task_config_input_parses_execution_path_and_maps_to_sidecar_task_config() {
+        let cfg: StartTaskConfigInput = serde_json::from_value(json!({
+            "modelId": "openai/gpt-5.3-codex",
+            "executionPath": "direct",
+            "maxTokens": 2048
+        }))
+        .expect("deserialize StartTaskConfigInput");
+
+        assert_eq!(cfg.execution_path.as_deref(), Some("direct"));
+
+        let sidecar_cfg = TaskConfig {
+            model_id: cfg.model_id,
+            execution_path: cfg.execution_path,
+            max_tokens: cfg.max_tokens,
+            max_history_messages: cfg.max_history_messages,
+            enabled_claude_skills: cfg.enabled_claude_skills,
+            enabled_toolpacks: cfg.enabled_toolpacks,
+            enabled_skills: cfg.enabled_skills,
+            voice_provider_mode: cfg.voice_provider_mode,
+        };
+        let serialized = serde_json::to_value(sidecar_cfg).expect("serialize TaskConfig");
+        assert_eq!(serialized.get("executionPath"), Some(&json!("direct")));
     }
 
     #[test]
@@ -2039,6 +2087,7 @@ pub async fn send_task_message(
 
     let config = input.config.map(|cfg| TaskConfig {
         model_id: cfg.model_id,
+        execution_path: cfg.execution_path,
         max_tokens: cfg.max_tokens,
         max_history_messages: cfg.max_history_messages,
         enabled_claude_skills: cfg.enabled_claude_skills,
@@ -2066,6 +2115,8 @@ pub async fn send_task_message(
         return Ok(SendTaskMessageResult {
             success: true,
             task_id,
+            turn_id: None,
+            queue_position: None,
             error: None,
         });
     }
@@ -2084,6 +2135,8 @@ pub async fn send_task_message(
                 return Ok(SendTaskMessageResult {
                     success: true,
                     task_id,
+                    turn_id: None,
+                    queue_position: None,
                     error: None,
                 });
             }
@@ -2095,6 +2148,8 @@ pub async fn send_task_message(
             return Ok(SendTaskMessageResult {
                 success: false,
                 task_id,
+                turn_id: None,
+                queue_position: None,
                 error: Some(error_message),
             });
         }
@@ -2118,6 +2173,14 @@ pub async fn send_task_message(
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| (!success).then(|| "send_task_message_failed".to_string()));
+    let turn_id = payload
+        .get("turnId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let queue_position = payload
+        .get("queuePosition")
+        .and_then(Value::as_u64)
+        .map(|value| value as u32);
 
     if !success {
         clear_recent_send_task_message(&task_id, content_fingerprint);
@@ -2126,6 +2189,8 @@ pub async fn send_task_message(
     Ok(SendTaskMessageResult {
         success,
         task_id,
+        turn_id,
+        queue_position,
         error,
     })
 }
@@ -2146,6 +2211,7 @@ pub async fn resume_interrupted_task(
 
     let config = input.config.map(|cfg| TaskConfig {
         model_id: cfg.model_id,
+        execution_path: cfg.execution_path,
         max_tokens: cfg.max_tokens,
         max_history_messages: cfg.max_history_messages,
         enabled_claude_skills: cfg.enabled_claude_skills,

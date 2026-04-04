@@ -487,13 +487,11 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls.length).toBe(1);
         expect(harness.userMessageCalls[0]?.threadId).toBe('task-1');
         expect(harness.userMessageCalls[0]?.resourceId).toBe('employee-task-1');
-        expect(
-            harness.outgoing.some(
-                (message) =>
-                    message.type === 'start_task_response'
-                    && (message.payload as Record<string, unknown>)?.success === true,
-            ),
-        ).toBe(true);
+        const startResponse = harness.outgoing.find((message) => message.type === 'start_task_response');
+        expect(startResponse).toBeDefined();
+        expect((startResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect((startResponse?.payload as Record<string, unknown>)?.turnId).toBe('cmd-start');
+        expect((startResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(0);
         expect(harness.outgoing.some((message) => message.type === 'TASK_STARTED')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TEXT_DELTA')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
@@ -540,13 +538,96 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls.length).toBe(1);
         expect(harness.userMessageCalls[0]?.threadId).toBe('task-2');
         expect(harness.userMessageCalls[0]?.message).toBe('continue');
-        expect(
-            harness.outgoing.some(
-                (message) =>
-                    message.type === 'send_task_message_response'
-                    && (message.payload as Record<string, unknown>)?.success === true,
-            ),
-        ).toBe(true);
+        const sendResponse = harness.outgoing.find((message) => message.type === 'send_task_message_response');
+        expect(sendResponse).toBeDefined();
+        expect((sendResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect((sendResponse?.payload as Record<string, unknown>)?.turnId).toBe('cmd-followup');
+        expect((sendResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(0);
+        const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
+        expect((textDelta?.payload as Record<string, unknown>)?.turnId).toBe('cmd-followup');
+    });
+
+    test('send_task_message serializes turns per task and exposes queuePosition', async () => {
+        let releaseFirst: (() => void) | null = null;
+        const firstTurnDone = new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+        });
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                if (input.message === 'first') {
+                    emit({
+                        type: 'text_delta',
+                        runId: 'run-first',
+                        content: 'first-started',
+                    });
+                    await firstTurnDone;
+                    emit({
+                        type: 'complete',
+                        runId: 'run-first',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-first' };
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-second',
+                    content: 'second-started',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-second',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-second' };
+            },
+        });
+
+        const firstProcess = harness.process({
+            id: 'cmd-turn-1',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-queue',
+                content: 'first',
+            },
+        });
+        for (let index = 0; index < 10; index += 1) {
+            if (harness.outgoing.some((message) => (
+                message.type === 'send_task_message_response'
+                && message.commandId === 'cmd-turn-1'
+            ))) {
+                break;
+            }
+            await Promise.resolve();
+        }
+
+        const secondProcess = harness.process({
+            id: 'cmd-turn-2',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-queue',
+                content: 'second',
+            },
+        });
+        for (let index = 0; index < 10; index += 1) {
+            if (harness.outgoing.some((message) => (
+                message.type === 'send_task_message_response'
+                && message.commandId === 'cmd-turn-2'
+            ))) {
+                break;
+            }
+            await Promise.resolve();
+        }
+
+        const secondResponse = harness.outgoing.find((message) => (
+            message.type === 'send_task_message_response'
+            && message.commandId === 'cmd-turn-2'
+        ));
+        expect(secondResponse).toBeDefined();
+        expect((secondResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(1);
+
+        releaseFirst?.();
+        await Promise.all([firstProcess, secondProcess]);
+        expect(harness.userMessageCalls.map((entry) => entry.message)).toEqual(['first', 'second']);
     });
 
     test('send_task_message retries with recovery thread after store-disabled history reference error', async () => {
@@ -618,6 +699,61 @@ describe('mastra entrypoint processor', () => {
         });
 
         expect(calls[calls.length - 1]?.threadId).toBe('task-recover-recovery-req-fixed');
+    });
+
+    test('send_task_message retries recovery thread when error only states store=false persistence', async () => {
+        const calls: Array<{ threadId: string; message: string }> = [];
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                calls.push({
+                    threadId: input.threadId,
+                    message: input.message,
+                });
+
+                if (input.threadId === 'task-recover-compact') {
+                    emit({
+                        type: 'error',
+                        runId: 'run-recover-compact-1',
+                        message: 'Items are not persisted when `store` is set to false.',
+                    });
+                    return { runId: 'run-recover-compact-1' };
+                }
+
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-recover-compact-2',
+                    content: `recovered:${input.message}`,
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-recover-compact-2',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-recover-compact-2' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-followup-recover-compact',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-recover-compact',
+                content: 'continue after compact store=false error',
+            },
+        });
+
+        expect(calls.map((call) => call.threadId)).toEqual([
+            'task-recover-compact',
+            'task-recover-compact-recovery-req-fixed',
+        ]);
+        expect(
+            harness.outgoing.some(
+                (message) =>
+                    message.type === 'TEXT_DELTA'
+                    && (message.payload as Record<string, unknown>)?.delta === 'recovered:continue after compact store=false error',
+            ),
+        ).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
     test('token usage desktop events are forwarded as TOKEN_USAGE payloads', async () => {

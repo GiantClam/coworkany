@@ -516,6 +516,7 @@ describe('real model smoke e2e', () => {
                 },
                 config: {
                     modelId: candidate.modelId,
+                    executionPath: 'direct',
                 },
             },
         });

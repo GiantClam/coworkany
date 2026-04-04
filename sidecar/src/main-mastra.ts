@@ -21,9 +21,10 @@ import { MastraHookRuntimeStore, setHookRuntimeEventsEnabled } from './mastra/ho
 import { createMastraPolicyEngineFromEnv } from './mastra/policyEngine';
 import { evaluateSkillPolicy } from './mastra/pluginPolicy';
 import { loadRemoteSessionGovernancePolicy } from './mastra/remoteSessionGovernance';
+import { createMastraTaskExecutionService } from './mastra/taskExecutionService';
+import { resolveRuntimeAppDataRoot } from './config/runtimeConfig';
 const workspaceRoot = process.cwd();
-const appDataRoot = process.env.COWORKANY_APP_DATA_DIR?.trim()
-    || path.join(workspaceRoot, '.coworkany');
+const appDataRoot = resolveRuntimeAppDataRoot({ cwd: workspaceRoot });
 const additionalCommandRuntime = createMastraAdditionalCommandHandler({
     workspaceRoot,
     appDataRoot,
@@ -46,6 +47,7 @@ const hookRuntime = new MastraHookRuntimeStore(
 setHookRuntimeEventsEnabled(true);
 const policyEngine = createMastraPolicyEngineFromEnv();
 const remoteSessionGovernancePolicy = loadRemoteSessionGovernancePolicy(workspaceRoot);
+const taskExecutionService = createMastraTaskExecutionService();
 function writeEvent(event: Record<string, unknown>): void {
     process.stdout.write(`${JSON.stringify(event)}\n`);
 }
@@ -150,6 +152,7 @@ async function run(): Promise<void> {
         taskStateStore,
         remoteSessionStore,
         remoteSessionGovernancePolicy,
+        executeTaskMessage: taskExecutionService.executeTaskMessage,
     });
     schedulerRuntime = createMastraSchedulerRuntime({
         appDataRoot,

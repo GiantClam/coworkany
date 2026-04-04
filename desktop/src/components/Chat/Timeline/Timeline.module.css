@@ -6,7 +6,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    padding: var(--space-2);
+    padding: 12px var(--chat-content-gutter) 14px;
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -20,7 +20,11 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 14px 12px;
+    width: 100%;
+    max-width: calc(var(--chat-content-max-width) + (var(--chat-content-gutter) * 2));
+    margin: 0 auto;
+    padding: 14px var(--chat-content-gutter);
+    box-sizing: border-box;
 }
 
 .assistantUiLoadingRail {
@@ -48,9 +52,9 @@
 }
 
 .assistantUiLoadingCard {
-    width: min(880px, 100%);
+    width: min(var(--chat-content-max-width), 100%);
     min-height: 86px;
-    border-radius: 14px;
+    border-radius: var(--radius-xl);
     border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
     background: linear-gradient(
         180deg,
@@ -99,7 +103,7 @@
     align-items: center;
     justify-content: center;
     font-size: 16px;
-    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
+    background: color-mix(in srgb, var(--bg-element) 80%, var(--bg-panel));
     border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
     flex-shrink: 0;
 }
@@ -123,8 +127,8 @@
 
 .assistantTurnLead {
     margin: 0;
-    font-size: 17px;
-    line-height: 1.7;
+    font-size: 16px;
+    line-height: 1.65;
     color: var(--text-primary);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -163,17 +167,23 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    max-width: min(100%, 66.666%);
+    max-width: min(var(--chat-content-max-width), 100%);
 }
 
 .assistantTurnStep {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
-    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
-    padding: 10px 12px;
+    background: color-mix(in srgb, var(--bg-element) 78%, var(--bg-panel));
+    padding: 11px 13px;
+    transition: transform var(--transition-fast), border-color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.assistantTurnStep:hover {
+    transform: translateY(-1px);
+    background: color-mix(in srgb, var(--bg-element-hover) 74%, var(--bg-panel));
 }
 
 .assistantTurnStepNeutral {
@@ -257,7 +267,7 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    max-width: min(100%, 66.666%);
+    max-width: min(var(--chat-content-max-width), 100%);
 }
 
 .assistantTurnMarkdown {
@@ -569,12 +579,42 @@
 
 .assistantPendingCard .structuredCardBody {
     margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
 }
 
 .pendingStatusCardBody {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 9px;
+}
+
+.pendingStatusLabelRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pendingStatusLabel {
+    font-size: 11px;
+    line-height: 1.2;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.pendingStatusToolChip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--status-info) 34%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-info) 12%, var(--bg-element));
+    color: color-mix(in srgb, var(--status-info) 80%, var(--text-primary));
+    font-size: 10px;
+    line-height: 1;
+    padding: 4px 8px;
+    font-family: var(--font-code);
 }
 
 .pendingStatusDots {
@@ -588,7 +628,7 @@
     width: 7px;
     height: 7px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--status-success) 85%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-info) 86%, var(--text-primary));
     animation: pendingDotBounce 1.05s ease-in-out infinite;
 }
 
@@ -606,7 +646,7 @@
     width: min(360px, 100%);
     height: 5px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--status-success) 18%, transparent);
+    background: color-mix(in srgb, var(--status-info) 16%, transparent);
     overflow: hidden;
 }
 
@@ -617,11 +657,187 @@
     border-radius: inherit;
     background: linear-gradient(
         90deg,
-        color-mix(in srgb, var(--status-success) 0%, transparent),
-        color-mix(in srgb, var(--status-success) 88%, transparent),
-        color-mix(in srgb, var(--status-success) 0%, transparent)
+        color-mix(in srgb, var(--status-info) 0%, transparent),
+        color-mix(in srgb, var(--status-info) 88%, transparent),
+        color-mix(in srgb, var(--status-info) 0%, transparent)
     );
     animation: pendingStatusSweep 1.2s linear infinite;
+}
+
+.pendingStatusRunningTool .pendingStatusDot {
+    background: color-mix(in srgb, var(--status-warning) 88%, var(--text-primary));
+}
+
+.pendingStatusThinking .pendingStatusDot {
+    background: color-mix(in srgb, var(--status-info) 86%, var(--text-primary));
+}
+
+.pendingStatusRunningTool .pendingStatusTrack {
+    background: color-mix(in srgb, var(--status-warning) 18%, transparent);
+}
+
+.pendingStatusRunningTool .pendingStatusBar {
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--status-warning) 0%, transparent),
+        color-mix(in srgb, var(--status-warning) 88%, transparent),
+        color-mix(in srgb, var(--status-warning) 0%, transparent)
+    );
+}
+
+.pendingStatusRetrying .pendingStatusDot {
+    background: color-mix(in srgb, var(--status-error) 82%, var(--text-primary));
+}
+
+.pendingStatusRetrying .pendingStatusTrack {
+    background: color-mix(in srgb, var(--status-error) 15%, transparent);
+}
+
+.pendingStatusRetrying .pendingStatusBar {
+    background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--status-error) 0%, transparent),
+        color-mix(in srgb, var(--status-error) 78%, transparent),
+        color-mix(in srgb, var(--status-error) 0%, transparent)
+    );
+}
+
+.approvalDecisionCard {
+    width: 100%;
+}
+
+.approvalDecisionBody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.approvalDecisionMetaRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.approvalSeverityBadge,
+.approvalDecisionBadge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 76%, var(--bg-panel));
+    color: var(--text-secondary);
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    font-weight: 600;
+}
+
+.approvalSeverityLow {
+    border-color: color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    color: var(--text-secondary);
+}
+
+.approvalSeverityMedium {
+    border-color: color-mix(in srgb, var(--status-warning) 34%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-warning) 80%, var(--text-primary));
+}
+
+.approvalSeverityHigh {
+    border-color: color-mix(in srgb, var(--status-error) 34%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 80%, var(--text-primary));
+}
+
+.approvalSeverityCritical {
+    border-color: color-mix(in srgb, var(--status-error) 46%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 92%, var(--text-primary));
+}
+
+.approvalDecisionPending {
+    border-color: color-mix(in srgb, var(--status-info) 34%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-info) 82%, var(--text-primary));
+}
+
+.approvalDecisionApproved {
+    border-color: color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 82%, var(--text-primary));
+}
+
+.approvalDecisionDenied {
+    border-color: color-mix(in srgb, var(--status-error) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 82%, var(--text-primary));
+}
+
+.approvalRiskText {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+
+.approvalBlockingText {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--status-warning) 82%, var(--text-primary));
+}
+
+.approvalActionRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.approvalActionButton {
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 82%, var(--bg-panel));
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1;
+    padding: 8px 11px;
+    cursor: pointer;
+}
+
+.approvalActionButton:disabled {
+    opacity: 0.52;
+    cursor: default;
+}
+
+.approvalActionButtonApprove {
+    border-color: color-mix(in srgb, var(--status-success) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 82%, var(--text-primary));
+}
+
+.approvalActionButtonModify {
+    border-color: color-mix(in srgb, var(--status-warning) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-warning) 80%, var(--text-primary));
+}
+
+.approvalActionButtonDeny {
+    border-color: color-mix(in srgb, var(--status-error) 38%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 82%, var(--text-primary));
+}
+
+.approvalModifyBox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.approvalModifyInput {
+    flex: 1;
+    min-width: 0;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 86%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 84%, var(--bg-panel));
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.3;
+    padding: 8px 10px;
 }
 
 @keyframes pendingDotBounce {
@@ -656,9 +872,9 @@
 }
 
 .structuredMessageCard {
-    background: var(--bg-subtle) !important;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-xl);
+    background: color-mix(in srgb, var(--bg-element) 88%, var(--bg-panel)) !important;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    border-radius: var(--radius-lg);
     padding: var(--space-3) var(--space-4);
     box-shadow: none;
 }
@@ -1018,10 +1234,66 @@
     margin-top: 10px;
     padding-top: 10px;
     border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .toolBody {
     padding: 0;
+}
+
+.toolEventTimelineRow {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.toolEventTimelineDot {
+    width: 9px;
+    height: 9px;
+    margin-top: 4px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 86%, transparent);
+    flex-shrink: 0;
+}
+
+.toolEventToneRunning {
+    border-color: color-mix(in srgb, var(--status-info) 42%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-info) 24%, var(--bg-element));
+}
+
+.toolEventToneSuccess {
+    border-color: color-mix(in srgb, var(--status-success) 42%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-success) 22%, var(--bg-element));
+}
+
+.toolEventToneFailed {
+    border-color: color-mix(in srgb, var(--status-error) 42%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 22%, var(--bg-element));
+}
+
+.toolEventTimelineText {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.toolEventTimelinePrimary {
+    font-size: 12px;
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.toolEventTimelineSecondary {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .structuredSectionGroup {
@@ -1252,4 +1524,220 @@
     .pendingStatusBar {
         animation: none;
     }
+}
+
+/* ============================================================================
+ * Zola strict alignment overrides
+ * ============================================================================ */
+
+.timeline {
+    padding: 16px var(--chat-content-gutter) 14px;
+    background: transparent;
+}
+
+.timelineItem,
+.assistantThread,
+.assistantTurnBlock,
+.assistantTurnSteps,
+.assistantTurnCardStack {
+    width: 100%;
+    max-width: var(--chat-content-max-width);
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.assistantThreadBrand {
+    gap: 8px;
+}
+
+.assistantThreadBrandMark {
+    width: 32px;
+    height: 32px;
+}
+
+.assistantTurnLead {
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+.timelineItem.user .contentBubble {
+    max-width: 70%;
+    border-radius: 1.5rem;
+    padding: 10px 14px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 92%, var(--bg-element));
+    color: var(--text-on-dark);
+}
+
+.structuredMessageCard {
+    border-radius: var(--radius-lg);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-element)) !important;
+    box-shadow: none;
+}
+
+.structuredCardHeader {
+    gap: 8px;
+}
+
+.structuredCardKicker,
+.structuredSectionLabel {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+}
+
+.structuredCardTitle {
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.structuredCardSubtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.structuredCardStatus {
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    font-size: 10px;
+}
+
+.pendingStatusCardBody {
+    gap: 8px;
+}
+
+.pendingStatusToolChip {
+    text-transform: none;
+    font-size: 10px;
+}
+
+.toolEventTimelineRow {
+    gap: 10px;
+}
+
+.toolEventTimelineDot {
+    width: 10px;
+    height: 10px;
+    margin-top: 5px;
+}
+
+.toolEventTimelinePrimary {
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.toolEventTimelineSecondary {
+    font-size: 11px;
+}
+
+.approvalActionButton {
+    min-height: calc(var(--button-height) - 6px);
+    border-radius: var(--radius-md);
+    font-size: 11px;
+}
+
+.approvalModifyInput,
+.structuredInput {
+    border-radius: var(--radius-md);
+}
+
+@media (max-width: 768px) {
+    .timeline {
+        padding: 12px var(--space-3) 12px;
+    }
+
+    .timelineItem,
+    .assistantThread,
+    .assistantTurnBlock,
+    .assistantTurnSteps,
+    .assistantTurnCardStack {
+        max-width: 100%;
+    }
+
+    .timelineItem.user .contentBubble {
+        max-width: 90%;
+    }
+}
+
+/* ============================================================================
+ * Zola deep alignment overrides
+ * Flatten timeline cards, tighten typography, and keep event flow readable
+ * ============================================================================ */
+
+.assistantThreadBrandMark {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    font-size: 11px;
+}
+
+.assistantThreadBrandName {
+    font-family: var(--font-code);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.assistantTurnLead {
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+.assistantTurnStep {
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-element));
+}
+
+.assistantTurnStep:hover {
+    transform: none;
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-element));
+}
+
+.structuredMessageCard {
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-element)) !important;
+}
+
+.structuredCardAssistant,
+.structuredCardRuntime,
+.structuredCardTask,
+.structuredCardTool {
+    background: color-mix(in srgb, var(--bg-panel) 96%, var(--bg-element)) !important;
+    border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
+}
+
+.structuredCardKicker {
+    color: var(--text-muted);
+}
+
+.toolCard .structuredMessageCard:hover {
+    box-shadow: none;
+}
+
+.toolCard .structuredCardBody {
+    margin-top: 8px;
+    padding-top: 8px;
+}
+
+.pendingStatusTrack {
+    height: 4px;
+}
+
+.approvalActionButton {
+    min-height: 28px;
+    border-radius: var(--radius-md);
+    font-size: 11px;
+}
+
+.contentBubble {
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.timelineItem.user .contentBubble {
+    border: 0;
+    border-radius: 1.5rem;
+    padding: 10px 18px;
 }

@@ -164,4 +164,72 @@ describe('timeline turn rounds regression', () => {
             expect(!(types[index] === 'assistant_turn' && types[index - 1] === 'assistant_turn')).toBe(true);
         }
     });
+
+    test('chat mode hides task workflow completion/status events from message bubbles', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'chat',
+            messages: [
+                {
+                    id: 'msg-user-chat-1',
+                    role: 'user',
+                    content: '你好，请简单问候我一下。',
+                    timestamp: '2026-04-03T09:00:00.000Z',
+                },
+                {
+                    id: 'msg-assistant-chat-1',
+                    role: 'assistant',
+                    content: '你好！很高兴见到你。',
+                    timestamp: '2026-04-03T09:00:02.000Z',
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'event-chat-started',
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    timestamp: '2026-04-03T09:00:00.010Z',
+                    payload: {
+                        title: '你好，请简单问候我一下。',
+                        description: '你好，请简单问候我一下。',
+                        context: {
+                            mode: 'chat',
+                            userQuery: '你好，请简单问候我一下。',
+                        },
+                    },
+                }),
+                makeEvent({
+                    id: 'event-chat-status-running',
+                    sequence: 2,
+                    type: 'TASK_STATUS',
+                    timestamp: '2026-04-03T09:00:00.500Z',
+                    payload: {
+                        status: 'running',
+                        message: '正在处理问候请求…',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-chat-finished',
+                    sequence: 3,
+                    type: 'TASK_FINISHED',
+                    timestamp: '2026-04-03T09:00:02.500Z',
+                    payload: {
+                        summary: '问候已响应',
+                        finishReason: 'greeting_responded',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        expect(result.items.map((item) => item.type)).toEqual(['user_message', 'assistant_turn']);
+
+        const assistantTurn = result.items[1];
+        expect(assistantTurn?.type).toBe('assistant_turn');
+        if (assistantTurn?.type === 'assistant_turn') {
+            expect(assistantTurn.taskCard).toBeUndefined();
+            expect(assistantTurn.systemEvents?.length ?? 0).toBe(0);
+            expect(assistantTurn.messages).toEqual(['你好！很高兴见到你。']);
+        }
+    });
 });

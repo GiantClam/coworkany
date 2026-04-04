@@ -20,6 +20,17 @@ interface ToolCardProps {
     viewModel?: ToolCardViewModel;
 }
 
+function getEventToneClass(tone: ToolCardViewModel['summary']['statusTone']): string {
+    switch (tone) {
+        case 'success':
+            return styles.toolEventToneSuccess;
+        case 'failed':
+            return styles.toolEventToneFailed;
+        default:
+            return styles.toolEventToneRunning;
+    }
+}
+
 const ToolCardComponent: React.FC<ToolCardProps> = ({ item, viewModel }) => {
     const { t } = useTranslation();
     const [expanded, setExpanded] = useState(false);
@@ -37,14 +48,23 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item, viewModel }) => {
             kind={model.summary.kind}
             kicker={model.summary.kicker}
             title={model.summary.title}
-            subtitle={!expanded ? model.summary.preview : undefined}
+            subtitle={!expanded ? (model.summary.eventDetail || model.summary.preview) : undefined}
             statusLabel={model.summary.statusLabel}
             statusTone={model.summary.statusTone}
             onHeaderClick={() => setExpanded(!expanded)}
-            headerActionLabel="Details"
+            headerActionLabel={t('chat.details', { defaultValue: 'Details' })}
             expanded={expanded}
             className={styles.toolCard}
         >
+            <div className={styles.toolEventTimelineRow}>
+                <span className={`${styles.toolEventTimelineDot} ${getEventToneClass(model.summary.statusTone)}`} aria-hidden="true" />
+                <div className={styles.toolEventTimelineText}>
+                    <span className={styles.toolEventTimelinePrimary}>{model.summary.statusLabel}</span>
+                    {model.summary.eventDetail ? (
+                        <span className={styles.toolEventTimelineSecondary}>{model.summary.eventDetail}</span>
+                    ) : null}
+                </div>
+            </div>
             {expanded ? (
                 <div className={styles.structuredSectionGroup}>
                     {model.sections.map((section, index) => (

@@ -25,16 +25,18 @@ interface HeaderProps {
     onClearHistory: () => void;
     onCancel: () => void;
     onReconnectLlm: () => void;
+    onRetryFailedTask?: () => void;
     onStopVoice: () => void;
     canClearHistory: boolean;
+    failedAction?: 'reconnect' | 'settings' | 'retry';
 }
 
 function abbreviateTitle(title: string): string {
-    if (title.length <= 20) {
+    if (title.length <= 32) {
         return title;
     }
 
-    return `${title.slice(0, 10)}...${title.slice(-7)}`;
+    return `${title.slice(0, 20)}...${title.slice(-9)}`;
 }
 
 const HeaderComponent: React.FC<HeaderProps> = ({
@@ -55,124 +57,188 @@ const HeaderComponent: React.FC<HeaderProps> = ({
     onClearHistory,
     onCancel,
     onReconnectLlm,
+    onRetryFailedTask,
     onStopVoice,
     canClearHistory,
+    failedAction = 'reconnect',
 }) => {
     const { t } = useTranslation();
+    const [isMoreMenuOpen, setIsMoreMenuOpen] = React.useState(false);
+    const moreMenuRef = React.useRef<HTMLDivElement | null>(null);
 
     const displayTitle = abbreviateTitle(title);
     const canReconnectLlm = status === 'finished' || status === 'failed';
+    const failedStatusActionHint = failedAction === 'settings'
+        ? t('chat.failureActionOpenSettings', { defaultValue: 'Open LLM Settings' })
+        : failedAction === 'retry'
+            ? t('chat.failureActionRetry', { defaultValue: 'Retry' })
+            : t('chat.reconnectLlm');
     const isStatusActionDisabled = !isSpeaking && status !== 'running' && !canReconnectLlm;
     const statusActionHint = isSpeaking
         ? (isStoppingVoice ? t('chat.stoppingVoice') : t('chat.stopVoice'))
         : status === 'running'
             ? t('common.cancel')
             : canReconnectLlm
-                ? t('chat.reconnectLlm')
+                ? (status === 'failed' ? failedStatusActionHint : t('chat.reconnectLlm'))
                 : null;
     const statusActionClassName = `chat-header-chip chat-status-chip ${status} ${isSpeaking ? 'warning' : ''}`.trim();
+    const moreActionsLabel = t('chat.moreActions', { defaultValue: 'Actions' });
+
+    const closeMoreMenu = React.useCallback(() => {
+        setIsMoreMenuOpen(false);
+    }, []);
+
+    React.useEffect(() => {
+        if (!isMoreMenuOpen) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent): void => {
+            if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
+                setIsMoreMenuOpen(false);
+            }
+        };
+
+        const handleEscape = (event: KeyboardEvent): void => {
+            if (event.key === 'Escape') {
+                setIsMoreMenuOpen(false);
+            }
+        };
+
+        window.addEventListener('pointerdown', handlePointerDown);
+        window.addEventListener('keydown', handleEscape);
+
+        return () => {
+            window.removeEventListener('pointerdown', handlePointerDown);
+            window.removeEventListener('keydown', handleEscape);
+        };
+    }, [isMoreMenuOpen]);
 
     return (
         <header className="chat-header">
-            <div className="chat-header-main">
-                <div className="chat-header-title-block">
-                    <div className={`chat-status-dot ${status}`} aria-hidden="true" />
-                    <div className="chat-header-copy">
-                        <h2 className="chat-title" title={title}>{displayTitle}</h2>
+            <div className="chat-header-inner">
+                <div className="chat-header-main">
+                    <div className="chat-header-title-block">
+                        <div className={`chat-status-dot ${status}`} aria-hidden="true" />
+                        <div className="chat-header-copy">
+                            <h2 className="chat-title" title={title}>{displayTitle}</h2>
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            <div className="chat-header-actions">
-                <button
-                    type="button"
-                    className={statusActionClassName}
-                    onClick={() => {
-                        if (isSpeaking) {
-                            onStopVoice();
-                            return;
-                        }
-                        if (status === 'running') {
-                            onCancel();
-                            return;
-                        }
-                        if (canReconnectLlm) {
-                            onReconnectLlm();
-                        }
-                    }}
-                    disabled={isStatusActionDisabled || isCancelling || isStoppingVoice || isReconnectingLlm}
-                    title={statusLabel}
-                    aria-label={statusLabel}
-                >
-                    <span className="chat-header-chip-label">STATUS</span>
-                    <span className="chat-header-chip-value">{statusLabel}</span>
-                    {statusActionHint ? (
-                        <span className="chat-header-chip-meta">{statusActionHint}</span>
-                    ) : null}
-                </button>
+                <div className="chat-header-actions">
+                    <button
+                        type="button"
+                        className={statusActionClassName}
+                        onClick={() => {
+                            if (isSpeaking) {
+                                onStopVoice();
+                                return;
+                            }
+                            if (status === 'running') {
+                                onCancel();
+                                return;
+                            }
+                            if (canReconnectLlm) {
+                                if (status === 'failed' && failedAction === 'settings') {
+                                    onShowSettings();
+                                    return;
+                                }
+                                if (status === 'failed' && failedAction === 'retry' && onRetryFailedTask) {
+                                    onRetryFailedTask();
+                                    return;
+                                }
+                                onReconnectLlm();
+                            }
+                        }}
+                        disabled={isStatusActionDisabled || isCancelling || isStoppingVoice || isReconnectingLlm}
+                        title={statusLabel}
+                        aria-label={statusLabel}
+                    >
+                        <span className="chat-header-chip-value">{statusLabel}</span>
+                        {statusActionHint ? (
+                            <span className="chat-header-chip-action">{statusActionHint}</span>
+                        ) : null}
+                    </button>
 
-                <button
-                    type="button"
-                    className="chat-header-chip"
-                    onClick={onShowSettings}
-                    title={t('chat.editLlmSettings')}
-                    aria-label={`${modelName} | ${t('chat.editLlmSettings')}`}
-                >
-                    <span className="chat-header-chip-label">MODEL</span>
-                    <span className="chat-header-chip-value">{modelName}</span>
-                </button>
+                    <button
+                        type="button"
+                        className="chat-header-chip"
+                        onClick={onShowSettings}
+                        title={t('chat.editLlmSettings')}
+                        aria-label={`${modelName} | ${t('chat.editLlmSettings')}`}
+                    >
+                        <span className="chat-header-chip-value">{modelName}</span>
+                    </button>
 
-                <button
-                    type="button"
-                    className="chat-header-icon-button"
-                    onClick={onShowSkills}
-                    title={t('chat.manageSkills')}
-                    aria-label={t('chat.manageSkills')}
-                >
-                    <span className="chat-header-icon-button-text">SK</span>
-                    <span className="chat-header-icon-button-count">{enabledSkillsCount}</span>
-                </button>
+                    <div className="chat-header-more" ref={moreMenuRef}>
+                        <button
+                            type="button"
+                            className="chat-header-more-trigger"
+                            onClick={() => setIsMoreMenuOpen((open) => !open)}
+                            aria-haspopup="menu"
+                            aria-expanded={isMoreMenuOpen}
+                            aria-label={moreActionsLabel}
+                            title={moreActionsLabel}
+                        >
+                            <span aria-hidden="true">⋯</span>
+                        </button>
 
-                <button
-                    type="button"
-                    className="chat-header-icon-button"
-                    onClick={onShowMcp}
-                    title={t('chat.manageMcpServers')}
-                    aria-label={t('chat.manageMcpServers')}
-                >
-                    <span className="chat-header-icon-button-text">MCP</span>
-                    <span className="chat-header-icon-button-count">{enabledToolpacksCount}</span>
-                </button>
+                        {isMoreMenuOpen ? (
+                            <div className="chat-header-more-menu" role="menu" aria-label={moreActionsLabel}>
+                                <button
+                                    type="button"
+                                    className="chat-header-more-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        closeMoreMenu();
+                                        onShowSkills();
+                                    }}
+                                    title={t('chat.manageSkills')}
+                                >
+                                    <span className="chat-header-more-item-label">{t('chat.skills', { defaultValue: 'Skills' })}</span>
+                                    <span className="chat-header-more-item-value">{enabledSkillsCount}</span>
+                                </button>
 
-                <button
-                    type="button"
-                    className="status-action"
-                    onClick={onClearHistory}
-                    disabled={isClearing || !canClearHistory}
-                    title={t('chat.clearHistory')}
-                >
-                    {t('chat.clear')}
-                </button>
+                                <button
+                                    type="button"
+                                    className="chat-header-more-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        closeMoreMenu();
+                                        onShowMcp();
+                                    }}
+                                    title={t('chat.manageMcpServers')}
+                                >
+                                    <span className="chat-header-more-item-label">{t('chat.tools', { defaultValue: 'Tools' })}</span>
+                                    <span className="chat-header-more-item-value">{enabledToolpacksCount}</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    className="chat-header-more-item"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        closeMoreMenu();
+                                        onClearHistory();
+                                    }}
+                                    disabled={isClearing || !canClearHistory}
+                                    title={t('chat.clearHistory')}
+                                >
+                                    <span className="chat-header-more-item-label">{t('chat.clear')}</span>
+                                    {isClearing ? (
+                                        <span className="chat-header-more-item-value">{t('common.processing', { defaultValue: 'Processing' })}</span>
+                                    ) : null}
+                                </button>
+                            </div>
+                        ) : null}
+                    </div>
+                </div>
             </div>
         </header>
     );
 };
 
-const arePropsEqual = (prevProps: HeaderProps, nextProps: HeaderProps): boolean => {
-    return (
-        prevProps.title === nextProps.title &&
-        prevProps.status === nextProps.status &&
-        prevProps.statusLabel === nextProps.statusLabel &&
-        prevProps.modelName === nextProps.modelName &&
-        prevProps.enabledSkillsCount === nextProps.enabledSkillsCount &&
-        prevProps.enabledToolpacksCount === nextProps.enabledToolpacksCount &&
-        prevProps.isClearing === nextProps.isClearing &&
-        prevProps.isCancelling === nextProps.isCancelling &&
-        prevProps.isSpeaking === nextProps.isSpeaking &&
-        prevProps.isStoppingVoice === nextProps.isStoppingVoice
-    );
-};
-
-export const Header = React.memo(HeaderComponent, arePropsEqual);
+export const Header = React.memo(HeaderComponent);
 
 Header.displayName = 'Header';

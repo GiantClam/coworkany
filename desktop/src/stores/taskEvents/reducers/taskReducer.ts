@@ -14,11 +14,17 @@ function isTaskMode(value: unknown): value is NonNullable<TaskSession['taskMode'
 }
 
 function extractOriginalTaskFromRoutedQuery(value: string): string | null {
-    const patterns = [
+    const tokenMatched = value.match(/^\s*__route_(?:chat|task)__\s*(?:\n+|[\t ]+)([\s\S]*)$/iu);
+    const tokenCandidate = tokenMatched?.[1]?.trim();
+    if (tokenCandidate && tokenCandidate.length > 0) {
+        return tokenCandidate;
+    }
+
+    const legacyPatterns = [
         /^\s*原始任务[:：]\s*(.+?)(?:\n|$)/u,
         /^\s*original task[:：]\s*(.+?)(?:\n|$)/iu,
     ];
-    for (const pattern of patterns) {
+    for (const pattern of legacyPatterns) {
         const matched = value.match(pattern);
         const candidate = matched?.[1]?.trim();
         if (candidate && candidate.length > 0) {
@@ -26,6 +32,39 @@ function extractOriginalTaskFromRoutedQuery(value: string): string | null {
         }
     }
     return null;
+}
+
+function inferTaskModeFromRoutedEnvelope(value: string): TaskSession['taskMode'] {
+    const tokenMatched = value.match(/^\s*__route_(chat|task)__\b/iu);
+    const token = tokenMatched?.[1]?.toLowerCase();
+    if (token === 'chat') {
+        return 'chat';
+    }
+    if (token === 'task') {
+        return 'immediate_task';
+    }
+    return undefined;
+}
+
+function inferTaskModeFromTaskStartedPayload(
+    payload: Record<string, unknown>,
+    context: Record<string, unknown>,
+): TaskSession['taskMode'] {
+    if (isTaskMode(context.mode)) {
+        return context.mode;
+    }
+    if (context.scheduled === true) {
+        return 'scheduled_task';
+    }
+
+    const contextUserQuery = typeof context.userQuery === 'string' ? context.userQuery : '';
+    const contextInferredMode = inferTaskModeFromRoutedEnvelope(contextUserQuery);
+    if (contextInferredMode) {
+        return contextInferredMode;
+    }
+
+    const description = typeof payload.description === 'string' ? payload.description : '';
+    return inferTaskModeFromRoutedEnvelope(description);
 }
 
 function resolveTaskStartedDisplayText(payload: Record<string, unknown>, context: Record<string, unknown>): string {
@@ -36,12 +75,26 @@ function resolveTaskStartedDisplayText(payload: Record<string, unknown>, context
 
     const userQuery = typeof context.userQuery === 'string' ? context.userQuery.trim() : '';
     if (userQuery.length > 0) {
-        return extractOriginalTaskFromRoutedQuery(userQuery) ?? userQuery;
+        const extracted = extractOriginalTaskFromRoutedQuery(userQuery);
+        if (extracted !== null) {
+            return extracted;
+        }
+        if (/^__route_(?:chat|task)__$/iu.test(userQuery)) {
+            return '';
+        }
+        return userQuery;
     }
 
     const description = typeof payload.description === 'string' ? payload.description.trim() : '';
     if (description.length > 0) {
-        return extractOriginalTaskFromRoutedQuery(description) ?? description;
+        const extracted = extractOriginalTaskFromRoutedQuery(description);
+        if (extracted !== null) {
+            return extracted;
+        }
+        if (/^__route_(?:chat|task)__$/iu.test(description)) {
+            return '';
+        }
+        return description;
     }
 
     const title = typeof payload.title === 'string' ? payload.title.trim() : '';
@@ -469,17 +522,41 @@ function appendSystemMessage(session: TaskSession, event: TaskEvent, content: st
     };
 }
 
+function appendAssistantMessage(session: TaskSession, event: TaskEvent, content: string): TaskSession {
+    return {
+        ...session,
+        messages: [
+            ...session.messages,
+            {
+                id: `${event.id}:assistant`,
+                role: 'assistant',
+                content,
+                timestamp: event.timestamp,
+            },
+        ],
+    };
+}
+
+function hasAssistantReplyAfterLatestUserMessage(session: TaskSession): boolean {
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+        const message = session.messages[index];
+        if (message.role === 'assistant' && message.content.trim().length > 0) {
+            return true;
+        }
+        if (message.role === 'user') {
+            return false;
+        }
+    }
+    return false;
+}
+
 export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSession {
     const payload = event.payload as Record<string, unknown>;
 
     switch (event.type) {
         case 'TASK_STARTED': {
             const context = ((payload.context as Record<string, unknown> | undefined) ?? {});
-            const resolvedTaskMode = isTaskMode(context.mode)
-                ? context.mode
-                : context.scheduled === true
-                    ? 'scheduled_task'
-                    : session.taskMode;
+            const resolvedTaskMode = inferTaskModeFromTaskStartedPayload(payload, context) ?? session.taskMode;
             const displayText = resolveTaskStartedDisplayText(payload, context);
             return {
                 ...session,
@@ -730,16 +807,27 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
         }
 
         case 'TASK_FAILED':
-            return appendSystemMessage({
+        {
+            const nextFailure = {
+                error: (payload.error as string) ?? 'Unknown error',
+                errorCode: typeof payload.errorCode === 'string' ? payload.errorCode : undefined,
+                recoverable: payload.recoverable === true,
+                suggestion: typeof payload.suggestion === 'string' ? payload.suggestion.trim() : undefined,
+            };
+            const isDuplicateFailure =
+                session.failure?.error === nextFailure.error &&
+                session.failure?.errorCode === nextFailure.errorCode &&
+                session.failure?.recoverable === nextFailure.recoverable &&
+                session.failure?.suggestion === nextFailure.suggestion;
+            const failureMessage = [
+                `Task failed: ${nextFailure.error}`,
+                nextFailure.suggestion ?? null,
+            ].filter(Boolean).join('\n');
+            const nextSession: TaskSession = {
                 ...session,
                 status: 'failed',
-                summary: payload.error as string,
-                failure: {
-                    error: (payload.error as string) ?? 'Unknown error',
-                    errorCode: typeof payload.errorCode === 'string' ? payload.errorCode : undefined,
-                    recoverable: payload.recoverable === true,
-                    suggestion: typeof payload.suggestion === 'string' ? payload.suggestion.trim() : undefined,
-                },
+                summary: nextFailure.error,
+                failure: nextFailure,
                 suspension: undefined,
                 clarificationQuestions: undefined,
                 currentCheckpoint: undefined,
@@ -747,19 +835,30 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 activeHardness: session.executionProfile?.primaryHardness,
                 blockingReason: undefined,
                 assistantDraft: undefined,
-            }, event, [
-                `Task failed: ${(payload.error as string) ?? 'Unknown error'}`,
-                typeof payload.suggestion === 'string' && payload.suggestion.trim().length > 0
-                    ? payload.suggestion.trim()
-                    : null,
-            ].filter(Boolean).join('\n'));
+            };
+
+            if (isDuplicateFailure) {
+                return nextSession;
+            }
+
+            return appendAssistantMessage(nextSession, event, failureMessage);
+        }
 
         case 'TASK_STATUS': {
             const status = payload.status as TaskStatus;
+            const preserveRecoverableFailureDuringRetry =
+                status === 'running'
+                && session.status === 'failed'
+                && Boolean(session.failure);
             const nextSession: TaskSession = {
                 ...session,
-                status: status ?? session.status,
-                failure: status === 'running' ? undefined : session.failure,
+                status: preserveRecoverableFailureDuringRetry
+                    ? session.status
+                    : (status ?? session.status),
+                failure:
+                    status === 'running'
+                        ? (preserveRecoverableFailureDuringRetry ? session.failure : undefined)
+                        : session.failure,
                 currentCheckpoint: status === 'running' ? undefined : session.currentCheckpoint,
                 currentUserAction: status === 'running' ? undefined : session.currentUserAction,
                 blockingReason:
@@ -818,7 +917,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
 
             const nextSession: TaskSession = {
                 ...session,
-                status: 'idle',
+                status: 'suspended',
                 failure: undefined,
                 suspension: nextSuspension,
                 activeHardness: session.executionProfile?.primaryHardness,
@@ -862,6 +961,7 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
             return {
                 ...session,
                 status: 'idle',
+                title: undefined,
                 taskMode: undefined,
                 summary: undefined,
                 failure: undefined,
@@ -927,6 +1027,19 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 event,
                 `Security alert${threat ? `: ${threat}` : ''}`
             );
+        }
+
+        case 'RATE_LIMITED': {
+            const retryMessage = typeof payload.message === 'string' ? payload.message.trim() : '';
+            const hasSettledChatReply = session.taskMode === 'chat' && hasAssistantReplyAfterLatestUserMessage(session);
+            return {
+                ...session,
+                status: hasSettledChatReply ? 'finished' : 'running',
+                failure: undefined,
+                blockingReason: hasSettledChatReply
+                    ? undefined
+                    : (retryMessage.length > 0 ? retryMessage : session.blockingReason),
+            };
         }
 
         default:

@@ -4,7 +4,7 @@ body {
     margin: 0;
     padding: 0;
     width: 100%;
-    font-size: 12px;
+    font-size: 14px;
     font-family: var(--font-body);
     background: var(--bg-app);
     color: var(--text-primary);
@@ -50,7 +50,19 @@ button {
     font-family: var(--font-body);
     font-weight: 500;
     cursor: pointer;
-    transition: all var(--ease-default);
+    transition:
+        transform var(--ease-default),
+        filter var(--ease-default),
+        background-color var(--ease-default),
+        border-color var(--ease-default),
+        box-shadow var(--ease-default),
+        color var(--ease-default),
+        opacity var(--ease-default);
+}
+
+button:not(:disabled):active {
+    transform: translateY(1px) scale(0.985);
+    filter: brightness(0.96);
 }
 
 button,
@@ -104,24 +116,24 @@ option,
 }
 
 ::-webkit-scrollbar-thumb {
-    background: var(--c-ink-300);
+    background: color-mix(in srgb, var(--text-muted) 42%, transparent);
     border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--c-ink-400);
+    background: color-mix(in srgb, var(--text-secondary) 52%, transparent);
 }
 
 /* Focus Outline */
 :focus-visible {
-    outline: 2px solid var(--brand-500);
+    outline: 2px solid color-mix(in srgb, var(--zola-ring) 80%, transparent);
     outline-offset: 2px;
 }
 
 .app-shell {
-    --app-aurora-blur: 0;
-    --app-aurora-opacity: 0;
-    --app-noise-opacity: 0;
+    --app-aurora-blur: 32px;
+    --app-aurora-opacity: 0.04;
+    --app-noise-opacity: 0.02;
     --surface-blur-strong: none;
     --surface-blur-medium: none;
     position: relative;
@@ -138,9 +150,9 @@ option,
 }
 
 .app-shell-macos {
-    --app-aurora-blur: 26px;
-    --app-aurora-opacity: 0.16;
-    --app-noise-opacity: 0.08;
+    --app-aurora-blur: 40px;
+    --app-aurora-opacity: 0.06;
+    --app-noise-opacity: 0.03;
     --surface-blur-strong: none;
     --surface-blur-medium: none;
     --glass-blur: none;
@@ -148,6 +160,12 @@ option,
 
 .app-aurora {
     display: none;
+    position: absolute;
+    border-radius: 999px;
+    filter: blur(var(--app-aurora-blur));
+    opacity: var(--app-aurora-opacity);
+    pointer-events: none;
+    z-index: 0;
 }
 
 .app-aurora-one {
@@ -155,7 +173,7 @@ option,
     height: 320px;
     top: -70px;
     left: -80px;
-    background: radial-gradient(circle at 35% 35%, rgba(59, 130, 246, 0.74), rgba(59, 130, 246, 0.02));
+    background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--brand-500) 70%, transparent), transparent 70%);
 }
 
 .app-aurora-two {
@@ -163,7 +181,7 @@ option,
     height: 360px;
     right: -110px;
     top: 110px;
-    background: radial-gradient(circle at 55% 45%, rgba(249, 115, 22, 0.38), rgba(249, 115, 22, 0.02));
+    background: radial-gradient(circle at 55% 45%, color-mix(in srgb, var(--accent-primary) 52%, transparent), transparent 72%);
 }
 
 .app-aurora-three {
@@ -171,11 +189,18 @@ option,
     height: 420px;
     left: 24%;
     bottom: -220px;
-    background: radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.44), rgba(37, 99, 235, 0.02));
+    background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--brand-300) 44%, transparent), transparent 74%);
 }
 
 .app-noise-overlay {
     display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: var(--app-noise-opacity);
+    background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-primary) 38%, transparent) 0.7px, transparent 0.8px);
+    background-size: 3px 3px;
 }
 
 .app-content {
@@ -188,7 +213,7 @@ option,
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    background: var(--bg-app);
+    background: transparent;
     -webkit-app-region: no-drag;
     app-region: no-drag;
 }
@@ -201,6 +226,15 @@ option,
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+[data-theme="dark"] html,
+[data-theme="dark"] body {
+    background: var(--bg-app);
+}
+
+[data-theme="dark"] .app-shell {
+    background: var(--bg-app);
 }
 
 @supports (height: 100dvh) {
@@ -238,14 +272,14 @@ option,
 
 /* Primary: Brand Blue */
 .btn-primary {
-    background: var(--brand-500);
-    color: white;
-    border-color: var(--brand-500);
+    background: color-mix(in srgb, var(--accent-primary) 90%, white 10%);
+    color: var(--text-on-dark);
+    border-color: color-mix(in srgb, var(--accent-primary) 88%, white 12%);
 }
 
 .btn-primary:hover:not(:disabled) {
-    background: var(--brand-600);
-    border-color: var(--brand-600);
+    background: color-mix(in srgb, var(--accent-hover) 88%, white 12%);
+    border-color: color-mix(in srgb, var(--accent-hover) 86%, white 14%);
     transform: translateY(-1px);
     box-shadow: var(--shadow-md);
 }
@@ -258,8 +292,8 @@ option,
 }
 
 .btn-secondary:hover:not(:disabled) {
-    background: var(--bg-element);
-    border-color: var(--text-primary);
+    background: color-mix(in srgb, var(--bg-element) 80%, transparent);
+    border-color: var(--border-strong);
 }
 
 /* Ghost: Text Only */
@@ -269,8 +303,8 @@ option,
 }
 
 .btn-ghost:hover:not(:disabled) {
-    background: var(--bg-element-hover);
-    color: var(--brand-500);
+    background: color-mix(in srgb, var(--bg-element-hover) 88%, transparent);
+    color: var(--text-primary);
 }
 
 .btn-danger {
@@ -299,7 +333,7 @@ option,
 }
 
 .input-field:focus {
-    border-color: var(--brand-500);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--border-strong));
     background: var(--bg-card);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }

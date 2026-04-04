@@ -1,6 +1,7 @@
 type DesktopEventBase = {
     runId?: string;
     traceId?: string;
+    turnId?: string;
 };
 type DesktopTextDeltaRole = 'assistant' | 'thinking';
 
@@ -9,6 +10,23 @@ export type DesktopEvent =
     | ({ type: 'tool_call'; toolName: string; args: unknown } & DesktopEventBase)
     | ({ type: 'approval_required'; toolCallId: string; toolName: string; args: unknown; resumeSchema: string } & DesktopEventBase)
     | ({ type: 'suspended'; toolCallId: string; toolName: string; payload: unknown } & DesktopEventBase)
+    | ({
+        type: 'rate_limited';
+        message?: string;
+        attempt?: number;
+        maxAttempts?: number;
+        retryAfterMs?: number;
+        error?: string;
+        stage?: 'dns' | 'connect' | 'ttfb' | 'first_token' | 'last_token' | 'unknown';
+        timings?: {
+            elapsedMs?: number;
+            dnsMs?: number | null;
+            connectMs?: number | null;
+            ttfbMs?: number | null;
+            firstTokenMs?: number | null;
+            lastTokenMs?: number | null;
+        };
+    } & DesktopEventBase)
     | {
         type: 'tripwire';
         reason: string;

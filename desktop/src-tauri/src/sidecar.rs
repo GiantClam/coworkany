@@ -160,6 +160,8 @@ pub struct TaskContext {
 pub struct TaskConfig {
     #[serde(rename = "modelId", skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    #[serde(rename = "executionPath", skip_serializing_if = "Option::is_none")]
+    pub execution_path: Option<String>,
     #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(rename = "maxHistoryMessages", skip_serializing_if = "Option::is_none")]

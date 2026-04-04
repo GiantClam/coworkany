@@ -1,5 +1,6 @@
 import type { ThreadMessageLike } from '@assistant-ui/react';
 import type { TimelineTurnRound } from '../Timeline/viewModels/turnRounds';
+import type { PendingTaskStatus } from '../Timeline/pendingTaskStatus';
 
 export interface AssistantUiStructuredTool {
     toolName: string;
@@ -19,7 +20,7 @@ export interface AssistantUiStructuredApproval {
 
 export interface AssistantUiStructuredTask {
     title: string;
-    status: 'idle' | 'running' | 'finished' | 'failed';
+    status: 'idle' | 'running' | 'finished' | 'failed' | 'suspended';
     progress?: {
         completed: number;
         total: number;
@@ -34,7 +35,10 @@ export interface AssistantUiStructuredPatch {
 export interface AssistantUiStructuredPayload {
     runtime?: {
         pendingLabel?: string;
+        pendingPhase?: PendingTaskStatus['phase'];
+        toolName?: string;
     };
+    events: string[];
     tools: AssistantUiStructuredTool[];
     approvals: AssistantUiStructuredApproval[];
     task?: AssistantUiStructuredTask;
@@ -59,6 +63,7 @@ export interface AssistantUiExternalMessage {
 
 export interface AssistantUiProjectionOptions {
     pendingLabel?: string;
+    pendingStatus?: PendingTaskStatus | null;
 }
 
 function normalizeText(value: string | undefined | null): string {
@@ -93,7 +98,6 @@ function buildAssistantTurnText(round: TimelineTurnRound): string {
         ...(turn.lead ? [turn.lead] : []),
         ...turn.messages,
     ]);
-    const runtimeLines = toUniqueLines(turn.systemEvents ?? []);
     const sections: string[] = [];
     const taskCardResultLines = turn.taskCard
         ? toUniqueLines([
@@ -106,30 +110,16 @@ function buildAssistantTurnText(round: TimelineTurnRound): string {
         ? toUniqueLines(turn.taskCard.sections.flatMap((section) => section.lines))
         : [];
 
+    const messageLineSet = new Set(messageLines.map((line) => line.trim().toLowerCase()));
+    const uniqueTaskCardResultLines = taskCardResultLines.filter((line) => !messageLineSet.has(line.trim().toLowerCase()));
+
     if (messageLines.length > 0) {
         sections.push(messageLines.join('\n\n'));
     }
-    if (taskCardResultLines.length > 0) {
-        sections.push(taskCardResultLines.join('\n\n'));
+    if (uniqueTaskCardResultLines.length > 0) {
+        sections.push(uniqueTaskCardResultLines.join('\n\n'));
     } else if (messageLines.length === 0 && taskCardSectionLines.length > 0) {
         sections.push(taskCardSectionLines.join('\n\n'));
-    }
-    if (runtimeLines.length > 0) {
-        sections.push(`Runtime:\n${runtimeLines.map((line) => `- ${line}`).join('\n')}`);
-    }
-
-    const tools = turn.toolCalls?.length ?? 0;
-    const approvals = turn.effectRequests?.length ?? 0;
-    const tasks = turn.taskCard ? 1 : 0;
-    const patches = turn.patches?.length ?? 0;
-    const structuredCounts = [
-        tools > 0 ? `Tools ${tools}` : '',
-        approvals > 0 ? `Approvals ${approvals}` : '',
-        tasks > 0 ? 'Task 1' : '',
-        patches > 0 ? `Patches ${patches}` : '',
-    ].filter((line) => line.length > 0);
-    if (structuredCounts.length > 0) {
-        sections.push(`Structured cards: ${structuredCounts.join(' | ')}`);
     }
 
     return sections.join('\n\n').trim();
@@ -137,6 +127,17 @@ function buildAssistantTurnText(round: TimelineTurnRound): string {
 
 function buildStructuredFallbackText(structured: AssistantUiStructuredPayload): string {
     const segments: string[] = [];
+    if (structured.runtime?.pendingPhase) {
+        if (structured.runtime.pendingPhase === 'running_tool') {
+            segments.push(`Runtime: tool ${structured.runtime.toolName || 'Tool'}`);
+        } else if (structured.runtime.pendingPhase === 'retrying') {
+            segments.push('Runtime: retrying');
+        } else {
+            segments.push('Runtime: thinking');
+        }
+    } else if (structured.runtime?.pendingLabel) {
+        segments.push('Runtime');
+    }
     if (structured.tools.length > 0) {
         segments.push(`Tools ${structured.tools.length}`);
     }
@@ -148,6 +149,9 @@ function buildStructuredFallbackText(structured: AssistantUiStructuredPayload): 
     }
     if (structured.patches.length > 0) {
         segments.push(`Patches ${structured.patches.length}`);
+    }
+    if (structured.events.length > 0) {
+        segments.push(`Events ${structured.events.length}`);
     }
     if (segments.length === 0) {
         return 'Update';
@@ -212,6 +216,7 @@ function severityRank(value: AssistantUiStructuredApproval['severity']): number 
 function buildStructuredPayload(
     round: TimelineTurnRound,
     runtimePendingLabel?: string,
+    runtimePendingStatus?: PendingTaskStatus | null,
 ): AssistantUiStructuredPayload | undefined {
     if (!round.assistantTurn) {
         return undefined;
@@ -240,38 +245,46 @@ function buildStructuredPayload(
             severityRank(right.severity) - severityRank(left.severity)
             || right.risk - left.risk
         ));
-    const task = round.assistantTurn.taskCard
+    const taskProgress = Array.isArray(round.assistantTurn.taskCard?.tasks) && round.assistantTurn.taskCard.tasks.length > 0
         ? {
-            title: normalizeText(round.assistantTurn.taskCard.title) || 'Task center',
-            status: round.assistantTurn.taskCard.status ?? 'idle',
-            progress: Array.isArray(round.assistantTurn.taskCard.tasks) && round.assistantTurn.taskCard.tasks.length > 0
-                ? {
-                    completed: round.assistantTurn.taskCard.tasks.filter((entry) => (
-                        entry.status === 'completed' || entry.status === 'complete' || entry.status === 'skipped'
-                    )).length,
-                    total: round.assistantTurn.taskCard.tasks.length,
-                }
-                : undefined,
+            completed: round.assistantTurn.taskCard.tasks.filter((entry) => (
+                entry.status === 'completed' || entry.status === 'complete' || entry.status === 'skipped'
+            )).length,
+            total: round.assistantTurn.taskCard.tasks.length,
+        }
+        : undefined;
+    const taskStatus = round.assistantTurn.taskCard?.status ?? 'idle';
+    const taskHasTerminalState = taskStatus === 'finished' || taskStatus === 'failed';
+    const shouldExposeTask = Boolean(round.assistantTurn.taskCard) && (Boolean(taskProgress) || taskHasTerminalState);
+    const task = shouldExposeTask
+        ? {
+            title: normalizeText(round.assistantTurn.taskCard?.title) || 'Task center',
+            status: taskStatus,
+            progress: taskProgress,
         }
         : undefined;
     const patches = (round.assistantTurn.patches ?? []).map((patch) => ({
         filePath: normalizeText(patch.filePath) || 'Unknown file',
         status: patch.status,
     }));
+    const events = toUniqueLines(round.assistantTurn.systemEvents ?? []);
 
     const pendingLabel = normalizeText(runtimePendingLabel);
-    const runtime = pendingLabel
-        ? {
-            pendingLabel,
-        }
+    const runtime = (pendingLabel || runtimePendingStatus?.phase)
+        ? ({
+            pendingLabel: pendingLabel || undefined,
+            pendingPhase: runtimePendingStatus?.phase,
+            toolName: normalizeText(runtimePendingStatus?.toolName) || undefined,
+        })
         : undefined;
 
-    if (tools.length === 0 && approvals.length === 0 && !task && patches.length === 0 && !runtime) {
+    if (tools.length === 0 && approvals.length === 0 && !task && patches.length === 0 && events.length === 0 && !runtime) {
         return undefined;
     }
 
     return {
         runtime,
+        events,
         tools,
         approvals,
         task,
@@ -313,7 +326,13 @@ function asToolStatus(value: unknown): AssistantUiStructuredTool['status'] {
 }
 
 function asTaskStatus(value: unknown): AssistantUiStructuredTask['status'] {
-    if (value === 'idle' || value === 'running' || value === 'finished' || value === 'failed') {
+    if (
+        value === 'idle'
+        || value === 'running'
+        || value === 'finished'
+        || value === 'failed'
+        || value === 'suspended'
+    ) {
         return value;
     }
     return 'idle';
@@ -324,6 +343,13 @@ function asPatchStatus(value: unknown): AssistantUiStructuredPatch['status'] {
         return value;
     }
     return 'proposed';
+}
+
+function asPendingPhase(value: unknown): PendingTaskStatus['phase'] | undefined {
+    if (value === 'waiting_for_model' || value === 'running_tool' || value === 'retrying') {
+        return value;
+    }
+    return undefined;
 }
 
 export function readAssistantUiStructuredPayload(customValue: unknown): AssistantUiStructuredPayload | null {
@@ -361,8 +387,15 @@ export function readAssistantUiStructuredPayload(customValue: unknown): Assistan
     const runtime = isRecord(rawStructured.runtime)
         ? {
             pendingLabel: normalizeText(asString(rawStructured.runtime.pendingLabel)) || undefined,
+            pendingPhase: asPendingPhase(rawStructured.runtime.pendingPhase),
+            toolName: normalizeText(asString(rawStructured.runtime.toolName)) || undefined,
         }
         : undefined;
+    const events = Array.isArray(rawStructured.events)
+        ? rawStructured.events
+            .map((event) => normalizeText(asString(event)))
+            .filter((event) => event.length > 0)
+        : [];
 
     const task = isRecord(rawStructured.task)
         ? {
@@ -385,12 +418,13 @@ export function readAssistantUiStructuredPayload(customValue: unknown): Assistan
             status: asPatchStatus(patch.status),
         }));
 
-    if (tools.length === 0 && approvals.length === 0 && !task && patches.length === 0 && !runtime?.pendingLabel) {
+    if (tools.length === 0 && approvals.length === 0 && !task && patches.length === 0 && events.length === 0 && !runtime?.pendingLabel && !runtime?.pendingPhase) {
         return null;
     }
 
     return {
         runtime,
+        events,
         tools,
         approvals,
         task,
@@ -404,6 +438,7 @@ export function buildAssistantUiExternalMessages(
 ): AssistantUiExternalMessage[] {
     const messages: AssistantUiExternalMessage[] = [];
     const pendingLabel = normalizeText(options.pendingLabel);
+    const pendingStatus = options.pendingStatus ?? null;
     const lastRoundIndex = rounds.length - 1;
 
     for (let index = 0; index < rounds.length; index += 1) {
@@ -426,8 +461,9 @@ export function buildAssistantUiExternalMessages(
 
         const isLastRound = index === lastRoundIndex;
         const roundPendingLabel = isLastRound ? pendingLabel : '';
+        const roundPendingStatus = isLastRound ? pendingStatus : null;
         const assistantText = buildAssistantTurnText(round);
-        const structured = buildStructuredPayload(round, roundPendingLabel);
+        const structured = buildStructuredPayload(round, roundPendingLabel, roundPendingStatus);
         if (!assistantText) {
             if (structured) {
                 messages.push({
@@ -440,7 +476,7 @@ export function buildAssistantUiExternalMessages(
                     cardCounts: {
                         tools: round.assistantTurn.toolCalls?.length ?? 0,
                         approvals: round.assistantTurn.effectRequests?.length ?? 0,
-                        tasks: round.assistantTurn.taskCard ? 1 : 0,
+                        tasks: structured.task ? 1 : 0,
                         patches: round.assistantTurn.patches?.length ?? 0,
                     },
                     structured,
@@ -477,7 +513,7 @@ export function buildAssistantUiExternalMessages(
             cardCounts: {
                 tools: round.assistantTurn.toolCalls?.length ?? 0,
                 approvals: round.assistantTurn.effectRequests?.length ?? 0,
-                tasks: round.assistantTurn.taskCard ? 1 : 0,
+                tasks: structured?.task ? 1 : 0,
                 patches: round.assistantTurn.patches?.length ?? 0,
             },
             structured,

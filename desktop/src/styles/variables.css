@@ -2,53 +2,69 @@
 /* Fonts are preloaded via <link> in index.html — no blocking @import */
 
 :root {
-    /* Neutral Slate Scale */
-    --c-ink-50: #f8fafc;
-    --c-ink-100: #f1f5f9;
-    --c-ink-200: #e2e8f0;
-    --c-ink-300: #cbd5e1;
-    --c-ink-400: #94a3b8;
-    --c-ink-500: #64748b;
-    --c-ink-600: #475569;
-    --c-ink-700: #334155;
-    --c-ink-800: #1e293b;
-    --c-ink-900: #0f172a;
-    --c-ink-950: #020617;
+    /* Zola design foundation (mapped from zola/app/globals.css) */
+    --zola-background: oklch(1 0 0);
+    --zola-foreground: oklch(0.141 0.005 285.823);
+    --zola-card: oklch(1 0 0);
+    --zola-muted-surface: oklch(0.967 0.001 286.375);
+    --zola-border: oklch(0.92 0.004 286.32);
+    --zola-ring: oklch(0.705 0.015 286.067);
+    --zola-radius-base: 0.625rem;
+    --zola-chat-max-width: 48rem;
+    --zola-content-gutter: 1.5rem;
+    --zola-control-height: 2.25rem;
+    --zola-transition-fast: 200ms cubic-bezier(0.2, 0, 0.2, 1);
+    --zola-transition-base: 260ms cubic-bezier(0.2, 0, 0.2, 1);
+    --zola-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.06);
+    --zola-shadow-sm: 0 8px 24px rgba(15, 23, 42, 0.09);
 
-    --bg-app: #06101f;
-    --bg-sidebar: rgba(8, 18, 38, 0.94);
-    --bg-panel: rgba(10, 24, 49, 0.92);
-    --bg-element: rgba(16, 37, 72, 0.9);
-    --bg-element-hover: rgba(24, 52, 102, 0.96);
-    --bg-subtle: rgba(10, 28, 58, 0.88);
+    /* Neutral scale */
+    --c-ink-50: #fafafa;
+    --c-ink-100: #f4f4f5;
+    --c-ink-200: #e4e4e7;
+    --c-ink-300: #d4d4d8;
+    --c-ink-400: #a1a1aa;
+    --c-ink-500: #71717a;
+    --c-ink-600: #52525b;
+    --c-ink-700: #3f3f46;
+    --c-ink-800: #27272a;
+    --c-ink-900: #18181b;
+    --c-ink-950: #09090b;
+
+    --bg-app: var(--zola-background);
+    --bg-sidebar: color-mix(in srgb, var(--zola-card) 95%, transparent);
+    --bg-panel: color-mix(in srgb, var(--zola-card) 93%, transparent);
+    --bg-element: color-mix(in srgb, var(--zola-card) 100%, transparent);
+    --bg-element-hover: color-mix(in srgb, var(--zola-muted-surface) 88%, var(--zola-card));
+    --bg-subtle: color-mix(in srgb, var(--zola-muted-surface) 78%, var(--zola-card));
 
     /* Borders */
-    --border-subtle: rgba(96, 165, 250, 0.2);
-    --border-strong: rgba(147, 197, 253, 0.42);
+    --border-subtle: color-mix(in srgb, var(--zola-border) 74%, transparent);
+    --border-strong: color-mix(in srgb, var(--zola-border) 96%, transparent);
 
     /* Text */
-    --text-primary: #eff6ff;
-    --text-secondary: #c7d7f7;
-    --text-tertiary: #9cb6ea;
-    --text-muted: #7c95c6;
-    --text-inverse: #081428;
-    --text-on-dark: #eff6ff;
+    --text-primary: var(--zola-foreground);
+    --text-secondary: color-mix(in srgb, var(--zola-foreground) 86%, white 14%);
+    --text-tertiary: color-mix(in srgb, var(--zola-foreground) 74%, white 26%);
+    --text-muted: color-mix(in srgb, var(--zola-foreground) 58%, white 42%);
+    --text-inverse: #f9fafb;
+    --text-on-dark: #f9fafb;
 
-    /* Accents - Enterprise Blue */
-    --accent-primary: #2563eb;
-    --accent-hover: #3b82f6;
-    --accent-subtle: rgba(37, 99, 235, 0.18);
+    /* Accent */
+    --accent-primary: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-subtle: rgba(59, 130, 246, 0.14);
 
-    /* Status - Muted/Natural */
-    --status-success: #34d399;
-    --status-error: #fb7185;
+    /* Status */
+    --status-success: #10b981;
+    --status-error: #ef4444;
     --status-warning: #f59e0b;
-    --status-info: #60a5fa;
+    --status-info: #3b82f6;
 
-    /* Typography — Inter for clean modern look, system-ui as instant fallback */
-    --font-heading: 'Rajdhani', 'Segoe UI', sans-serif;
-    --font-body: 'Manrope', 'Segoe UI', sans-serif;
-    --font-code: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+    /* Typography */
+    --font-heading: 'Geist', 'Manrope', 'Segoe UI', sans-serif;
+    --font-body: 'Geist', 'Manrope', 'Segoe UI', sans-serif;
+    --font-code: 'Geist Mono', 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
 
     /* Spacing */
     --space-1: 4px;
@@ -60,17 +76,17 @@
     --space-8: 32px;
 
     /* Radii */
-    --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --radius-xl: 16px;
+    --radius-sm: calc(var(--zola-radius-base) - 4px);
+    --radius-md: var(--zola-radius-base);
+    --radius-lg: calc(var(--zola-radius-base) + 2px);
+    --radius-xl: calc(var(--zola-radius-base) + 6px);
     --radius-full: 9999px;
 
-    /* Shadows - Soft and Warm */
-    --shadow-sm: 0 8px 20px rgba(2, 8, 20, 0.24);
-    --shadow-md: 0 14px 34px rgba(2, 8, 20, 0.34);
-    --shadow-lg: 0 22px 52px rgba(2, 8, 20, 0.42);
-    --shadow-float: 0 28px 68px rgba(2, 8, 20, 0.5), 0 0 0 1px rgba(96, 165, 250, 0.12);
+    /* Shadows */
+    --shadow-sm: var(--zola-shadow-xs);
+    --shadow-md: var(--zola-shadow-sm);
+    --shadow-lg: 0 20px 48px rgba(15, 23, 42, 0.14);
+    --shadow-float: 0 20px 44px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.6);
 
     /* Typography - Font Sizes */
     --font-size-xs: 0.6875rem;  /* 11px */
@@ -94,10 +110,10 @@
     --font-bold: 700;
 
     /* Transitions */
-    --ease-default: 0.2s cubic-bezier(0.2, 0.0, 0.2, 1);
-    --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-    --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-    --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-default: 180ms cubic-bezier(0.21, 0.02, 0.2, 1);
+    --transition-fast: var(--zola-transition-fast);
+    --transition-base: var(--zola-transition-base);
+    --transition-slow: 320ms cubic-bezier(0.22, 0.04, 0.16, 1);
 
     /* Z-Index Layers */
     --z-base: 1;
@@ -110,6 +126,7 @@
 
     /* Semantic aliases — keep undefined-variable warnings away */
     --bg-elevated: var(--bg-panel);
+    --bg-card: var(--bg-element);
     --border-default: var(--border-strong);
     --surface-thread: var(--bg-panel);
     --surface-message: var(--bg-element);
@@ -118,91 +135,104 @@
     --surface-card-strong: var(--bg-element);
 
     /* Accessibility */
-    --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-primary);
+    --focus-ring: 0 0 0 2px color-mix(in srgb, var(--bg-app) 82%, white), 0 0 0 4px color-mix(in srgb, var(--accent-primary) 60%, white);
 
     /* Component Specific - Common Values */
-    --input-height: 40px;
-    --button-height: 40px;
+    --input-height: var(--zola-control-height);
+    --button-height: var(--zola-control-height);
+    --control-height-compact: 2rem;
     --header-height: 48px;
-    --sidebar-width: 280px;
+    --sidebar-width: 210px;
+    --chat-content-max-width: var(--zola-chat-max-width);
+    --chat-content-gutter: var(--zola-content-gutter);
+    --shell-panel-padding: 10px;
+    --shell-panel-padding-tight: 8px;
+    --surface-stack-gap: 10px;
+    --surface-stack-gap-tight: 8px;
+    --surface-card-radius: 12px;
+    --surface-card-radius-lg: 16px;
+    --surface-chip-radius: 999px;
+    --timeline-rail-inset: 14px;
     
     /* Collapsible Sidebar */
     --sidebar-collapsed-width: 56px;
-    --sidebar-expanded-width: 280px;
+    --sidebar-expanded-width: 210px;
     
-    /* Brand Colors (Enterprise Blue) */
-    --brand-50: #0a1838;
-    --brand-100: #10275a;
-    --brand-200: #173a86;
-    --brand-300: #1d4ed8;
-    --brand-400: #2563eb;
+    /* Brand colors */
+    --brand-50: #eff6ff;
+    --brand-100: #dbeafe;
+    --brand-200: #bfdbfe;
+    --brand-300: #93c5fd;
+    --brand-400: #60a5fa;
     --brand-500: #3b82f6;
-    --brand-600: #60a5fa;
-    --brand-700: #93c5fd;
+    --brand-600: #2563eb;
+    --brand-700: #1d4ed8;
     
-    /* Glass Effect */
-    --glass-bg: rgba(8, 23, 48, 0.78);
-    --glass-bg-dark: rgba(5, 15, 34, 0.9);
-    --glass-border: rgba(96, 165, 250, 0.2);
-    --glass-glow: rgba(59, 130, 246, 0.24);
-    --glass-blur: blur(14px) saturate(135%);
+    /* Glass */
+    --glass-bg: rgba(255, 255, 255, 0.72);
+    --glass-bg-dark: rgba(244, 246, 251, 0.82);
+    --glass-border: rgba(24, 24, 27, 0.08);
+    --glass-glow: rgba(59, 130, 246, 0.16);
+    --glass-blur: blur(16px) saturate(128%);
 }
 
 /* Dark Theme */
 [data-theme="dark"] {
-    /* Inverted Ink Scale for Dark Mode */
-    --bg-app: #040b18;
-    --bg-sidebar: rgba(5, 14, 31, 0.95);
-    --bg-panel: rgba(6, 18, 39, 0.94);
-    --bg-element: rgba(14, 35, 67, 0.9);
-    --bg-element-hover: rgba(22, 50, 95, 0.94);
-    --bg-subtle: rgba(9, 24, 50, 0.9);
+    --zola-background: oklch(21.34% 0 0);
+    --zola-foreground: oklch(0.985 0 0);
+    --zola-card: oklch(26.45% 0 0);
+    --zola-muted-surface: oklch(100% 0 0 / 10.2%);
+    --zola-border: oklch(100% 0 0 / 8%);
+    --zola-ring: oklch(0.442 0.017 285.786);
+    --zola-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.34);
+    --zola-shadow-sm: 0 14px 36px rgba(0, 0, 0, 0.38);
 
-    --border-subtle: rgba(96, 165, 250, 0.18);
-    --border-strong: rgba(147, 197, 253, 0.34);
+    --bg-app: var(--zola-background);
+    --bg-sidebar: color-mix(in srgb, var(--zola-card) 96%, transparent);
+    --bg-panel: color-mix(in srgb, var(--zola-card) 94%, transparent);
+    --bg-element: color-mix(in srgb, var(--zola-card) 100%, transparent);
+    --bg-element-hover: color-mix(in srgb, var(--zola-muted-surface) 86%, var(--zola-card));
+    --bg-subtle: color-mix(in srgb, var(--zola-muted-surface) 74%, var(--zola-card));
 
-    --text-primary: #f3f7ff;
-    --text-secondary: #d5e3ff;
-    --text-tertiary: #aac2ef;
-    --text-muted: #88a3d3;
-    --text-inverse: #050f22;
-    --text-on-dark: #f3f7ff;
+    --border-subtle: color-mix(in srgb, var(--zola-border) 84%, transparent);
+    --border-strong: color-mix(in srgb, var(--zola-border) 100%, transparent);
 
-    /* Slightly brighter accent in dark mode */
-    --accent-primary: #3b82f6;
-    --accent-hover: #60a5fa;
-    --accent-subtle: rgba(59, 130, 246, 0.16);
+    --text-primary: var(--zola-foreground);
+    --text-secondary: color-mix(in srgb, var(--zola-foreground) 84%, black 16%);
+    --text-tertiary: color-mix(in srgb, var(--zola-foreground) 68%, black 32%);
+    --text-muted: color-mix(in srgb, var(--zola-foreground) 52%, black 48%);
+    --text-inverse: #09090b;
+    --text-on-dark: #f5f5f7;
 
-    /* Status colors — slightly brighter in dark mode */
-    --status-success: #6ee7b7;
+    --accent-primary: #7fb2ff;
+    --accent-hover: #9fc8ff;
+    --accent-subtle: rgba(127, 178, 255, 0.18);
+
+    --status-success: #34d399;
     --status-error: #fb7185;
     --status-warning: #f59e0b;
     --status-info: #93c5fd;
 
-    /* Shadows — darker in dark mode */
-    --shadow-sm: 0 8px 18px rgba(1, 5, 16, 0.44);
-    --shadow-md: 0 16px 36px rgba(1, 5, 16, 0.52);
-    --shadow-lg: 0 28px 58px rgba(1, 5, 16, 0.6);
-    --shadow-float: 0 34px 72px rgba(1, 5, 16, 0.66), 0 0 0 1px rgba(96, 165, 250, 0.12);
-    
-    /* Brand Colors - Brighter in dark mode */
-    --brand-50: #0b1733;
-    --brand-100: #13285a;
-    --brand-200: #1c3d8e;
-    --brand-300: #2563eb;
-    --brand-400: #3b82f6;
-    --brand-500: #60a5fa;
-    --brand-600: #93c5fd;
-    --brand-700: #bfdbfe;
-    
-    /* Glass Effect - Dark mode */
-    --glass-bg: rgba(6, 17, 39, 0.84);
-    --glass-bg-dark: rgba(3, 11, 25, 0.92);
-    --glass-border: rgba(96, 165, 250, 0.18);
-    --glass-glow: rgba(59, 130, 246, 0.2);
+    --shadow-sm: 0 10px 24px rgba(3, 5, 10, 0.38);
+    --shadow-md: 0 18px 38px rgba(3, 5, 10, 0.46);
+    --shadow-lg: 0 30px 62px rgba(2, 4, 9, 0.56);
+    --shadow-float: 0 26px 58px rgba(2, 4, 9, 0.54), 0 0 0 1px rgba(255, 255, 255, 0.04);
 
-    /* Focus ring — brighter in dark mode */
-    --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-primary);
+    --brand-50: #101828;
+    --brand-100: #132341;
+    --brand-200: #1e3a73;
+    --brand-300: #345ca6;
+    --brand-400: #5b89dc;
+    --brand-500: #7fb2ff;
+    --brand-600: #a8ceff;
+    --brand-700: #d2e7ff;
+
+    --glass-bg: rgba(16, 18, 24, 0.72);
+    --glass-bg-dark: rgba(10, 12, 16, 0.86);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-glow: rgba(127, 178, 255, 0.2);
+
+    --focus-ring: 0 0 0 2px color-mix(in srgb, var(--bg-app) 94%, black), 0 0 0 4px color-mix(in srgb, var(--accent-primary) 60%, white);
 }
 
 /* ============================================================================

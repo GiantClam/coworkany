@@ -29,6 +29,7 @@ import type { CanonicalStreamEvent } from '../../../sidecar/src/protocol';
 export function useTauriEvents() {
     const addEvents = useTaskEventStore((state) => state.addEvents);
     const addCanonicalEvents = useCanonicalTaskStreamStore((state) => state.addEvents);
+    const clearCanonicalSession = useCanonicalTaskStreamStore((state) => state.clearSession);
     const setSidecarConnected = useTaskEventStore((state) => state.setSidecarConnected);
     const handleIpcResponse = useTaskEventStore((state) => state.handleIpcResponse);
     const addAuditEvent = useTaskEventStore((state) => state.addAuditEvent);
@@ -48,6 +49,9 @@ export function useTauriEvents() {
     }, [addEvents]);
 
     const enqueueTaskEvent = useCallback((event: TaskEvent) => {
+        if (event.type === 'TASK_HISTORY_CLEARED') {
+            clearCanonicalSession(event.taskId);
+        }
         pendingTaskEventsRef.current.push(event);
         if (flushFrameRef.current !== null) {
             return;
@@ -56,7 +60,7 @@ export function useTauriEvents() {
         flushFrameRef.current = window.requestAnimationFrame(() => {
             flushTaskEvents();
         });
-    }, [flushTaskEvents]);
+    }, [clearCanonicalSession, flushTaskEvents]);
 
     useEffect(() => {
         let unlistenTaskEvent: UnlistenFn | undefined;

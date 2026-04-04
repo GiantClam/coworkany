@@ -2,6 +2,7 @@ import React from 'react';
 import styles from '../Timeline.module.css';
 import type { AssistantTurnItem } from '../../../../types';
 import { sanitizeDisplayText } from '../textSanitizer';
+import type { PendingTaskStatus } from '../pendingTaskStatus';
 import { buildAssistantTurnCardSchemas } from './assistantTurnCardSchema';
 import { AssistantTurnCardStack } from './AssistantTurnCardStack';
 
@@ -10,6 +11,12 @@ type StepTone = 'neutral' | 'running' | 'success' | 'failed';
 interface AssistantTurnBlockProps {
     item: AssistantTurnItem;
     pendingLabel?: string;
+    pendingStatus?: PendingTaskStatus | null;
+    onApprovalDecision?: (input: {
+        requestId: string;
+        decision: 'approve' | 'deny' | 'modify_approve';
+        note?: string;
+    }) => Promise<void> | void;
     onTaskCollaborationSubmit?: (input: {
         taskId?: string;
         cardId: string;
@@ -34,6 +41,8 @@ function stepToneClass(tone: StepTone): string {
 const AssistantTurnBlockComponent: React.FC<AssistantTurnBlockProps> = ({
     item,
     pendingLabel,
+    pendingStatus,
+    onApprovalDecision,
     onTaskCollaborationSubmit,
 }) => {
     const visibleSteps = (item.steps || []).filter((step) => {
@@ -43,8 +52,8 @@ const AssistantTurnBlockComponent: React.FC<AssistantTurnBlockProps> = ({
             && normalizedTitle !== 'summary';
     });
     const cards = React.useMemo(
-        () => buildAssistantTurnCardSchemas(item, pendingLabel),
-        [item, pendingLabel],
+        () => buildAssistantTurnCardSchemas(item, pendingLabel, pendingStatus),
+        [item, pendingLabel, pendingStatus],
     );
 
     return (
@@ -71,6 +80,7 @@ const AssistantTurnBlockComponent: React.FC<AssistantTurnBlockProps> = ({
 
             <AssistantTurnCardStack
                 cards={cards}
+                onApprovalDecision={onApprovalDecision}
                 onTaskCollaborationSubmit={onTaskCollaborationSubmit}
             />
         </div>

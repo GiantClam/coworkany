@@ -98,3 +98,10 @@ sidecar/.npmrc
 /workspaces.json
 sidecar/workspace/
 sidecar/src/*.bak
+
+# Local OMX runtime state
+.omx/
+
+# Local E2E/visual output artifacts
+output/playwright/
+artifacts/stability-replay/

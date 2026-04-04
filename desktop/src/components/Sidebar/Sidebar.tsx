@@ -86,6 +86,19 @@ const CloseIcon = () => (
     </svg>
 );
 
+function resolveSessionStatusDotTone(status: SidebarSessionSummary['status']): 'waiting' | 'success' | 'error' | 'idle' {
+    if (status === 'running') {
+        return 'waiting';
+    }
+    if (status === 'finished') {
+        return 'success';
+    }
+    if (status === 'failed' || status === 'suspended') {
+        return 'error';
+    }
+    return 'idle';
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({ onOpenSettings }) => {
     const { t } = useTranslation();
     const sidecarConnected = useTaskEventStore((state) => state.sidecarConnected);
@@ -362,7 +375,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenSettings }) => {
                                         }}
                                         type="button"
                                     >
-                                        {session.title || t('search.untitledTask')}
+                                        <span className={`session-status-dot ${resolveSessionStatusDotTone(session.status)}`} aria-hidden="true" />
+                                        <span className="session-title">{session.title || t('search.untitledTask')}</span>
                                     </button>
                                     <button
                                         type="button"
@@ -521,7 +535,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onOpenSettings }) => {
                                                                 }}
                                                                 type="button"
                                                             >
-                                                                {session.title || t('search.untitledTask')}
+                                                                <span className={`session-status-dot ${resolveSessionStatusDotTone(session.status)}`} aria-hidden="true" />
+                                                                <span className="session-title">{session.title || t('search.untitledTask')}</span>
                                                             </button>
                                                             <button
                                                                 type="button"

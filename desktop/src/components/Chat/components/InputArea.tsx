@@ -37,9 +37,10 @@ interface InputAreaProps {
     llmProfiles: LlmProfile[];
     activeProfileId?: string;
     onSelectProfile: (id: string) => void;
-    showRouteControls?: boolean;
     routeMode?: InputRouteMode;
-    onRouteModeChange?: (mode: InputRouteMode) => void;
+    isRunning?: boolean;
+    isInterrupting?: boolean;
+    onInterrupt?: () => void;
 }
 
 const InputAreaComponent: React.FC<InputAreaProps> = ({
@@ -58,9 +59,10 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     llmProfiles,
     activeProfileId,
     onSelectProfile,
-    showRouteControls = false,
     routeMode = 'chat',
-    onRouteModeChange,
+    isRunning = false,
+    isInterrupting = false,
+    onInterrupt,
 }) => {
     const { t } = useTranslation();
     const voiceInput = useVoiceInput(getCurrentLanguage());
@@ -126,6 +128,7 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
             ? t('voice.stopRecording')
             : t('voice.startRecording');
     const canSubmit = query.trim().length > 0 || attachments.length > 0;
+    const canInterrupt = isRunning && typeof onInterrupt === 'function';
     const voiceStatusText = voiceInput.isProcessing
         ? t('voice.processingTranscription')
         : voiceInput.isListening
@@ -204,36 +207,22 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     };
 
     const submit = () => {
+        if (canInterrupt) {
+            if (!isInterrupting) {
+                onInterrupt?.();
+            }
+            return;
+        }
         if (disabled || !canSubmit) return;
         void onSubmit();
     };
 
+    const modeBadgeLabel = routeMode === 'task'
+        ? t('welcome.modeTaskTitle', { defaultValue: 'Task Mode' })
+        : t('welcome.modeChatTitle', { defaultValue: 'Chat Mode' });
+
     return (
         <div className="input-area" onPaste={handlePasteEvent}>
-            {showRouteControls ? (
-                <div className="input-route-switch" role="tablist" aria-label={t('chat.messageRouting', { defaultValue: 'Message routing' })}>
-                    <button
-                        type="button"
-                        className={`input-route-button${routeMode === 'chat' ? ' active' : ''}`}
-                        onClick={() => onRouteModeChange?.('chat')}
-                        role="tab"
-                        aria-selected={routeMode === 'chat'}
-                        disabled={disabled}
-                    >
-                        {t('welcome.modeChatTitle', { defaultValue: 'Chat Mode' })}
-                    </button>
-                    <button
-                        type="button"
-                        className={`input-route-button${routeMode === 'task' ? ' active' : ''}`}
-                        onClick={() => onRouteModeChange?.('task')}
-                        role="tab"
-                        aria-selected={routeMode === 'task'}
-                        disabled={disabled}
-                    >
-                        {t('welcome.modeTaskTitle', { defaultValue: 'Task Mode' })}
-                    </button>
-                </div>
-            ) : null}
             {voiceStatusText && (
                 <div className="voice-interim">
                     {voiceStatusText}
@@ -270,109 +259,125 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                     aria-hidden="true"
                     tabIndex={-1}
                 />
-                <textarea
-                    ref={textAreaRef}
-                    className="chat-input"
-                    placeholder={placeholder}
-                    value={query}
-                    rows={1}
-                    onChange={(e) => onQueryChange(e.target.value)}
-                    onCompositionStart={() => {
-                        isComposingRef.current = true;
-                    }}
-                    onCompositionEnd={() => {
-                        isComposingRef.current = false;
-                    }}
-                    onKeyDown={(event) => {
-                        if (isImeConfirmingEnter(event, isComposingRef.current)) {
-                            event.preventDefault();
-                            return;
-                        }
+                <div className="input-compose-row">
+                    <textarea
+                        ref={textAreaRef}
+                        className="chat-input"
+                        placeholder={placeholder}
+                        value={query}
+                        rows={1}
+                        onChange={(e) => onQueryChange(e.target.value)}
+                        onCompositionStart={() => {
+                            isComposingRef.current = true;
+                        }}
+                        onCompositionEnd={() => {
+                            isComposingRef.current = false;
+                        }}
+                        onKeyDown={(event) => {
+                            if (isImeConfirmingEnter(event, isComposingRef.current)) {
+                                event.preventDefault();
+                                return;
+                            }
 
-                        if (shouldSubmitOnEnter(event, isComposingRef.current)) {
-                            event.preventDefault();
-                            submit();
-                        }
-                    }}
-                    disabled={disabled}
-                    aria-label={placeholder}
-                />
-                <button
-                    type="button"
-                    className="attach-button"
-                    onClick={handleOpenPicker}
-                    disabled={disabled}
-                    title={t('multimodal.attachFile')}
-                    aria-label={t('multimodal.attachFile')}
-                >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
-                </button>
-                {voiceInput.isSupported && (
-                    <button
-                        type="button"
-                        className={`voice-button ${voiceInput.isListening ? 'listening' : ''} ${voiceInput.isProcessing ? 'processing' : ''}`}
-                        onClick={voiceInput.toggleListening}
-                        disabled={disabled || voiceInput.isProcessing}
-                        title={voiceLabel}
-                        aria-label={voiceLabel}
-                        aria-pressed={voiceInput.isListening}
-                    >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                            <line x1="12" y1="19" x2="12" y2="23"></line>
-                            <line x1="8" y1="23" x2="16" y2="23"></line>
-                        </svg>
-                    </button>
-                )}
-                <button
-                    type="button"
-                    className="send-button"
-                    onClick={submit}
-                    disabled={!canSubmit || disabled}
-                    aria-label={t('chat.sendMessage')}
-                >
-                    <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
-                    >
-                        <line x1="22" y1="2" x2="11" y2="13"></line>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                </button>
-            </form>
-            <div className="input-meta-row">
-                <span className="input-mode-badge">Build</span>
-                <label className="llm-select-wrap">
-                    <span className="llm-select-icon" aria-hidden="true">AI</span>
-                    <select
-                        className="llm-select"
-                        value={activeProfileId ?? ''}
-                        onChange={handleProfileChange}
-                        disabled={disabled || llmProfiles.length === 0}
-                        aria-label={t('chat.llmSettings')}
-                    >
-                        {llmProfiles.length === 0 && (
-                            <option value="">{t('chat.noProfiles')}</option>
+                            if (shouldSubmitOnEnter(event, isComposingRef.current)) {
+                                event.preventDefault();
+                                submit();
+                            }
+                        }}
+                        disabled={disabled}
+                        aria-label={placeholder}
+                    />
+                </div>
+                <div className="input-actions-row">
+                    <div className="input-actions-left">
+                        <button
+                            type="button"
+                            className="attach-button"
+                            onClick={handleOpenPicker}
+                            disabled={disabled}
+                            title={t('multimodal.attachFile')}
+                            aria-label={t('multimodal.attachFile')}
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <line x1="12" y1="5" x2="12" y2="19"></line>
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                        </button>
+                        {voiceInput.isSupported && (
+                            <button
+                                type="button"
+                                className={`voice-button ${voiceInput.isListening ? 'listening' : ''} ${voiceInput.isProcessing ? 'processing' : ''}`}
+                                onClick={voiceInput.toggleListening}
+                                disabled={disabled || voiceInput.isProcessing}
+                                title={voiceLabel}
+                                aria-label={voiceLabel}
+                                aria-pressed={voiceInput.isListening}
+                            >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                                </svg>
+                            </button>
                         )}
-                        {llmProfiles.map((profile) => (
-                            <option key={profile.id} value={profile.id}>
-                                {profile.name}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-            </div>
+                        <span className="input-mode-badge">{modeBadgeLabel}</span>
+                        <label className="llm-select-wrap">
+                            <span className="llm-select-icon" aria-hidden="true">AI</span>
+                            <select
+                                className="llm-select"
+                                value={activeProfileId ?? ''}
+                                onChange={handleProfileChange}
+                                disabled={disabled || llmProfiles.length === 0}
+                                aria-label={t('chat.llmSettings')}
+                            >
+                                {llmProfiles.length === 0 && (
+                                    <option value="">{t('chat.noProfiles')}</option>
+                                )}
+                                {llmProfiles.map((profile) => (
+                                    <option key={profile.id} value={profile.id}>
+                                        {profile.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+                    <div className="input-actions-right">
+                        <span className="input-submit-hint">
+                            {canInterrupt ? t('common.cancel') : 'Enter'}
+                        </span>
+                        <button
+                            type="button"
+                            className={`send-button${canInterrupt ? ' is-stop' : ''}${isInterrupting ? ' is-busy' : ''}`}
+                            onClick={submit}
+                            disabled={canInterrupt ? isInterrupting : (!canSubmit || disabled)}
+                            aria-label={canInterrupt ? t('common.cancel') : t('chat.sendMessage')}
+                            title={canInterrupt ? t('common.cancel') : t('chat.sendMessage')}
+                        >
+                            {canInterrupt ? (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                    <rect x="7" y="7" width="10" height="10" rx="2" />
+                                </svg>
+                            ) : (
+                                <svg
+                                    width="20"
+                                    height="20"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            )}
+                        </button>
+                    </div>
+                </div>
+            </form>
         </div>
     );
 };
@@ -384,6 +389,8 @@ const arePropsEqual = (prevProps: InputAreaProps, nextProps: InputAreaProps): bo
         prevProps.query === nextProps.query &&
         prevProps.placeholder === nextProps.placeholder &&
         prevProps.disabled === nextProps.disabled &&
+        prevProps.isRunning === nextProps.isRunning &&
+        prevProps.isInterrupting === nextProps.isInterrupting &&
         prevProps.attachmentError === nextProps.attachmentError &&
         prevProps.activeProfileId === nextProps.activeProfileId &&
         prevProps.attachments.map((item) => item.id).join('|') === nextProps.attachments.map((item) => item.id).join('|') &&
