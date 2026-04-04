@@ -140,6 +140,28 @@ describe('ipc bridge', () => {
         });
     });
 
+    test('ignores non-assistant finish chunk response messages when extracting final assistant text', () => {
+        const event = extractMastraFinalAssistantTextEvent({
+            type: 'finish',
+            payload: {
+                response: {
+                    messages: [
+                        {
+                            role: 'user',
+                            content: [{ text: 'repeat my prompt' }],
+                        },
+                        {
+                            role: 'system',
+                            content: [{ text: 'internal routing note' }],
+                        },
+                    ],
+                },
+            },
+        }, 'run-4c');
+
+        expect(event).toBeNull();
+    });
+
     test('maps structured error chunk to error event with nested message', () => {
         const event = mapMastraChunkToDesktopEvent({
             type: 'error',

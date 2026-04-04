@@ -756,6 +756,39 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
+    test('send_task_message treats complete without assistant narrative as false completion failure', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-false-complete',
+                    role: 'thinking',
+                    content: 'thinking...',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-false-complete',
+                    finishReason: 'stream_exhausted',
+                });
+                return { runId: 'run-false-complete' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-false-complete',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-false-complete',
+                content: 'continue',
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_FALSE_COMPLETION');
+    });
+
     test('token usage desktop events are forwarded as TOKEN_USAGE payloads', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
