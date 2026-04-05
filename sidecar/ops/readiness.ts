@@ -248,6 +248,9 @@ export type ReleaseReadinessReport = {
         controlPlaneThresholdProfile?: string;
         syncProductionReplays?: boolean;
         productionReplayDatasetPath?: string;
+        repoMatrixPath?: string;
+        repoMatrixOutPath?: string;
+        repoMatrixEvidenceDir?: string;
     };
     stages: ReleaseStageResult[];
     productionReplayImport?: ProductionReplayImportSummary;
@@ -1177,6 +1180,15 @@ export function renderReleaseReadinessMarkdown(report: ReleaseReadinessReport): 
     lines.push(`- Doctor required status: ${report.requestedOptions.doctorRequiredStatus}`);
     lines.push(`- Canary evidence path: ${report.requestedOptions.canaryEvidencePath ?? 'not provided'}`);
     lines.push(`- Require canary evidence: ${report.requestedOptions.requireCanaryEvidence ? 'yes' : 'no'}`);
+    if (report.requestedOptions.repoMatrixPath) {
+        lines.push(`- Repo matrix input: ${report.requestedOptions.repoMatrixPath}`);
+    }
+    if (report.requestedOptions.repoMatrixOutPath) {
+        lines.push(`- Repo matrix report: ${report.requestedOptions.repoMatrixOutPath}`);
+    }
+    if (report.requestedOptions.repoMatrixEvidenceDir) {
+        lines.push(`- Repo matrix evidence: ${report.requestedOptions.repoMatrixEvidenceDir}`);
+    }
     if (report.requestedOptions.productionReplayDatasetPath) {
         lines.push(`- Production replay dataset: ${report.requestedOptions.productionReplayDatasetPath}`);
     }

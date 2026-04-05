@@ -24,20 +24,46 @@ function sortMessages(messages: CanonicalTaskMessage[]): CanonicalTaskMessage[] 
     });
 }
 
-function findMessageIndex(messages: CanonicalTaskMessage[], message: Pick<CanonicalTaskMessage, 'id' | 'correlationId'>): number {
-    const exactIndex = messages.findIndex((entry) => entry.id === message.id);
+function findMessageIndex(
+    messages: CanonicalTaskMessage[],
+    message: Pick<CanonicalTaskMessage, 'id' | 'correlationId' | 'turnId'>,
+): number {
+    const turnId = message.turnId ?? '';
+    const exactIndex = messages.findIndex((entry) => (
+        entry.id === message.id
+        && (entry.turnId ?? '') === turnId
+    ));
     if (exactIndex >= 0) {
         return exactIndex;
+    }
+
+    if (!message.turnId) {
+        const legacyExactIndex = messages.findIndex((entry) => entry.id === message.id && !entry.turnId);
+        if (legacyExactIndex >= 0) {
+            return legacyExactIndex;
+        }
     }
 
     if (!message.correlationId) {
         return -1;
     }
 
-    return messages.findIndex((entry) =>
-        entry.id === message.correlationId
-        || entry.correlationId === message.correlationId
-    );
+    const correlatedIndex = messages.findIndex((entry) => (
+        (entry.id === message.correlationId || entry.correlationId === message.correlationId)
+        && (entry.turnId ?? '') === turnId
+    ));
+    if (correlatedIndex >= 0) {
+        return correlatedIndex;
+    }
+
+    if (!message.turnId) {
+        return messages.findIndex((entry) =>
+            !entry.turnId
+            && (entry.id === message.correlationId || entry.correlationId === message.correlationId)
+        );
+    }
+
+    return -1;
 }
 
 function mergeCanonicalMessage(
@@ -61,6 +87,7 @@ function applyMessageDelta(
     let existingIndex = findMessageIndex(messages, {
         id: event.payload.id,
         correlationId: event.payload.correlationId,
+        turnId: event.payload.turnId,
     });
     const hasExplicitIdentity = Boolean(
         event.payload.correlationId
@@ -73,6 +100,7 @@ function applyMessageDelta(
             && lastMessage.role === 'assistant'
             && lastMessage.status === 'streaming'
             && lastMessage.sourceEventType === 'TEXT_DELTA'
+            && (lastMessage.turnId ?? '') === (event.payload.turnId ?? '')
         ) {
             existingIndex = messages.length - 1;
         }
@@ -83,6 +111,7 @@ function applyMessageDelta(
         : {
             id: event.payload.id,
             taskId: event.payload.taskId,
+            turnId: event.payload.turnId,
             role: event.payload.role,
             timestamp: event.payload.timestamp,
             sequence: event.payload.sequence,
@@ -115,6 +144,7 @@ function applyMessageDelta(
     nextMessage.status = 'streaming';
     nextMessage.sequence = event.payload.sequence;
     nextMessage.timestamp = event.payload.timestamp;
+    nextMessage.turnId = event.payload.turnId ?? nextMessage.turnId;
 
     return mergeCanonicalMessage(messages, nextMessage);
 }

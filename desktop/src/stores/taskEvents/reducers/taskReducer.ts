@@ -537,19 +537,6 @@ function appendAssistantMessage(session: TaskSession, event: TaskEvent, content:
     };
 }
 
-function hasAssistantReplyAfterLatestUserMessage(session: TaskSession): boolean {
-    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-        const message = session.messages[index];
-        if (message.role === 'assistant' && message.content.trim().length > 0) {
-            return true;
-        }
-        if (message.role === 'user') {
-            return false;
-        }
-    }
-    return false;
-}
-
 export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSession {
     const payload = event.payload as Record<string, unknown>;
 
@@ -1028,13 +1015,13 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
 
         case 'RATE_LIMITED': {
             const retryMessage = typeof payload.message === 'string' ? payload.message.trim() : '';
-            const hasSettledChatReply = session.taskMode === 'chat' && hasAssistantReplyAfterLatestUserMessage(session);
+            const shouldKeepTerminalStatus = session.status === 'finished' || session.status === 'failed';
             return {
                 ...session,
-                status: hasSettledChatReply ? 'finished' : 'running',
+                status: shouldKeepTerminalStatus ? session.status : 'running',
                 failure: undefined,
-                blockingReason: hasSettledChatReply
-                    ? undefined
+                blockingReason: shouldKeepTerminalStatus
+                    ? session.blockingReason
                     : (retryMessage.length > 0 ? retryMessage : session.blockingReason),
             };
         }

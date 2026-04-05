@@ -49,6 +49,17 @@ function getString(value: unknown): string | undefined {
     return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function hasSubstantiveAssistantText(content: string): boolean {
+    const normalized = content
+        .replace(/[`*_>#-]/gu, ' ')
+        .replace(/\s+/gu, ' ')
+        .trim();
+    if (normalized.length < 4) {
+        return false;
+    }
+    return /[\p{L}\p{N}]/u.test(normalized);
+}
+
 function normalizeOpenAiBaseUrl(input: string | undefined): string | undefined {
     const raw = input?.trim();
     if (!raw) {
@@ -590,6 +601,6 @@ describe('real model smoke e2e', () => {
             .map((message) => getString(toRecord(message.payload).delta) ?? '')
             .join('')
             .trim();
-        expect(text.length).toBeGreaterThan(8);
+        expect(hasSubstantiveAssistantText(text)).toBe(true);
     }, 240_000);
 });

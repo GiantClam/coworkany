@@ -817,9 +817,13 @@ function buildCanonicalTimelineItems(
                             currentAssistantTurn.taskCard.collaboration = undefined;
                         }
                     }
-                    if (part.label && !isChatSession) {
+                    const shouldShowStatusLabel = Boolean(part.label) && (
+                        !isChatSession
+                        || normalizeText(message.sourceEventType) === 'RATE_LIMITED'
+                    );
+                    if (shouldShowStatusLabel) {
                         currentAssistantTurn = ensureCanonicalAssistantTurn(currentAssistantTurn, message);
-                        appendCanonicalSystemEvent(currentAssistantTurn, part.label);
+                        appendCanonicalSystemEvent(currentAssistantTurn, part.label ?? '');
                     }
                     break;
                 case 'task':
@@ -1239,6 +1243,41 @@ function mergeAssistantTurn(base: AssistantTurnItem, incoming: AssistantTurnItem
     };
 }
 
+function mergeTrajectoryRoundsWithCanonicalRounds(
+    rawRoundItems: TimelineItemType[],
+    canonicalRoundItems: TimelineItemType[],
+): TimelineItemType[] {
+    const merged: TimelineItemType[] = [];
+    const canonicalAssistantTurns = canonicalRoundItems
+        .filter((item): item is AssistantTurnItem => item.type === 'assistant_turn')
+        .map((item) => cloneAssistantTurn(item));
+
+    let assistantTurnIndex = 0;
+    for (const rawItem of rawRoundItems) {
+        if (rawItem.type !== 'assistant_turn') {
+            merged.push(rawItem);
+            continue;
+        }
+
+        const rawTurn = cloneAssistantTurn(rawItem);
+        const canonicalTurn = canonicalAssistantTurns[assistantTurnIndex];
+        assistantTurnIndex += 1;
+        merged.push(canonicalTurn ? mergeAssistantTurn(rawTurn, canonicalTurn) : rawTurn);
+    }
+
+    for (let index = assistantTurnIndex; index < canonicalAssistantTurns.length; index += 1) {
+        const extra = canonicalAssistantTurns[index];
+        const last = merged[merged.length - 1];
+        if (last?.type === 'assistant_turn') {
+            merged[merged.length - 1] = mergeAssistantTurn(last, extra);
+        } else {
+            merged.push(extra);
+        }
+    }
+
+    return normalizeTimelineToTurnRounds(merged);
+}
+
 function normalizeTimelineToTurnRounds(items: TimelineItemType[]): TimelineItemType[] {
     const output: TimelineItemType[] = [];
 
@@ -1342,9 +1381,34 @@ function ensureVisibleUserEntry(items: TimelineItemType[], session: TaskSession)
     }, ...items];
 }
 
+function toLatencyLabel(metric: string, value: unknown): string {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? `${metric} ${Math.max(0, Math.round(value))}ms`
+        : `${metric} n/a`;
+}
+
+function formatRateLimitedRuntimeLabel(payload: Record<string, unknown>): string {
+    const baseMessage = normalizeText(payload.message)
+        || `API rate limited (attempt ${String(payload.attempt ?? '?')}/${String(payload.maxRetries ?? '?')}). Retrying...`;
+    const stageRaw = normalizeText(payload.stage);
+    const stage = stageRaw.length > 0 ? stageRaw.toUpperCase() : 'UNKNOWN';
+    const timings = (payload.timings && typeof payload.timings === 'object')
+        ? payload.timings as Record<string, unknown>
+        : {};
+    const timingSummary = [
+        toLatencyLabel('DNS', timings.dnsMs),
+        toLatencyLabel('CONNECT', timings.connectMs),
+        toLatencyLabel('TTFB', timings.ttfbMs),
+        toLatencyLabel('FIRST_TOKEN', timings.firstTokenMs),
+        toLatencyLabel('LAST_TOKEN', timings.lastTokenMs),
+    ].join(', ');
+    return `${baseMessage} | Timeout stage: ${stage} | ${timingSummary}`;
+}
+
 function buildCanonicalMessagesFromTaskEvents(taskId: string, events: TaskSession['events']): CanonicalTaskMessage[] {
     const canonicalEvents = events.flatMap((event): CanonicalStreamEvent[] => {
         if (event.type === 'RATE_LIMITED') {
+            const payload = (event.payload as Record<string, unknown> | undefined) ?? {};
             return [{
                 type: 'canonical_message',
                 payload: {
@@ -1359,8 +1423,7 @@ function buildCanonicalMessagesFromTaskEvents(taskId: string, events: TaskSessio
                     parts: [{
                         type: 'status',
                         status: 'running',
-                        label: normalizeText((event.payload as Record<string, unknown>).message)
-                            || `API rate limited (attempt ${String((event.payload as Record<string, unknown>).attempt ?? '?')}/${String((event.payload as Record<string, unknown>).maxRetries ?? '?')}). Retrying...`,
+                        label: formatRateLimitedRuntimeLabel(payload),
                     }],
                 },
             }];
@@ -1430,8 +1493,6 @@ function applyHistoryClearBoundaryToCanonicalMessages(
 }
 
 // Keep helper symbols referenced for replay/debug parity during staged migration.
-void shouldPreserveTaskMessageTrajectory;
-void buildRawConversationTrajectoryItems;
 void appendLatestStructuredAssistantTurn;
 void buildCanonicalMessagesFromSessionMessages;
 
@@ -1451,8 +1512,30 @@ export function buildTimelineItems(
     const localCanonicalMessages = buildCanonicalMessagesFromTaskEvents(session.taskId, sourceEvents);
     const effectiveCanonicalMessages = scopedCanonicalMessages ?? localCanonicalMessages;
     const standardItems = buildCanonicalTimelineItems(session, effectiveCanonicalMessages);
-    const turnRoundItems = normalizeTimelineToTurnRounds(standardItems);
-    const items = ensureVisibleUserEntry(turnRoundItems, session);
+    const canonicalRoundItems = normalizeTimelineToTurnRounds(standardItems);
+    let items = canonicalRoundItems;
+
+    if (shouldPreserveTaskMessageTrajectory(session)) {
+        const rawRoundItems = normalizeTimelineToTurnRounds(buildRawConversationTrajectoryItems(session));
+        if (rawRoundItems.length > 0) {
+            items = mergeTrajectoryRoundsWithCanonicalRounds(rawRoundItems, canonicalRoundItems);
+        }
+    }
+
+    if (session.taskMode === 'chat') {
+        const hasRenderableAssistantTurn = items.some((item) => (
+            item.type === 'assistant_turn'
+            && hasAssistantTurnNarrative(item)
+        ));
+        if (!hasRenderableAssistantTurn) {
+            const rawRoundItems = normalizeTimelineToTurnRounds(buildRawConversationTrajectoryItems(session));
+            if (rawRoundItems.length > 0) {
+                items = mergeTrajectoryRoundsWithCanonicalRounds(rawRoundItems, canonicalRoundItems);
+            }
+        }
+    }
+
+    items = ensureVisibleUserEntry(items, session);
 
     return {
         items,

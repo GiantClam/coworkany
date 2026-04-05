@@ -80,4 +80,43 @@ describe('mastra plugin dependency resolver', () => {
         expect(cycles.length).toBeGreaterThan(0);
         expect(cycles.some((cycle) => cycle.join('>').includes('dep-a>dep-b>dep-a'))).toBe(true);
     });
+
+    test('treats namespaced dependency references as aliases of installed skill id/name', () => {
+        const result = verifyAndDemotePlugins([
+            {
+                id: 'github:anthropics/skills/dependency-a',
+                name: 'dependency-a',
+                enabled: true,
+                dependencies: [],
+            },
+            {
+                id: 'consumer-skill',
+                name: 'consumer-skill',
+                enabled: true,
+                dependencies: ['github:anthropics/skills/dependency-a'],
+            },
+        ]);
+
+        expect(result.demoted.has('consumer-skill')).toBe(false);
+        expect(result.errors).toHaveLength(0);
+    });
+
+    test('finds reverse dependents when dependency declared with source-prefixed alias', () => {
+        const dependents = findReverseDependents('base-skill', [
+            {
+                id: 'base-skill',
+                name: 'base-skill',
+                enabled: true,
+                dependencies: [],
+            },
+            {
+                id: 'consumer-a',
+                name: 'Consumer A',
+                enabled: true,
+                dependencies: ['github:local/repo/base-skill'],
+            },
+        ]);
+
+        expect(dependents).toEqual(['Consumer A']);
+    });
 });

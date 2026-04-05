@@ -1,0 +1,97 @@
+{
+  "version": "1",
+  "repos": [
+    {
+      "repo": "https://github.com/leilei926524-tech/anti-distill",
+      "kind": "skill-repo",
+      "install": {
+        "source": "git",
+        "ref": "master"
+      },
+      "enable": {
+        "ids": [
+          "anti-distill"
+        ]
+      },
+      "invoke": {
+        "mode": "smoke",
+        "prompt": "capability smoke"
+      },
+      "expectedCapabilities": [
+        "skills",
+        "commands",
+        "agents",
+        "hooks"
+      ]
+    },
+    {
+      "repo": "https://github.com/obra/superpowers",
+      "kind": "skill-repo",
+      "install": {
+        "source": "git",
+        "ref": "main"
+      },
+      "enable": {
+        "ids": [
+          "superpowers"
+        ]
+      },
+      "invoke": {
+        "mode": "smoke",
+        "prompt": "capability smoke"
+      },
+      "expectedCapabilities": [
+        "skills",
+        "commands",
+        "agents",
+        "hooks"
+      ]
+    },
+    {
+      "repo": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "kind": "skill-repo",
+      "install": {
+        "source": "git",
+        "ref": "main"
+      },
+      "enable": {
+        "ids": [
+          "ui-ux-pro-max-skill"
+        ]
+      },
+      "invoke": {
+        "mode": "smoke",
+        "prompt": "capability smoke"
+      },
+      "expectedCapabilities": [
+        "skills",
+        "commands",
+        "agents",
+        "hooks"
+      ]
+    },
+    {
+      "repo": "https://github.com/anthropics/skills",
+      "kind": "skill-repo",
+      "install": {
+        "source": "git",
+        "ref": "main"
+      },
+      "enable": {
+        "ids": [
+          "skills"
+        ]
+      },
+      "invoke": {
+        "mode": "smoke",
+        "prompt": "capability smoke"
+      },
+      "expectedCapabilities": [
+        "skills",
+        "commands",
+        "agents",
+        "hooks"
+      ]
+    }
+  ]
+}

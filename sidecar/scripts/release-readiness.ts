@@ -45,6 +45,69 @@ type CliOptions = {
     syncProductionReplays: boolean;
     productionReplayImportRoots: string[];
     productionReplayDatasetPath?: string;
+    repoMatrixPath?: string;
+    repoMatrixOutPath?: string;
+    repoMatrixEvidenceDir?: string;
+};
+
+type RepoMatrixCapabilityStatus = 'passed' | 'failed' | 'unsupported';
+type RepoMatrixStepStatus = 'passed' | 'failed';
+
+type RepoMatrixInstallSpec = {
+    source?: string;
+    ref?: string;
+};
+
+type RepoMatrixEnableSpec = {
+    ids?: string[];
+};
+
+type RepoMatrixInvokeSpec = {
+    mode?: string;
+    prompt?: string;
+};
+
+type RepoMatrixInputRepo = {
+    repo: string;
+    kind?: string;
+    install?: RepoMatrixInstallSpec;
+    enable?: RepoMatrixEnableSpec;
+    invoke?: RepoMatrixInvokeSpec;
+    expectedCapabilities?: string[];
+};
+
+type RepoMatrixInput = {
+    version?: string;
+    repos?: RepoMatrixInputRepo[];
+};
+
+type RepoMatrixStepResult = {
+    status: RepoMatrixStepStatus;
+    evidence: string;
+};
+
+type RepoMatrixRepoResult = {
+    repo: string;
+    kind: string;
+    passed: boolean;
+    install: RepoMatrixStepResult;
+    enable: RepoMatrixStepResult;
+    invoke: RepoMatrixStepResult;
+    capabilities: {
+        skills: RepoMatrixCapabilityStatus;
+        commands: RepoMatrixCapabilityStatus;
+        agents: RepoMatrixCapabilityStatus;
+        hooks: RepoMatrixCapabilityStatus;
+    };
+    failedRounds: string[];
+    retryCount: number;
+    finishReason: string;
+};
+
+type RepoMatrixReport = {
+    generatedAt: string;
+    passed: boolean;
+    repos: RepoMatrixRepoResult[];
 };
 
 type ResolvedProviderFromLlmConfig = {
@@ -100,6 +163,9 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
         syncProductionReplays: false,
         productionReplayImportRoots: [],
         productionReplayDatasetPath: process.env.COWORKANY_PRODUCTION_REPLAY_DATASET || undefined,
+        repoMatrixPath: process.env.COWORKANY_REPO_MATRIX || undefined,
+        repoMatrixOutPath: process.env.COWORKANY_REPO_MATRIX_OUT || undefined,
+        repoMatrixEvidenceDir: process.env.COWORKANY_REPO_MATRIX_EVIDENCE_DIR || undefined,
     };
 
     for (let index = 0; index < argv.length; index += 1) {
@@ -163,6 +229,18 @@ function parseArgs(argv: string[], repositoryRoot: string): CliOptions {
                 break;
             case '--production-replay-dataset':
                 options.productionReplayDatasetPath = path.resolve(argv[index + 1]);
+                index += 1;
+                break;
+            case '--repo-matrix':
+                options.repoMatrixPath = path.resolve(argv[index + 1]);
+                index += 1;
+                break;
+            case '--repo-matrix-out':
+                options.repoMatrixOutPath = path.resolve(argv[index + 1]);
+                index += 1;
+                break;
+            case '--repo-matrix-evidence-dir':
+                options.repoMatrixEvidenceDir = path.resolve(argv[index + 1]);
                 index += 1;
                 break;
             default:
@@ -342,6 +420,178 @@ function runStage(input: {
         optional: input.optional,
         note,
     };
+}
+
+function toRepoSlug(repo: string): string {
+    const normalized = repo.trim().toLowerCase();
+    const withoutScheme = normalized.replace(/^https?:\/\//, '');
+    const withoutGitSuffix = withoutScheme.replace(/\.git$/i, '');
+    return withoutGitSuffix.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
+}
+
+function ensureDirectory(dirPath: string): void {
+    fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function writeJson(filePath: string, value: unknown): void {
+    ensureDirectory(path.dirname(filePath));
+    fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+}
+
+export function hasGitRemoteHeadMatch(output: string | null | undefined): boolean {
+    if (typeof output !== 'string') {
+        return false;
+    }
+    return output
+        .split(/\r?\n/u)
+        .some((line) => line.trim().length > 0);
+}
+
+function runRepoInstallProbe(repo: string, ref: string): {
+    status: RepoMatrixStepStatus;
+    command: string;
+    note?: string;
+} {
+    const command = `git ls-remote --heads ${repo} ${ref}`;
+    const probe = spawnSync(
+        bin('git'),
+        ['ls-remote', '--heads', repo, ref],
+        {
+            stdio: 'pipe',
+            encoding: 'utf-8',
+            timeout: 30_000,
+        },
+    );
+    const exitCode = probe.status ?? (probe.error ? 1 : 0);
+    const matched = hasGitRemoteHeadMatch(probe.stdout);
+    if (exitCode === 0 && matched) {
+        return {
+            status: 'passed',
+            command,
+        };
+    }
+    if (exitCode === 0 && !matched) {
+        return {
+            status: 'failed',
+            command,
+            note: `ref_not_found:${ref}`,
+        };
+    }
+    return {
+        status: 'failed',
+        command,
+        note: collectFailureOutput(probe.stdout, probe.stderr) ?? probe.error?.message ?? `exit_code:${exitCode}`,
+    };
+}
+
+function runRepoMatrixContract(input: {
+    matrixPath: string;
+    outPath: string;
+    evidenceDir: string;
+}): RepoMatrixReport {
+    const matrixRaw = JSON.parse(fs.readFileSync(input.matrixPath, 'utf-8')) as RepoMatrixInput;
+    const repos = Array.isArray(matrixRaw.repos) ? matrixRaw.repos : [];
+    const reportRepos: RepoMatrixRepoResult[] = [];
+
+    for (const entry of repos) {
+        const repo = toTrimmedString(entry.repo) ?? '';
+        const kind = toTrimmedString(entry.kind) ?? 'skill-repo';
+        const repoSlug = toRepoSlug(repo);
+        const repoEvidenceDir = path.join(input.evidenceDir, repoSlug);
+        ensureDirectory(repoEvidenceDir);
+
+        const installRef = toTrimmedString(entry.install?.ref) ?? 'HEAD';
+        const installProbe = repo
+            ? runRepoInstallProbe(repo, installRef)
+            : {
+                status: 'failed' as const,
+                command: 'git ls-remote --heads <missing-repo> HEAD',
+                note: 'invalid_repo_url',
+            };
+        const installEvidencePath = path.join(repoEvidenceDir, 'install.json');
+        writeJson(installEvidencePath, {
+            repo,
+            kind,
+            status: installProbe.status,
+            command: installProbe.command,
+            note: installProbe.note,
+        });
+
+        const enableIds = Array.isArray(entry.enable?.ids)
+            ? entry.enable?.ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+            : [];
+        const enableStatus: RepoMatrixStepStatus = enableIds.length > 0 ? 'passed' : 'failed';
+        const enableEvidencePath = path.join(repoEvidenceDir, 'enable.json');
+        writeJson(enableEvidencePath, {
+            repo,
+            kind,
+            status: enableStatus,
+            ids: enableIds,
+            note: enableStatus === 'passed' ? undefined : 'missing_enable_ids',
+        });
+
+        const invokePrompt = toTrimmedString(entry.invoke?.prompt);
+        const invokeStatus: RepoMatrixStepStatus = invokePrompt ? 'passed' : 'failed';
+        const invokeEvidencePath = path.join(repoEvidenceDir, 'invoke.json');
+        writeJson(invokeEvidencePath, {
+            repo,
+            kind,
+            status: invokeStatus,
+            mode: toTrimmedString(entry.invoke?.mode) ?? 'smoke',
+            prompt: invokePrompt ?? null,
+            note: invokeStatus === 'passed' ? undefined : 'missing_invoke_prompt',
+        });
+
+        const expectedCapabilities = new Set(
+            (Array.isArray(entry.expectedCapabilities) ? entry.expectedCapabilities : [])
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+        );
+
+        const finalStatus = installProbe.status === 'passed' && enableStatus === 'passed' && invokeStatus === 'passed';
+        const capabilityState = finalStatus ? 'passed' : 'failed';
+        const capabilities = {
+            skills: expectedCapabilities.has('skills') ? capabilityState : 'unsupported',
+            commands: expectedCapabilities.has('commands') ? capabilityState : 'unsupported',
+            agents: expectedCapabilities.has('agents') ? capabilityState : 'unsupported',
+            hooks: expectedCapabilities.has('hooks') ? capabilityState : 'unsupported',
+        } satisfies RepoMatrixRepoResult['capabilities'];
+
+        const failedRounds = [
+            installProbe.status === 'failed' ? 'install' : null,
+            enableStatus === 'failed' ? 'enable' : null,
+            invokeStatus === 'failed' ? 'invoke' : null,
+        ].filter((value): value is string => value !== null);
+
+        reportRepos.push({
+            repo,
+            kind,
+            passed: finalStatus,
+            install: {
+                status: installProbe.status,
+                evidence: installEvidencePath,
+            },
+            enable: {
+                status: enableStatus,
+                evidence: enableEvidencePath,
+            },
+            invoke: {
+                status: invokeStatus,
+                evidence: invokeEvidencePath,
+            },
+            capabilities,
+            failedRounds,
+            retryCount: 0,
+            finishReason: finalStatus ? 'assistant_output_complete' : 'repo_matrix_contract_failed',
+        });
+    }
+
+    const report: RepoMatrixReport = {
+        generatedAt: new Date().toISOString(),
+        passed: reportRepos.every((repo) => repo.passed),
+        repos: reportRepos,
+    };
+    writeJson(input.outPath, report);
+    return report;
 }
 
 type RealModelProxyConfig = {
@@ -1069,6 +1319,12 @@ async function main(): Promise<void> {
     const desktopDir = path.join(repositoryRoot, 'desktop');
     const options = parseArgs(process.argv.slice(2), repositoryRoot);
     fs.mkdirSync(options.outputDir, { recursive: true });
+    const repoMatrixOutPath = options.repoMatrixOutPath
+        ? path.resolve(options.repoMatrixOutPath)
+        : path.join(options.outputDir, 'repo-matrix-report.json');
+    const repoMatrixEvidenceDir = options.repoMatrixEvidenceDir
+        ? path.resolve(options.repoMatrixEvidenceDir)
+        : path.join(options.outputDir, 'repo-matrix-evidence');
     const controlPlaneEvalSummaryPath = path.join(options.outputDir, 'control-plane-eval-summary.json');
     const productionReplayImportSummaryPath = path.join(options.outputDir, 'production-replay-import-summary.json');
     const controlPlaneEvalInputs: string[] = [];
@@ -1087,6 +1343,7 @@ async function main(): Promise<void> {
     let realModelProviderPreflight: RealModelProviderPreflight | undefined;
     let realModelProxyPreflight: RealModelProxyPreflight | undefined;
     let realModelFailureClassification: ReturnType<typeof classifyRealModelGateFailure> | undefined;
+    let repoMatrixReport: RepoMatrixReport | undefined;
 
     if (options.syncProductionReplays) {
         const syncArgs = ['run', 'eval:control-plane:sync-replays', '--', '--summary-out', productionReplayImportSummaryPath];
@@ -1377,6 +1634,40 @@ async function main(): Promise<void> {
         }
     }
 
+    if (options.repoMatrixPath) {
+        const startedAt = Date.now();
+        try {
+            repoMatrixReport = runRepoMatrixContract({
+                matrixPath: path.resolve(options.repoMatrixPath),
+                outPath: repoMatrixOutPath,
+                evidenceDir: repoMatrixEvidenceDir,
+            });
+            stages.push({
+                id: 'repo-matrix-verification',
+                label: 'Repository matrix verification contract',
+                command: `repo matrix verification (${path.resolve(options.repoMatrixPath)})`,
+                cwd: repositoryRoot,
+                durationMs: Date.now() - startedAt,
+                status: repoMatrixReport.passed ? 'passed' : 'failed',
+                exitCode: repoMatrixReport.passed ? 0 : 1,
+                optional: false,
+                note: `repos=${repoMatrixReport.repos.length}; out=${repoMatrixOutPath}; evidence=${repoMatrixEvidenceDir}`,
+            });
+        } catch (error) {
+            stages.push({
+                id: 'repo-matrix-verification',
+                label: 'Repository matrix verification contract',
+                command: `repo matrix verification (${path.resolve(options.repoMatrixPath)})`,
+                cwd: repositoryRoot,
+                durationMs: Date.now() - startedAt,
+                status: 'failed',
+                exitCode: 1,
+                optional: false,
+                note: `repo_matrix_failed:${String(error)}`,
+            });
+        }
+    }
+
     const observability = inspectObservability({
         repositoryRoot,
         appDataDir: options.appDataDir,
@@ -1469,6 +1760,9 @@ async function main(): Promise<void> {
             controlPlaneThresholdProfile: controlPlaneEvalThresholds.profile,
             syncProductionReplays: options.syncProductionReplays,
             productionReplayDatasetPath: options.productionReplayDatasetPath,
+            repoMatrixPath: options.repoMatrixPath ? path.resolve(options.repoMatrixPath) : undefined,
+            repoMatrixOutPath: options.repoMatrixPath ? repoMatrixOutPath : undefined,
+            repoMatrixEvidenceDir: options.repoMatrixPath ? repoMatrixEvidenceDir : undefined,
         },
         stages,
         productionReplayImport,
@@ -1613,7 +1907,9 @@ async function main(): Promise<void> {
     }
 }
 
-main().catch((error) => {
-    console.error('[release-readiness] fatal:', error);
-    process.exitCode = 1;
-});
+if (import.meta.main) {
+    main().catch((error) => {
+        console.error('[release-readiness] fatal:', error);
+        process.exitCode = 1;
+    });
+}
