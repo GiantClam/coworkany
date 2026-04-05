@@ -1,0 +1,34 @@
+{
+  "generatedAt": "2026-04-05T08:38:44.189Z",
+  "passed": false,
+  "repos": [
+    {
+      "repo": "https://github.com/anthropics/skills",
+      "kind": "skill-repo",
+      "passed": false,
+      "install": {
+        "status": "failed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/invalid-ref/github-com-anthropics-skills/install.json"
+      },
+      "enable": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/invalid-ref/github-com-anthropics-skills/enable.json"
+      },
+      "invoke": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/invalid-ref/github-com-anthropics-skills/invoke.json"
+      },
+      "capabilities": {
+        "skills": "failed",
+        "commands": "failed",
+        "agents": "failed",
+        "hooks": "failed"
+      },
+      "failedRounds": [
+        "install"
+      ],
+      "retryCount": 0,
+      "finishReason": "repo_matrix_contract_failed"
+    }
+  ]
+}

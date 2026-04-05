@@ -1,0 +1,6 @@
+{
+  "repo": "https://github.com/leilei926524-tech/anti-distill",
+  "kind": "skill-repo",
+  "status": "passed",
+  "command": "git ls-remote --heads https://github.com/leilei926524-tech/anti-distill master"
+}

@@ -1,0 +1,110 @@
+{
+  "generatedAt": "2026-04-05T08:47:31.814Z",
+  "passed": true,
+  "repos": [
+    {
+      "repo": "https://github.com/leilei926524-tech/anti-distill",
+      "kind": "skill-repo",
+      "passed": true,
+      "install": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-leilei926524-tech-anti-distill/install.json"
+      },
+      "enable": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-leilei926524-tech-anti-distill/enable.json"
+      },
+      "invoke": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-leilei926524-tech-anti-distill/invoke.json"
+      },
+      "capabilities": {
+        "skills": "passed",
+        "commands": "passed",
+        "agents": "passed",
+        "hooks": "passed"
+      },
+      "failedRounds": [],
+      "retryCount": 0,
+      "finishReason": "assistant_output_complete"
+    },
+    {
+      "repo": "https://github.com/obra/superpowers",
+      "kind": "skill-repo",
+      "passed": true,
+      "install": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-obra-superpowers/install.json"
+      },
+      "enable": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-obra-superpowers/enable.json"
+      },
+      "invoke": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-obra-superpowers/invoke.json"
+      },
+      "capabilities": {
+        "skills": "passed",
+        "commands": "passed",
+        "agents": "passed",
+        "hooks": "passed"
+      },
+      "failedRounds": [],
+      "retryCount": 0,
+      "finishReason": "assistant_output_complete"
+    },
+    {
+      "repo": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "kind": "skill-repo",
+      "passed": true,
+      "install": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-nextlevelbuilder-ui-ux-pro-max-skill/install.json"
+      },
+      "enable": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-nextlevelbuilder-ui-ux-pro-max-skill/enable.json"
+      },
+      "invoke": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-nextlevelbuilder-ui-ux-pro-max-skill/invoke.json"
+      },
+      "capabilities": {
+        "skills": "passed",
+        "commands": "passed",
+        "agents": "passed",
+        "hooks": "passed"
+      },
+      "failedRounds": [],
+      "retryCount": 0,
+      "finishReason": "assistant_output_complete"
+    },
+    {
+      "repo": "https://github.com/anthropics/skills",
+      "kind": "skill-repo",
+      "passed": true,
+      "install": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-anthropics-skills/install.json"
+      },
+      "enable": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-anthropics-skills/enable.json"
+      },
+      "invoke": {
+        "status": "passed",
+        "evidence": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run1/github-com-anthropics-skills/invoke.json"
+      },
+      "capabilities": {
+        "skills": "passed",
+        "commands": "passed",
+        "agents": "passed",
+        "hooks": "passed"
+      },
+      "failedRounds": [],
+      "retryCount": 0,
+      "finishReason": "assistant_output_complete"
+    }
+  ]
+}

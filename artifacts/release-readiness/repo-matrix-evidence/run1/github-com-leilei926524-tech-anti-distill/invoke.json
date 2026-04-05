@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/leilei926524-tech/anti-distill",
+  "kind": "skill-repo",
+  "status": "passed",
+  "mode": "smoke",
+  "prompt": "capability smoke"
+}

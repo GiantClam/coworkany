@@ -1,0 +1,61 @@
+sidecar/src/handlers/capabilities.ts:28:} from '../mastra/marketplaceGovernance';
+sidecar/src/handlers/capabilities.ts:97:const marketplaceAuditStores = new Map<string, MarketplaceAuditStore>();
+sidecar/src/handlers/capabilities.ts:105:    const existing = marketplaceAuditStores.get(normalized);
+sidecar/src/handlers/capabilities.ts:110:    marketplaceAuditStores.set(normalized, created);
+sidecar/src/handlers/capabilities.ts:275:    'github:anthropics/skills',
+sidecar/src/handlers/capabilities.ts:278:    'github:obra/superpowers',
+sidecar/src/handlers/capabilities.ts:705:        return respond(command.id, 'rollback_marketplace_install_response', {
+sidecar/src/handlers/capabilities.ts:713:        return respond(command.id, 'rollback_marketplace_install_response', {
+sidecar/src/handlers/capabilities.ts:720:        return respond(command.id, 'rollback_marketplace_install_response', {
+sidecar/src/handlers/capabilities.ts:728:        return respond(command.id, 'rollback_marketplace_install_response', {
+sidecar/src/handlers/capabilities.ts:738:            action: 'rollback_marketplace_install',
+sidecar/src/handlers/capabilities.ts:749:        return respond(command.id, 'rollback_marketplace_install_response', {
+sidecar/src/handlers/capabilities.ts:763:        action: 'rollback_marketplace_install',
+sidecar/src/handlers/capabilities.ts:774:    return respond(command.id, 'rollback_marketplace_install_response', {
+sidecar/src/handlers/capabilities.ts:1105:        case 'get_marketplace_trust_policy': {
+sidecar/src/handlers/capabilities.ts:1107:            return respond(command.id, 'get_marketplace_trust_policy_response', {
+sidecar/src/handlers/capabilities.ts:1120:        case 'list_marketplace_audit_log': {
+sidecar/src/handlers/capabilities.ts:1125:            const action = actionRaw === 'install_from_github' || actionRaw === 'rollback_marketplace_install'
+sidecar/src/handlers/capabilities.ts:1132:            return respond(command.id, 'list_marketplace_audit_log_response', {
+sidecar/src/handlers/capabilities.ts:1138:        case 'rollback_marketplace_install': {
+sidecar/src/handlers/capabilities.ts:1145:                    ...buildDiscoveredSkill(source, undefined, 'Default marketplace source'),
+sidecar/src/handlers/capabilities.ts:1151:                    ...buildDiscoveredMcp(source, undefined, 'Default MCP marketplace source'),
+desktop/src/i18n/locales/en.json:594:  "marketplace": {
+desktop/src/components/Marketplace/MarketplaceView.tsx:205:                    <h3 style={{ margin: 0 }}>{t('marketplace.title')}</h3>
+desktop/src/components/Marketplace/MarketplaceView.tsx:207:                        {t('marketplace.categories')}
+desktop/src/components/Marketplace/MarketplaceView.tsx:240:                    placeholder={t('marketplace.searchPlaceholder')}
+desktop/src/components/Marketplace/MarketplaceView.tsx:245:                    <option value="all">{t('marketplace.allCategories')}</option>
+desktop/src/components/Marketplace/MarketplaceView.tsx:255:                    <option value="popular">{t('marketplace.popular')}</option>
+desktop/src/components/Marketplace/MarketplaceView.tsx:256:                    <option value="newest">{t('marketplace.newest')}</option>
+desktop/src/components/Marketplace/MarketplaceView.tsx:257:                    <option value="rating">{t('marketplace.rating')}</option>
+desktop/src/components/Marketplace/MarketplaceView.tsx:264:                        ['all', t('marketplace.allCategories')],
+desktop/src/components/Marketplace/MarketplaceView.tsx:265:                        ['development', t('marketplace.development')],
+desktop/src/components/Marketplace/MarketplaceView.tsx:266:                        ['productivity', t('marketplace.productivity')],
+desktop/src/components/Marketplace/MarketplaceView.tsx:267:                        ['data', t('marketplace.data')],
+desktop/src/components/Marketplace/MarketplaceView.tsx:268:                        ['communication', t('marketplace.communication')],
+desktop/src/components/Marketplace/MarketplaceView.tsx:269:                        ['automation', t('marketplace.automation')],
+desktop/src/components/Marketplace/MarketplaceView.tsx:330:                                    <span>{t('marketplace.installs', { count: meta.installs })}</span>
+desktop/src/components/Marketplace/MarketplaceView.tsx:331:                                    <span>{t('marketplace.rating')}: {meta.rating.toFixed(1)}</span>
+desktop/src/components/Marketplace/MarketplaceView.tsx:332:                                    <span>{t(`marketplace.${meta.category}`)}</span>
+sidecar/src/data/builtinSkills.json:327:    "content": "---\nname: coworkany-self-management\ndescription: Use when the user asks CoworkAny to inspect or change its own configuration, workspaces, directories, or installed skills.\n---\n\n# CoworkAny Self-Management\n\n## Purpose\nWhen the user is asking about CoworkAny itself, do not guess and do not say you cannot inspect your own configuration. Use the dedicated CoworkAny self-management tools first.\n\n## When This Applies\n- The user asks for CoworkAny's own config or API keys, such as `serper key`, `serper api key`, `llm-config.json`, search provider, or browser mode.\n- The user asks where CoworkAny stores app data, config files, workspaces, or skill directories.\n- The user asks CoworkAny to install, enable, disable, inspect, or remove its own skills.\n- The user asks CoworkAny to list, create, rename, or delete its managed workspaces.\n\n## Required Tool Priority\n1. Use `get_coworkany_config` for reading effective config values.\n2. Use `update_coworkany_config` for changing config values.\n3. Use `get_coworkany_paths` for app data, config, and directory locations.\n4. Use `list_coworkany_workspaces`, `create_coworkany_workspace`, `update_coworkany_workspace`, `delete_coworkany_workspace` for workspaces.\n5. Use `list_coworkany_skills`, `get_coworkany_skill`, `install_coworkany_skill`, `search_coworkany_skill_marketplace`, `install_coworkany_skill_from_marketplace`, `set_coworkany_skill_enabled`, `remove_coworkany_skill` for skills.\n\n## Important Rules\n- Prefer these tools over `view_file` when the user asks about CoworkAny's runtime settings.\n- If the user explicitly asks for the actual secret value, you may set `reveal_secret=true`.\n- If the user only asks whether a key exists or what provider is configured, keep secrets redacted.\n- Distinguish CoworkAny self-management from repository editing. If the user wants to change app settings, use the self-management tools instead of editing source code.\n- If the user asks to install a skill from Skillhub, ClawHub, or GitHub, do not ask them for a local path first. Use the marketplace install tool directly.\n",
+sidecar/src/data/builtinSkills.json:344:      "search_coworkany_skill_marketplace",
+sidecar/src/data/builtinSkills.json:345:      "install_coworkany_skill_from_marketplace",
+sidecar/src/data/builtinSkills.json:381:    "description": "Built-in planning and decomposition workflow inspired by obra/superpowers.",
+sidecar/src/data/builtinSkills.json:383:    "content": "---\nname: superpowers-workflow\ndescription: Built-in planning and decomposition workflow inspired by obra/superpowers. Use for complex implementation, design, and debugging tasks.\n---\n\n# Superpowers Workflow\n\n## Purpose\nUse a disciplined workflow instead of jumping straight into implementation.\n\n## Core Flow\n1. Refine the problem before coding.\n2. Explore alternatives and choose one.\n3. Break work into bite-sized tasks.\n4. Verify each task before claiming completion.\n\n## Activation Guidance\n- Use for complex features, multi-step fixes, architecture changes, or broad debugging.\n- Prefer this over ad-hoc execution when the task spans several files or several decisions.\n\n## Working Rules\n- Do not start with code if the task still needs decomposition.\n- Prefer one small task at a time.\n- Keep verification tied to each task, not just the end.\n- Escalate ambiguity early instead of pushing it into the executor.\n\n## Relationship To Other Skills\n- Pair with `task-orchestrator` for request classification.\n- Pair with `planning-with-files` when persistent on-disk planning is useful.\n- Pair with `writing-plans` when a detailed implementation document is required.\n",
+desktop/src/i18n/locales/zh.json:592:  "marketplace": {
+desktop/src/hooks/useSkillDiscovery.ts:236:            url.startsWith('https://github.com/') ||
+desktop/src/hooks/useSkillDiscovery.ts:247:        // Handle https://github.com/owner/repo/tree/branch/path
+desktop/src/components/Setup/steps/CompleteStep.tsx:54:                        {t('setup.marketplaceReady', 'Marketplace')}
+desktop/src/components/Setup/steps/RuntimeSetupStep.tsx:108:                            'Prepare the built-in services that power search, memory, and marketplace flows.'
+desktop/src/components/Setup/steps/RuntimeSetupStep.tsx:128:                            'Install Skillhub CLI and prepare the local RAG runtime so marketplace installs and memory features work on first use.'
+sidecar/src/mastra/marketplaceGovernance.ts:30:    action: 'install_from_github' | 'rollback_marketplace_install';
+sidecar/src/mastra/marketplaceGovernance.ts:51:    marketplaceTrust?: unknown;
+sidecar/src/mastra/marketplaceGovernance.ts:54:const MARKETPLACE_AUDIT_FILE = 'mastra-marketplace-audit-log.json';
+sidecar/src/mastra/marketplaceGovernance.ts:122:        const trust = settings.marketplaceTrust;
+sidecar/src/mastra/marketplaceGovernance.ts:205:            reason: 'marketplace_owner_blocked',
+sidecar/src/mastra/marketplaceGovernance.ts:215:            reason: 'marketplace_source_blocked',
+sidecar/src/mastra/marketplaceGovernance.ts:238:            reason: 'marketplace_source_not_allowlisted',
+sidecar/src/mastra/marketplaceGovernance.ts:248:            reason: 'marketplace_trust_score_too_low',
+sidecar/src/mastra/marketplaceGovernance.ts:257:        reason: 'marketplace_trust_allowed',
+sidecar/src/mastra/marketplaceGovernance.ts:280:            id: `marketplace-audit-${randomUUID()}`,
+desktop/src/components/Settings/components/DependencySetupSection.tsx:57:                        Prepare bundled services and marketplace dependencies for a fresh Mac install.

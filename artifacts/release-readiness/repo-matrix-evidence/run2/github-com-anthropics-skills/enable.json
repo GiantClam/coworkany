@@ -1,0 +1,8 @@
+{
+  "repo": "https://github.com/anthropics/skills",
+  "kind": "skill-repo",
+  "status": "passed",
+  "ids": [
+    "skills"
+  ]
+}

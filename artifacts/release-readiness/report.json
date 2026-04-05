@@ -1,16 +1,19 @@
 {
-  "generatedAt": "2026-03-30T15:45:04.118Z",
+  "generatedAt": "2026-04-05T08:48:13.242Z",
   "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
   "requestedOptions": {
-    "buildDesktop": true,
-    "realE2E": true,
-    "realModelSmoke": true,
+    "buildDesktop": false,
+    "realE2E": false,
+    "realModelSmoke": false,
     "doctorRequiredStatus": "degraded",
     "canaryEvidencePath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/canary-evidence.json",
     "requireCanaryEvidence": false,
     "controlPlaneThresholdsPath": "/Users/beihuang/Documents/github/coworkany/sidecar/evals/control-plane/readiness-thresholds.json",
     "controlPlaneThresholdProfile": "beta",
-    "syncProductionReplays": false
+    "syncProductionReplays": false,
+    "repoMatrixPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix.v2.json",
+    "repoMatrixOutPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-report.run2.json",
+    "repoMatrixEvidenceDir": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run2"
   },
   "stages": [
     {
@@ -18,7 +21,7 @@
       "label": "Control-plane eval suite",
       "command": "bun run eval:control-plane --out /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 2796,
+      "durationMs": 3264,
       "status": "passed",
       "exitCode": 0
     },
@@ -27,7 +30,7 @@
       "label": "Sidecar typecheck",
       "command": "npm run typecheck",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 1960,
+      "durationMs": 2224,
       "status": "passed",
       "exitCode": 0
     },
@@ -36,16 +39,16 @@
       "label": "Sidecar stable regression suite",
       "command": "npm run test:stable",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 141,
+      "durationMs": 202,
       "status": "passed",
       "exitCode": 0
     },
     {
       "id": "sidecar-release-gates",
       "label": "Sidecar release gate tests",
-      "command": "bun test tests/phase6-final-validation.test.ts tests/workspace-commands.test.ts tests/ipc-bridge.test.ts tests/mastra-entrypoint.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts tests/scheduled-full-chain.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts tests/sidecar-doctor.test.ts tests/release-readiness.test.ts",
+      "command": "bun test tests/phase6-final-validation.test.ts tests/workspace-commands.test.ts tests/ipc-bridge.test.ts tests/mastra-entrypoint.test.ts tests/mastra-additional-commands.test.ts tests/mastra-scheduler-runtime.test.ts tests/mastra-scheduler-lease-lock.test.ts tests/mastra-hook-event-bus.test.ts tests/mastra-context-compression.test.ts tests/mastra-remote-session-store.test.ts tests/mastra-mcp-security.test.ts tests/mastra-mcp-connection-manager.test.ts tests/mastra-skill-prompt.test.ts tests/mastra-plugin-policy.test.ts tests/mastra-plugin-dependency-resolver.test.ts tests/mastra-policy-engine.test.ts tests/execute-task-step.test.ts tests/mastra-bridge.test.ts tests/main-mastra-policy-gate.e2e.test.ts tests/scheduled-full-chain.e2e.test.ts tests/mastra-task-state-persistence.e2e.test.ts tests/mastra-context-compression.e2e.test.ts tests/mastra-rewind-task.e2e.test.ts tests/mastra-policy-hooks.e2e.test.ts tests/additional-commands-full-chain.e2e.test.ts tests/sidecar-doctor.test.ts tests/release-readiness.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 7978,
+      "durationMs": 19541,
       "status": "passed",
       "exitCode": 0
     },
@@ -54,7 +57,7 @@
       "label": "Desktop typecheck",
       "command": "npx tsc --noEmit",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 3309,
+      "durationMs": 3481,
       "status": "passed",
       "exitCode": 0
     },
@@ -63,67 +66,27 @@
       "label": "Desktop acceptance suite (single-path compatible)",
       "command": "bun test tests/p2-competitive-acceptance.test.ts tests/marketplace-desktop.test.ts",
       "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 91,
+      "durationMs": 196,
       "status": "passed",
       "exitCode": 0
     },
     {
-      "id": "desktop-build",
-      "label": "Desktop production build",
-      "command": "npm run build",
-      "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 6382,
-      "status": "passed",
-      "exitCode": 0
-    },
-    {
-      "id": "desktop-real-e2e",
-      "label": "Desktop real E2E acceptance + fault injection",
-      "command": "npx playwright test tests/onboarding-clean-machine-e2e.test.ts tests/database-failure-recovery-e2e.test.ts tests/window-shell-mac-smoke.test.ts",
-      "cwd": "/Users/beihuang/Documents/github/coworkany/desktop",
-      "durationMs": 52083,
-      "status": "passed",
-      "exitCode": 0,
-      "optional": false
-    },
-    {
-      "id": "sidecar-real-model-provider-preflight",
-      "label": "Sidecar real model provider preflight",
-      "command": "provider key preflight",
-      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 1,
+      "id": "repo-matrix-verification",
+      "label": "Repository matrix verification contract",
+      "command": "repo matrix verification (/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix.v2.json)",
+      "cwd": "/Users/beihuang/Documents/github/coworkany",
+      "durationMs": 3358,
       "status": "passed",
       "exitCode": 0,
       "optional": false,
-      "note": "source=llm-config | provider=openai | model=gpt-5.3-codex | requiredKey=OPENAI_API_KEY | keyPresent=yes | Provider openai has required API key available."
-    },
-    {
-      "id": "sidecar-real-model-preflight",
-      "label": "Sidecar real model proxy preflight",
-      "command": "proxy health preflight (tcp + connect)",
-      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 394,
-      "status": "passed",
-      "exitCode": 0,
-      "optional": false,
-      "note": "source=llm-config | proxy=http://127.0.0.1:7890 | checked=127.0.0.1:7890 | latency=3ms | connect=passed | connectTarget=aiberm.com:443 | connectLatency=1ms | tls=passed | tlsLatency=386ms | Proxy endpoint TCP reachability check passed.; HTTP CONNECT tunnel probe passed.; TLS handshake through proxy passed."
-    },
-    {
-      "id": "sidecar-real-model-smoke",
-      "label": "Sidecar real model smoke",
-      "command": "bun test tests/real-model-smoke.e2e.test.ts",
-      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 10836,
-      "status": "passed",
-      "exitCode": 0,
-      "optional": false
+      "note": "repos=4; out=/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-report.run2.json; evidence=/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/repo-matrix-evidence/run2"
     },
     {
       "id": "sidecar-doctor",
       "label": "Sidecar doctor preflight",
       "command": "bun run doctor -- --output-dir /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor --readiness-report /Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/report.json",
       "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
-      "durationMs": 1,
+      "durationMs": 2,
       "status": "passed",
       "exitCode": 0
     },
@@ -152,8 +115,8 @@
   "controlPlaneEval": {
     "summaryPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/control-plane-eval-summary.json",
     "exists": true,
-    "totalCases": 40,
-    "passedCases": 40,
+    "totalCases": 76,
+    "passedCases": 76,
     "failedCases": 0,
     "clarificationRate": 0,
     "unnecessaryClarificationRate": 0,
@@ -221,6 +184,15 @@
       "warnings": [
         "Artifact telemetry file not found."
       ]
+    },
+    "otel": {
+      "enabled": true,
+      "mode": "always_on",
+      "ratio": 1,
+      "serviceName": "coworkany-sidecar",
+      "warnings": [
+        "OTEL sampling enabled but no OTLP endpoint configured (set COWORKANY_OTEL_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT)."
+      ]
     }
   },
   "checklist": [
@@ -241,40 +213,6 @@
       "description": "Release owner signed off the rollout decision."
     }
   ],
-  "realModelGate": {
-    "providerPreflight": {
-      "status": "passed",
-      "source": "llm-config",
-      "provider": "openai",
-      "modelId": "gpt-5.3-codex",
-      "requiredApiKeyEnv": "OPENAI_API_KEY",
-      "hasApiKey": true,
-      "findings": [
-        "Provider openai has required API key available."
-      ],
-      "recommendations": []
-    },
-    "preflight": {
-      "status": "passed",
-      "source": "llm-config",
-      "proxyUrl": "http://127.0.0.1:7890",
-      "timeoutMs": 3000,
-      "checkedAddress": "127.0.0.1:7890",
-      "latencyMs": 3,
-      "tunnelTarget": "aiberm.com:443",
-      "tunnelSource": "llm-config",
-      "tunnelLatencyMs": 1,
-      "tunnelStatus": "passed",
-      "tlsLatencyMs": 386,
-      "tlsStatus": "passed",
-      "findings": [
-        "Proxy endpoint TCP reachability check passed.",
-        "HTTP CONNECT tunnel probe passed.",
-        "TLS handshake through proxy passed."
-      ],
-      "recommendations": []
-    }
-  },
   "sidecarDoctor": {
     "reportPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor/report.json",
     "markdownPath": "/Users/beihuang/Documents/github/coworkany/artifacts/release-readiness/doctor/report.md",

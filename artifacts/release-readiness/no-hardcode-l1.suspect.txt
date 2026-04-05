@@ -1,0 +1,34 @@
+23:desktop/src/i18n/locales/en.json:594:  "marketplace": {
+24:desktop/src/components/Marketplace/MarketplaceView.tsx:205:                    <h3 style={{ margin: 0 }}>{t('marketplace.title')}</h3>
+25:desktop/src/components/Marketplace/MarketplaceView.tsx:207:                        {t('marketplace.categories')}
+26:desktop/src/components/Marketplace/MarketplaceView.tsx:240:                    placeholder={t('marketplace.searchPlaceholder')}
+27:desktop/src/components/Marketplace/MarketplaceView.tsx:245:                    <option value="all">{t('marketplace.allCategories')}</option>
+28:desktop/src/components/Marketplace/MarketplaceView.tsx:255:                    <option value="popular">{t('marketplace.popular')}</option>
+29:desktop/src/components/Marketplace/MarketplaceView.tsx:256:                    <option value="newest">{t('marketplace.newest')}</option>
+30:desktop/src/components/Marketplace/MarketplaceView.tsx:257:                    <option value="rating">{t('marketplace.rating')}</option>
+31:desktop/src/components/Marketplace/MarketplaceView.tsx:264:                        ['all', t('marketplace.allCategories')],
+32:desktop/src/components/Marketplace/MarketplaceView.tsx:265:                        ['development', t('marketplace.development')],
+33:desktop/src/components/Marketplace/MarketplaceView.tsx:266:                        ['productivity', t('marketplace.productivity')],
+34:desktop/src/components/Marketplace/MarketplaceView.tsx:267:                        ['data', t('marketplace.data')],
+35:desktop/src/components/Marketplace/MarketplaceView.tsx:268:                        ['communication', t('marketplace.communication')],
+36:desktop/src/components/Marketplace/MarketplaceView.tsx:269:                        ['automation', t('marketplace.automation')],
+37:desktop/src/components/Marketplace/MarketplaceView.tsx:330:                                    <span>{t('marketplace.installs', { count: meta.installs })}</span>
+38:desktop/src/components/Marketplace/MarketplaceView.tsx:331:                                    <span>{t('marketplace.rating')}: {meta.rating.toFixed(1)}</span>
+39:desktop/src/components/Marketplace/MarketplaceView.tsx:332:                                    <span>{t(`marketplace.${meta.category}`)}</span>
+45:desktop/src/i18n/locales/zh.json:592:  "marketplace": {
+46:desktop/src/hooks/useSkillDiscovery.ts:236:            url.startsWith('https://github.com/') ||
+47:desktop/src/hooks/useSkillDiscovery.ts:247:        // Handle https://github.com/owner/repo/tree/branch/path
+48:desktop/src/components/Setup/steps/CompleteStep.tsx:54:                        {t('setup.marketplaceReady', 'Marketplace')}
+49:desktop/src/components/Setup/steps/RuntimeSetupStep.tsx:108:                            'Prepare the built-in services that power search, memory, and marketplace flows.'
+50:desktop/src/components/Setup/steps/RuntimeSetupStep.tsx:128:                            'Install Skillhub CLI and prepare the local RAG runtime so marketplace installs and memory features work on first use.'
+51:sidecar/src/mastra/marketplaceGovernance.ts:30:    action: 'install_from_github' | 'rollback_marketplace_install';
+52:sidecar/src/mastra/marketplaceGovernance.ts:51:    marketplaceTrust?: unknown;
+53:sidecar/src/mastra/marketplaceGovernance.ts:54:const MARKETPLACE_AUDIT_FILE = 'mastra-marketplace-audit-log.json';
+54:sidecar/src/mastra/marketplaceGovernance.ts:122:        const trust = settings.marketplaceTrust;
+55:sidecar/src/mastra/marketplaceGovernance.ts:205:            reason: 'marketplace_owner_blocked',
+56:sidecar/src/mastra/marketplaceGovernance.ts:215:            reason: 'marketplace_source_blocked',
+57:sidecar/src/mastra/marketplaceGovernance.ts:238:            reason: 'marketplace_source_not_allowlisted',
+58:sidecar/src/mastra/marketplaceGovernance.ts:248:            reason: 'marketplace_trust_score_too_low',
+59:sidecar/src/mastra/marketplaceGovernance.ts:257:        reason: 'marketplace_trust_allowed',
+60:sidecar/src/mastra/marketplaceGovernance.ts:280:            id: `marketplace-audit-${randomUUID()}`,
+61:desktop/src/components/Settings/components/DependencySetupSection.tsx:57:                        Prepare bundled services and marketplace dependencies for a fresh Mac install.

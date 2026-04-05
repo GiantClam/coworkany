@@ -1,6 +1,6 @@
 # Sidecar Doctor Report
 
-Generated at: 2026-03-30T15:45:04.119Z
+Generated at: 2026-04-05T08:48:13.244Z
 Overall: degraded
 
 ## Checks

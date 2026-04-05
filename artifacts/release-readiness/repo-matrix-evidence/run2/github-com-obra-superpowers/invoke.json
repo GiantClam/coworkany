@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/obra/superpowers",
+  "kind": "skill-repo",
+  "status": "passed",
+  "mode": "smoke",
+  "prompt": "capability smoke"
+}

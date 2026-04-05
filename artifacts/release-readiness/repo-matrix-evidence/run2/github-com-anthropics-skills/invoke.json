@@ -1,0 +1,7 @@
+{
+  "repo": "https://github.com/anthropics/skills",
+  "kind": "skill-repo",
+  "status": "passed",
+  "mode": "smoke",
+  "prompt": "capability smoke"
+}

@@ -1,0 +1,6 @@
+{
+  "repo": "https://github.com/obra/superpowers",
+  "kind": "skill-repo",
+  "status": "passed",
+  "command": "git ls-remote --heads https://github.com/obra/superpowers main"
+}
