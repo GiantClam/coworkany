@@ -53,7 +53,7 @@
     "@modelcontextprotocol/server-memory": "^2026.1.26",
     "ai": "^6.0.103",
     "express": "^4.22.1",
-    "googleapis": "^133.0.0",
+    "googleapis": "^171.4.0",
     "playwright": "^1.50.0",
     "yaml": "^2.8.2",
     "zod": "^3.23.8"
