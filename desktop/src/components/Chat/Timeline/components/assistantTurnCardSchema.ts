@@ -63,6 +63,26 @@ export type AssistantTurnCardSchema =
         placement: 'inline' | 'primary';
     };
 
+function shouldHideLeadSubtitle(lead: string, messages: string[]): boolean {
+    const normalizedLead = sanitizeDisplayText(lead);
+    if (!normalizedLead) {
+        return false;
+    }
+
+    return messages.some((message) => {
+        const normalizedMessage = sanitizeDisplayText(message);
+        if (!normalizedMessage) {
+            return false;
+        }
+
+        if (normalizedMessage === normalizedLead) {
+            return true;
+        }
+
+        return normalizedLead.length >= 24 && normalizedMessage.startsWith(normalizedLead);
+    });
+}
+
 function toRiskSeverity(risk: number): ApprovalSeverity {
     if (risk >= 9) {
         return 'critical';
@@ -119,6 +139,7 @@ export function buildAssistantTurnCardSchemas(
     const safeSystemEvents = (item.systemEvents || [])
         .map((entry) => sanitizeDisplayText(entry))
         .filter((entry) => entry.length > 0);
+    const hideLeadSubtitle = shouldHideLeadSubtitle(safeLead, safeMessages);
     const hasRenderedAssistantMessages = safeLead.length > 0 || safeMessages.length > 0;
 
     if (safeLead.length > 0 || safeMessages.length > 0 || safeSystemEvents.length > 0) {
@@ -129,7 +150,7 @@ export function buildAssistantTurnCardSchemas(
                 kind: 'assistant',
                 kicker: 'Assistant',
                 title: 'Response',
-                subtitle: safeLead || undefined,
+                subtitle: hideLeadSubtitle ? undefined : (safeLead || undefined),
             },
             messages: safeMessages,
             systemEvents: safeSystemEvents,

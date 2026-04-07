@@ -94,6 +94,8 @@ struct SidecarLlmProfile {
 
 const STDERR_NOISE_LOG_INTERVAL: Duration = Duration::from_secs(30);
 const JSON_LOG_PREVIEW_MAX_CHARS: usize = 2_048;
+const STREAM_DELTA_LOG_PREVIEW_MAX_CHARS: usize = 320;
+const SIDECAR_METRICS_LOG_PREFIX: &str = "[coworkany-metrics]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SidecarStderrCategory {
@@ -536,6 +538,10 @@ impl SidecarManager {
                 error
             );
         }
+        if let Err(error) = self.warmup_chat_runtime(Duration::from_secs(10)) {
+            self.invalidate_transport("chat runtime warmup failed after sidecar spawn");
+            return Err(error);
+        }
 
         Ok(())
     }
@@ -543,7 +549,10 @@ impl SidecarManager {
     /// Send a command to the sidecar
     pub fn send_command(&self, command: IpcCommand) -> Result<(), SidecarError> {
         let json = serde_json::to_string(&command)?;
-        debug!("Sending command to sidecar: {}", truncate_log_line(&json, JSON_LOG_PREVIEW_MAX_CHARS));
+        debug!(
+            "Sending command to sidecar: {}",
+            truncate_log_line(&json, JSON_LOG_PREVIEW_MAX_CHARS)
+        );
         self.write_stdin_line(&json)
     }
 
@@ -628,6 +637,57 @@ impl SidecarManager {
         Err(SidecarError::SendError(
             "runtime snapshot handshake returned unsuccessful response".to_string(),
         ))
+    }
+
+    fn warmup_chat_runtime(&self, timeout: Duration) -> Result<(), SidecarError> {
+        let command = json!({
+            "id": Uuid::new_v4().to_string(),
+            "timestamp": chrono_now(),
+            "type": "warmup_chat_runtime",
+            "payload": {}
+        });
+        let receiver = self.send_command_async(command)?;
+        let response = receiver.recv_timeout(timeout).map_err(|error| {
+            SidecarError::SendError(format!("chat runtime warmup timeout: {}", error))
+        })?;
+        let payload = response
+            .get("payload")
+            .and_then(|value| value.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let success = payload
+            .get("success")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if success {
+            let warmup = payload
+                .get("warmup")
+                .and_then(|value| value.as_object())
+                .cloned()
+                .unwrap_or_default();
+            let mcp_server_count = warmup
+                .get("mcpServerCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let mcp_tool_count = warmup
+                .get("mcpToolCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let duration_ms = warmup
+                .get("durationMs")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            info!(
+                "Sidecar chat warmup finished: mcp_servers={} mcp_tools={} duration_ms={}",
+                mcp_server_count, mcp_tool_count, duration_ms
+            );
+            return Ok(());
+        }
+        let error = payload
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("chat runtime warmup failed");
+        Err(SidecarError::SendError(error.to_string()))
     }
 
     /// Shutdown the sidecar process
@@ -784,6 +844,7 @@ impl SidecarManager {
     ) {
         let reader = BufReader::new(stdout);
         let mut suppressed_non_protocol_lines = 0usize;
+        let mut stream_delta_log_aggregator = StreamDeltaLogAggregator::default();
 
         for line_result in reader.lines() {
             match line_result {
@@ -793,6 +854,14 @@ impl SidecarManager {
                     }
 
                     if !is_json_object_line(&line) {
+                        if is_sidecar_metrics_line(&line) {
+                            stream_delta_log_aggregator.flush();
+                            debug!(
+                                "Received sidecar metrics: {}",
+                                truncate_log_line(&line, JSON_LOG_PREVIEW_MAX_CHARS)
+                            );
+                            continue;
+                        }
                         suppressed_non_protocol_lines += 1;
                         continue;
                     }
@@ -810,10 +879,15 @@ impl SidecarManager {
                                 warn!("Ignoring sidecar stdout JSON value that is not an object");
                                 continue;
                             }
-                            debug!(
-                                "Received from sidecar: {}",
-                                truncate_log_line(&line, JSON_LOG_PREVIEW_MAX_CHARS)
-                            );
+                            if let Some(stream_entry) = extract_stream_delta_log_entry(&message) {
+                                stream_delta_log_aggregator.push(stream_entry);
+                            } else {
+                                stream_delta_log_aggregator.flush();
+                                debug!(
+                                    "Received from sidecar: {}",
+                                    truncate_log_line(&line, JSON_LOG_PREVIEW_MAX_CHARS)
+                                );
+                            }
 
                             match classify_sidecar_message(&message) {
                                 Some(SidecarMessageKind::TaskEvent) => {
@@ -865,6 +939,7 @@ impl SidecarManager {
                             }
                         }
                         Err(e) => {
+                            stream_delta_log_aggregator.flush();
                             warn!(
                                 "Failed to parse sidecar output as JSON: {} - preview: {}",
                                 e,
@@ -874,11 +949,13 @@ impl SidecarManager {
                     }
                 }
                 Err(e) => {
+                    stream_delta_log_aggregator.flush();
                     error!("Error reading from sidecar stdout: {}", e);
                     break;
                 }
             }
         }
+        stream_delta_log_aggregator.flush();
         if suppressed_non_protocol_lines > 0 {
             debug!(
                 "Suppressed {} non-protocol sidecar stdout lines before stream closed",
@@ -1240,6 +1317,7 @@ impl SidecarManager {
         Self::apply_singleton_env(&mut command, app_data_dir);
         Self::apply_proxy_env(&mut command, app_data_dir);
         Self::apply_llm_env(&mut command, app_data_dir);
+        Self::apply_chat_runtime_env(&mut command);
         command.spawn().map_err(SidecarError::from)
     }
 
@@ -1269,6 +1347,7 @@ impl SidecarManager {
             Self::apply_singleton_env(&mut node_cmd, app_data_dir);
             Self::apply_proxy_env(&mut node_cmd, app_data_dir);
             Self::apply_llm_env(&mut node_cmd, app_data_dir);
+            Self::apply_chat_runtime_env(&mut node_cmd);
 
             return node_cmd.spawn().map_err(SidecarError::from);
         }
@@ -1290,6 +1369,7 @@ impl SidecarManager {
         Self::apply_singleton_env(&mut npx_cmd, app_data_dir);
         Self::apply_proxy_env(&mut npx_cmd, app_data_dir);
         Self::apply_llm_env(&mut npx_cmd, app_data_dir);
+        Self::apply_chat_runtime_env(&mut npx_cmd);
 
         npx_cmd
             .spawn()
@@ -1306,6 +1386,7 @@ impl SidecarManager {
                 Self::apply_singleton_env(&mut bun_cmd, app_data_dir);
                 Self::apply_proxy_env(&mut bun_cmd, app_data_dir);
                 Self::apply_llm_env(&mut bun_cmd, app_data_dir);
+                Self::apply_chat_runtime_env(&mut bun_cmd);
                 bun_cmd.spawn()
             })
             .map_err(SidecarError::from)
@@ -1422,6 +1503,216 @@ impl SidecarManager {
             .filter(|value| !value.is_empty())
     }
 
+    fn resolve_bounded_env_usize(keys: &[&str], fallback: usize, min: usize, max: usize) -> usize {
+        let parsed = Self::first_non_empty_env(keys).and_then(|value| value.parse::<usize>().ok());
+        let value = parsed.unwrap_or(fallback);
+        value.clamp(min, max)
+    }
+
+    fn apply_chat_runtime_env(command: &mut Command) {
+        let guardrails = Self::first_non_empty_env(&["COWORKANY_ENABLE_GUARDRAILS"])
+            .unwrap_or_else(|| "0".to_string());
+        let output_guardrails = Self::first_non_empty_env(&["COWORKANY_ENABLE_OUTPUT_GUARDRAILS"])
+            .unwrap_or_else(|| "0".to_string());
+        let start_retry_count = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT"],
+            5,
+            0,
+            10,
+        );
+        let start_retry_delay_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS"],
+            1_000,
+            100,
+            30_000,
+        );
+        let start_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS"],
+            12_000,
+            2_000,
+            30_000,
+        );
+        let forward_retry_count = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT"],
+            5,
+            0,
+            10,
+        );
+        let forward_retry_delay_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS"],
+            1_000,
+            100,
+            30_000,
+        );
+        let startup_budget_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS"],
+            90_000,
+            15_000,
+            120_000,
+        );
+        let generate_fallback_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS"],
+            30_000,
+            3_000,
+            60_000,
+        );
+        let turn_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS"],
+            180_000,
+            30_000,
+            180_000,
+        );
+        let stream_max_duration_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS"],
+            180_000,
+            30_000,
+            180_000,
+        );
+        let post_assistant_max_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS"],
+            30_000,
+            5_000,
+            90_000,
+        );
+        let mcp_toolsets_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS"],
+            2_000,
+            200,
+            20_000,
+        );
+        let task_workflow_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"],
+            120_000,
+            15_000,
+            180_000,
+        );
+        let task_workflow_retry_count = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT"],
+            5,
+            0,
+            5,
+        );
+        let task_workflow_retry_delay_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS"],
+            1_000,
+            100,
+            10_000,
+        );
+        let task_execute_step_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS"],
+            90_000,
+            15_000,
+            90_000,
+        );
+        let task_execute_step_retry_count = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT"],
+            5,
+            0,
+            5,
+        );
+        let task_execute_step_retry_delay_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS"],
+            1_000,
+            100,
+            10_000,
+        );
+
+        command
+            .env("COWORKANY_ENABLE_GUARDRAILS", &guardrails)
+            .env("COWORKANY_ENABLE_OUTPUT_GUARDRAILS", &output_guardrails)
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
+                start_retry_count.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS",
+                start_retry_delay_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS",
+                start_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT",
+                forward_retry_count.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS",
+                forward_retry_delay_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS",
+                startup_budget_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS",
+                generate_fallback_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS",
+                turn_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS",
+                stream_max_duration_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS",
+                post_assistant_max_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS",
+                mcp_toolsets_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
+                task_workflow_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
+                task_workflow_retry_count.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
+                task_workflow_retry_delay_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS",
+                task_execute_step_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT",
+                task_execute_step_retry_count.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS",
+                task_execute_step_retry_delay_ms.to_string(),
+            );
+
+        info!(
+            "Sidecar chat runtime configured: guardrails={} output_guardrails={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} post_assistant_max_ms={} mcp_toolsets_timeout_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
+            guardrails,
+            output_guardrails,
+            start_retry_count,
+            start_retry_delay_ms,
+            start_timeout_ms,
+            forward_retry_count,
+            forward_retry_delay_ms,
+            startup_budget_ms,
+            generate_fallback_timeout_ms,
+            turn_timeout_ms,
+            stream_max_duration_ms,
+            post_assistant_max_ms,
+            mcp_toolsets_timeout_ms,
+            task_workflow_timeout_ms,
+            task_workflow_retry_count,
+            task_workflow_retry_delay_ms,
+            task_execute_step_timeout_ms,
+            task_execute_step_retry_count,
+            task_execute_step_retry_delay_ms
+        );
+    }
+
     fn sanitize_proxy_for_log(proxy_url: &str) -> String {
         if let Some(at_pos) = proxy_url.rfind('@') {
             let scheme_end = proxy_url.find("://").map(|pos| pos + 3).unwrap_or(0);
@@ -1440,11 +1731,26 @@ impl SidecarManager {
         serde_json::from_str(&raw).ok()
     }
 
+    fn is_openai_compatible_provider(provider: &str) -> bool {
+        matches!(
+            provider,
+            "openai" | "aiberm" | "nvidia" | "siliconflow" | "gemini" | "qwen" | "minimax"
+                | "kimi"
+        )
+    }
+
     fn normalize_model_id(provider: &str, model: &str) -> String {
-        const KNOWN_PREFIXES: [&str; 8] = [
+        const KNOWN_PREFIXES: [&str; 15] = [
             "anthropic/",
             "openai/",
             "openrouter/",
+            "aiberm/",
+            "nvidia/",
+            "siliconflow/",
+            "gemini/",
+            "qwen/",
+            "minimax/",
+            "kimi/",
             "google/",
             "xai/",
             "groq/",
@@ -1461,6 +1767,9 @@ impl SidecarManager {
         match provider {
             "anthropic" => format!("anthropic/{normalized}"),
             "openrouter" => format!("openrouter/{normalized}"),
+            provider if Self::is_openai_compatible_provider(provider) => {
+                format!("{provider}/{normalized}")
+            }
             _ => format!("openai/{normalized}"),
         }
     }
@@ -1561,6 +1870,8 @@ impl SidecarManager {
             return;
         };
 
+        command.env("COWORKANY_LLM_CONFIG_PROVIDER", provider);
+
         let mut resolved_model: Option<String> = None;
         match provider {
             "anthropic" => {
@@ -1600,17 +1911,19 @@ impl SidecarManager {
                 }
             }
             "custom" => {
+                let api_format = settings
+                    .api_format
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("openai");
+                command.env("COWORKANY_LLM_CUSTOM_API_FORMAT", api_format);
+
                 if let Some(api_key) = settings
                     .api_key
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 {
-                    let api_format = settings
-                        .api_format
-                        .as_deref()
-                        .map(str::trim)
-                        .unwrap_or("openai");
                     if api_format.eq_ignore_ascii_case("anthropic") {
                         command.env("ANTHROPIC_API_KEY", api_key);
                     } else {
@@ -1631,11 +1944,6 @@ impl SidecarManager {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 {
-                    let api_format = settings
-                        .api_format
-                        .as_deref()
-                        .map(str::trim)
-                        .unwrap_or("openai");
                     let model_provider = if api_format.eq_ignore_ascii_case("anthropic") {
                         "anthropic"
                     } else {
@@ -1678,7 +1986,10 @@ impl SidecarManager {
                         &normalized_model,
                     );
                     command.env("OPENAI_BASE_URL", &base_url);
-                    resolved_model = Some(Self::normalize_model_id("openai", &normalized_model));
+                    resolved_model = Some(Self::normalize_model_id(
+                        openai_compatible_provider,
+                        &normalized_model,
+                    ));
                 }
             }
         }
@@ -1815,6 +2126,10 @@ fn is_json_object_line(line: &str) -> bool {
     trimmed.starts_with('{') && trimmed.ends_with('}')
 }
 
+fn is_sidecar_metrics_line(line: &str) -> bool {
+    line.trim_start().starts_with(SIDECAR_METRICS_LOG_PREFIX)
+}
+
 fn truncate_log_line(line: &str, max_chars: usize) -> String {
     let mut iter = line.chars();
     let preview: String = iter.by_ref().take(max_chars).collect();
@@ -1822,6 +2137,132 @@ fn truncate_log_line(line: &str, max_chars: usize) -> String {
         return preview;
     }
     format!("{}…", preview)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StreamDeltaLogKey {
+    message_type: String,
+    task_id: Option<String>,
+    turn_id: Option<String>,
+    message_id: Option<String>,
+    correlation_id: Option<String>,
+    role: Option<String>,
+    part_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StreamDeltaLogEntry {
+    key: StreamDeltaLogKey,
+    delta: String,
+}
+
+#[derive(Debug, Default)]
+struct StreamDeltaLogAggregator {
+    current_key: Option<StreamDeltaLogKey>,
+    chunk_count: usize,
+    total_chars: usize,
+    preview: String,
+}
+
+impl StreamDeltaLogAggregator {
+    fn push(&mut self, entry: StreamDeltaLogEntry) {
+        if self.current_key.as_ref() != Some(&entry.key) {
+            self.flush();
+            self.current_key = Some(entry.key);
+        }
+
+        self.chunk_count += 1;
+        self.total_chars += entry.delta.chars().count();
+
+        let preview_chars = self.preview.chars().count();
+        if preview_chars < STREAM_DELTA_LOG_PREVIEW_MAX_CHARS {
+            let remaining = STREAM_DELTA_LOG_PREVIEW_MAX_CHARS - preview_chars;
+            self.preview
+                .push_str(&entry.delta.chars().take(remaining).collect::<String>());
+        }
+    }
+
+    fn flush(&mut self) {
+        let Some(key) = self.current_key.as_ref() else {
+            return;
+        };
+
+        let escaped_preview = self.preview.replace('\r', "\\r").replace('\n', "\\n");
+        debug!(
+            "Received stream text from sidecar: type={} taskId={} turnId={} messageId={} correlationId={} role={} partType={} chunks={} chars={} preview=\"{}\"",
+            key.message_type,
+            key.task_id.as_deref().unwrap_or("-"),
+            key.turn_id.as_deref().unwrap_or("-"),
+            key.message_id.as_deref().unwrap_or("-"),
+            key.correlation_id.as_deref().unwrap_or("-"),
+            key.role.as_deref().unwrap_or("-"),
+            key.part_type.as_deref().unwrap_or("-"),
+            self.chunk_count,
+            self.total_chars,
+            truncate_log_line(&escaped_preview, STREAM_DELTA_LOG_PREVIEW_MAX_CHARS)
+        );
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.current_key = None;
+        self.chunk_count = 0;
+        self.total_chars = 0;
+        self.preview.clear();
+    }
+}
+
+fn value_as_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(|node| node.as_str())
+        .map(|node| node.to_string())
+}
+
+fn extract_stream_delta_log_entry(message: &serde_json::Value) -> Option<StreamDeltaLogEntry> {
+    let message_type = value_as_string(message.get("type"))?;
+
+    if message_type == "TEXT_DELTA" {
+        let payload = message.get("payload")?;
+        let delta = value_as_string(
+            payload
+                .get("delta")
+                .or_else(|| payload.get("text"))
+                .or_else(|| payload.get("content")),
+        )
+        .unwrap_or_default();
+        return Some(StreamDeltaLogEntry {
+            key: StreamDeltaLogKey {
+                message_type,
+                task_id: value_as_string(message.get("taskId")),
+                turn_id: value_as_string(payload.get("turnId")),
+                message_id: value_as_string(payload.get("messageId")),
+                correlation_id: value_as_string(payload.get("correlationId")),
+                role: value_as_string(payload.get("role")),
+                part_type: None,
+            },
+            delta,
+        });
+    }
+
+    if message_type == "canonical_message_delta" {
+        let payload = message.get("payload")?;
+        let part = payload.get("part");
+        return Some(StreamDeltaLogEntry {
+            key: StreamDeltaLogKey {
+                message_type,
+                task_id: value_as_string(payload.get("taskId"))
+                    .or_else(|| value_as_string(message.get("taskId"))),
+                turn_id: value_as_string(payload.get("turnId")),
+                message_id: value_as_string(payload.get("id")),
+                correlation_id: value_as_string(payload.get("correlationId")),
+                role: value_as_string(payload.get("role")),
+                part_type: value_as_string(part.and_then(|node| node.get("type"))),
+            },
+            delta: value_as_string(part.and_then(|node| node.get("delta"))).unwrap_or_default(),
+        });
+    }
+
+    None
 }
 
 fn classify_sidecar_message(message: &serde_json::Value) -> Option<SidecarMessageKind> {
@@ -2964,11 +3405,13 @@ impl Default for SidecarState {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_sidecar_message, is_json_object_line, truncate_log_line, SidecarManager,
-        SidecarMessageKind,
+        classify_sidecar_message, extract_stream_delta_log_entry, is_json_object_line,
+        is_sidecar_metrics_line,
+        truncate_log_line, SidecarManager, SidecarMessageKind,
     };
     use serde_json::json;
     use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::fs;
     use std::io::{BufRead, BufReader};
     #[cfg(unix)]
@@ -3001,6 +3444,21 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    fn snapshot_env(keys: &[&str]) -> Vec<(String, Option<OsString>)> {
+        keys.iter()
+            .map(|key| (key.to_string(), std::env::var_os(key)))
+            .collect()
+    }
+
+    fn restore_env(snapshot: Vec<(String, Option<OsString>)>) {
+        for (key, value) in snapshot {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
     }
 
     #[test]
@@ -3068,6 +3526,252 @@ mod tests {
     }
 
     #[test]
+    fn apply_chat_runtime_env_sets_safe_defaults() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let keys = [
+            "COWORKANY_ENABLE_GUARDRAILS",
+            "COWORKANY_ENABLE_OUTPUT_GUARDRAILS",
+            "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
+            "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT",
+            "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS",
+            "COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS",
+            "COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS",
+            "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS",
+            "COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
+            "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT",
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS",
+        ];
+        let snapshot = snapshot_env(&keys);
+        for key in &keys {
+            std::env::remove_var(key);
+        }
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_chat_runtime_env(&mut command);
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("COWORKANY_ENABLE_GUARDRAILS"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_ENABLE_OUTPUT_GUARDRAILS"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS"),
+            Some(&"1000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS"),
+            Some(&"12000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS"),
+            Some(&"1000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS"),
+            Some(&"90000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS"),
+            Some(&"30000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS"),
+            Some(&"180000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS"),
+            Some(&"180000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS"),
+            Some(&"30000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS"),
+            Some(&"2000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"),
+            Some(&"120000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS"),
+            Some(&"1000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS"),
+            Some(&"90000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS"),
+            Some(&"1000".to_string())
+        );
+
+        restore_env(snapshot);
+    }
+
+    #[test]
+    fn apply_chat_runtime_env_clamps_extreme_values() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let keys = [
+            "COWORKANY_ENABLE_GUARDRAILS",
+            "COWORKANY_ENABLE_OUTPUT_GUARDRAILS",
+            "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
+            "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT",
+            "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS",
+            "COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS",
+            "COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS",
+            "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS",
+            "COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
+            "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT",
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS",
+        ];
+        let snapshot = snapshot_env(&keys);
+
+        std::env::set_var("COWORKANY_ENABLE_GUARDRAILS", "1");
+        std::env::set_var("COWORKANY_ENABLE_OUTPUT_GUARDRAILS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT", "99");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT", "-1");
+        std::env::set_var(
+            "COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS",
+            "999999",
+        );
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS", "9999999");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT", "99");
+        std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT", "-1");
+        std::env::set_var("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS", "999999");
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_chat_runtime_env(&mut command);
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("COWORKANY_ENABLE_GUARDRAILS"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_ENABLE_OUTPUT_GUARDRAILS"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT"),
+            Some(&"10".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS"),
+            Some(&"100".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS"),
+            Some(&"2000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_DELAY_MS"),
+            Some(&"30000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS"),
+            Some(&"15000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS"),
+            Some(&"3000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS"),
+            Some(&"30000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS"),
+            Some(&"180000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS"),
+            Some(&"5000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS"),
+            Some(&"20000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"),
+            Some(&"15000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS"),
+            Some(&"100".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS"),
+            Some(&"90000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT"),
+            Some(&"5".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS"),
+            Some(&"10000".to_string())
+        );
+
+        restore_env(snapshot);
+    }
+
+    #[test]
     fn apply_llm_env_uses_active_openai_compatible_profile() {
         let app_data_dir = unique_temp_dir("sidecar-llm-config");
         fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
@@ -3112,12 +3816,73 @@ mod tests {
             Some(&"https://aiberm.com/v1".to_string())
         );
         assert_eq!(
+            envs.get("COWORKANY_LLM_CONFIG_PROVIDER"),
+            Some(&"aiberm".to_string())
+        );
+        assert_eq!(
             envs.get("COWORKANY_MODEL"),
-            Some(&"openai/gpt-5.3-codex".to_string())
+            Some(&"aiberm/gpt-5.3-codex".to_string())
         );
         assert!(
             !envs.contains_key("ANTHROPIC_API_KEY"),
             "active profile should decide provider key propagation"
+        );
+
+        let _ = fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[test]
+    fn apply_llm_env_routes_custom_openai_format_via_openai_compatible_env() {
+        let app_data_dir = unique_temp_dir("sidecar-llm-config-custom-openai");
+        fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        fs::write(
+            app_data_dir.join("llm-config.json"),
+            r#"{
+                "provider": "custom",
+                "activeProfileId": "profile-custom",
+                "profiles": [
+                    {
+                        "id": "profile-custom",
+                        "provider": "custom",
+                        "custom": {
+                            "apiKey": "sk-custom-real",
+                            "baseUrl": "https://api.example.com/v1",
+                            "model": "claude-sonnet-4-6",
+                            "apiFormat": "openai"
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("write llm-config");
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_llm_env(&mut command, app_data_dir.to_str().expect("utf8 path"));
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("COWORKANY_LLM_CONFIG_PROVIDER"),
+            Some(&"custom".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_LLM_CUSTOM_API_FORMAT"),
+            Some(&"openai".to_string())
+        );
+        assert_eq!(
+            envs.get("OPENAI_API_KEY"),
+            Some(&"sk-custom-real".to_string())
+        );
+        assert_eq!(
+            envs.get("OPENAI_BASE_URL"),
+            Some(&"https://api.example.com/v1".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MODEL"),
+            Some(&"openai/claude-sonnet-4-6".to_string())
+        );
+        assert!(
+            !envs.contains_key("ANTHROPIC_API_KEY"),
+            "custom openai-format profile should not inject anthropic key"
         );
 
         let _ = fs::remove_dir_all(&app_data_dir);
@@ -3160,8 +3925,12 @@ mod tests {
             Some(&"https://api.minimaxi.com/v1".to_string())
         );
         assert_eq!(
+            envs.get("COWORKANY_LLM_CONFIG_PROVIDER"),
+            Some(&"minimax".to_string())
+        );
+        assert_eq!(
             envs.get("COWORKANY_MODEL"),
-            Some(&"openai/MiniMax-M2.7".to_string())
+            Some(&"minimax/MiniMax-M2.7".to_string())
         );
 
         let _ = fs::remove_dir_all(&app_data_dir);
@@ -3255,8 +4024,86 @@ mod tests {
     }
 
     #[test]
+    fn is_sidecar_metrics_line_recognizes_prefixed_metric_output() {
+        assert!(is_sidecar_metrics_line(
+            r#"[coworkany-metrics] {"event":"llm_timing","outcome":"success"}"#
+        ));
+        assert!(is_sidecar_metrics_line(
+            r#"   [coworkany-metrics] {"event":"llm_timing"}"#
+        ));
+        assert!(!is_sidecar_metrics_line("[SkillStore] Loaded 8 skills"));
+        assert!(!is_sidecar_metrics_line(r#"{"type":"TASK_EVENT"}"#));
+    }
+
+    #[test]
     fn truncate_log_line_limits_json_log_length() {
         assert_eq!(truncate_log_line("short", 16), "short");
         assert_eq!(truncate_log_line("1234567890", 5), "12345…");
+    }
+
+    #[test]
+    fn extract_stream_delta_log_entry_parses_text_delta_payload() {
+        let message = json!({
+            "type": "TEXT_DELTA",
+            "taskId": "task-123",
+            "payload": {
+                "turnId": "turn-1",
+                "messageId": "msg-1",
+                "correlationId": "corr-1",
+                "role": "assistant",
+                "delta": "hello"
+            }
+        });
+
+        let entry = extract_stream_delta_log_entry(&message).expect("stream log entry");
+        assert_eq!(entry.delta, "hello");
+        assert_eq!(entry.key.message_type, "TEXT_DELTA");
+        assert_eq!(entry.key.task_id.as_deref(), Some("task-123"));
+        assert_eq!(entry.key.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(entry.key.message_id.as_deref(), Some("msg-1"));
+        assert_eq!(entry.key.correlation_id.as_deref(), Some("corr-1"));
+        assert_eq!(entry.key.role.as_deref(), Some("assistant"));
+        assert_eq!(entry.key.part_type, None);
+    }
+
+    #[test]
+    fn extract_stream_delta_log_entry_parses_canonical_message_delta_payload() {
+        let message = json!({
+            "type": "canonical_message_delta",
+            "payload": {
+                "id": "canon-1",
+                "taskId": "task-123",
+                "turnId": "turn-1",
+                "correlationId": "corr-1",
+                "role": "assistant",
+                "part": {
+                    "type": "text",
+                    "delta": "world"
+                }
+            }
+        });
+
+        let entry = extract_stream_delta_log_entry(&message).expect("stream log entry");
+        assert_eq!(entry.delta, "world");
+        assert_eq!(entry.key.message_type, "canonical_message_delta");
+        assert_eq!(entry.key.task_id.as_deref(), Some("task-123"));
+        assert_eq!(entry.key.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(entry.key.message_id.as_deref(), Some("canon-1"));
+        assert_eq!(entry.key.correlation_id.as_deref(), Some("corr-1"));
+        assert_eq!(entry.key.role.as_deref(), Some("assistant"));
+        assert_eq!(entry.key.part_type.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn extract_stream_delta_log_entry_ignores_non_stream_events() {
+        let message = json!({
+            "type": "TASK_STATUS",
+            "taskId": "task-123",
+            "payload": {
+                "status": "running"
+            }
+        });
+
+        assert!(extract_stream_delta_log_entry(&message).is_none());
     }
 }

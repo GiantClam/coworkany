@@ -28,6 +28,7 @@ export interface StartTaskConfig {
     maxTokens?: number;
     maxHistoryMessages?: number;
     executionPath?: 'direct' | 'workflow';
+    enableChatSkills?: boolean;
     enabledClaudeSkills?: string[];
     enabledToolpacks?: string[];
     enabledSkills?: string[];

@@ -523,15 +523,21 @@ function appendSystemMessage(session: TaskSession, event: TaskEvent, content: st
 }
 
 function appendAssistantMessage(session: TaskSession, event: TaskEvent, content: string): TaskSession {
+    const payload = event.payload as Record<string, unknown>;
+    const turnId = typeof payload.turnId === 'string' && payload.turnId.trim().length > 0
+        ? payload.turnId.trim()
+        : undefined;
+    const messageId = turnId ? `task-failed:${turnId}` : `${event.id}:assistant`;
     return {
         ...session,
         messages: [
             ...session.messages,
             {
-                id: `${event.id}:assistant`,
+                id: messageId,
                 role: 'assistant',
                 content,
                 timestamp: event.timestamp,
+                turnId,
             },
         ],
     };
@@ -801,7 +807,10 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 recoverable: payload.recoverable === true,
                 suggestion: typeof payload.suggestion === 'string' ? payload.suggestion.trim() : undefined,
             };
-            const assistantMessageId = `${event.id}:assistant`;
+            const turnId = typeof payload.turnId === 'string' && payload.turnId.trim().length > 0
+                ? payload.turnId.trim()
+                : undefined;
+            const assistantMessageId = turnId ? `task-failed:${turnId}` : `${event.id}:assistant`;
             const isDuplicateFailureEvent = session.messages.some((message) => message.id === assistantMessageId);
             const failureMessage = [
                 `Task failed: ${nextFailure.error}`,

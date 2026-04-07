@@ -840,8 +840,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         );
         const executionPath = routedMode === 'chat' ? 'direct' : 'workflow';
         const titleSource = effectiveQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
-        const enabledSkillsForRequest = enabledSkills;
-        const enabledToolpacksForRequest = enabledToolpacks;
+        const shouldUseLeanChatRuntime = routedMode === 'chat' && executionPath === 'direct';
+        const enabledSkillsForRequest = shouldUseLeanChatRuntime ? [] : enabledSkills;
+        const enabledToolpacksForRequest = shouldUseLeanChatRuntime ? [] : enabledToolpacks;
+        const enableChatSkills = !shouldUseLeanChatRuntime;
 
         if (activeSession?.taskId && !activeSession.isDraft && !createTaskIntent) {
             const voiceSettings = await getVoiceSettings();
@@ -865,6 +867,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     enabledClaudeSkills: enabledSkillsForRequest,
                     enabledToolpacks: enabledToolpacksForRequest,
                     enabledSkills: enabledSkillsForRequest,
+                    enableChatSkills,
                     voiceProviderMode: voiceSettings.providerMode,
                 },
             });
@@ -924,6 +927,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 enabledClaudeSkills: enabledSkillsForRequest,
                 enabledToolpacks: enabledToolpacksForRequest,
                 enabledSkills: enabledSkillsForRequest,
+                enableChatSkills,
                 voiceProviderMode: voiceSettings.providerMode,
             },
         }, optimisticDraftTaskId ? { draftTaskId: optimisticDraftTaskId } : undefined);
@@ -1086,9 +1090,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [isReconnectingLlm, shutdownSidecar, spawnSidecar]);
 
-    const handleRetryFailedTask = useCallback(async () => {
-        if (!activeSession || (activeSession.status !== 'failed' && activeSession.status !== 'suspended')) {
-            return;
+    const retryLatestUserTurn = useCallback(async (
+        options?: { allowWhenNotFailed?: boolean }
+    ): Promise<boolean> => {
+        const allowWhenNotFailed = options?.allowWhenNotFailed === true;
+        if (!activeSession) {
+            return false;
+        }
+        if (!allowWhenNotFailed && (activeSession.status !== 'failed' && activeSession.status !== 'suspended')) {
+            return false;
         }
         const latestUserMessage = [...activeSession.messages]
             .reverse()
@@ -1098,27 +1108,58 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 && !message.content.trim().startsWith('[RESUME_REQUESTED]')
             ));
         if (!latestUserMessage) {
-            await handleReconnectLlm();
-            return;
+            if (!allowWhenNotFailed) {
+                await handleReconnectLlm();
+            }
+            return false;
         }
         const voiceSettings = await getVoiceSettings();
+        const isChatSessionRetry = activeSession.taskMode === 'chat';
+        const retryEnabledSkills = isChatSessionRetry ? [] : enabledSkills;
+        const retryEnabledToolpacks = isChatSessionRetry ? [] : enabledToolpacks;
         setWorkspaceError(null);
+        appendLocalTaskEvent(activeSession.taskId, 'CHAT_MESSAGE', {
+            role: 'user',
+            content: latestUserMessage.content,
+            __localEcho: true,
+        });
+        appendLocalTaskEvent(activeSession.taskId, 'TASK_RESUMED', {
+            resumeReason: 'user_retry',
+        });
         stageOptimisticUserEcho(activeSession.taskId, latestUserMessage.content);
         const result = await sendMessage({
             taskId: activeSession.taskId,
             content: latestUserMessage.content,
             bypassDedup: true,
             config: {
-                enabledClaudeSkills: enabledSkills,
-                enabledToolpacks,
-                enabledSkills,
+                executionPath: isChatSessionRetry ? 'direct' : 'workflow',
+                enabledClaudeSkills: retryEnabledSkills,
+                enabledToolpacks: retryEnabledToolpacks,
+                enabledSkills: retryEnabledSkills,
+                enableChatSkills: !isChatSessionRetry,
                 voiceProviderMode: voiceSettings.providerMode,
             },
         });
         if (!result?.success) {
+            appendLocalTaskEvent(activeSession.taskId, 'TASK_FAILED', {
+                error: result?.error ?? t('chat.connectionError'),
+                errorCode: 'RETRY_SEND_FAILED',
+                recoverable: true,
+                suggestion: t('chat.connectionError'),
+            });
             setWorkspaceError(result?.error ?? t('chat.connectionError'));
+            return false;
         }
-    }, [activeSession, enabledSkills, enabledToolpacks, handleReconnectLlm, sendMessage, stageOptimisticUserEcho, t]);
+        return true;
+    }, [activeSession, appendLocalTaskEvent, enabledSkills, enabledToolpacks, handleReconnectLlm, sendMessage, stageOptimisticUserEcho, t]);
+
+    const handleRetryFailedTask = useCallback(async () => {
+        await retryLatestUserTurn({ allowWhenNotFailed: false });
+    }, [retryLatestUserTurn]);
+
+    const handleAssistantUiRetry = useCallback(async (_parentId: string | null) => {
+        await retryLatestUserTurn({ allowWhenNotFailed: true });
+    }, [retryLatestUserTurn]);
 
     const handleContinueInterruptedTask = useCallback(async () => {
         if (!activeSession?.taskId || !interruptedRecovery) {
@@ -1127,12 +1168,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         setWorkspaceError(null);
         const voiceSettings = await getVoiceSettings();
+        const isChatSessionResume = activeSession.taskMode === 'chat';
+        const resumeEnabledSkills = isChatSessionResume ? [] : enabledSkills;
+        const resumeEnabledToolpacks = isChatSessionResume ? [] : enabledToolpacks;
         const result = await resumeInterruptedTask({
             taskId: activeSession.taskId,
             config: {
-                enabledClaudeSkills: enabledSkills,
-                enabledToolpacks,
-                enabledSkills,
+                executionPath: isChatSessionResume ? 'direct' : 'workflow',
+                enabledClaudeSkills: resumeEnabledSkills,
+                enabledToolpacks: resumeEnabledToolpacks,
+                enabledSkills: resumeEnabledSkills,
+                enableChatSkills: !isChatSessionResume,
                 voiceProviderMode: voiceSettings.providerMode,
             },
         });
@@ -1307,6 +1353,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Timeline
                 session={activeSession}
                 optimisticUserEntry={activeOptimisticUserEntry}
+                onAssistantUiRetry={handleAssistantUiRetry}
                 onTaskCollaborationSubmit={handleTaskCardCollaborationSubmit}
             />
 

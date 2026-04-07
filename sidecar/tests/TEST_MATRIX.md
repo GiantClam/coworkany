@@ -15,6 +15,7 @@ This directory contains several different classes of tests. They do not all have
 | `npm test` | Alias of `test:stable` | High | Bun + local source tree |
 | `npm run test:stable` | Deterministic local structural/unit tests | High | None beyond installed deps |
 | `npm run test:ci` | CI-safe subset | High | Same as `test:stable` |
+| `npm run test:regression:task-message-dedup` | Focused regression retest for same-task duplicate message suppression and retry dedup | High | None beyond installed deps |
 | `npm run test:agent:core` | Sidecar-spawn agent flows without browser focus | Medium | Working LLM provider/config |
 | `npm run test:agent:scenarios` | Large scenario and OpenClaw comparison suites | Low-Medium | Working LLM provider/config, long runtime budget |
 | `npm run test:agent:research` | Search/research/TTS suites | Low-Medium | LLM provider plus search API keys and optional TTS support |

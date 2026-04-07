@@ -3,6 +3,7 @@ import { ActionBarPrimitive, MessagePrimitive, ThreadPrimitive, useAuiState } fr
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import styles from './AssistantUiThreadView.module.css';
 import {
     readAssistantUiStructuredPayload,
@@ -214,6 +215,8 @@ interface AssistantUiStructuredCardProps {
     children: React.ReactNode;
 }
 
+const structuredListExpansionMemory = new Map<string, boolean>();
+
 const AssistantUiStructuredCard: React.FC<AssistantUiStructuredCardProps> = ({
     title,
     count,
@@ -233,10 +236,29 @@ const AssistantUiStructuredCard: React.FC<AssistantUiStructuredCardProps> = ({
 
 interface AssistantUiStructuredListProps {
     items: React.ReactNode[];
+    expansionKey?: string;
 }
 
-const AssistantUiStructuredList: React.FC<AssistantUiStructuredListProps> = ({ items }) => {
+const AssistantUiStructuredList: React.FC<AssistantUiStructuredListProps> = ({ items, expansionKey }) => {
     const { t } = useTranslation();
+    const [isExpanded, setIsExpanded] = React.useState<boolean>(() => (
+        expansionKey ? Boolean(structuredListExpansionMemory.get(expansionKey)) : false
+    ));
+
+    React.useEffect(() => {
+        if (!expansionKey) {
+            return;
+        }
+        setIsExpanded(Boolean(structuredListExpansionMemory.get(expansionKey)));
+    }, [expansionKey]);
+
+    React.useEffect(() => {
+        if (!expansionKey) {
+            return;
+        }
+        structuredListExpansionMemory.set(expansionKey, isExpanded);
+    }, [expansionKey, isExpanded]);
+
     if (items.length <= 2) {
         return <ul className={styles.structuredList}>{items}</ul>;
     }
@@ -246,7 +268,13 @@ const AssistantUiStructuredList: React.FC<AssistantUiStructuredListProps> = ({ i
     return (
         <div className={styles.structuredListGroup}>
             <ul className={styles.structuredList}>{previewItems}</ul>
-            <details className={styles.structuredDetails}>
+            <details
+                className={styles.structuredDetails}
+                open={isExpanded}
+                onToggle={(event) => {
+                    setIsExpanded(event.currentTarget.open);
+                }}
+            >
                 <summary className={styles.structuredSummary}>
                     {t('assistantUi.showMore', { count: hiddenCount, defaultValue: `Show ${hiddenCount} more` })}
                 </summary>
@@ -364,6 +392,7 @@ const AssistantUiApprovalItem: React.FC<AssistantUiApprovalItemProps> = ({
 interface AssistantStructuredDetailsProps {
     structured: AssistantUiStructuredPayload | null;
     suppressRuntimeCard?: boolean;
+    messageScopeKey?: string;
     onApprovalDecision?: (input: {
         requestId: string;
         decision: 'approve' | 'deny' | 'modify_approve';
@@ -374,6 +403,7 @@ interface AssistantStructuredDetailsProps {
 const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
     structured,
     suppressRuntimeCard = false,
+    messageScopeKey,
     onApprovalDecision,
 }) => {
     const { t } = useTranslation();
@@ -469,6 +499,7 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                 className={mergedClassName}
             >
                 <AssistantUiStructuredList
+                    expansionKey={messageScopeKey ? `${messageScopeKey}:${keyPrefix}` : undefined}
                     items={approvals.map((approval, index) => (
                         <AssistantUiApprovalItem
                             key={`${keyPrefix}-${approval.requestId}-${index}`}
@@ -536,6 +567,7 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                     className={styles.eventCard}
                 >
                     <AssistantUiStructuredList
+                        expansionKey={messageScopeKey ? `${messageScopeKey}:events` : undefined}
                         items={structured.events.map((event, index) => (
                             <li key={`event-${index}`} className={`${styles.structuredItem} ${styles.eventItem}`}>
                                 <span className={styles.eventDot} aria-hidden="true" />
@@ -599,7 +631,10 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                                     <span className={styles.toolsGroupSummaryCount}>{structured.tools.length}</span>
                                 </summary>
                                 <div className={styles.toolsGroupBody}>
-                                    <AssistantUiStructuredList items={toolItems} />
+                                    <AssistantUiStructuredList
+                                        expansionKey={messageScopeKey ? `${messageScopeKey}:tools` : undefined}
+                                        items={toolItems}
+                                    />
                                 </div>
                             </details>
                         );
@@ -689,15 +724,38 @@ interface AssistantUiMessageProps {
 }
 
 const MarkdownTextPart = ({ text }: { text: string }) => {
-    const content = processMessageContent(text);
+    const content = processMessageContent(text, {
+        compactMarkdown: false,
+        cleanNewlines: true,
+    });
     if (!content) {
         return null;
     }
 
     return (
         <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkGfm, remarkBreaks]}
             components={{
+                code(props) {
+                    const { children, className } = props;
+                    const languageClass = typeof className === 'string' ? className : '';
+                    const isInline = !languageClass.includes('language-');
+                    if (isInline) {
+                        return (
+                            <code {...props} className={className}>
+                                {children}
+                            </code>
+                        );
+                    }
+
+                    return (
+                        <pre className={styles.messageCodeBlock}>
+                            <code className={languageClass}>
+                                {String(children).replace(/\n$/, '')}
+                            </code>
+                        </pre>
+                    );
+                },
                 a(props) {
                     const { href, children, ...rest } = props;
                     const isExternal = isExternalHref(href);
@@ -738,6 +796,18 @@ const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecis
         () => readAssistantUiStructuredPayload(customValue),
         [customValue],
     );
+    const messageScopeKey = React.useMemo(() => {
+        if (!customValue || typeof customValue !== 'object') {
+            return undefined;
+        }
+        const record = customValue as Record<string, unknown>;
+        const turnId = typeof record.turnId === 'string' ? record.turnId.trim() : '';
+        const source = typeof record.source === 'string' ? record.source.trim() : '';
+        if (!turnId) {
+            return undefined;
+        }
+        return source ? `${source}:${turnId}` : turnId;
+    }, [customValue]);
     const timestampLabel = React.useMemo(
         () => formatAssistantUiTimestamp(messageCreatedAt, i18n.language),
         [i18n.language, messageCreatedAt],
@@ -871,6 +941,7 @@ const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecis
                             <AssistantStructuredDetails
                                 structured={structured}
                                 suppressRuntimeCard={suppressRuntimeCard}
+                                messageScopeKey={messageScopeKey}
                                 onApprovalDecision={onApprovalDecision}
                             />
                         </div>

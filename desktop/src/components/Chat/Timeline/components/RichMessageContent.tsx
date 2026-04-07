@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { toast } from '../../../Common/ToastProvider';
 import { ModalDialog } from '../../../Common/ModalDialog';
 import styles from '../Timeline.module.css';
@@ -116,8 +117,28 @@ const MarkdownSegment = React.memo(function MarkdownSegment({ content, className
     return (
         <div className={className}>
             <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkBreaks]}
                 components={{
+                    code(props) {
+                        const { children, className } = props;
+                        const languageClass = typeof className === 'string' ? className : '';
+                        const isInline = !languageClass.includes('language-');
+                        if (isInline) {
+                            return (
+                                <code {...props} className={className}>
+                                    {children}
+                                </code>
+                            );
+                        }
+
+                        return (
+                            <pre className={styles.codeBlock}>
+                                <code className={languageClass}>
+                                    {String(children).replace(/\n$/, '')}
+                                </code>
+                            </pre>
+                        );
+                    },
                     a(props) {
                         const { href, children, ...rest } = props;
                         const isExternal = isExternalHref(href);
@@ -134,7 +155,10 @@ const MarkdownSegment = React.memo(function MarkdownSegment({ content, className
                     }
                 }}
             >
-                {processMessageContent(content)}
+                {processMessageContent(content, {
+                    compactMarkdown: false,
+                    cleanNewlines: true,
+                })}
             </ReactMarkdown>
         </div>
     );

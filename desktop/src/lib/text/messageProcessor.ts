@@ -102,10 +102,55 @@ function compactMarkdown(text: string): string {
 
 /**
  * Clean excessive newlines
- * Replace 3+ newlines with 2 (one empty line)
+ * - Collapse markdown paragraph breaks (`\n\n`) to single newline outside fenced code blocks
+ * - Preserve code fence content exactly (including blank lines)
+ * - Trim trailing spaces on non-code lines
  */
 function cleanNewlines(text: string): string {
-    return text.replace(/[\r\n]{3,}/g, '\n\n');
+    const normalized = text.replace(/\r\n?/g, '\n');
+    const lines = normalized.split('\n');
+    const output: string[] = [];
+    let fence: { marker: '`' | '~'; length: number } | null = null;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+
+        if (fenceMatch) {
+            const token = fenceMatch[1];
+            const marker = token[0] as '`' | '~';
+            const length = token.length;
+            if (!fence) {
+                fence = { marker, length };
+            } else if (fence.marker === marker && length >= fence.length) {
+                fence = null;
+            }
+            output.push(line);
+            continue;
+        }
+
+        if (fence) {
+            output.push(line);
+            continue;
+        }
+
+        if (trimmed.length === 0) {
+            continue;
+        }
+
+        const normalizedLine = line
+            .replace(/^(\s*)(\d+)\)(?=\S)/u, '$1$2. ')
+            .replace(/^(\s*)(\d+)[）](?=\S)/u, '$1$2. ')
+            .replace(/^(\s*)(\d+)[、](?=\S)/u, '$1$2. ')
+            .replace(/^(\s*)(\d+)\.(?=\S)/u, '$1$2. ')
+            .replace(/^(\s*)-(?=\S)/u, '$1- ')
+            .replace(/^(\s*)\+(?=\S)/u, '$1+ ')
+            .replace(/^(\s*)\*(?!\*)(?=\S)/u, '$1* ')
+            .replace(/[ \t]+$/g, '');
+
+        output.push(normalizedLine);
+    }
+    return output.join('\n');
 }
 
 // ============================================================================
@@ -128,7 +173,7 @@ export function processMessageContent(
     // Default options
     const {
         removeEmojis: shouldRemoveEmojis = true,
-        compactMarkdown: shouldCompactMarkdown = true,
+        compactMarkdown: shouldCompactMarkdown = false,
         cleanNewlines: shouldCleanNewlines = true,
     } = options;
 
@@ -198,7 +243,7 @@ export function isInProcessingCache(
 ): boolean {
     const {
         removeEmojis: shouldRemoveEmojis = true,
-        compactMarkdown: shouldCompactMarkdown = true,
+        compactMarkdown: shouldCompactMarkdown = false,
         cleanNewlines: shouldCleanNewlines = true,
     } = options;
 

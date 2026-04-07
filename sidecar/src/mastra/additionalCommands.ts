@@ -460,6 +460,7 @@ export function createMastraAdditionalCommandHandler(input?: {
 }): {
     handler: AdditionalCommandHandler;
     skillStore: SkillStore;
+    toolpackStore: ToolpackStore;
     getPluginPolicySnapshot: () => PluginPolicySnapshot;
 } {
     const workspaceRoot = input?.workspaceRoot ?? process.cwd();
@@ -826,6 +827,7 @@ export function createMastraAdditionalCommandHandler(input?: {
     return {
         handler,
         skillStore: runtime.skillStore,
+        toolpackStore,
         getPluginPolicySnapshot: runtime.getPluginPolicySnapshot,
     };
 }

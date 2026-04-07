@@ -135,6 +135,26 @@ function createHarness(overrides?: {
         prompt?: string;
         enabledSkillIds: string[];
     };
+    onListRuntimeCapabilities?: () => {
+        skills: Array<{
+            id: string;
+            name?: string;
+            enabled: boolean;
+            description?: string;
+        }>;
+        toolpacks: Array<{
+            id: string;
+            name?: string;
+            enabled: boolean;
+            description?: string;
+            tools?: string[];
+        }>;
+    };
+    onWarmupChatRuntime?: () => Promise<{
+        mcpServerCount: number;
+        mcpToolCount: number;
+        durationMs: number;
+    }>;
     initialTaskStates?: TaskRuntimeState[];
     policyGateResponseTimeoutMs?: number;
     policyGateTimeoutRetryCount?: number;
@@ -250,6 +270,7 @@ function createHarness(overrides?: {
         getNowIso: () => '2026-03-30T00:00:00.000Z',
         createId: () => 'req-fixed',
         resolveSkillPrompt: (input) => overrides?.onResolveSkillPrompt?.(input) ?? { enabledSkillIds: [] },
+        listRuntimeCapabilities: overrides?.onListRuntimeCapabilities,
         taskTranscriptStore: {
             append: (taskId, role, content) => {
                 const normalized = content.trim();
@@ -407,6 +428,7 @@ function createHarness(overrides?: {
         remoteSessionGovernancePolicy: overrides?.remoteSessionGovernancePolicy,
         policyGateResponseTimeoutMs: overrides?.policyGateResponseTimeoutMs,
         policyGateTimeoutRetryCount: overrides?.policyGateTimeoutRetryCount,
+        warmupChatRuntime: overrides?.onWarmupChatRuntime,
     });
 
     const emit = (message: Record<string, unknown>) => {
@@ -545,6 +567,255 @@ describe('mastra entrypoint processor', () => {
         expect((sendResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(0);
         const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
         expect((textDelta?.payload as Record<string, unknown>)?.turnId).toBe('cmd-followup');
+    });
+
+    test('send_task_message disables heavy skill prompt for default direct chat turns', async () => {
+        const harness = createHarness({
+            onResolveSkillPrompt: () => ({
+                prompt: '[Enabled Skills]\n- release-checker: validate release evidence',
+                enabledSkillIds: ['release-checker'],
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-chat-skill-trim',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-chat-skill-trim',
+                content: '帮我写一份简洁日报',
+                config: {
+                    enabledSkills: ['release-checker'],
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.enabledSkills).toEqual([]);
+        expect(harness.userMessageCalls[0]?.options?.skillPrompt).toBeUndefined();
+    });
+
+    test('send_task_message returns runtime skill and toolpack list for capability queries without model execution', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [
+                    { id: 'release-checker', enabled: true },
+                    { id: 'incident-tracker', enabled: false },
+                ],
+                toolpacks: [
+                    { id: 'filesystem', name: 'Filesystem', enabled: true, tools: ['view_file', 'run_command'] },
+                    { id: 'browser', name: 'Browser', enabled: false, tools: ['browse'] },
+                ],
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-capability-query',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-capability-query',
+                content: '当前支持哪些 skill 和 tools？',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
+        const delta = toString(toRecord(textDelta?.payload).delta);
+        expect(delta).toContain('release-checker');
+        expect(delta).toContain('incident-tracker');
+        expect(delta).toContain('Filesystem');
+        expect(delta).toContain('Browser');
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_query');
+        const persisted = harness.persistedTaskStates().find((state) => state.taskId === 'task-capability-query');
+        expect(persisted?.status).toBe('idle');
+    });
+
+    test('send_task_message returns name and description for capability explanation queries', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [
+                    { id: 'release-checker', enabled: true, description: 'validate release evidence' },
+                    { id: 'incident-tracker', enabled: false, description: 'track incident timelines' },
+                ],
+                toolpacks: [
+                    { id: 'filesystem', name: 'Filesystem', enabled: true, tools: ['view_file'], description: 'read and write files' },
+                ],
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-capability-explain-query',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-capability-explain-query',
+                content: '说明一下这些 skill 和 tools',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
+        const delta = toString(toRecord(textDelta?.payload).delta);
+        expect(delta).toContain('- release-checker: validate release evidence');
+        expect(delta).toContain('- incident-tracker: track incident timelines');
+        expect(delta).toContain('- Filesystem[1]: read and write files');
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_query');
+    });
+
+    test('send_task_message does not short-circuit non-query messages that merely mention skills', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [
+                    { id: 'release-checker', enabled: true },
+                ],
+                toolpacks: [],
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-capability-non-query',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-capability-non-query',
+                content: '帮我用这个skill生成一份日报',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+    });
+
+    test('send_task_message deduplicates same task message while the first run is in flight', async () => {
+        let releaseRun: (() => void) | undefined;
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-dedup-inflight',
+                    content: 'processing',
+                });
+                await new Promise<void>((resolve) => {
+                    releaseRun = resolve;
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-dedup-inflight',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-dedup-inflight' };
+            },
+        });
+
+        const firstProcess = harness.process({
+            id: 'cmd-dedup-inflight-1',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-dedup-inflight',
+                content: '同一条消息',
+            },
+        });
+        for (let index = 0; index < 10; index += 1) {
+            if (harness.outgoing.some((message) => (
+                message.type === 'send_task_message_response'
+                && message.commandId === 'cmd-dedup-inflight-1'
+            ))) {
+                break;
+            }
+            await Promise.resolve();
+        }
+
+        const secondProcess = harness.process({
+            id: 'cmd-dedup-inflight-2',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-dedup-inflight',
+                content: '同一条消息',
+            },
+        });
+        for (let index = 0; index < 10; index += 1) {
+            if (harness.outgoing.some((message) => (
+                message.type === 'send_task_message_response'
+                && message.commandId === 'cmd-dedup-inflight-2'
+            ))) {
+                break;
+            }
+            await Promise.resolve();
+        }
+
+        const secondResponse = harness.outgoing.find((message) => (
+            message.type === 'send_task_message_response'
+            && message.commandId === 'cmd-dedup-inflight-2'
+        ));
+        expect(secondResponse).toBeDefined();
+        expect((secondResponse?.payload as Record<string, unknown>)?.deduplicated).toBe(true);
+        expect((secondResponse?.payload as Record<string, unknown>)?.dedupReason).toBe('in_flight');
+        expect(harness.userMessageCalls).toHaveLength(1);
+
+        releaseRun?.();
+        await Promise.all([firstProcess, secondProcess]);
+    });
+
+    test('send_task_message allows repeated content after completion', async () => {
+        const harness = createHarness();
+
+        await harness.process({
+            id: 'cmd-dedup-recent-1',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-dedup-recent',
+                content: '请继续',
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-dedup-recent-2',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-dedup-recent',
+                content: '请继续',
+            },
+        });
+
+        const secondResponse = harness.outgoing.find((message) => (
+            message.type === 'send_task_message_response'
+            && message.commandId === 'cmd-dedup-recent-2'
+        ));
+        expect(secondResponse).toBeDefined();
+        expect((secondResponse?.payload as Record<string, unknown>)?.deduplicated).not.toBe(true);
+        expect(harness.userMessageCalls).toHaveLength(2);
+    });
+
+    test('send_task_message can bypass dedupe when allowDuplicateTaskMessage is true', async () => {
+        const harness = createHarness();
+
+        await harness.process({
+            id: 'cmd-dedup-bypass-1',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-dedup-bypass',
+                content: '重复发送',
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-dedup-bypass-2',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-dedup-bypass',
+                content: '重复发送',
+                config: {
+                    allowDuplicateTaskMessage: true,
+                },
+            },
+        });
+
+        const secondResponse = harness.outgoing.find((message) => (
+            message.type === 'send_task_message_response'
+            && message.commandId === 'cmd-dedup-bypass-2'
+        ));
+        expect(secondResponse).toBeDefined();
+        expect((secondResponse?.payload as Record<string, unknown>)?.deduplicated).not.toBe(true);
+        expect(harness.userMessageCalls).toHaveLength(2);
     });
 
     test('send_task_message serializes turns per task and exposes queuePosition', async () => {
@@ -756,6 +1027,165 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
+    test('send_task_message treats store-disabled history error after assistant narrative as recovered completion', async () => {
+        const calls: Array<{ threadId: string; message: string }> = [];
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                calls.push({
+                    threadId: input.threadId,
+                    message: input.message,
+                });
+
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-store-after-text',
+                    content: '这是一份简洁日报。',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-store-after-text',
+                    message: "Item with id 'msg_x' not found. Items are not persisted when `store` is set to false.",
+                });
+                return { runId: 'run-store-after-text' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-store-after-text',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-store-after-text',
+                content: '帮我写一份简洁日报',
+            },
+        });
+
+        expect(calls.map((call) => call.threadId)).toEqual(['task-store-after-text']);
+        expect(
+            harness.outgoing.some(
+                (message) =>
+                    message.type === 'TEXT_DELTA'
+                    && (message.payload as Record<string, unknown>)?.delta === '这是一份简洁日报。',
+            ),
+        ).toBe(true);
+        expect(
+            harness.outgoing.some(
+                (message) =>
+                    message.type === 'TASK_FINISHED'
+                    && (message.payload as Record<string, unknown>)?.finishReason === 'assistant_text_store_disabled_history_recovered',
+            ),
+        ).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message treats wrapped store-disabled history error after assistant narrative as recovered completion', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-store-after-text-wrapped',
+                    content: '当然可以，给你一版简洁日报。',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-store-after-text-wrapped',
+                    message: "{\n  \"error\": {\n    \"message\": \"Item with id 'msg_061e62c89cada9e90169d34945aa8081999180e2820ffa1996' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": null\n  }\n}（traceid: 25aea4d080aea3188c08b310d0455984）",
+                });
+                return { runId: 'run-store-after-text-wrapped' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-store-after-text-wrapped',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-store-after-text-wrapped',
+                content: '帮我写一份简洁日报',
+            },
+        });
+
+        expect(
+            harness.outgoing.some(
+                (message) =>
+                    message.type === 'TASK_FINISHED'
+                    && (message.payload as Record<string, unknown>)?.finishReason === 'assistant_text_store_disabled_history_recovered',
+            ),
+        ).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message suppresses repeated terminal errors after store-disabled recovery completion', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-store-repeated-errors',
+                    content: '当然可以，这是一版简洁日报。',
+                });
+                const repeatedError = "{\n  \"error\": {\n    \"message\": \"Item with id 'msg_061e62c89cada9e90169d34945aa8081999180e2820ffa1996' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": null\n  }\n}";
+                emit({
+                    type: 'error',
+                    runId: 'run-store-repeated-errors',
+                    message: repeatedError,
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-store-repeated-errors',
+                    message: repeatedError,
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-store-repeated-errors',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-store-repeated-errors' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-store-repeated-errors',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-store-repeated-errors',
+                content: '帮我写一份简洁日报',
+            },
+        });
+
+        const finished = harness.outgoing.filter((message) => message.type === 'TASK_FINISHED');
+        expect(finished.length).toBe(1);
+        expect((finished[0]?.payload as Record<string, unknown>)?.finishReason).toBe('assistant_text_store_disabled_history_recovered');
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message emits at most one TASK_FAILED for repeated terminal error events in same turn', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'error',
+                    runId: 'run-repeated-errors',
+                    message: 'upstream_timeout',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-repeated-errors',
+                    message: 'upstream_timeout',
+                });
+                return { runId: 'run-repeated-errors' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-repeated-errors',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-repeated-errors',
+                content: '继续',
+            },
+        });
+
+        const failed = harness.outgoing.filter((message) => message.type === 'TASK_FAILED');
+        expect(failed.length).toBe(1);
+    });
+
     test('send_task_message treats complete without assistant narrative as false completion failure', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -787,6 +1217,49 @@ describe('mastra entrypoint processor', () => {
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect(failed).toBeDefined();
         expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_FALSE_COMPLETION');
+    });
+
+    test('send_task_message suppresses late approval events after false completion failure', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'complete',
+                    runId: 'run-false-complete-late-approval',
+                    finishReason: 'stream_exhausted',
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-false-complete-late-approval',
+                    toolCallId: 'call-late',
+                    toolName: 'agent-researcher',
+                    args: { query: 'minimax' },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-false-complete-late-approval',
+                    toolName: 'agent-researcher',
+                    args: { query: 'minimax' },
+                });
+                return { runId: 'run-false-complete-late-approval' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-false-complete-late-approval',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-false-complete-late-approval',
+                content: '今天 minimax 的港股股价是什么表现？',
+            },
+        });
+
+        const failures = harness.outgoing.filter((message) => message.type === 'TASK_FAILED');
+        expect(failures).toHaveLength(1);
+        expect((failures[0]?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_FALSE_COMPLETION');
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_EVENT')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
     });
 
     test('token usage desktop events are forwarded as TOKEN_USAGE payloads', async () => {
@@ -992,6 +1465,57 @@ describe('mastra entrypoint processor', () => {
 
         releaseRun?.();
         await processing;
+    });
+
+    test('send_task_message does not fail false-completion when run is waiting for user approval', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-approval-complete-before-resume',
+                    toolCallId: 'tool-approval-complete-before-resume',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: { command: 'curl -s https://example.com' },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-approval-complete-before-resume',
+                    finishReason: 'stream_exhausted',
+                });
+                return { runId: 'run-approval-complete-before-resume' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-approval-complete-before-resume',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-approval-complete-before-resume',
+                content: '需要执行命令后回复',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        expect(effectRequested).toBeDefined();
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-approval-complete-before-resume-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
+                success: true,
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
     test('report_effect_result returns not-found when request id is unknown', async () => {
@@ -1225,6 +1749,30 @@ describe('mastra entrypoint processor', () => {
         const tasks = snapshotPayload.tasks as Array<Record<string, unknown>>;
         expect(tasks[0]?.taskId).toBe('task-snapshot');
         expect(tasks[0]?.workspacePath).toBe('/tmp/ws-snapshot');
+    });
+
+    test('warmup_chat_runtime preloads runtime and returns MCP preload metrics', async () => {
+        const harness = createHarness({
+            onWarmupChatRuntime: async () => ({
+                mcpServerCount: 2,
+                mcpToolCount: 7,
+                durationMs: 42,
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-warmup',
+            type: 'warmup_chat_runtime',
+            payload: {},
+        });
+
+        const warmupResponse = harness.outgoing.find((message) => message.type === 'warmup_chat_runtime_response');
+        expect(warmupResponse).toBeDefined();
+        expect((warmupResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        const warmupPayload = ((warmupResponse?.payload as Record<string, unknown>)?.warmup ?? {}) as Record<string, unknown>;
+        expect(warmupPayload.mcpServerCount).toBe(2);
+        expect(warmupPayload.mcpToolCount).toBe(7);
+        expect(warmupPayload.durationMs).toBe(42);
     });
 
     test('resume_interrupted_task replays the last user message for the same task', async () => {
@@ -1577,6 +2125,89 @@ describe('mastra entrypoint processor', () => {
         expect(duplicateRetryPayload.success).toBe(true);
         expect(duplicateRetryPayload.deduplicated).toBe(true);
         expect(harness.userMessageCalls).toHaveLength(2);
+    });
+
+    test('retry_task deduplicates same retry message while a retry run is still in flight', async () => {
+        let releaseRun: (() => void) | undefined;
+        const harness = createHarness({
+            initialTaskStates: [{
+                taskId: 'task-retry-message-dedup',
+                conversationThreadId: 'thread-retry-message-dedup',
+                title: 'Retry message dedup',
+                workspacePath: '/tmp/retry-message-dedup',
+                createdAt: '2026-03-30T00:00:00.000Z',
+                status: 'failed',
+                lastUserMessage: 'retry failed',
+                resourceId: 'employee-task-retry-message-dedup',
+                retry: {
+                    attempts: 0,
+                    maxAttempts: 5,
+                },
+                executionPath: 'workflow',
+            }],
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-retry-message-dedup',
+                    content: 'retrying',
+                });
+                await new Promise<void>((resolve) => {
+                    releaseRun = resolve;
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-retry-message-dedup',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-retry-message-dedup' };
+            },
+        });
+
+        const firstRetry = harness.process({
+            id: 'cmd-retry-message-dedup-1',
+            type: 'retry_task',
+            payload: {
+                taskId: 'task-retry-message-dedup',
+            },
+        });
+        for (let index = 0; index < 10; index += 1) {
+            if (harness.outgoing.some((message) => (
+                message.type === 'retry_task_response'
+                && message.commandId === 'cmd-retry-message-dedup-1'
+            ))) {
+                break;
+            }
+            await Promise.resolve();
+        }
+
+        const secondRetry = harness.process({
+            id: 'cmd-retry-message-dedup-2',
+            type: 'retry_task',
+            payload: {
+                taskId: 'task-retry-message-dedup',
+            },
+        });
+        for (let index = 0; index < 10; index += 1) {
+            if (harness.outgoing.some((message) => (
+                message.type === 'retry_task_response'
+                && message.commandId === 'cmd-retry-message-dedup-2'
+            ))) {
+                break;
+            }
+            await Promise.resolve();
+        }
+
+        const secondResponse = harness.outgoing.find((message) =>
+            message.type === 'retry_task_response'
+            && message.commandId === 'cmd-retry-message-dedup-2',
+        );
+        expect(secondResponse).toBeDefined();
+        expect((secondResponse?.payload as Record<string, unknown>)?.deduplicated).toBe(true);
+        expect((secondResponse?.payload as Record<string, unknown>)?.dedupReason).toBe('in_flight');
+        expect(harness.userMessageCalls).toHaveLength(1);
+
+        releaseRun?.();
+        await Promise.all([firstRetry, secondRetry]);
     });
 
     test('get_tasks returns workspace-scoped task list', async () => {

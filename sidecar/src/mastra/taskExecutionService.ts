@@ -8,10 +8,14 @@ import { mastra } from './index';
 import { createTelemetryRunContext } from './telemetry';
 import { TaskContextCompressionStore } from './contextCompression';
 import { resolveMissingApiKeyForModel } from '../ipc/streaming';
+import { classifyRuntimeErrorMessage } from './runtimeErrorClassifier';
 
 type TaskExecutionMode = 'direct' | 'workflow';
 const contextCompressionStore = new TaskContextCompressionStore();
 const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-4-5';
+const DEFAULT_WORKFLOW_TIMEOUT_MS = 35_000;
+const DEFAULT_WORKFLOW_RETRY_COUNT = 1;
+const DEFAULT_WORKFLOW_RETRY_DELAY_MS = 500;
 
 function toRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -105,6 +109,30 @@ function readFlag(name: string, fallback: boolean): boolean {
     return fallback;
 }
 
+function readBoundedInt(
+    name: string,
+    fallback: number,
+    min: number,
+    max: number,
+): number {
+    const raw = process.env[name];
+    const parsed = Number.parseInt(raw ?? '', 10);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    return Math.min(max, Math.max(min, parsed));
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableWorkflowError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /\b(workflow_run_timeout|workflow_retryable_failure|timeout|timed out|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream)\b/i
+        .test(message);
+}
+
 function resolveExecutionMode(input: TaskMessageExecutionDelegateInput): TaskExecutionMode {
     const configuredPath = input.executionOptions?.executionPath;
     if (configuredPath === 'workflow') {
@@ -130,6 +158,7 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
         resourceId: input.resourceId,
         workspacePath: input.workspacePath,
         content: input.message,
+        turnId: input.turnId,
     });
     const promptPack = contextCompressionStore.buildPromptPack(input.taskId);
     const recalledMemoryFiles = promptPack?.recalledTopicMemories.map((entry) => entry.relativePath) ?? [];
@@ -154,6 +183,7 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
             resourceId: input.resourceId,
             workspacePath: input.workspacePath,
             content: failureMessage,
+            turnId: input.turnId,
         });
         input.executionOptions?.onPostCompact?.({
             taskId: input.taskId,
@@ -174,120 +204,207 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
     }
     const workflowUserInput = input.message;
     const workflow = mastra.getWorkflow('controlPlane');
-    const runId = `control-plane-${randomUUID()}`;
     const telemetry = createTelemetryRunContext({
         taskId: input.taskId,
         threadId: input.preferredThreadId,
         resourceId: input.resourceId,
         workspacePath: input.workspacePath,
     });
-    const run = await workflow.createRun({
-        runId,
-        resourceId: input.resourceId,
-    });
-    const result = await run.start({
-        inputData: {
-            userInput: workflowUserInput,
-            workspacePath: input.workspacePath ?? process.cwd(),
-        },
-        tracingOptions: telemetry.tracingOptions,
-        outputOptions: {
-            includeState: true,
-            includeResumeLabels: true,
-        },
-    });
-    const status = pickWorkflowStatus(result);
-    if (status === 'suspended') {
-        if (promptPack) {
-            input.executionOptions?.onPostCompact?.({
-                taskId: input.taskId,
-                threadId: input.preferredThreadId,
+    const workflowTimeoutMs = readBoundedInt(
+        'COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS',
+        DEFAULT_WORKFLOW_TIMEOUT_MS,
+        500,
+        120_000,
+    );
+    const workflowRetryCount = readBoundedInt(
+        'COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT',
+        DEFAULT_WORKFLOW_RETRY_COUNT,
+        0,
+        5,
+    );
+    const workflowRetryDelayMs = readBoundedInt(
+        'COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS',
+        DEFAULT_WORKFLOW_RETRY_DELAY_MS,
+        100,
+        10_000,
+    );
+    const maxAttempts = workflowRetryCount + 1;
+
+    for (let attempt = 0; attempt <= workflowRetryCount; attempt += 1) {
+        const runId = `control-plane-${randomUUID()}`;
+        try {
+            const run = await workflow.createRun({
+                runId,
                 resourceId: input.resourceId,
-                workspacePath: input.workspacePath,
-                microSummary: promptPack.microSummary,
-                structuredSummary: promptPack.structuredSummary,
-                recalledMemoryFiles,
             });
+            const abortController = new AbortController();
+            let timeoutId: ReturnType<typeof setTimeout> | null = null;
+            const startPayload = {
+                inputData: {
+                    userInput: workflowUserInput,
+                    workspacePath: input.workspacePath ?? process.cwd(),
+                },
+                tracingOptions: telemetry.tracingOptions,
+                outputOptions: {
+                    includeState: true,
+                    includeResumeLabels: true,
+                },
+                signal: abortController.signal,
+            };
+            const result = await (async () => {
+                try {
+                    return await Promise.race([
+                        (run.start as (input: unknown) => Promise<unknown>)(startPayload),
+                        new Promise<never>((_, reject) => {
+                            timeoutId = setTimeout(() => {
+                                abortController.abort(new Error('workflow_run_timeout'));
+                                reject(new Error(`workflow_run_timeout:${workflowTimeoutMs}`));
+                            }, workflowTimeoutMs);
+                        }),
+                    ]);
+                } finally {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                    }
+                }
+            })();
+
+            const status = pickWorkflowStatus(result);
+            if (status === 'suspended') {
+                if (promptPack) {
+                    input.executionOptions?.onPostCompact?.({
+                        taskId: input.taskId,
+                        threadId: input.preferredThreadId,
+                        resourceId: input.resourceId,
+                        workspacePath: input.workspacePath,
+                        microSummary: promptPack.microSummary,
+                        structuredSummary: promptPack.structuredSummary,
+                        recalledMemoryFiles,
+                    });
+                }
+                await input.emitDesktopEvent({
+                    type: 'suspended',
+                    runId,
+                    toolCallId: `workflow-suspend-${input.taskId}`,
+                    toolName: 'control_plane',
+                    payload: result,
+                    turnId: input.turnId,
+                });
+                return 'workflow';
+            }
+            if (status === 'failed' || status === 'tripwire') {
+                const failureMessage = pickWorkflowResultText(result) ?? `control_plane_failed:${status}`;
+                const failureClassification = classifyRuntimeErrorMessage(failureMessage);
+                const canRetry = failureClassification.failureClass === 'retryable'
+                    && attempt < workflowRetryCount;
+                if (canRetry) {
+                    await input.emitDesktopEvent({
+                        type: 'rate_limited',
+                        runId,
+                        message: `Workflow execution delayed. Retrying (${attempt + 2}/${maxAttempts})...`,
+                        attempt: attempt + 2,
+                        maxAttempts,
+                        retryAfterMs: workflowRetryDelayMs,
+                        error: failureMessage,
+                        stage: 'unknown',
+                        turnId: input.turnId,
+                    });
+                    await delay(workflowRetryDelayMs * (attempt + 1));
+                    continue;
+                }
+                if (failureClassification.failureClass === 'retryable') {
+                    throw new Error(`workflow_retryable_failure:${failureMessage}`);
+                }
+                const snapshot = contextCompressionStore.recordAssistantTurn({
+                    taskId: input.taskId,
+                    threadId: input.preferredThreadId,
+                    resourceId: input.resourceId,
+                    workspacePath: input.workspacePath,
+                    content: failureMessage,
+                    turnId: input.turnId,
+                });
+                input.executionOptions?.onPostCompact?.({
+                    taskId: input.taskId,
+                    threadId: input.preferredThreadId,
+                    resourceId: input.resourceId,
+                    workspacePath: input.workspacePath,
+                    microSummary: snapshot.microSummary,
+                    structuredSummary: snapshot.structuredSummary,
+                    recalledMemoryFiles,
+                });
+                await input.emitDesktopEvent({
+                    type: 'error',
+                    runId,
+                    message: failureMessage,
+                    turnId: input.turnId,
+                });
+                return 'workflow';
+            }
+            const summary = pickWorkflowResultText(result) ?? 'Task completed via workflow runtime.';
+            if (summary) {
+                const snapshot = contextCompressionStore.recordAssistantTurn({
+                    taskId: input.taskId,
+                    threadId: input.preferredThreadId,
+                    resourceId: input.resourceId,
+                    workspacePath: input.workspacePath,
+                    content: summary,
+                    turnId: input.turnId,
+                });
+                input.executionOptions?.onPostCompact?.({
+                    taskId: input.taskId,
+                    threadId: input.preferredThreadId,
+                    resourceId: input.resourceId,
+                    workspacePath: input.workspacePath,
+                    microSummary: snapshot.microSummary,
+                    structuredSummary: snapshot.structuredSummary,
+                    recalledMemoryFiles,
+                });
+                await input.emitDesktopEvent({
+                    type: 'text_delta',
+                    runId,
+                    role: 'assistant',
+                    content: summary,
+                    turnId: input.turnId,
+                });
+            } else if (promptPack) {
+                input.executionOptions?.onPostCompact?.({
+                    taskId: input.taskId,
+                    threadId: input.preferredThreadId,
+                    resourceId: input.resourceId,
+                    workspacePath: input.workspacePath,
+                    microSummary: promptPack.microSummary,
+                    structuredSummary: promptPack.structuredSummary,
+                    recalledMemoryFiles,
+                });
+            }
+            await input.emitDesktopEvent({
+                type: 'complete',
+                runId,
+                finishReason: `workflow:${status}`,
+                turnId: input.turnId,
+            });
+            return 'workflow';
+        } catch (error) {
+            const canRetry = isRetryableWorkflowError(error)
+                && attempt < workflowRetryCount;
+            if (!canRetry) {
+                throw error;
+            }
+            await input.emitDesktopEvent({
+                type: 'rate_limited',
+                message: `Workflow request timed out. Retrying (${attempt + 2}/${maxAttempts})...`,
+                attempt: attempt + 2,
+                maxAttempts,
+                retryAfterMs: workflowRetryDelayMs,
+                error: String(error),
+                stage: 'unknown',
+                turnId: input.turnId,
+            });
+            await delay(workflowRetryDelayMs * (attempt + 1));
         }
-        await input.emitDesktopEvent({
-            type: 'suspended',
-            runId,
-            toolCallId: `workflow-suspend-${input.taskId}`,
-            toolName: 'control_plane',
-            payload: result,
-            turnId: input.turnId,
-        });
-        return 'workflow';
     }
-    if (status === 'failed' || status === 'tripwire') {
-        const failureMessage = pickWorkflowResultText(result) ?? `control_plane_failed:${status}`;
-        const snapshot = contextCompressionStore.recordAssistantTurn({
-            taskId: input.taskId,
-            threadId: input.preferredThreadId,
-            resourceId: input.resourceId,
-            workspacePath: input.workspacePath,
-            content: failureMessage,
-        });
-        input.executionOptions?.onPostCompact?.({
-            taskId: input.taskId,
-            threadId: input.preferredThreadId,
-            resourceId: input.resourceId,
-            workspacePath: input.workspacePath,
-            microSummary: snapshot.microSummary,
-            structuredSummary: snapshot.structuredSummary,
-            recalledMemoryFiles,
-        });
-        await input.emitDesktopEvent({
-            type: 'error',
-            runId,
-            message: failureMessage,
-            turnId: input.turnId,
-        });
-        return 'workflow';
-    }
-    const summary = pickWorkflowResultText(result) ?? 'Task completed via workflow runtime.';
-    if (summary) {
-        const snapshot = contextCompressionStore.recordAssistantTurn({
-            taskId: input.taskId,
-            threadId: input.preferredThreadId,
-            resourceId: input.resourceId,
-            workspacePath: input.workspacePath,
-            content: summary,
-        });
-        input.executionOptions?.onPostCompact?.({
-            taskId: input.taskId,
-            threadId: input.preferredThreadId,
-            resourceId: input.resourceId,
-            workspacePath: input.workspacePath,
-            microSummary: snapshot.microSummary,
-            structuredSummary: snapshot.structuredSummary,
-            recalledMemoryFiles,
-        });
-        await input.emitDesktopEvent({
-            type: 'text_delta',
-            runId,
-            role: 'assistant',
-            content: summary,
-            turnId: input.turnId,
-        });
-    } else if (promptPack) {
-        input.executionOptions?.onPostCompact?.({
-            taskId: input.taskId,
-            threadId: input.preferredThreadId,
-            resourceId: input.resourceId,
-            workspacePath: input.workspacePath,
-            microSummary: promptPack.microSummary,
-            structuredSummary: promptPack.structuredSummary,
-            recalledMemoryFiles,
-        });
-    }
-    await input.emitDesktopEvent({
-        type: 'complete',
-        runId,
-        finishReason: `workflow:${status}`,
-        turnId: input.turnId,
-    });
-    return 'workflow';
+
+    throw new Error('workflow_exhausted_without_result');
 }
 
 export function createMastraTaskExecutionService(): {

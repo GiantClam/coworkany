@@ -110,6 +110,134 @@ describe('mastra additional command handler', () => {
         expect((remove?.payload as Record<string, unknown>)?.success).toBe(true);
     });
 
+    test('skill lifecycle commands install, toggle, and uninstall skill correctly', async () => {
+        const workspaceRoot = createTempDir('coworkany-mastra-skill-lifecycle-');
+        const appDataRoot = createTempDir('coworkany-mastra-skill-lifecycle-appdata-');
+        const skillDir = createTempDir('coworkany-mastra-skill-lifecycle-source-');
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---
+name: lifecycle-skill
+version: 1.0.0
+description: lifecycle test skill
+---
+
+# lifecycle-skill
+`);
+
+        const { handler, skillStore } = createMastraAdditionalCommandHandler({
+            workspaceRoot,
+            appDataRoot,
+        });
+
+        const imported = await handler(createCommand('import_claude_skill', {
+            path: skillDir,
+        }));
+        const importedPayload = (imported?.payload ?? {}) as Record<string, unknown>;
+        expect(imported?.type).toBe('import_claude_skill_response');
+        expect(importedPayload.success).toBe(true);
+        expect(importedPayload.skillId).toBe('lifecycle-skill');
+        expect(skillStore.get('lifecycle-skill')?.enabled).toBe(true);
+
+        const disabled = await handler(createCommand('set_claude_skill_enabled', {
+            skillId: 'lifecycle-skill',
+            enabled: false,
+        }));
+        expect(disabled?.type).toBe('set_claude_skill_enabled_response');
+        expect((disabled?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(skillStore.get('lifecycle-skill')?.enabled).toBe(false);
+
+        const reEnabled = await handler(createCommand('set_claude_skill_enabled', {
+            skillId: 'lifecycle-skill',
+            enabled: true,
+        }));
+        expect(reEnabled?.type).toBe('set_claude_skill_enabled_response');
+        expect((reEnabled?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(skillStore.get('lifecycle-skill')?.enabled).toBe(true);
+
+        const removed = await handler(createCommand('remove_claude_skill', {
+            skillId: 'lifecycle-skill',
+            deleteFiles: true,
+        }));
+        expect(removed?.type).toBe('remove_claude_skill_response');
+        expect((removed?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(skillStore.get('lifecycle-skill')).toBeUndefined();
+        expect(fs.existsSync(skillDir)).toBe(false);
+    });
+
+    test('toolpack lifecycle commands install, toggle, and remove toolpack correctly', async () => {
+        const workspaceRoot = createTempDir('coworkany-mastra-toolpack-lifecycle-');
+        const appDataRoot = createTempDir('coworkany-mastra-toolpack-lifecycle-appdata-');
+        const toolpackDir = createTempDir('coworkany-mastra-toolpack-lifecycle-source-');
+        fs.writeFileSync(path.join(toolpackDir, 'mcp.json'), JSON.stringify({
+            id: 'lifecycle-toolpack',
+            name: 'Lifecycle Toolpack',
+            version: '1.0.0',
+            description: 'lifecycle test toolpack',
+            runtime: 'stdio',
+            tools: ['tool_a', 'tool_b'],
+            effects: [],
+        }, null, 2));
+
+        const { handler } = createMastraAdditionalCommandHandler({
+            workspaceRoot,
+            appDataRoot,
+        });
+
+        const installed = await handler(createCommand('install_toolpack', {
+            path: toolpackDir,
+        }));
+        const installedPayload = (installed?.payload ?? {}) as Record<string, unknown>;
+        expect(installed?.type).toBe('install_toolpack_response');
+        expect(installedPayload.success).toBe(true);
+
+        const listAfterInstall = await handler(createCommand('list_toolpacks', {
+            includeDisabled: true,
+        }));
+        const listAfterInstallPayload = (listAfterInstall?.payload ?? {}) as Record<string, unknown>;
+        const listedToolpacks = Array.isArray(listAfterInstallPayload.toolpacks)
+            ? listAfterInstallPayload.toolpacks as Array<Record<string, unknown>>
+            : [];
+        expect(
+            listedToolpacks.some((item) => {
+                const manifest = ((item.manifest ?? {}) as Record<string, unknown>);
+                return manifest.id === 'lifecycle-toolpack';
+            }),
+        ).toBe(true);
+
+        const disabled = await handler(createCommand('set_toolpack_enabled', {
+            toolpackId: 'lifecycle-toolpack',
+            enabled: false,
+        }));
+        expect(disabled?.type).toBe('set_toolpack_enabled_response');
+        expect((disabled?.payload as Record<string, unknown>)?.success).toBe(true);
+
+        const reEnabled = await handler(createCommand('set_toolpack_enabled', {
+            toolpackId: 'lifecycle-toolpack',
+            enabled: true,
+        }));
+        expect(reEnabled?.type).toBe('set_toolpack_enabled_response');
+        expect((reEnabled?.payload as Record<string, unknown>)?.success).toBe(true);
+
+        const removed = await handler(createCommand('remove_toolpack', {
+            toolpackId: 'lifecycle-toolpack',
+        }));
+        expect(removed?.type).toBe('remove_toolpack_response');
+        expect((removed?.payload as Record<string, unknown>)?.success).toBe(true);
+
+        const listAfterRemove = await handler(createCommand('list_toolpacks', {
+            includeDisabled: true,
+        }));
+        const listAfterRemovePayload = (listAfterRemove?.payload ?? {}) as Record<string, unknown>;
+        const toolpacksAfterRemove = Array.isArray(listAfterRemovePayload.toolpacks)
+            ? listAfterRemovePayload.toolpacks as Array<Record<string, unknown>>
+            : [];
+        expect(
+            toolpacksAfterRemove.some((item) => {
+                const manifest = ((item.manifest ?? {}) as Record<string, unknown>);
+                return manifest.id === 'lifecycle-toolpack';
+            }),
+        ).toBe(false);
+    });
+
     test('scan_default_repos + validate_github_url + install_from_github(skill/mcp) are supported', async () => {
         const workspaceRoot = createTempDir('coworkany-mastra-marketplace-');
         const appDataRoot = createTempDir('coworkany-mastra-marketplace-appdata-');

@@ -1766,4 +1766,156 @@ describe('buildTimelineItems', () => {
         ]);
         expect(turns[0]?.systemEvents).toContain('任务已完成，结果：系统返回最终摘要。');
     });
+
+    test('collapses consecutive duplicate assistant turns and keeps a single markdown narrative', () => {
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'chat',
+            messages: [
+                {
+                    id: 'msg-user-dup-1',
+                    role: 'user',
+                    content: '帮我写一份简洁的日报。',
+                    timestamp: '2026-04-07T03:15:20.000Z',
+                },
+                {
+                    id: 'msg-assistant-dup-1',
+                    role: 'assistant',
+                    content: '当然可以，给你一份简洁版日报：\n\n**今日完成**\n- 推进重点事项',
+                    timestamp: '2026-04-07T03:15:31.000Z',
+                    turnId: 'turn-dup-1',
+                },
+                {
+                    id: 'msg-assistant-dup-2',
+                    role: 'assistant',
+                    content: '当然可以，给你一份简洁版日报：\n\n**今日完成**\n- 推进重点事项',
+                    timestamp: '2026-04-07T03:15:32.000Z',
+                    turnId: 'turn-dup-2',
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'event-start-dup-1',
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    timestamp: '2026-04-07T03:15:20.100Z',
+                    payload: {
+                        title: '帮我写一份简洁的日报。',
+                        description: '帮我写一份简洁的日报。',
+                        context: {
+                            mode: 'chat',
+                            userQuery: '帮我写一份简洁的日报。',
+                            displayText: '帮我写一份简洁的日报。',
+                        },
+                    },
+                }),
+                makeEvent({
+                    id: 'event-delta-dup-1',
+                    sequence: 2,
+                    type: 'TEXT_DELTA',
+                    timestamp: '2026-04-07T03:15:31.000Z',
+                    payload: {
+                        role: 'assistant',
+                        delta: '当然可以，给你一份简洁版日报：\n\n**今日完成**\n- 推进重点事项',
+                        turnId: 'turn-dup-1',
+                        messageId: 'stream-dup-1',
+                    },
+                }),
+                makeEvent({
+                    id: 'event-delta-dup-2',
+                    sequence: 3,
+                    type: 'TEXT_DELTA',
+                    timestamp: '2026-04-07T03:15:32.000Z',
+                    payload: {
+                        role: 'assistant',
+                        delta: '当然可以，给你一份简洁版日报：\n\n**今日完成**\n- 推进重点事项',
+                        turnId: 'turn-dup-2',
+                        messageId: 'stream-dup-2',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const assistantTurns = result.items.filter((item) => item.type === 'assistant_turn');
+        expect(result.items.map((item) => item.type)).toEqual(['user_message', 'assistant_turn']);
+        expect(assistantTurns).toHaveLength(1);
+        expect(assistantTurns[0]?.type).toBe('assistant_turn');
+        if (assistantTurns[0]?.type === 'assistant_turn') {
+            expect(assistantTurns[0].messages).toEqual([
+                '当然可以，给你一份简洁版日报：\n\n**今日完成**\n- 推进重点事项',
+            ]);
+        }
+    });
+
+    test('keeps only markdown narrative when raw and canonical messages are near-duplicate rewrites in one turn', () => {
+        const markdownReply = [
+            '当然可以，我先给你一版“更像本人表达”的简洁日报（偏务实、口语化一点）：',
+            '',
+            '**今日日报（4月6日）**',
+            '',
+            '## 今日完成',
+            '- 推进核心事项，关键节点按计划完成。',
+            '- 处理中间问题并同步给相关同事。',
+        ].join('\n');
+        const flattenedReply = '当然可以，我先给你一版“更像本人表达”的简洁日报（偏务实、口语化一点）： 今日日报（4月6日） 今日完成 推进核心事项，关键节点按计划完成。 处理中间问题并同步给相关同事。';
+
+        const session = makeSession({
+            status: 'finished',
+            taskMode: 'chat',
+            messages: [
+                {
+                    id: 'msg-user-source-1',
+                    role: 'user',
+                    content: '好的，改成更像我的',
+                    timestamp: '2026-04-07T03:20:00.000Z',
+                },
+                {
+                    id: 'msg-assistant-source-1',
+                    role: 'assistant',
+                    content: flattenedReply,
+                    timestamp: '2026-04-07T03:20:10.000Z',
+                    turnId: 'turn-source-1',
+                },
+            ],
+            events: [
+                makeEvent({
+                    id: 'event-start-source-1',
+                    sequence: 1,
+                    type: 'TASK_STARTED',
+                    timestamp: '2026-04-07T03:20:00.100Z',
+                    payload: {
+                        title: '好的，改成更像我的',
+                        description: '好的，改成更像我的',
+                        context: {
+                            mode: 'chat',
+                            userQuery: '好的，改成更像我的',
+                            displayText: '好的，改成更像我的',
+                        },
+                    },
+                }),
+                makeEvent({
+                    id: 'event-delta-source-1',
+                    sequence: 2,
+                    type: 'TEXT_DELTA',
+                    timestamp: '2026-04-07T03:20:10.100Z',
+                    payload: {
+                        role: 'assistant',
+                        delta: markdownReply,
+                        turnId: 'turn-source-1',
+                        messageId: 'stream-source-1',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const assistantTurn = result.items.find((item) => item.type === 'assistant_turn');
+        expect(result.items.map((item) => item.type)).toEqual(['user_message', 'assistant_turn']);
+        expect(assistantTurn?.type).toBe('assistant_turn');
+        if (assistantTurn?.type === 'assistant_turn') {
+            expect(assistantTurn.lead).toBeUndefined();
+            expect(assistantTurn.messages).toEqual([markdownReply]);
+        }
+    });
 });

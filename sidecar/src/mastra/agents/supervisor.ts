@@ -6,8 +6,9 @@ import { memoryConfig } from '../memory/config';
 import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
 import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
+import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 
-const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
+const DEFAULT_MODEL = resolveRuntimeModelConfig();
 const UNSAFE_DELEGATION_PATTERNS: RegExp[] = [
     /\brm\s+-rf\b/i,
     /\bsudo\b/i,

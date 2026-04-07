@@ -19,6 +19,7 @@ interface AssistantUiRuntimeBridgeProps {
     pendingStatus?: PendingTaskStatus | null;
     isRunning?: boolean;
     onSubmitText?: (text: string) => Promise<void> | void;
+    onReloadMessage?: (parentId: string | null) => Promise<void> | void;
     children: React.ReactNode;
 }
 
@@ -37,6 +38,7 @@ export const AssistantUiRuntimeBridge: React.FC<AssistantUiRuntimeBridgeProps> =
     pendingStatus = null,
     isRunning = false,
     onSubmitText,
+    onReloadMessage,
     children,
 }) => {
     const externalMessages = React.useMemo(
@@ -57,11 +59,35 @@ export const AssistantUiRuntimeBridge: React.FC<AssistantUiRuntimeBridgeProps> =
         await onSubmitText(content);
     }, [onSubmitText]);
 
+    const onReload = React.useCallback(async (parentId: string | null): Promise<void> => {
+        if (onReloadMessage) {
+            await onReloadMessage(parentId);
+            return;
+        }
+
+        if (!onSubmitText) {
+            return;
+        }
+
+        const parentMessage = parentId
+            ? messages.find((message) => message.id === parentId && message.role === 'user')
+            : undefined;
+        const fallbackUserMessage = [...messages]
+            .reverse()
+            .find((message) => message.role === 'user' && message.text.trim().length > 0);
+        const content = (parentMessage?.text || fallbackUserMessage?.text || '').trim();
+        if (!content) {
+            return;
+        }
+        await onSubmitText(content);
+    }, [messages, onReloadMessage, onSubmitText]);
+
     const runtime = useExternalStoreRuntime<AssistantUiExternalMessage>({
         isRunning,
         messages,
         setMessages,
         onNew,
+        onReload,
         convertMessage: toAssistantUiThreadMessageLike,
     });
 

@@ -159,7 +159,7 @@
     max-width: min(72%, 100%);
     border-radius: calc(var(--surface-card-radius) + 10px);
     padding: 10px 14px;
-    line-height: 1.58;
+    line-height: 1.44;
     white-space: pre-wrap;
     word-break: break-word;
     font-size: var(--font-size-base);
@@ -172,7 +172,93 @@
 }
 
 .messageBubble :where(p + p) {
-    margin-top: 8px;
+    margin-top: 2px;
+}
+
+.assistantBubble :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table),
+.systemBubble :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table) {
+    margin: 0;
+}
+
+.assistantBubble :where(h1, h2, h3, h4, h5, h6),
+.systemBubble :where(h1, h2, h3, h4, h5, h6) {
+    line-height: 1.24;
+}
+
+.assistantBubble :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table)
++ :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table),
+.systemBubble :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table)
++ :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table) {
+    margin-top: 2px;
+}
+
+.assistantBubble :where(ul, ol),
+.systemBubble :where(ul, ol) {
+    margin: 0;
+    padding-left: 1.25em;
+}
+
+.assistantBubble :where(ol),
+.systemBubble :where(ol) {
+    list-style-type: decimal;
+    list-style-position: outside;
+}
+
+.assistantBubble :where(ul),
+.systemBubble :where(ul) {
+    list-style-type: disc;
+    list-style-position: outside;
+}
+
+.assistantBubble p,
+.systemBubble p {
+    margin: 0;
+}
+
+.assistantBubble p + p,
+.systemBubble p + p {
+    margin-top: 2px;
+}
+
+.assistantBubble ol,
+.systemBubble ol {
+    margin: 0;
+    padding-left: 1.25em;
+    list-style-type: decimal;
+    list-style-position: outside;
+}
+
+.assistantBubble ul,
+.systemBubble ul {
+    margin: 0;
+    padding-left: 1.25em;
+    list-style-type: disc;
+    list-style-position: outside;
+}
+
+.messageCodeBlock {
+    margin: 6px 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 96%, var(--bg-panel));
+    max-height: min(42vh, 320px);
+    overflow: auto;
+    max-width: 100%;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
+    font-family: var(--font-code);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.messageCodeBlock code {
+    font-family: inherit;
+}
+
+.assistantBubble :where(li + li),
+.systemBubble :where(li + li) {
+    margin-top: 2px;
 }
 
 .messageActions {
@@ -238,7 +324,7 @@
 
 .assistantBubble {
     flex: 1 1 auto;
-    max-width: 100%;
+    max-width: min(66%, 100%);
     border-radius: var(--surface-card-radius);
     border: none;
     background: transparent;
@@ -1015,7 +1101,7 @@
 
 .messageBubble {
     font-size: 15px;
-    line-height: 1.6;
+    line-height: 1.44;
 }
 
 .userBubble {

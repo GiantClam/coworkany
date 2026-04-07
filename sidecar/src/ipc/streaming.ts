@@ -48,6 +48,31 @@ type StreamTimingSnapshot = {
     lastTokenMs: number | null;
 };
 
+type ProxyRuntimeSnapshot = {
+    enabled: boolean;
+    source: string | null;
+    endpoint: string | null;
+    noProxy: string | null;
+};
+
+type LlmTimingLogInput = {
+    taskId: string;
+    threadId: string;
+    turnId?: string;
+    modelId: string;
+    provider: string;
+    phase: 'stream' | 'generate_fallback';
+    outcome: 'success' | 'error';
+    attempt: number;
+    maxAttempts: number;
+    assistantChars: number;
+    finishReason?: string;
+    error?: unknown;
+    timings: StreamTimingSnapshot;
+    proxyBefore: ProxyRuntimeSnapshot;
+    proxyAfter: ProxyRuntimeSnapshot;
+};
+
 type RateLimitedEmitInput = {
     runId?: string;
     attempt?: number;
@@ -79,11 +104,84 @@ const PROVIDER_KEY_MAP: Record<string, string> = {
     deepseek: 'DEEPSEEK_API_KEY',
     mistral: 'MISTRAL_API_KEY',
 };
+const OPENAI_COMPATIBLE_PROFILE_PROVIDERS = new Set([
+    'openai',
+    'aiberm',
+    'nvidia',
+    'siliconflow',
+    'gemini',
+    'qwen',
+    'minimax',
+    'kimi',
+]);
+
+function shouldDisableProxyForConfiguredLlmProvider(
+    env: Record<string, string | undefined> = process.env,
+): boolean {
+    const keepProxyRaw = env.COWORKANY_KEEP_PROXY_FOR_OPENAI_COMPAT?.trim().toLowerCase();
+    const keepProxy = keepProxyRaw === '1'
+        || keepProxyRaw === 'true'
+        || keepProxyRaw === 'yes'
+        || keepProxyRaw === 'on';
+    if (keepProxy) {
+        return false;
+    }
+    const configuredProvider = env.COWORKANY_LLM_CONFIG_PROVIDER?.trim().toLowerCase();
+    if (!configuredProvider) {
+        const modelProvider = env.COWORKANY_MODEL?.split('/')[0]?.trim().toLowerCase();
+        if (!modelProvider) {
+            return false;
+        }
+        return modelProvider === 'openai'
+            || OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(modelProvider);
+    }
+    if (configuredProvider === 'custom') {
+        const customApiFormat = env.COWORKANY_LLM_CUSTOM_API_FORMAT?.trim().toLowerCase();
+        return customApiFormat !== 'anthropic';
+    }
+    return OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(configuredProvider);
+}
+
+function disableProxyEnvForLlmPath(
+    env: Record<string, string | undefined> = process.env,
+): void {
+    if (!shouldDisableProxyForConfiguredLlmProvider(env)) {
+        return;
+    }
+    const keys = [
+        'COWORKANY_PROXY_URL',
+        'HTTPS_PROXY',
+        'https_proxy',
+        'HTTP_PROXY',
+        'http_proxy',
+        'ALL_PROXY',
+        'all_proxy',
+        'GLOBAL_AGENT_HTTPS_PROXY',
+        'GLOBAL_AGENT_HTTP_PROXY',
+        'COWORKANY_PROXY_SOURCE',
+    ];
+    for (const key of keys) {
+        delete env[key];
+    }
+    env.NODE_USE_ENV_PROXY = '0';
+}
 
 export function resolveMissingApiKeyForModel(
     modelId: string,
     env: Record<string, string | undefined> = process.env,
 ): string | null {
+    const configuredProvider = env.COWORKANY_LLM_CONFIG_PROVIDER?.trim().toLowerCase();
+    if (configuredProvider === 'custom') {
+        const customApiFormat = env.COWORKANY_LLM_CUSTOM_API_FORMAT?.trim().toLowerCase();
+        const customKeyEnv = customApiFormat === 'anthropic'
+            ? 'ANTHROPIC_API_KEY'
+            : 'OPENAI_API_KEY';
+        return env[customKeyEnv] ? null : customKeyEnv;
+    }
+    if (configuredProvider && OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(configuredProvider)) {
+        return env.OPENAI_API_KEY ? null : 'OPENAI_API_KEY';
+    }
+
     const provider = modelId.split('/')[0]?.toLowerCase();
     if (!provider) {
         return null;
@@ -139,9 +237,27 @@ function resolveRemainingBudgetMs(deadlineAt?: number): number | null {
     return Math.max(0, deadlineAt - Date.now());
 }
 
+function resolveEarliestDeadline(deadlines: Array<number | null | undefined>): number | undefined {
+    let earliest: number | undefined;
+    for (const deadline of deadlines) {
+        if (typeof deadline !== 'number' || !Number.isFinite(deadline)) {
+            continue;
+        }
+        if (typeof earliest !== 'number' || deadline < earliest) {
+            earliest = deadline;
+        }
+    }
+    return earliest;
+}
+
 function isTurnBudgetTimeoutError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return /\bchat_turn_timeout_budget_exhausted\b/i.test(message);
+}
+
+function isStartupBudgetTimeoutError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /\bchat_startup_timeout_budget_exhausted\b/i.test(message);
 }
 
 function isTransientStartError(error: unknown): boolean {
@@ -151,8 +267,30 @@ function isTransientStartError(error: unknown): boolean {
 
 function isRetryableForwardError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
-    return /\b(stream_idle_timeout|stream_progress_timeout|timeout|timed out|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream)\b/i
+    return /\b(stream_idle_timeout|stream_progress_timeout|stream_exhausted_without_assistant_text|complete_without_assistant_text|timeout|timed out|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream)\b/i
         .test(message);
+}
+
+function isNoAssistantNarrativeCompletionError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /\b(stream_exhausted_without_assistant_text|complete_without_assistant_text)\b/i.test(message);
+}
+
+function isStoreDisabledHistoryReferenceError(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    const mentionsStoreDisabled = message.includes('store')
+        && message.includes('false')
+        && (
+            message.includes('not persisted')
+            || message.includes('store is set to false')
+        );
+    if (mentionsStoreDisabled) {
+        return true;
+    }
+    return message.includes('item with id')
+        && message.includes('not found')
+        && message.includes('store')
+        && message.includes('false');
 }
 
 function resolveTimeoutStageFromError(
@@ -197,8 +335,84 @@ function buildTimingSnapshot(input: {
     };
 }
 
-async function resolveDynamicToolsetsWithTimeout(): Promise<Awaited<ReturnType<typeof listMcpToolsetsSafe>>> {
-    const timeoutMs = resolvePositiveIntFromEnv('COWORKANY_MCP_TOOLSETS_TIMEOUT_MS', 8_000);
+function sanitizeProxyEndpoint(raw: string | undefined): string | null {
+    if (typeof raw !== 'string') {
+        return null;
+    }
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+        return null;
+    }
+    const candidate = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    try {
+        const parsed = new URL(candidate);
+        const port = parsed.port ? `:${parsed.port}` : '';
+        return `${parsed.protocol}//${parsed.hostname}${port}`;
+    } catch {
+        return 'configured';
+    }
+}
+
+function getProxyRuntimeSnapshot(
+    env: Record<string, string | undefined> = process.env,
+): ProxyRuntimeSnapshot {
+    const proxyUrl = env.COWORKANY_PROXY_URL
+        || env.HTTPS_PROXY
+        || env.https_proxy
+        || env.HTTP_PROXY
+        || env.http_proxy
+        || env.ALL_PROXY
+        || env.all_proxy
+        || env.GLOBAL_AGENT_HTTPS_PROXY
+        || env.GLOBAL_AGENT_HTTP_PROXY;
+    const source = env.COWORKANY_PROXY_SOURCE?.trim() || (proxyUrl ? 'env' : null);
+    const noProxy = (env.NO_PROXY || env.no_proxy || '').trim();
+    return {
+        enabled: typeof proxyUrl === 'string' && proxyUrl.trim().length > 0,
+        source,
+        endpoint: sanitizeProxyEndpoint(proxyUrl),
+        noProxy: noProxy.length > 0 ? noProxy : null,
+    };
+}
+
+function summarizeErrorForLog(error: unknown): string | null {
+    const normalized = String(error ?? '').trim();
+    if (normalized.length === 0) {
+        return null;
+    }
+    const maxChars = 320;
+    return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}…` : normalized;
+}
+
+function emitLlmTimingLog(input: LlmTimingLogInput): void {
+    const payload = {
+        event: 'llm_timing',
+        taskId: input.taskId,
+        threadId: input.threadId,
+        turnId: input.turnId ?? null,
+        modelId: input.modelId,
+        provider: input.provider,
+        phase: input.phase,
+        outcome: input.outcome,
+        attempt: input.attempt,
+        maxAttempts: input.maxAttempts,
+        assistantChars: input.assistantChars,
+        finishReason: input.finishReason ?? null,
+        error: summarizeErrorForLog(input.error),
+        timings: input.timings,
+        proxy: {
+            before: input.proxyBefore,
+            after: input.proxyAfter,
+        },
+        timestamp: new Date().toISOString(),
+    };
+    console.info(`[coworkany-metrics] ${JSON.stringify(payload)}`);
+}
+
+async function resolveDynamicToolsetsWithTimeout(isChatTurn: boolean): Promise<Awaited<ReturnType<typeof listMcpToolsetsSafe>>> {
+    const timeoutMs = isChatTurn
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS', 2_000)
+        : resolvePositiveIntFromEnv('COWORKANY_MCP_TOOLSETS_TIMEOUT_MS', 8_000);
     const timeoutResult: Awaited<ReturnType<typeof listMcpToolsetsSafe>> = {};
     try {
         return await Promise.race([
@@ -211,6 +425,24 @@ async function resolveDynamicToolsetsWithTimeout(): Promise<Awaited<ReturnType<t
         console.warn('[streaming] MCP toolset preload failed; continuing without MCP toolsets:', error);
         return {};
     }
+}
+
+export async function warmupChatRuntime(): Promise<{
+    mcpServerCount: number;
+    mcpToolCount: number;
+    durationMs: number;
+}> {
+    const startedAt = Date.now();
+    const toolsets = await resolveDynamicToolsetsWithTimeout(true);
+    const mcpServerCount = Object.keys(toolsets).length;
+    const mcpToolCount = Object.values(toolsets).reduce((count, serverTools) => (
+        count + Object.keys(serverTools || {}).length
+    ), 0);
+    return {
+        mcpServerCount,
+        mcpToolCount,
+        durationMs: Math.max(0, Date.now() - startedAt),
+    };
 }
 
 async function withStartRetries<T>(
@@ -313,7 +545,7 @@ async function forwardStream(
         onRateLimited?: (input: RateLimitedEmitInput) => void;
         deadlineAt?: number;
     },
-): Promise<{ assistantText: string }> {
+): Promise<{ assistantText: string; finishReason?: string; timings: StreamTimingSnapshot }> {
     const runId = stream.runId;
     let hasAssistantTextDelta = false;
     let assistantText = '';
@@ -332,12 +564,14 @@ async function forwardStream(
         ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS', 20_000)
         : resolvePositiveIntFromEnv('COWORKANY_MASTRA_POST_ASSISTANT_MAX_MS', 45_000);
     const maxDurationMs = isChatTurn
-        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS', 90_000)
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS', 180_000)
         : resolvePositiveIntFromEnv('COWORKANY_MASTRA_STREAM_MAX_DURATION_MS', 180_000);
     const streamStartedAt = Date.now();
     let lastProgressAt = Date.now();
     let ignoredChunkCount = 0;
     let sawTerminalEvent = false;
+    let sawCompleteEvent = false;
+    let terminalFinishReason: string | undefined;
     let firstAssistantTextAt: number | null = null;
     let lastAssistantTextAt: number | null = null;
     let sawToolingAfterAssistantText = false;
@@ -354,11 +588,57 @@ async function forwardStream(
         ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_DELAY_MS', 1_200)
         : resolvePositiveIntFromEnv('COWORKANY_MASTRA_STREAM_TAIL_RETRY_DELAY_MS', 800);
     let tailRetryAttempt = 0;
-    const deadlineAt = options?.deadlineAt;
+    const deadlineRefreshWindowMs = isChatTurn
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS', 180_000)
+        : 0;
+    const chatDeltaFlushIntervalMs = isChatTurn
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_DELTA_FLUSH_INTERVAL_MS', 80)
+        : 0;
+    const chatDeltaFlushChars = isChatTurn
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_DELTA_FLUSH_CHARS', 48)
+        : 0;
+    let bufferedAssistantDelta = '';
+    let bufferedAssistantDeltaStartedAt = 0;
+    const flushBufferedAssistantDelta = (force: boolean): void => {
+        if (bufferedAssistantDelta.length === 0) {
+            return;
+        }
+        if (!force && isChatTurn) {
+            const ageMs = Date.now() - bufferedAssistantDeltaStartedAt;
+            if (bufferedAssistantDelta.length < chatDeltaFlushChars && ageMs < chatDeltaFlushIntervalMs) {
+                return;
+            }
+        }
+        sendToDesktop({
+            type: 'text_delta',
+            content: bufferedAssistantDelta,
+            role: 'assistant',
+            runId,
+            turnId: options?.turnId,
+        });
+        bufferedAssistantDelta = '';
+        bufferedAssistantDeltaStartedAt = 0;
+    };
+    const queueAssistantDelta = (content: string): void => {
+        if (content.length === 0) {
+            return;
+        }
+        if (bufferedAssistantDelta.length === 0) {
+            bufferedAssistantDeltaStartedAt = Date.now();
+        }
+        bufferedAssistantDelta += content;
+        flushBufferedAssistantDelta(false);
+    };
+    let deadlineAt = options?.deadlineAt;
+    const shouldRefreshDeadlineOnProgress = isChatTurn
+        && typeof deadlineAt === 'number'
+        && Number.isFinite(deadlineAt);
 
     while (true) {
+        flushBufferedAssistantDelta(false);
         const remainingBudgetMs = resolveRemainingBudgetMs(deadlineAt);
         if (remainingBudgetMs !== null && remainingBudgetMs <= 0) {
+            flushBufferedAssistantDelta(true);
             if (hasAssistantTextDelta && !sawTerminalEvent) {
                 sawTerminalEvent = true;
                 sendToDesktop({
@@ -366,6 +646,8 @@ async function forwardStream(
                     runId,
                     finishReason: 'assistant_text_turn_timeout_budget',
                 });
+                sawCompleteEvent = true;
+                terminalFinishReason = 'assistant_text_turn_timeout_budget';
                 break;
             }
             throw new Error('chat_turn_timeout_budget_exhausted');
@@ -373,7 +655,7 @@ async function forwardStream(
         if (
             firstAssistantTextAt !== null
             && (options?.forcePostAssistantCompletion === true || !sawToolingAfterAssistantText)
-            && Date.now() - firstAssistantTextAt >= postAssistantMaxCompleteMs
+            && Date.now() - lastProgressAt >= postAssistantMaxCompleteMs
             && !sawTerminalEvent
         ) {
             try {
@@ -381,24 +663,29 @@ async function forwardStream(
             } catch {
                 // Ignore cleanup failures.
             }
+            flushBufferedAssistantDelta(true);
             sawTerminalEvent = true;
             sendToDesktop({
                 type: 'complete',
                 runId,
                 finishReason: 'assistant_text_settled_max_window',
             });
+            sawCompleteEvent = true;
+            terminalFinishReason = 'assistant_text_settled_max_window';
             break;
         }
 
         const effectiveMaxDurationMs = remainingBudgetMs !== null
             ? Math.min(maxDurationMs, remainingBudgetMs)
             : maxDurationMs;
-        if (Date.now() - streamStartedAt >= effectiveMaxDurationMs) {
+        const maxDurationAnchorAt = hasAssistantTextDelta ? lastProgressAt : streamStartedAt;
+        if (Date.now() - maxDurationAnchorAt >= effectiveMaxDurationMs) {
             try {
                 await iterator.return?.();
             } catch {
                 // Ignore cleanup failures.
             }
+            flushBufferedAssistantDelta(true);
             if (hasAssistantTextDelta && !sawTerminalEvent) {
                 sawTerminalEvent = true;
                 sendToDesktop({
@@ -406,6 +693,7 @@ async function forwardStream(
                     runId,
                     finishReason: 'stream_max_duration_after_text',
                 });
+                terminalFinishReason = 'stream_max_duration_after_text';
                 break;
             }
             throw new Error(`stream_max_duration_timeout:${maxDurationMs}`);
@@ -437,6 +725,23 @@ async function forwardStream(
                 }
             })();
         } catch (error) {
+            if (hasAssistantTextDelta && isStoreDisabledHistoryReferenceError(error)) {
+                try {
+                    await iterator.return?.();
+                } catch {
+                    // Ignore cleanup failures.
+                }
+                flushBufferedAssistantDelta(true);
+                sawTerminalEvent = true;
+                sendToDesktop({
+                    type: 'complete',
+                    runId,
+                    finishReason: 'assistant_text_store_disabled_history_recovered',
+                });
+                sawCompleteEvent = true;
+                terminalFinishReason = 'assistant_text_store_disabled_history_recovered';
+                break;
+            }
             const canTailRetry = hasAssistantTextDelta
                 && isRetryableForwardError(error)
                 && tailRetryAttempt < tailRetryCount;
@@ -469,6 +774,7 @@ async function forwardStream(
             } catch {
                 // Ignore cleanup failures.
             }
+            flushBufferedAssistantDelta(true);
             if (
                 hasAssistantTextDelta
                 && !sawTerminalEvent
@@ -482,12 +788,17 @@ async function forwardStream(
                         ? 'assistant_text_idle'
                         : 'assistant_text_stream_interrupted',
                 });
+                sawCompleteEvent = true;
+                terminalFinishReason = /\bstream_(?:idle|progress)_timeout\b/i.test(String(error))
+                    ? 'assistant_text_idle'
+                    : 'assistant_text_stream_interrupted';
                 break;
             }
             throw error;
         }
 
         if (result.done) {
+            flushBufferedAssistantDelta(true);
             break;
         }
         const chunk = result.value;
@@ -509,7 +820,12 @@ async function forwardStream(
                 if (finalTextEvent.role !== 'thinking') {
                     assistantText += finalTextEvent.content;
                 }
-                sendToDesktop(finalTextEvent);
+                if (finalTextEvent.role === 'assistant') {
+                    queueAssistantDelta(finalTextEvent.content);
+                } else {
+                    flushBufferedAssistantDelta(true);
+                    sendToDesktop(finalTextEvent);
+                }
                 hasProgress = true;
             }
         }
@@ -535,16 +851,50 @@ async function forwardStream(
             ) {
                 sawToolingAfterAssistantText = true;
             }
+            if (event.type === 'error' && hasAssistantTextDelta && isStoreDisabledHistoryReferenceError(event.message)) {
+                flushBufferedAssistantDelta(true);
+                sawTerminalEvent = true;
+                sendToDesktop({
+                    type: 'complete',
+                    runId,
+                    finishReason: 'assistant_text_store_disabled_history_recovered',
+                });
+                try {
+                    await iterator.return?.();
+                } catch {
+                    // Ignore cleanup failures.
+                }
+                break;
+            }
             if (event.type === 'complete' || event.type === 'error' || event.type === 'tripwire') {
                 sawTerminalEvent = true;
             }
-            sendToDesktop(event);
+            if (event.type === 'complete') {
+                sawCompleteEvent = true;
+                terminalFinishReason = event.finishReason;
+            } else if (event.type === 'error') {
+                terminalFinishReason = 'error';
+            } else if (event.type === 'tripwire') {
+                terminalFinishReason = 'tripwire';
+            }
+            if (event.type === 'text_delta' && event.role === 'assistant') {
+                queueAssistantDelta(event.content);
+            } else {
+                flushBufferedAssistantDelta(true);
+                sendToDesktop(event);
+            }
             hasProgress = true;
+            if (event.type === 'complete' || event.type === 'error' || event.type === 'tripwire') {
+                break;
+            }
         }
 
         if (hasProgress) {
             lastProgressAt = Date.now();
             ignoredChunkCount = 0;
+            if (shouldRefreshDeadlineOnProgress) {
+                deadlineAt = lastProgressAt + deadlineRefreshWindowMs;
+            }
         } else {
             ignoredChunkCount += 1;
             if (Date.now() - lastProgressAt >= progressTimeoutMs) {
@@ -557,15 +907,31 @@ async function forwardStream(
             }
         }
     }
+    flushBufferedAssistantDelta(true);
     if (!sawTerminalEvent) {
+        if (!hasAssistantTextDelta) {
+            throw new Error('stream_exhausted_without_assistant_text');
+        }
         sendToDesktop({
             type: 'complete',
             runId,
             finishReason: 'stream_exhausted',
         });
+        sawCompleteEvent = true;
+        terminalFinishReason = 'stream_exhausted';
+    }
+    if (sawCompleteEvent && !hasAssistantTextDelta) {
+        throw new Error(`complete_without_assistant_text:${terminalFinishReason ?? 'unknown'}`);
     }
     return {
         assistantText: assistantText.trim(),
+        finishReason: terminalFinishReason,
+        timings: buildTimingSnapshot({
+            startedAt: streamAttemptStartedAt,
+            streamReadyAt,
+            firstTokenAt: firstAssistantTextAt,
+            lastTokenAt: lastAssistantTextAt,
+        }),
     };
 }
 
@@ -617,6 +983,9 @@ export async function handleUserMessage(
         onPostCompact?: (payload: CompactHookPayload) => void;
     },
 ): Promise<{ runId: string }> {
+    const proxySnapshotBeforeDisable = getProxyRuntimeSnapshot();
+    disableProxyEnvForLlmPath();
+    const proxySnapshotAfterDisable = getProxyRuntimeSnapshot();
     const taskId = options?.taskId ?? threadId;
     contextCompressionStore.recordUserTurn({
         taskId,
@@ -624,6 +993,7 @@ export async function handleUserMessage(
         resourceId,
         workspacePath: options?.workspacePath,
         content: message,
+        turnId: options?.turnId,
     });
     const promptPack = contextCompressionStore.buildPromptPack(taskId);
     const recalledTopicMemories: RecalledTopicMemory[] = promptPack?.recalledTopicMemories ?? [];
@@ -675,6 +1045,7 @@ export async function handleUserMessage(
         return { runId };
     }
 
+    const isChatTurn = options?.forcePostAssistantCompletion === true;
     const requestContext = createTaskRequestContext({
         threadId,
         resourceId,
@@ -689,7 +1060,10 @@ export async function handleUserMessage(
         resourceId,
         workspacePath: options?.workspacePath,
     });
-    const dynamicToolsets = await resolveDynamicToolsetsWithTimeout();
+    const dynamicToolsets = await resolveDynamicToolsetsWithTimeout(isChatTurn);
+    const defaultMaxSteps = isChatTurn ? 1 : 16;
+    const defaultRequireToolApproval = isChatTurn ? false : true;
+    const defaultAutoResumeSuspendedTools = isChatTurn ? false : true;
     const streamOptions = {
         memory: {
             thread: threadId,
@@ -698,22 +1072,27 @@ export async function handleUserMessage(
         requestContext,
         tracingOptions: telemetry.tracingOptions,
         toolsets: Object.keys(dynamicToolsets).length > 0 ? dynamicToolsets : undefined,
-        requireToolApproval: options?.requireToolApproval,
-        autoResumeSuspendedTools: options?.autoResumeSuspendedTools ?? true,
+        requireToolApproval: options?.requireToolApproval ?? defaultRequireToolApproval,
+        autoResumeSuspendedTools: options?.autoResumeSuspendedTools ?? defaultAutoResumeSuspendedTools,
         toolCallConcurrency: options?.toolCallConcurrency ?? 1,
-        maxSteps: options?.maxSteps ?? 16,
+        maxSteps: options?.maxSteps ?? defaultMaxSteps,
         providerOptions,
     };
 
-    const isChatTurn = options?.forcePostAssistantCompletion === true;
     const chatTurnTimeoutMs = isChatTurn
-        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS', 90_000)
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS', 180_000)
         : 0;
     const chatTurnDeadlineAt = isChatTurn
         ? Date.now() + chatTurnTimeoutMs
         : null;
+    const chatStartupBudgetMs = isChatTurn
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS', 90_000)
+        : 0;
+    const chatStartupDeadlineAt = isChatTurn
+        ? Date.now() + chatStartupBudgetMs
+        : null;
     const forwardRetryCount = isChatTurn
-        ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT', 2)
+        ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT', 5)
         : (
             Number.isFinite(STREAM_FORWARD_RETRY_COUNT) && STREAM_FORWARD_RETRY_COUNT > 0
                 ? STREAM_FORWARD_RETRY_COUNT
@@ -723,18 +1102,18 @@ export async function handleUserMessage(
         ? STREAM_FORWARD_RETRY_DELAY_MS
         : 800;
     const startRetryCount = isChatTurn
-        ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT', 2)
+        ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT', 5)
         : undefined;
     const startRetryDelayMs = isChatTurn
-        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS', 250)
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS', 1_000)
         : undefined;
     const startTimeoutMs = isChatTurn
-        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS', 75_000)
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS', 12_000)
         : undefined;
 
     const fallbackToGenerateOnStartTimeout = resolveBooleanFromEnv('COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK', true);
     const generateFallbackTimeoutMs = isChatTurn
-        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS', 75_000)
+        ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS', 30_000)
         : resolvePositiveIntFromEnv('COWORKANY_MASTRA_GENERATE_FALLBACK_TIMEOUT_MS', 45_000);
     const emitRateLimited = (input: RateLimitedEmitInput): void => {
         sendToDesktop({
@@ -766,6 +1145,8 @@ export async function handleUserMessage(
     };
     const runGenerateFallback = async (
         reason: string,
+        attemptNumber: number,
+        maxAttempts: number,
     ): Promise<{ runId: string } | null> => {
         if (!fallbackToGenerateOnStartTimeout) {
             return null;
@@ -789,12 +1170,17 @@ export async function handleUserMessage(
             }),
         });
         try {
-            const remainingBudgetMs = resolveRemainingBudgetMs(chatTurnDeadlineAt ?? undefined);
+            const fallbackStartedAt = Date.now();
+            const fallbackDeadlineAt = resolveEarliestDeadline([
+                chatTurnDeadlineAt ?? undefined,
+                chatStartupDeadlineAt ?? undefined,
+            ]);
+            const remainingBudgetMs = resolveRemainingBudgetMs(fallbackDeadlineAt);
             const effectiveGenerateFallbackTimeoutMs = remainingBudgetMs !== null
                 ? Math.max(1_000, Math.min(generateFallbackTimeoutMs, remainingBudgetMs))
                 : generateFallbackTimeoutMs;
             if (remainingBudgetMs !== null && remainingBudgetMs <= 0) {
-                throw new Error('chat_turn_timeout_budget_exhausted');
+                throw new Error('chat_startup_timeout_budget_exhausted');
             }
             const generated = await Promise.race([
                 supervisor.generate(effectiveMessage, streamOptions),
@@ -836,6 +1222,7 @@ export async function handleUserMessage(
                     resourceId,
                     workspacePath: options?.workspacePath,
                     content: generatedText,
+                    turnId: options?.turnId,
                 });
                 options?.onPostCompact?.({
                     taskId,
@@ -849,6 +1236,27 @@ export async function handleUserMessage(
             } else {
                 flushPostCompactWithPromptPack();
             }
+            emitLlmTimingLog({
+                taskId,
+                threadId,
+                turnId: options?.turnId,
+                modelId,
+                provider: modelProvider,
+                phase: 'generate_fallback',
+                outcome: 'success',
+                attempt: attemptNumber,
+                maxAttempts,
+                assistantChars: generatedText.length,
+                finishReason: generated.finishReason ?? 'fallback_generate',
+                timings: buildTimingSnapshot({
+                    startedAt: fallbackStartedAt,
+                    streamReadyAt: null,
+                    firstTokenAt: generatedText.length > 0 ? Date.now() : null,
+                    lastTokenAt: generatedText.length > 0 ? Date.now() : null,
+                }),
+                proxyBefore: proxySnapshotBeforeDisable,
+                proxyAfter: proxySnapshotAfterDisable,
+            });
             sendToDesktop({
                 type: 'complete',
                 runId: fallbackRunId,
@@ -858,6 +1266,27 @@ export async function handleUserMessage(
             return { runId: fallbackRunId };
         } catch (fallbackError) {
             const runId = `start-failed-${randomUUID()}`;
+            emitLlmTimingLog({
+                taskId,
+                threadId,
+                turnId: options?.turnId,
+                modelId,
+                provider: modelProvider,
+                phase: 'generate_fallback',
+                outcome: 'error',
+                attempt: attemptNumber,
+                maxAttempts,
+                assistantChars: 0,
+                error: fallbackError,
+                timings: buildTimingSnapshot({
+                    startedAt: Date.now(),
+                    streamReadyAt: null,
+                    firstTokenAt: null,
+                    lastTokenAt: null,
+                }),
+                proxyBefore: proxySnapshotBeforeDisable,
+                proxyAfter: proxySnapshotAfterDisable,
+            });
             sendToDesktop({
                 type: 'error',
                 runId,
@@ -870,6 +1299,36 @@ export async function handleUserMessage(
 
     let attempt = 0;
     while (true) {
+        const startupDeadlineAt = resolveEarliestDeadline([
+            chatTurnDeadlineAt ?? undefined,
+            chatStartupDeadlineAt ?? undefined,
+        ]);
+        if (startupDeadlineAt !== undefined && Date.now() >= startupDeadlineAt) {
+            const runId = `start-failed-${randomUUID()}`;
+            emitRateLimited({
+                runId,
+                attempt: 1,
+                maxAttempts: 1,
+                retryAfterMs: 0,
+                error: 'chat_startup_timeout_budget_exhausted',
+                message: 'Chat startup exceeded timeout budget before first response.',
+                stage: 'ttfb',
+                timings: buildTimingSnapshot({
+                    startedAt: startupDeadlineAt - chatStartupBudgetMs,
+                    streamReadyAt: null,
+                    firstTokenAt: null,
+                    lastTokenAt: null,
+                }),
+                turnId: options?.turnId,
+            });
+            sendToDesktop({
+                type: 'error',
+                runId,
+                message: 'chat_startup_timeout_budget_exhausted',
+                turnId: options?.turnId,
+            });
+            return { runId };
+        }
         if (chatTurnDeadlineAt !== null && Date.now() >= chatTurnDeadlineAt) {
             const runId = `start-failed-${randomUUID()}`;
             emitRateLimited({
@@ -904,7 +1363,7 @@ export async function handleUserMessage(
                 retryCount: startRetryCount,
                 retryDelayMs: startRetryDelayMs,
                 startTimeoutMs,
-                deadlineAt: chatTurnDeadlineAt ?? undefined,
+                deadlineAt: startupDeadlineAt,
                 onRetry: ({ attempt: retryAttempt, maxAttempts, error, retryAfterMs, startedAt, streamReadyAt: retryStreamReadyAt }) => {
                     emitRateLimited({
                         attempt: retryAttempt,
@@ -929,12 +1388,37 @@ export async function handleUserMessage(
             streamReadyAt = Date.now();
         } catch (error) {
             if (fallbackToGenerateOnStartTimeout && isTransientStartError(error)) {
-                const fallbackResult = await runGenerateFallback(String(error));
+                const fallbackResult = await runGenerateFallback(
+                    String(error),
+                    attempt + 1,
+                    forwardRetryCount + 1,
+                );
                 if (fallbackResult) {
                     return fallbackResult;
                 }
             }
             const runId = `start-failed-${randomUUID()}`;
+            emitLlmTimingLog({
+                taskId,
+                threadId,
+                turnId: options?.turnId,
+                modelId,
+                provider: modelProvider,
+                phase: 'stream',
+                outcome: 'error',
+                attempt: attempt + 1,
+                maxAttempts: forwardRetryCount + 1,
+                assistantChars: 0,
+                error,
+                timings: buildTimingSnapshot({
+                    startedAt: attemptStartedAt,
+                    streamReadyAt,
+                    firstTokenAt: null,
+                    lastTokenAt: null,
+                }),
+                proxyBefore: proxySnapshotBeforeDisable,
+                proxyAfter: proxySnapshotAfterDisable,
+            });
             emitRateLimited({
                 runId,
                 attempt: 1,
@@ -1006,6 +1490,7 @@ export async function handleUserMessage(
                     resourceId,
                     workspacePath: options?.workspacePath,
                     content: forwarded.assistantText,
+                    turnId: options?.turnId,
                 });
                 options?.onPostCompact?.({
                     taskId,
@@ -1019,13 +1504,32 @@ export async function handleUserMessage(
             } else {
                 flushPostCompactWithPromptPack();
             }
+            emitLlmTimingLog({
+                taskId,
+                threadId,
+                turnId: options?.turnId,
+                modelId,
+                provider: modelProvider,
+                phase: 'stream',
+                outcome: 'success',
+                attempt: attempt + 1,
+                maxAttempts: forwardRetryCount + 1,
+                assistantChars: forwarded.assistantText.length,
+                finishReason: forwarded.finishReason,
+                timings: forwarded.timings,
+                proxyBefore: proxySnapshotBeforeDisable,
+                proxyAfter: proxySnapshotAfterDisable,
+            });
             return { runId: stream.runId };
         } catch (error) {
             runContextById.delete(stream.runId);
+            const noNarrativeCompletionError = isNoAssistantNarrativeCompletionError(error);
             const canRetry = attempt < forwardRetryCount
                 && isRetryableForwardError(error)
                 && emittedAssistantText === false
-                && !isTurnBudgetTimeoutError(error);
+                && !isTurnBudgetTimeoutError(error)
+                && !isStartupBudgetTimeoutError(error)
+                && !noNarrativeCompletionError;
             if (canRetry) {
                 attempt += 1;
                 const maxAttempts = forwardRetryCount + 1;
@@ -1051,11 +1555,36 @@ export async function handleUserMessage(
                 continue;
             }
             if (!emittedAssistantText && isRetryableForwardError(error)) {
-                const fallbackResult = await runGenerateFallback(String(error));
+                const fallbackResult = await runGenerateFallback(
+                    String(error),
+                    attempt + 1,
+                    forwardRetryCount + 1,
+                );
                 if (fallbackResult) {
                     return fallbackResult;
                 }
             }
+            emitLlmTimingLog({
+                taskId,
+                threadId,
+                turnId: options?.turnId,
+                modelId,
+                provider: modelProvider,
+                phase: 'stream',
+                outcome: 'error',
+                attempt: attempt + 1,
+                maxAttempts: forwardRetryCount + 1,
+                assistantChars: 0,
+                error,
+                timings: buildTimingSnapshot({
+                    startedAt: attemptStartedAt,
+                    streamReadyAt,
+                    firstTokenAt: null,
+                    lastTokenAt: null,
+                }),
+                proxyBefore: proxySnapshotBeforeDisable,
+                proxyAfter: proxySnapshotAfterDisable,
+            });
             sendToDesktop({
                 type: 'error',
                 runId: stream.runId,

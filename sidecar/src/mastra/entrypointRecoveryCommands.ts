@@ -74,6 +74,21 @@ type HandleRecoveryAndCheckpointCommandsInput = {
         workspacePath?: string;
         executionOptions?: UserMessageExecutionOptions;
     }) => Promise<TaskRuntimeExecutionPath>;
+    claimTaskMessageDispatch?: (input: {
+        taskId: string;
+        message: string;
+    }) => {
+        deduplicated: boolean;
+        reason?: 'in_flight';
+        token?: {
+            taskId: string;
+            fingerprint: string;
+        };
+    };
+    completeTaskMessageDispatch?: (input: {
+        taskId: string;
+        fingerprint: string;
+    }) => void;
 };
 
 function isRecoveryOrCheckpointCommandType(commandType: string): commandType is RecoveryOrCheckpointCommandType {
@@ -461,6 +476,32 @@ export async function handleRecoveryAndCheckpointCommands(
             return true;
         }
         const retryMessage = input.getString(payload.message) ?? existing.lastUserMessage ?? 'Retry the last task context.';
+        let messageDispatchToken:
+            | {
+                taskId: string;
+                fingerprint: string;
+            }
+            | undefined;
+        if (input.claimTaskMessageDispatch) {
+            const claim = input.claimTaskMessageDispatch({
+                taskId,
+                message: retryMessage,
+            });
+            if (claim.deduplicated) {
+                input.emitFor('retry_task_response', {
+                    success: true,
+                    taskId,
+                    operationId,
+                    deduplicated: true,
+                    dedupReason: claim.reason ?? 'in_flight',
+                    checkpointVersion: currentCheckpointVersion,
+                    attempt: existing.retry?.attempts ?? 0,
+                    retry: existing.retry ?? null,
+                });
+                return true;
+            }
+            messageDispatchToken = claim.token;
+        }
         const operationRecord: TaskRuntimeOperationRecord = {
             operationId,
             action: 'retry',
@@ -469,49 +510,70 @@ export async function handleRecoveryAndCheckpointCommands(
             checkpointVersion: currentCheckpointVersion,
             retryAttempts: nextAttempts,
         };
-        const updated = input.upsertTaskState(taskId, {
-            status: 'retrying',
-            suspended: false,
-            suspensionReason: undefined,
-            checkpoint: undefined,
-            checkpointVersion: currentCheckpointVersion,
-            lastUserMessage: retryMessage,
-            retry: {
-                attempts: nextAttempts,
-                maxAttempts: retry.maxAttempts,
-                lastRetryAt: input.getNowIso(),
-                lastError: undefined,
-            },
-            operationLog: input.appendTaskOperationRecord(existing, operationRecord),
-        });
-        input.appendTranscript(taskId, 'system', `Retry requested (attempt ${nextAttempts}).`);
-        input.emitTaskEvent(taskId, {
-            type: 'retry',
-            attempt: nextAttempts,
-            maxAttempts: updated.retry?.maxAttempts ?? null,
-            message: retryMessage,
-        });
-        input.emitFor('retry_task_response', {
-            success: true,
-            taskId,
-            operationId,
-            deduplicated: false,
-            checkpointVersion: currentCheckpointVersion,
-            attempt: nextAttempts,
-            retry: updated.retry ?? null,
-        });
-        const retryExecutionPath = await input.executeTaskMessage({
-            taskId,
-            turnId: commandId,
-            message: retryMessage,
-            resourceId: updated.resourceId,
-            preferredThreadId: updated.conversationThreadId,
-            workspacePath: updated.workspacePath,
-            executionOptions: {
-                enabledSkills: updated.enabledSkills,
-                executionPath: updated.executionPath === 'direct' ? 'direct' : 'workflow',
-            },
-        });
+        let updated: TaskRuntimeState;
+        try {
+            updated = input.upsertTaskState(taskId, {
+                status: 'retrying',
+                suspended: false,
+                suspensionReason: undefined,
+                checkpoint: undefined,
+                checkpointVersion: currentCheckpointVersion,
+                lastUserMessage: retryMessage,
+                retry: {
+                    attempts: nextAttempts,
+                    maxAttempts: retry.maxAttempts,
+                    lastRetryAt: input.getNowIso(),
+                    lastError: undefined,
+                },
+                operationLog: input.appendTaskOperationRecord(existing, operationRecord),
+            });
+            input.appendTranscript(taskId, 'system', `Retry requested (attempt ${nextAttempts}).`);
+            input.emitTaskEvent(taskId, {
+                type: 'retry',
+                attempt: nextAttempts,
+                maxAttempts: updated.retry?.maxAttempts ?? null,
+                message: retryMessage,
+            });
+            input.emitFor('retry_task_response', {
+                success: true,
+                taskId,
+                operationId,
+                deduplicated: false,
+                checkpointVersion: currentCheckpointVersion,
+                attempt: nextAttempts,
+                retry: updated.retry ?? null,
+            });
+        } catch (error) {
+            if (messageDispatchToken && input.completeTaskMessageDispatch) {
+                input.completeTaskMessageDispatch({
+                    taskId: messageDispatchToken.taskId,
+                    fingerprint: messageDispatchToken.fingerprint,
+                });
+            }
+            throw error;
+        }
+        let retryExecutionPath: TaskRuntimeExecutionPath;
+        try {
+            retryExecutionPath = await input.executeTaskMessage({
+                taskId,
+                turnId: commandId,
+                message: retryMessage,
+                resourceId: updated.resourceId,
+                preferredThreadId: updated.conversationThreadId,
+                workspacePath: updated.workspacePath,
+                executionOptions: {
+                    enabledSkills: updated.enabledSkills,
+                    executionPath: updated.executionPath === 'direct' ? 'direct' : 'workflow',
+                },
+            });
+        } finally {
+            if (messageDispatchToken && input.completeTaskMessageDispatch) {
+                input.completeTaskMessageDispatch({
+                    taskId: messageDispatchToken.taskId,
+                    fingerprint: messageDispatchToken.fingerprint,
+                });
+            }
+        }
         if (retryExecutionPath !== updated.executionPath) {
             input.upsertTaskState(taskId, {
                 executionPath: retryExecutionPath,

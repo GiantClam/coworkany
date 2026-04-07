@@ -24,25 +24,12 @@ jobs:
         working-directory: desktop
         run: npm ci
         
-      - name: TypeScript type check (desktop)
-        working-directory: desktop
-        run: npx tsc --noEmit
-        
       - name: Install sidecar dependencies
         working-directory: sidecar
         run: bun install
         
-      - name: TypeScript type check (sidecar)
-        working-directory: sidecar
-        run: npm run typecheck
-
-      - name: Run sidecar CI tests
-        working-directory: sidecar
-        run: npm run test:ci
-
-      - name: Run sidecar assistant-ui stream contracts
-        working-directory: sidecar
-        run: npm run test:assistant-ui-contracts
+      - name: Run Codex PR sidecar gate
+        run: npm run test:codex -- --mode pr --subset sidecar
 
   test-desktop:
     runs-on: ubuntu-latest
@@ -61,9 +48,8 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Run desktop acceptance suite
-        working-directory: desktop
-        run: npm run test:ci
+      - name: Run Codex PR desktop gate
+        run: npm run test:codex -- --mode pr --subset desktop
 
   test-desktop-e2e-smoke-macos:
     runs-on: macos-15
@@ -90,9 +76,8 @@ jobs:
         working-directory: sidecar
         run: bun install
 
-      - name: Run desktop real e2e tier1 (critical chain)
-        working-directory: desktop
-        run: npm run test:e2e:tier1
+      - name: Run Codex PR desktop E2E gate
+        run: npm run test:codex -- --mode pr --subset desktop-e2e
 
   build-tauri:
     needs: [lint-and-typecheck, test-desktop, test-desktop-e2e-smoke-macos]

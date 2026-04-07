@@ -54,6 +54,23 @@ type UserMessageExecutionOptions = {
         recalledMemoryFiles: string[];
     }) => void;
 };
+type RuntimeCapabilitySkill = {
+    id: string;
+    name?: string;
+    enabled: boolean;
+    description?: string;
+};
+type RuntimeCapabilityToolpack = {
+    id: string;
+    name?: string;
+    enabled: boolean;
+    description?: string;
+    tools?: string[];
+};
+type RuntimeCapabilitySnapshot = {
+    skills: RuntimeCapabilitySkill[];
+    toolpacks: RuntimeCapabilityToolpack[];
+};
 export type TaskMessageExecutionDelegateInput = {
     taskId: string;
     turnId: string;
@@ -118,6 +135,20 @@ type EnqueueTaskExecutionInput = {
 type EnqueueTaskExecutionResult = {
     queuePosition: number;
     completion: Promise<TaskRuntimeExecutionPath>;
+};
+type TaskMessageDedupReason = 'in_flight';
+type TaskMessageDedupToken = {
+    taskId: string;
+    fingerprint: string;
+};
+type TaskMessageDedupState = {
+    inFlightFingerprints: Set<string>;
+};
+type TaskTurnTerminalType = 'complete' | 'error' | 'tripwire';
+type TaskTurnEventState = {
+    assistantNarrativeSeen: boolean;
+    terminal?: TaskTurnTerminalType;
+    updatedAtMs: number;
 };
 type TaskStateStore = {
     list: () => TaskRuntimeState[];
@@ -301,6 +332,7 @@ type ProcessorDeps = {
         prompt?: string;
         enabledSkillIds: string[];
     };
+    listRuntimeCapabilities?: () => RuntimeCapabilitySnapshot | Promise<RuntimeCapabilitySnapshot>;
     taskTranscriptStore?: TaskTranscriptStore;
     rewindTaskContext?: (input: {
         taskId: string;
@@ -321,12 +353,19 @@ type ProcessorDeps = {
     executeTaskMessage?: (
         input: TaskMessageExecutionDelegateInput,
     ) => Promise<TaskMessageExecutionDelegateResult>;
+    warmupChatRuntime?: () => Promise<{
+        mcpServerCount: number;
+        mcpToolCount: number;
+        durationMs: number;
+    }>;
 };
 const DEFAULT_POLICY_GATE_TIMEOUT_MS = 30_000;
 const REQUEST_EFFECT_TIMEOUT_MS = 300_000;
 const DEFAULT_POLICY_GATE_TIMEOUT_RETRY_COUNT = 1;
 const DEFAULT_REMOTE_SESSION_STALE_AFTER_MS = 5 * 60 * 1000;
 const MAX_TASK_OPERATION_LOG = 64;
+const TASK_TURN_EVENT_STATE_TTL_MS = 15 * 60 * 1000;
+const MAX_TASK_TURN_EVENT_STATES = 1024;
 const REMOTE_SESSION_SCOPE_METADATA_KEY = '__remoteSessionScope';
 const HOST_CONTROL_APPROVAL_PATTERN = /\b(shutdown|reboot|poweroff|halt)\b|关机|重启/u;
 const HOUR_CUE_PATTERN = /([01]?\d|2[0-3])\s*点/u;
@@ -734,6 +773,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const taskStates = new Map<string, TaskRuntimeState>();
     const taskExecutionTailByTaskId = new Map<string, Promise<void>>();
     const taskExecutionDepthByTaskId = new Map<string, number>();
+    const taskMessageDedupByTaskId = new Map<string, TaskMessageDedupState>();
+    const taskTurnEventStates = new Map<string, TaskTurnEventState>();
     const remoteSessionToTaskId = new Map<string, string>();
     const channelDeliveryEvents = new Map<string, ChannelDeliveryEvent>();
     if (deps.taskStateStore) {
@@ -773,12 +814,169 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         'get_policy_config',
     ]);
     let bootstrapRuntimeContext: Record<string, unknown> | undefined;
+    const buildTaskTurnEventStateKey = (input: {
+        taskId: string;
+        turnId?: string;
+        runId?: string;
+    }): string => {
+        const turnPart = (input.turnId && input.turnId.trim().length > 0)
+            ? input.turnId.trim()
+            : (
+                input.runId && input.runId.trim().length > 0
+                    ? `run:${input.runId.trim()}`
+                    : 'unknown'
+            );
+        return `${input.taskId}:${turnPart}`;
+    };
+    const pruneTaskTurnEventStates = (nowMs: number): void => {
+        for (const [key, state] of taskTurnEventStates.entries()) {
+            if (nowMs - state.updatedAtMs > TASK_TURN_EVENT_STATE_TTL_MS) {
+                taskTurnEventStates.delete(key);
+            }
+        }
+        if (taskTurnEventStates.size <= MAX_TASK_TURN_EVENT_STATES) {
+            return;
+        }
+        const oldest = [...taskTurnEventStates.entries()]
+            .sort((left, right) => left[1].updatedAtMs - right[1].updatedAtMs)
+            .slice(0, taskTurnEventStates.size - MAX_TASK_TURN_EVENT_STATES);
+        for (const [key] of oldest) {
+            taskTurnEventStates.delete(key);
+        }
+    };
+    const getTaskTurnEventState = (
+        key: string,
+        nowMs: number,
+    ): TaskTurnEventState => {
+        const existing = taskTurnEventStates.get(key);
+        if (existing) {
+            const updated = {
+                ...existing,
+                updatedAtMs: nowMs,
+            };
+            taskTurnEventStates.set(key, updated);
+            return updated;
+        }
+        const created: TaskTurnEventState = {
+            assistantNarrativeSeen: false,
+            updatedAtMs: nowMs,
+        };
+        taskTurnEventStates.set(key, created);
+        return created;
+    };
+    const markTaskTurnAssistantNarrative = (key: string): void => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        if (state.assistantNarrativeSeen) {
+            return;
+        }
+        taskTurnEventStates.set(key, {
+            ...state,
+            assistantNarrativeSeen: true,
+            updatedAtMs: nowMs,
+        });
+    };
+    const hasTaskTurnAssistantNarrative = (key: string): boolean => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        return getTaskTurnEventState(key, nowMs).assistantNarrativeSeen;
+    };
+    const hasTaskTurnTerminalEvent = (key: string): boolean => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        return typeof state.terminal === 'string';
+    };
+    const shouldSuppressTaskTurnTerminalEvent = (
+        key: string,
+        nextTerminal: TaskTurnTerminalType,
+    ): boolean => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        const currentTerminal = state.terminal;
+        if (!currentTerminal) {
+            return false;
+        }
+        if (currentTerminal === nextTerminal) {
+            return true;
+        }
+        if (currentTerminal === 'complete') {
+            return true;
+        }
+        if (nextTerminal === 'complete') {
+            return false;
+        }
+        return true;
+    };
+    const markTaskTurnTerminalEvent = (
+        key: string,
+        terminal: TaskTurnTerminalType,
+    ): void => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        taskTurnEventStates.set(key, {
+            ...state,
+            terminal,
+            updatedAtMs: nowMs,
+        });
+    };
     const clearPendingApprovalsForTask = (taskId: string): void => {
         for (const [requestId, pending] of pendingApprovals.entries()) {
             if (pending.taskId === taskId) {
                 pendingApprovals.delete(requestId);
             }
         }
+    };
+    const normalizeTaskMessageFingerprint = (message: string): string => {
+        const collapsed = message.trim().replace(/\s+/g, ' ');
+        return collapsed.length > 0 ? collapsed : message;
+    };
+    const claimTaskMessageDispatch = (input: {
+        taskId: string;
+        message: string;
+    }): {
+        deduplicated: boolean;
+        reason?: TaskMessageDedupReason;
+        token?: TaskMessageDedupToken;
+    } => {
+        const fingerprint = normalizeTaskMessageFingerprint(input.message);
+        const state = taskMessageDedupByTaskId.get(input.taskId) ?? {
+            inFlightFingerprints: new Set<string>(),
+        };
+        if (state.inFlightFingerprints.has(fingerprint)) {
+            taskMessageDedupByTaskId.set(input.taskId, state);
+            return {
+                deduplicated: true,
+                reason: 'in_flight',
+            };
+        }
+        state.inFlightFingerprints.add(fingerprint);
+        taskMessageDedupByTaskId.set(input.taskId, state);
+        return {
+            deduplicated: false,
+            token: {
+                taskId: input.taskId,
+                fingerprint,
+            },
+        };
+    };
+    const completeTaskMessageDispatch = (input: {
+        taskId: string;
+        fingerprint: string;
+    }): void => {
+        const state = taskMessageDedupByTaskId.get(input.taskId);
+        if (!state) {
+            return;
+        }
+        state.inFlightFingerprints.delete(input.fingerprint);
+        if (state.inFlightFingerprints.size === 0) {
+            taskMessageDedupByTaskId.delete(input.taskId);
+            return;
+        }
+        taskMessageDedupByTaskId.set(input.taskId, state);
     };
     const enqueueTaskExecution = (input: EnqueueTaskExecutionInput): EnqueueTaskExecutionResult => {
         const pendingDepth = taskExecutionDepthByTaskId.get(input.taskId) ?? 0;
@@ -1594,6 +1792,15 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     ): Promise<void> => {
         const turnId = event.turnId ?? enforcedTurnId;
         const traceId = event.traceId ?? null;
+        const turnEventStateKey = buildTaskTurnEventStateKey({
+            taskId,
+            turnId,
+            runId: event.runId,
+        });
+        const isTerminalEvent = event.type === 'complete' || event.type === 'error' || event.type === 'tripwire';
+        if (!isTerminalEvent && hasTaskTurnTerminalEvent(turnEventStateKey)) {
+            return;
+        }
         if (typeof event.traceId === 'string' && event.traceId.length > 0) {
             upsertTaskState(taskId, {
                 lastTraceId: event.traceId,
@@ -1602,6 +1809,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         if (event.type === 'text_delta') {
             if (event.role !== 'thinking' && typeof event.content === 'string') {
                 appendTranscript(taskId, 'assistant', event.content);
+                if (event.content.trim().length > 0) {
+                    markTaskTurnAssistantNarrative(turnEventStateKey);
+                }
             }
             const streamCorrelationId = typeof event.runId === 'string' && event.runId.length > 0
                 ? `stream:${event.runId}:assistant`
@@ -1691,6 +1901,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'complete') {
+            if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
+                return;
+            }
+            markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
             clearPendingApprovalsForTask(taskId);
             const retry = taskStates.get(taskId)?.retry;
             upsertTaskState(taskId, {
@@ -1726,6 +1940,52 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'error') {
+            if (
+                isStoreDisabledHistoryReferenceError(event.message)
+                && hasTaskTurnAssistantNarrative(turnEventStateKey)
+            ) {
+                if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
+                    return;
+                }
+                markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
+                clearPendingApprovalsForTask(taskId);
+                const retry = taskStates.get(taskId)?.retry;
+                upsertTaskState(taskId, {
+                    status: 'finished',
+                    suspended: false,
+                    suspensionReason: undefined,
+                    checkpoint: undefined,
+                    retry: retry
+                        ? {
+                            ...retry,
+                            lastError: undefined,
+                        }
+                        : undefined,
+                });
+                emitHookEvent('TaskCompleted', {
+                    taskId,
+                    runId: event.runId,
+                    traceId: typeof traceId === 'string' ? traceId : undefined,
+                    payload: {
+                        finishReason: 'assistant_text_store_disabled_history_recovered',
+                    },
+                });
+                emit({
+                    type: 'TASK_FINISHED',
+                    taskId,
+                    payload: {
+                        summary: 'Task completed via Mastra runtime.',
+                        finishReason: 'assistant_text_store_disabled_history_recovered',
+                        traceId,
+                        turnId,
+                    },
+                });
+                return;
+            }
+            if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'error')) {
+                return;
+            }
+            markTaskTurnTerminalEvent(turnEventStateKey, 'error');
             const classification = classifyRuntimeErrorMessage(event.message);
             clearPendingApprovalsForTask(taskId);
             const existingRetry = taskStates.get(taskId)?.retry;
@@ -1767,6 +2027,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'tripwire') {
+            if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'tripwire')) {
+                return;
+            }
+            markTaskTurnTerminalEvent(turnEventStateKey, 'tripwire');
             clearPendingApprovalsForTask(taskId);
             const existingRetry = taskStates.get(taskId)?.retry;
             upsertTaskState(taskId, {
@@ -2209,6 +2473,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     || event.type === 'approval_required'
                     || event.type === 'tool_result'
                 );
+                const turnEventStateKey = buildTaskTurnEventStateKey({
+                    taskId: input.taskId,
+                    turnId: input.turnId,
+                });
                 const isAssistantNarrativeEvent = (event: DesktopEvent): boolean => (
                     event.type === 'text_delta'
                     && event.role !== 'thinking'
@@ -2216,6 +2484,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     && event.content.trim().length > 0
                 );
                 const emitFalseCompletionFailure = (event: Extract<DesktopEvent, { type: 'complete' }>): void => {
+                    if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'error')) {
+                        return;
+                    }
+                    markTaskTurnTerminalEvent(turnEventStateKey, 'error');
                     clearPendingApprovalsForTask(input.taskId);
                     const existingRetry = taskStates.get(input.taskId)?.retry;
                     upsertTaskState(input.taskId, {
@@ -2299,16 +2571,48 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 let hasRecoverableHistoryError = false;
                 let hasAssistantProgress = false;
                 let hasAssistantNarrative = false;
+                let recoveredStoreHistoryErrorAfterNarrative = false;
                 let suppressRecoverableAttempt = false;
+                let noNarrativeTerminalFailure = false;
+                let awaitingUserApproval = false;
                 const suppressedRecoverableEvents: DesktopEvent[] = [];
 
                 await executeAttempt(input.preferredThreadId, (event) => {
+                    if (noNarrativeTerminalFailure) {
+                        return;
+                    }
                     const isProgressEvent = isAssistantProgressEvent(event);
                     if (isProgressEvent) {
                         hasAssistantProgress = true;
                     }
                     if (isAssistantNarrativeEvent(event)) {
                         hasAssistantNarrative = true;
+                    }
+                    if (event.type === 'approval_required') {
+                        const autoApproved = AUTO_APPROVE_TOOLS.has(event.toolName)
+                            || event.toolName.startsWith('agent-');
+                        if (!autoApproved) {
+                            awaitingUserApproval = true;
+                        }
+                    }
+                    if (
+                        hasAssistantNarrative
+                        && event.type === 'error'
+                        && isStoreDisabledHistoryReferenceError(event.message)
+                    ) {
+                        recoveredStoreHistoryErrorAfterNarrative = true;
+                        emitDesktopEvent(input.taskId, {
+                            type: 'complete',
+                            runId: event.runId,
+                            finishReason: 'assistant_text_store_disabled_history_recovered',
+                        }, emit, input.turnId);
+                        return;
+                    }
+                    if (
+                        recoveredStoreHistoryErrorAfterNarrative
+                        && (event.type === 'error' || event.type === 'complete')
+                    ) {
+                        return;
                     }
                     if (suppressRecoverableAttempt && !hasAssistantNarrative) {
                         suppressedRecoverableEvents.push(event);
@@ -2332,6 +2636,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         return;
                     }
                     if (!hasAssistantNarrative && event.type === 'complete') {
+                        // A completion marker can arrive while waiting for explicit tool approval.
+                        // Keep the turn suspended and wait for report_effect_result to resume.
+                        if (awaitingUserApproval) {
+                            return;
+                        }
+                        noNarrativeTerminalFailure = true;
                         emitFalseCompletionFailure(event);
                         return;
                     }
@@ -2505,6 +2815,33 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             tasks: [],
                             count: 0,
                         },
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                }
+                return;
+            }
+            if (command.type === 'warmup_chat_runtime') {
+                if (!deps.warmupChatRuntime) {
+                    emitFor('warmup_chat_runtime_response', {
+                        success: true,
+                        warmup: {
+                            mcpServerCount: 0,
+                            mcpToolCount: 0,
+                            durationMs: 0,
+                            skipped: true,
+                        },
+                    });
+                    return;
+                }
+                try {
+                    const warmup = await deps.warmupChatRuntime();
+                    emitFor('warmup_chat_runtime_response', {
+                        success: true,
+                        warmup,
+                    });
+                } catch (error) {
+                    emitFor('warmup_chat_runtime_response', {
+                        success: false,
                         error: error instanceof Error ? error.message : String(error),
                     });
                 }
@@ -2927,6 +3264,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 pickTaskExecutionPath,
                 toUserMessageExecutionPath,
                 resolveSkillPrompt: deps.resolveSkillPrompt,
+                listRuntimeCapabilities: deps.listRuntimeCapabilities,
                 resolveTaskResourceId,
                 upsertTaskState,
                 appendTranscript,
@@ -2942,6 +3280,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 isScheduledCancellationRequest,
                 scheduleTaskIfNeeded: deps.scheduleTaskIfNeeded,
                 cancelScheduledTasksForSourceTask: deps.cancelScheduledTasksForSourceTask,
+                claimTaskMessageDispatch,
+                completeTaskMessageDispatch,
             })) {
                 return;
             }
@@ -2973,6 +3313,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     });
                 },
                 executeTaskMessage,
+                claimTaskMessageDispatch,
+                completeTaskMessageDispatch,
             })) {
                 return;
             }

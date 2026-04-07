@@ -18,6 +18,10 @@ export interface SendTaskMessageInput {
 export interface SendTaskMessageResult {
     success: boolean;
     taskId: string;
+    turnId?: string;
+    queuePosition?: number;
+    deduplicated?: boolean;
+    dedupReason?: string;
     error?: string;
 }
 

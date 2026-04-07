@@ -1,0 +1,8 @@
+{
+  "name": "coworkany",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test:codex": "bun run scripts/test-codex.ts"
+  }
+}

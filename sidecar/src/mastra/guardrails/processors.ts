@@ -7,13 +7,15 @@ import {
     PIIDetector,
     PromptInjectionDetector,
 } from '@mastra/core/processors';
+import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 
 const DEFAULT_MODEL = process.env.COWORKANY_GUARDRAIL_MODEL
     || process.env.COWORKANY_MODEL
     || 'anthropic/claude-sonnet-4-5';
 const GUARDRAILS_ENABLED = process.env.COWORKANY_ENABLE_GUARDRAILS !== '0';
+const OUTPUT_GUARDRAILS_ENABLED = process.env.COWORKANY_ENABLE_OUTPUT_GUARDRAILS === '1';
 
-const sharedModelConfig = DEFAULT_MODEL;
+const sharedModelConfig = resolveRuntimeModelConfig(DEFAULT_MODEL);
 
 function buildInputProcessors(): InputProcessorOrWorkflow[] {
     if (!GUARDRAILS_ENABLED) {
@@ -42,7 +44,7 @@ function buildInputProcessors(): InputProcessorOrWorkflow[] {
 }
 
 function buildOutputProcessors(): OutputProcessorOrWorkflow[] {
-    if (!GUARDRAILS_ENABLED) {
+    if (!GUARDRAILS_ENABLED || !OUTPUT_GUARDRAILS_ENABLED) {
         return [];
     }
     return [

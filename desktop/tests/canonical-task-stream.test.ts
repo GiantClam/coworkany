@@ -141,6 +141,112 @@ describe('canonical task stream bridge', () => {
         });
     });
 
+    test('merges retried stream deltas for the same turn even when message id changes', () => {
+        const state = applyEvents([
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'stream-retry-1',
+                    taskId,
+                    turnId: 'turn-retry-1',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:00:00.000Z',
+                    sequence: 1,
+                    correlationId: 'stream-retry-1',
+                    sourceEventId: 'evt-retry-1',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: { type: 'text', delta: '当然可以，我先给你一版' },
+                },
+            },
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'stream-retry-2',
+                    taskId,
+                    turnId: 'turn-retry-1',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:00:01.000Z',
+                    sequence: 2,
+                    correlationId: 'stream-retry-2',
+                    sourceEventId: 'evt-retry-2',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: { type: 'text', delta: '当然可以，我先给你一版“更像本人表达”的简洁日报' },
+                },
+            },
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'stream-retry-2',
+                    taskId,
+                    turnId: 'turn-retry-1',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:00:02.000Z',
+                    sequence: 3,
+                    correlationId: 'stream-retry-2',
+                    sourceEventId: 'evt-retry-3',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: { type: 'text', delta: '。' },
+                },
+            },
+        ]);
+
+        expect(state.messages).toHaveLength(1);
+        expect(state.messages[0]).toMatchObject({
+            turnId: 'turn-retry-1',
+            status: 'streaming',
+            parts: [{ type: 'text', text: '当然可以，我先给你一版“更像本人表达”的简洁日报。' }],
+        });
+    });
+
+    test('keeps only rewritten markdown variant when retried stream restarts with near-identical full body', () => {
+        const state = applyEvents([
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'stream-rewrite-1',
+                    taskId,
+                    turnId: 'turn-rewrite-1',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:10:00.000Z',
+                    sequence: 1,
+                    correlationId: 'stream-rewrite-1',
+                    sourceEventId: 'evt-rewrite-1',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: {
+                        type: 'text',
+                        delta: '当然可以，我先给你一版更像本人表达的简洁日报：今日完成-推进重点事项；进行中-细节收尾；明日计划-继续推进。',
+                    },
+                },
+            },
+            {
+                type: 'canonical_message_delta',
+                payload: {
+                    id: 'stream-rewrite-2',
+                    taskId,
+                    turnId: 'turn-rewrite-1',
+                    role: 'assistant',
+                    timestamp: '2026-03-27T10:10:01.000Z',
+                    sequence: 2,
+                    correlationId: 'stream-rewrite-2',
+                    sourceEventId: 'evt-rewrite-2',
+                    sourceEventType: 'TEXT_DELTA',
+                    part: {
+                        type: 'text',
+                        delta: '当然可以，我先给你一版“更像本人表达”的简洁日报：\n\n**今日完成**\n- 推进重点事项\n\n**进行中**\n- 细节收尾\n\n**明日计划**\n- 继续推进',
+                    },
+                },
+            },
+        ]);
+
+        expect(state.messages).toHaveLength(1);
+        expect(state.messages[0]?.parts).toEqual([
+            {
+                type: 'text',
+                text: '当然可以，我先给你一版“更像本人表达”的简洁日报：\n\n**今日完成**\n- 推进重点事项\n\n**进行中**\n- 细节收尾\n\n**明日计划**\n- 继续推进',
+            },
+        ]);
+    });
+
     test('keeps independent runtime messages alongside assistant content', () => {
         const state = applyEvents([
             {

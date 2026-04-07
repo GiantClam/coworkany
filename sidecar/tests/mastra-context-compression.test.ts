@@ -101,4 +101,66 @@ describe('task context compression store', () => {
         expect(preamble).toContain('Relevant file memories:');
         expect(preamble).toContain('memory/');
     });
+
+    test('deduplicates repeated turn writes by role+turnId', () => {
+        const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-context-dedup-'));
+        const workspacePath = path.join(appDataRoot, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        tempDirs.push(appDataRoot);
+
+        const storePath = path.join(appDataRoot, 'mastra-context-state.json');
+        const store = new TaskContextCompressionStore(storePath);
+
+        store.recordUserTurn({
+            taskId: 'task-dedup-1',
+            threadId: 'thread-dedup-1',
+            resourceId: 'employee-task-dedup-1',
+            workspacePath,
+            content: '给我一个紧凑版本',
+            turnId: 'turn-1',
+        });
+        store.recordUserTurn({
+            taskId: 'task-dedup-1',
+            threadId: 'thread-dedup-1',
+            resourceId: 'employee-task-dedup-1',
+            workspacePath,
+            content: '给我一个紧凑版本',
+            turnId: 'turn-1',
+        });
+        store.recordAssistantTurn({
+            taskId: 'task-dedup-1',
+            threadId: 'thread-dedup-1',
+            resourceId: 'employee-task-dedup-1',
+            workspacePath,
+            content: '简版',
+            turnId: 'turn-1',
+        });
+        store.recordAssistantTurn({
+            taskId: 'task-dedup-1',
+            threadId: 'thread-dedup-1',
+            resourceId: 'employee-task-dedup-1',
+            workspacePath,
+            content: '简版：今日完成、进行中、明日计划、风险四点。',
+            turnId: 'turn-1',
+        });
+        store.recordUserTurn({
+            taskId: 'task-dedup-1',
+            threadId: 'thread-dedup-1',
+            resourceId: 'employee-task-dedup-1',
+            workspacePath,
+            content: '再给我一个更短版本',
+            turnId: 'turn-2',
+        });
+
+        const snapshot = store.get('task-dedup-1');
+        expect(snapshot).toBeDefined();
+        const turns = snapshot?.turns ?? [];
+        expect(turns.length).toBe(3);
+
+        const userTurn1 = turns.filter((turn) => turn.role === 'user' && turn.turnId === 'turn-1');
+        expect(userTurn1.length).toBe(1);
+
+        const assistantTurn1 = turns.find((turn) => turn.role === 'assistant' && turn.turnId === 'turn-1');
+        expect(assistantTurn1?.content).toContain('今日完成');
+    });
 });

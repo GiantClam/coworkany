@@ -25,6 +25,7 @@
     "test": "npm run test:stable",
     "test:stable": "bun test tests/token-usage.test.ts tests/command-sandbox.test.ts tests/scheduler-heartbeat.test.ts",
     "test:assistant-ui-contracts": "bun test tests/ipc-bridge.test.ts tests/mastra-bridge.test.ts tests/protocol-canonical-stream.test.ts tests/mastra-entrypoint.test.ts",
+    "test:regression:task-message-dedup": "bun test tests/mastra-entrypoint.test.ts --test-name-pattern \"send_task_message deduplicates same task message while the first run is in flight|send_task_message deduplicates immediate repeated content after completion|retry_task deduplicates same retry message while a retry run is still in flight|send_task_message treats store-disabled history error after assistant narrative as recovered completion|send_task_message treats wrapped store-disabled history error after assistant narrative as recovered completion|send_task_message suppresses repeated terminal errors after store-disabled recovery completion|send_task_message emits at most one TASK_FAILED for repeated terminal error events in same turn\" --rerun-each 3",
     "test:real-model-smoke": "bun test tests/real-model-smoke.e2e.test.ts",
     "test:ci": "npm run test:stable",
     "test:agent:core": "node scripts/run-tests-sequential.mjs tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",

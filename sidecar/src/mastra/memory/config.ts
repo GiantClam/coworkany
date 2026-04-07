@@ -4,9 +4,12 @@ import { LibSQLStore, LibSQLVector } from '@mastra/libsql';
 import { fastembed } from '@mastra/fastembed';
 import { Memory } from '@mastra/memory';
 import { workingMemoryTemplate } from './working-memory-template';
+import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 const DEFAULT_DB_PATH = path.resolve(process.cwd(), '.coworkany', 'data', 'coworkany.db');
 const DEFAULT_DB_DIR = path.dirname(DEFAULT_DB_PATH);
-const OBSERVATIONAL_MEMORY_ENABLED = process.env.COWORKANY_ENABLE_OBSERVATIONAL_MEMORY !== '0';
+const WORKING_MEMORY_ENABLED = process.env.COWORKANY_ENABLE_WORKING_MEMORY === '1';
+const OBSERVATIONAL_MEMORY_ENABLED = process.env.COWORKANY_ENABLE_OBSERVATIONAL_MEMORY === '1';
+const RUNTIME_MODEL = resolveRuntimeModelConfig();
 mkdirSync(DEFAULT_DB_DIR, { recursive: true });
 export const COWORKANY_DB_URL = process.env.COWORKANY_DB_URL || `file:${DEFAULT_DB_PATH}`;
 export const memoryStorage = new LibSQLStore({
@@ -28,12 +31,21 @@ export const memoryConfig = new Memory({
             messageRange: { before: 3, after: 1 },
             scope: 'resource',
         },
-        workingMemory: {
-            enabled: true,
-            template: workingMemoryTemplate,
-            scope: 'resource',
+        workingMemory: WORKING_MEMORY_ENABLED
+            ? {
+                enabled: true,
+                template: workingMemoryTemplate,
+                scope: 'resource',
+            }
+            : undefined,
+        observationalMemory: OBSERVATIONAL_MEMORY_ENABLED
+            ? {
+                  model: RUNTIME_MODEL,
+                  scope: 'resource',
+              }
+            : undefined,
+        generateTitle: {
+            model: RUNTIME_MODEL,
         },
-        observationalMemory: OBSERVATIONAL_MEMORY_ENABLED,
-        generateTitle: true,
     },
 });

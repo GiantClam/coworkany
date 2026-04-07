@@ -47,9 +47,12 @@ describe('Phase 3: Agent Loop', () => {
 
     test('supervisor has guardrail processors and task-complete scorers configured', async () => {
         const options = await supervisor.getDefaultOptions();
+        const outputGuardrailsEnabled = process.env.COWORKANY_ENABLE_OUTPUT_GUARDRAILS === '1'
+            && process.env.COWORKANY_ENABLE_GUARDRAILS !== '0';
         expect(options).toBeDefined();
         expect(Array.isArray(options?.inputProcessors)).toBe(true);
         expect(Array.isArray(options?.outputProcessors)).toBe(true);
+        expect(((options?.outputProcessors?.length ?? 0) > 0)).toBe(outputGuardrailsEnabled);
         expect(Array.isArray((options?.isTaskComplete as { scorers?: unknown[] })?.scorers)).toBe(true);
         expect(
             ((options?.isTaskComplete as { scorers?: unknown[] })?.scorers?.length ?? 0) >= 3,
@@ -167,7 +170,10 @@ describe('Phase 3: Agent Loop', () => {
                 return {
                     runId: 'run-phase3-context',
                     fullStream: (async function* () {
-                        // no-op
+                        yield {
+                            type: 'text-delta',
+                            payload: { text: 'context ok' },
+                        };
                     })(),
                 } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
             }) as typeof supervisor.stream;
@@ -241,7 +247,10 @@ describe('Phase 3: Agent Loop', () => {
                 return {
                     runId: 'run-phase3-openai-provider-options',
                     fullStream: (async function* () {
-                        // no-op
+                        yield {
+                            type: 'text-delta',
+                            payload: { text: 'provider options ok' },
+                        };
                     })(),
                 } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
             }) as typeof supervisor.stream;
@@ -383,7 +392,10 @@ describe('Phase 3: Agent Loop', () => {
                 return {
                     runId: 'run-phase3-retry',
                     fullStream: (async function* () {
-                        // no-op
+                        yield {
+                            type: 'text-delta',
+                            payload: { text: 'retry ok' },
+                        };
                     })(),
                 } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
             }) as typeof supervisor.stream;
@@ -413,6 +425,92 @@ describe('Phase 3: Agent Loop', () => {
                 process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT = previousRetryCount;
             } else {
                 delete process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT;
+            }
+        }
+    });
+
+    test('handleUserMessage emits compact llm_timing metrics with proxy before/after snapshot', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousOpenAi = process.env.OPENAI_API_KEY;
+        const previousProvider = process.env.COWORKANY_LLM_CONFIG_PROVIDER;
+        const previousProxy = process.env.COWORKANY_PROXY_URL;
+        const originalConsoleInfo = console.info;
+        const metricLines: string[] = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'aiberm/gpt-5.3-codex';
+            process.env.OPENAI_API_KEY = 'test-key';
+            process.env.COWORKANY_LLM_CONFIG_PROVIDER = 'aiberm';
+            process.env.COWORKANY_PROXY_URL = 'http://127.0.0.1:7890';
+            console.info = (...args: unknown[]) => {
+                metricLines.push(args.map((arg) => String(arg)).join(' '));
+            };
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                async function* simpleAssistantStream() {
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: '你好' },
+                    };
+                }
+                return {
+                    runId: 'run-phase3-metrics-log',
+                    fullStream: simpleAssistantStream(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'metrics snapshot',
+                'thread-metrics-snapshot',
+                'employee-metrics-snapshot',
+                () => undefined,
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-metrics-log');
+            const metricLine = metricLines.find((line) => line.includes('[coworkany-metrics]'));
+            expect(typeof metricLine).toBe('string');
+            const serialized = String(metricLine).replace(/^[\s\S]*?\[coworkany-metrics\]\s*/, '');
+            const payload = JSON.parse(serialized) as {
+                event?: string;
+                phase?: string;
+                outcome?: string;
+                timings?: { firstTokenMs?: number | null };
+                proxy?: {
+                    before?: { enabled?: boolean };
+                    after?: { enabled?: boolean };
+                };
+            };
+            expect(payload.event).toBe('llm_timing');
+            expect(payload.phase).toBe('stream');
+            expect(payload.outcome).toBe('success');
+            expect(typeof payload.timings?.firstTokenMs).toBe('number');
+            expect(payload.proxy?.before?.enabled).toBe(true);
+            expect(payload.proxy?.after?.enabled).toBe(false);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            console.info = originalConsoleInfo;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousOpenAi === 'string') {
+                process.env.OPENAI_API_KEY = previousOpenAi;
+            } else {
+                delete process.env.OPENAI_API_KEY;
+            }
+            if (typeof previousProvider === 'string') {
+                process.env.COWORKANY_LLM_CONFIG_PROVIDER = previousProvider;
+            } else {
+                delete process.env.COWORKANY_LLM_CONFIG_PROVIDER;
+            }
+            if (typeof previousProxy === 'string') {
+                process.env.COWORKANY_PROXY_URL = previousProxy;
+            } else {
+                delete process.env.COWORKANY_PROXY_URL;
             }
         }
     });
@@ -479,6 +577,172 @@ describe('Phase 3: Agent Loop', () => {
                 process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = previousChatStartTimeout;
             } else {
                 delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('chat-mode startup budget prevents long fallback hangs on first-token timeout', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const originalGenerate = supervisor.generate.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousFallback = process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+        const previousChatStartRetry = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT;
+        const previousChatStartTimeout = process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+        const previousChatStartupBudget = process.env.COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS;
+        const previousChatGenerateFallbackTimeout = process.env.COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = 'true';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = '3000';
+            process.env.COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS = '3500';
+            process.env.COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS = '20000';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                throw new Error('stream_start_timeout:3000');
+            }) as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => {
+                await new Promise(() => undefined);
+                throw new Error('unreachable');
+            }) as typeof supervisor.generate;
+
+            const startedAt = Date.now();
+            const result = await handleUserMessage(
+                'startup budget fallback guard',
+                'thread-startup-budget-fallback',
+                'employee-startup-budget-fallback',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+            const elapsedMs = Date.now() - startedAt;
+
+            expect(result.runId.startsWith('start-failed-')).toBe(true);
+            expect(elapsedMs).toBeLessThan(7_000);
+            expect(events.some((event) => event.type === 'rate_limited')).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'error'
+                && (
+                    String(event.message ?? '').includes('generate_fallback_timeout:')
+                    || String(event.message ?? '').includes('chat_startup_timeout_budget_exhausted')
+                )
+            ))).toBe(true);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousFallback === 'string') {
+                process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = previousFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+            }
+            if (typeof previousChatStartRetry === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT = previousChatStartRetry;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT;
+            }
+            if (typeof previousChatStartTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS = previousChatStartTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS;
+            }
+            if (typeof previousChatStartupBudget === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS = previousChatStartupBudget;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS;
+            }
+            if (typeof previousChatGenerateFallbackTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS = previousChatGenerateFallbackTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('chat-mode falls back to generate when stream completes without assistant narrative', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const originalGenerate = supervisor.generate.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousFallback = process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+        const previousForwardRetryCount = process.env.COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT;
+        const events: Array<Record<string, unknown>> = [];
+        let streamCalls = 0;
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = 'true';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT = '5';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                streamCalls += 1;
+                return {
+                    runId: 'run-phase3-no-narrative-stream',
+                    fullStream: (async function* emptyStream() {
+                        // Intentionally emit no assistant chunks to simulate silent stream exhaustion.
+                    })(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => ({
+                runId: 'run-phase3-no-narrative-fallback',
+                text: '这是自动回退生成的答复。',
+                finishReason: 'stop',
+            })) as typeof supervisor.generate;
+
+            const result = await handleUserMessage(
+                'silent stream fallback',
+                'thread-no-narrative-fallback',
+                'employee-no-narrative-fallback',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(streamCalls).toBe(1);
+            expect(result.runId).toBe('run-phase3-no-narrative-fallback');
+            expect(events.some((event) => event.type === 'rate_limited')).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'text_delta'
+                && String(event.content ?? '').includes('自动回退生成')
+            ))).toBe(true);
+            expect(events.some((event) => event.type === 'complete')).toBe(true);
+            expect(events.some((event) => event.type === 'error')).toBe(false);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousFallback === 'string') {
+                process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK = previousFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
+            }
+            if (typeof previousForwardRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT = previousForwardRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT;
             }
         }
     });
@@ -554,6 +818,268 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
+    test('chat-mode converts store-disabled history error after assistant text to recovered completion', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                async function* storeDisabledFailureAfterText() {
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: '当然可以，给你一版简洁日报。' },
+                    };
+                    throw new Error("Item with id 'msg_x' not found. Items are not persisted when `store` is set to false.");
+                }
+                return {
+                    runId: 'run-phase3-store-disabled-recovered',
+                    fullStream: storeDisabledFailureAfterText(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'store-disabled history recover',
+                'thread-store-disabled-recovered',
+                'employee-store-disabled-recovered',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-store-disabled-recovered');
+            expect(events.some((event) => event.type === 'text_delta')).toBe(true);
+            const completed = events.find((event) => event.type === 'complete') as Record<string, unknown> | undefined;
+            expect(completed?.finishReason).toBe('assistant_text_store_disabled_history_recovered');
+            expect(events.some((event) => event.type === 'error')).toBe(false);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+        }
+    });
+
+    test('chat-mode exits stream loop immediately after terminal error event', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                async function* terminalErrorThenNoise() {
+                    yield { type: 'text-delta', payload: { text: '前置文本' } };
+                    yield { type: 'error', payload: { error: { message: 'fatal_upstream_error' } } };
+                    yield { type: 'text-delta', payload: { text: 'should-not-emit' } };
+                }
+                return {
+                    runId: 'run-phase3-terminal-error-stop',
+                    fullStream: terminalErrorThenNoise(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'terminal error stop',
+                'thread-terminal-error-stop',
+                'employee-terminal-error-stop',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-terminal-error-stop');
+            const emittedText = events
+                .filter((event) => event.type === 'text_delta')
+                .map((event) => String(event.content ?? ''));
+            expect(emittedText.join('')).toBe('前置文本');
+            const errorEvent = events.find((event) => event.type === 'error') as Record<string, unknown> | undefined;
+            expect(errorEvent?.message).toContain('fatal_upstream_error');
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+        }
+    });
+
+    test('chat-mode settled window refreshes on each streamed delta', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousPostAssistantMax = process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS = '80';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                async function* slowTextStream() {
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: 'A' },
+                    };
+                    await new Promise((resolve) => setTimeout(resolve, 40));
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: 'B' },
+                    };
+                    await new Promise((resolve) => setTimeout(resolve, 40));
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: 'C' },
+                    };
+                    await new Promise((resolve) => setTimeout(resolve, 40));
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: 'D' },
+                    };
+                }
+                return {
+                    runId: 'run-phase3-refresh-window',
+                    fullStream: slowTextStream(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'refresh settled window',
+                'thread-refresh-window',
+                'employee-refresh-window',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-refresh-window');
+            const textDeltas = events
+                .filter((event) => event.type === 'text_delta')
+                .map((event) => String(event.content ?? ''));
+            expect(textDeltas.join('')).toContain('ABCD');
+            const completed = events.find((event) => event.type === 'complete') as Record<string, unknown> | undefined;
+            expect(completed?.finishReason).not.toBe('assistant_text_settled_max_window');
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousPostAssistantMax === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS = previousPostAssistantMax;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS;
+            }
+        }
+    });
+
+    test('chat-mode max duration does not truncate when stream keeps making progress', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousChatTurnBudget = process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS;
+        const previousChatStreamMax = process.env.COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS;
+        const previousPostAssistantMax = process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS;
+        const events: Array<Record<string, unknown>> = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS = '120';
+            process.env.COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS = '120';
+            process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS = '10000';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                async function* steadySlowStream() {
+                    yield { type: 'text-delta', payload: { text: 'A' } };
+                    await new Promise((resolve) => setTimeout(resolve, 50));
+                    yield { type: 'text-delta', payload: { text: 'B' } };
+                    await new Promise((resolve) => setTimeout(resolve, 50));
+                    yield { type: 'text-delta', payload: { text: 'C' } };
+                    await new Promise((resolve) => setTimeout(resolve, 50));
+                    yield { type: 'text-delta', payload: { text: 'D' } };
+                    await new Promise((resolve) => setTimeout(resolve, 50));
+                    yield { type: 'text-delta', payload: { text: 'E' } };
+                }
+                return {
+                    runId: 'run-phase3-max-duration-refresh',
+                    fullStream: steadySlowStream(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'max duration refresh',
+                'thread-max-duration-refresh',
+                'employee-max-duration-refresh',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-max-duration-refresh');
+            const textDeltas = events
+                .filter((event) => event.type === 'text_delta')
+                .map((event) => String(event.content ?? ''));
+            expect(textDeltas.join('')).toContain('ABCDE');
+            const completed = events.find((event) => event.type === 'complete') as Record<string, unknown> | undefined;
+            expect(completed?.finishReason).not.toBe('stream_max_duration_after_text');
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousChatTurnBudget === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS = previousChatTurnBudget;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS;
+            }
+            if (typeof previousChatStreamMax === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS = previousChatStreamMax;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS;
+            }
+            if (typeof previousPostAssistantMax === 'string') {
+                process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS = previousPostAssistantMax;
+            } else {
+                delete process.env.COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS;
+            }
+        }
+    });
+
     test('handleApprovalResponse resumes with requestContext and memory from cached run context', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalApprove = supervisor.approveToolCall.bind(supervisor);
@@ -569,7 +1095,10 @@ describe('Phase 3: Agent Loop', () => {
                 return {
                     runId: 'run-phase3-approval',
                     fullStream: (async function* () {
-                        // no-op
+                        yield {
+                            type: 'text-delta',
+                            payload: { text: 'approval ready' },
+                        };
                     })(),
                 } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
             }) as typeof supervisor.stream;
@@ -581,7 +1110,10 @@ describe('Phase 3: Agent Loop', () => {
                 return {
                     runId: 'run-phase3-approval',
                     fullStream: (async function* () {
-                        // no-op
+                        yield {
+                            type: 'text-delta',
+                            payload: { text: 'approval done' },
+                        };
                     })(),
                 } as unknown as Awaited<ReturnType<typeof supervisor.approveToolCall>>;
             }) as typeof supervisor.approveToolCall;

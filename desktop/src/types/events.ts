@@ -227,6 +227,9 @@ export interface ChatMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
     timestamp: string;
+    turnId?: string;
+    messageId?: string;
+    correlationId?: string;
 }
 
 export interface AuditEvent {

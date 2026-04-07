@@ -6,6 +6,7 @@ type CompressionTurn = {
     role: 'user' | 'assistant';
     content: string;
     at: string;
+    turnId?: string;
 };
 
 export type TaskContextCompressionSnapshot = {
@@ -40,6 +41,7 @@ type RecordTurnInput = {
     resourceId: string;
     workspacePath?: string;
     content: string;
+    turnId?: string;
 };
 
 const MAX_TURNS = 24;
@@ -262,11 +264,37 @@ export class TaskContextCompressionStore {
     private recordTurn(role: CompressionTurn['role'], input: RecordTurnInput): TaskContextCompressionSnapshot {
         const existing = this.snapshots.get(input.taskId);
         const turns = [...(existing?.turns ?? [])];
-        turns.push({
+        const normalizedTurnId = typeof input.turnId === 'string' && input.turnId.trim().length > 0
+            ? input.turnId.trim()
+            : undefined;
+        const nextTurn: CompressionTurn = {
             role,
             content: pickContentSnippet(input.content, MAX_TURN_CONTENT_CHARS),
             at: new Date().toISOString(),
-        });
+            turnId: normalizedTurnId,
+        };
+
+        if (normalizedTurnId) {
+            const existingTurnIndex = turns.findIndex((turn) => (
+                turn.role === role
+                && turn.turnId === normalizedTurnId
+            ));
+            if (existingTurnIndex >= 0) {
+                const existingTurn = turns[existingTurnIndex];
+                if (nextTurn.content.length > existingTurn.content.length) {
+                    turns[existingTurnIndex] = {
+                        ...existingTurn,
+                        content: nextTurn.content,
+                        at: nextTurn.at,
+                    };
+                }
+            } else {
+                turns.push(nextTurn);
+            }
+        } else {
+            turns.push(nextTurn);
+        }
+
         const trimmedTurns = turns.slice(-MAX_TURNS);
         const microSummary = buildMicroSummary(trimmedTurns);
         const structuredSummary = buildStructuredSummary(trimmedTurns);
@@ -356,10 +384,16 @@ export class TaskContextCompressionStore {
                             const role = rawTurn.role === 'assistant' ? 'assistant' : (rawTurn.role === 'user' ? 'user' : null);
                             const content = typeof rawTurn.content === 'string' ? rawTurn.content : '';
                             const at = typeof rawTurn.at === 'string' ? rawTurn.at : '';
+                            const turnId = typeof rawTurn.turnId === 'string' && rawTurn.turnId.trim().length > 0
+                                ? rawTurn.turnId.trim()
+                                : undefined;
                             if (!role || !content || !at) {
                                 return null;
                             }
-                            return { role, content, at } satisfies CompressionTurn;
+                            const parsedTurn: CompressionTurn = turnId
+                                ? { role, content, at, turnId }
+                                : { role, content, at };
+                            return parsedTurn;
                         })
                         .filter((turn): turn is CompressionTurn => turn !== null)
                     : [];

@@ -80,6 +80,65 @@ function mergeCanonicalMessage(
     return sortMessages(next);
 }
 
+function mergeAssistantStreamDelta(previous: string, delta: string): string {
+    if (delta.length === 0) {
+        return previous;
+    }
+    if (previous.length === 0) {
+        return delta;
+    }
+    if (previous.endsWith(delta)) {
+        return previous;
+    }
+    if (delta.startsWith(previous)) {
+        return delta;
+    }
+
+    const normalizeComparableText = (value: string): string => value.trim().replace(/\s+/g, ' ');
+    const normalizedPrevious = normalizeComparableText(previous);
+    const normalizedDelta = normalizeComparableText(delta);
+    if (normalizedPrevious.length > 0 && normalizedDelta.length > 0) {
+        if (normalizedPrevious === normalizedDelta) {
+            return delta.length >= previous.length ? delta : previous;
+        }
+
+        const shorter = normalizedPrevious.length <= normalizedDelta.length ? normalizedPrevious : normalizedDelta;
+        const longer = normalizedPrevious.length <= normalizedDelta.length ? normalizedDelta : normalizedPrevious;
+        if (
+            shorter.length >= 16
+            && longer.includes(shorter)
+            && shorter.length / longer.length >= 0.55
+        ) {
+            return normalizedDelta.length >= normalizedPrevious.length ? delta : previous;
+        }
+
+        let sharedPrefix = 0;
+        const prefixLimit = Math.min(normalizedPrevious.length, normalizedDelta.length);
+        while (
+            sharedPrefix < prefixLimit
+            && normalizedPrevious[sharedPrefix] === normalizedDelta[sharedPrefix]
+        ) {
+            sharedPrefix += 1;
+        }
+        if (
+            sharedPrefix >= 10
+            && Math.min(normalizedPrevious.length, normalizedDelta.length) >= 20
+            && sharedPrefix / Math.min(normalizedPrevious.length, normalizedDelta.length) >= 0.2
+        ) {
+            return normalizedDelta.length >= normalizedPrevious.length ? delta : previous;
+        }
+    }
+
+    const maxOverlap = Math.min(previous.length, delta.length);
+    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+        if (previous.slice(previous.length - overlap) === delta.slice(0, overlap)) {
+            return previous + delta.slice(overlap);
+        }
+    }
+
+    return previous + delta;
+}
+
 function applyMessageDelta(
     messages: CanonicalTaskMessage[],
     event: Extract<CanonicalStreamEvent, { type: 'canonical_message_delta' }>,
@@ -105,6 +164,19 @@ function applyMessageDelta(
             existingIndex = messages.length - 1;
         }
     }
+    if (existingIndex < 0 && event.payload.turnId) {
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const candidate = messages[index];
+            if (
+                candidate.role === event.payload.role
+                && (candidate.turnId ?? '') === event.payload.turnId
+                && candidate.sourceEventType === 'TEXT_DELTA'
+            ) {
+                existingIndex = index;
+                break;
+            }
+        }
+    }
     const existing = existingIndex >= 0 ? messages[existingIndex] : undefined;
     const nextMessage: CanonicalTaskMessage = existing
         ? { ...existing }
@@ -127,7 +199,7 @@ function applyMessageDelta(
         if (previousPart?.type === 'text') {
             nextMessage.parts = [
                 ...nextMessage.parts.slice(0, -1),
-                { ...previousPart, text: previousPart.text + event.payload.part.delta },
+                { ...previousPart, text: mergeAssistantStreamDelta(previousPart.text, event.payload.part.delta) },
             ];
         } else {
             nextMessage.parts = [...nextMessage.parts, { type: 'text', text: event.payload.part.delta }];
@@ -135,7 +207,7 @@ function applyMessageDelta(
     } else if (previousPart?.type === 'reasoning') {
         nextMessage.parts = [
             ...nextMessage.parts.slice(0, -1),
-            { ...previousPart, text: previousPart.text + event.payload.part.delta },
+            { ...previousPart, text: mergeAssistantStreamDelta(previousPart.text, event.payload.part.delta) },
         ];
     } else {
         nextMessage.parts = [...nextMessage.parts, { type: 'reasoning', text: event.payload.part.delta }];

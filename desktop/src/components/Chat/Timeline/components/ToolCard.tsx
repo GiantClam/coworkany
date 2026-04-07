@@ -8,6 +8,7 @@ import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import styles from '../Timeline.module.css';
 import type { ToolCallItem } from '../../../../types';
 import { isExternalHref } from '../../../../lib/externalLinks';
@@ -75,7 +76,7 @@ const ToolCardComponent: React.FC<ToolCardProps> = ({ item, viewModel }) => {
                             <div className={styles.markdownBody}>
                                 {section.content.type === 'markdown' ? (
                                     <ReactMarkdown
-                                        remarkPlugins={[remarkGfm]}
+                                        remarkPlugins={[remarkGfm, remarkBreaks]}
                                         components={{
                                             code(props) {
                                                 const { children, className } = props;

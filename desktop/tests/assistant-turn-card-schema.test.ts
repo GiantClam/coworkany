@@ -79,7 +79,7 @@ describe('buildAssistantTurnCardSchemas', () => {
             'assistant-response',
             'runtime-status',
             'tool-call',
-            'task-card',
+            'approval-request',
             'task-card',
             'task-card',
         ]);
@@ -112,17 +112,17 @@ describe('buildAssistantTurnCardSchemas', () => {
             },
         });
         expect(cards[3]).toMatchObject({
-            type: 'task-card',
-            placement: 'inline',
-            viewModel: {
-                summary: {
-                    title: 'Effect request · open_url',
-                },
+            type: 'approval-request',
+            approval: {
+                requestId: 'effect-1',
+                effectType: 'open_url',
+                risk: 2,
+                severity: 'low',
+                decision: 'pending',
             },
         });
         expect(cards[4]).toMatchObject({
             type: 'task-card',
-            placement: 'primary',
             viewModel: {
                 id: 'task-card-primary',
             },
@@ -135,6 +135,28 @@ describe('buildAssistantTurnCardSchemas', () => {
                     title: 'Patch update',
                 },
             },
+        });
+    });
+
+    test('hides duplicated lead subtitle when assistant message already contains the same content', () => {
+        const turn = makeAssistantTurn({
+            lead: '当然可以，我先给你一版“更像本人表达”的简洁日报（偏务实、口语化一点）：',
+            messages: [
+                '当然可以，我先给你一版“更像本人表达”的简洁日报（偏务实、口语化一点）：\n\n**今日日报（4月6日）**\n\n1. **今日完成**',
+            ],
+            systemEvents: [],
+        });
+
+        const cards = buildAssistantTurnCardSchemas(turn);
+        const responseCard = cards.find((card) => card.type === 'assistant-response');
+        expect(responseCard).toMatchObject({
+            type: 'assistant-response',
+            summary: {
+                subtitle: undefined,
+            },
+            messages: [
+                '当然可以，我先给你一版“更像本人表达”的简洁日报（偏务实、口语化一点）：\n\n**今日日报（4月6日）**\n\n1. **今日完成**',
+            ],
         });
     });
 

@@ -983,7 +983,6 @@ function buildRawConversationTrajectoryItems(session: TaskSession): TimelineItem
             type: 'assistant_turn',
             id: `assistant-trajectory-${message.id}`,
             timestamp: message.timestamp,
-            lead: sanitizeDisplayText(content),
             steps: [],
             messages: [content],
         });
@@ -1095,6 +1094,119 @@ function mergeUniqueTextParts(base: string[], incoming: string[]): string[] {
         merged.push(text);
     }
     return merged;
+}
+
+function normalizeAssistantNarrativeComparable(value: string): string {
+    return normalizeComparableText(value)
+        .replace(/\r\n?/g, '\n')
+        .replace(/[`*_~>#]/g, ' ')
+        .replace(/^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)/gm, '')
+        .replace(/^\s*[-*_]{3,}\s*$/gm, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function isNearDuplicateNarrative(left: string, right: string): boolean {
+    if (!left || !right) {
+        return false;
+    }
+    if (left === right) {
+        return true;
+    }
+
+    const shorter = left.length <= right.length ? left : right;
+    const longer = left.length <= right.length ? right : left;
+    if (shorter.length < 24) {
+        return false;
+    }
+
+    return longer.includes(shorter) && (shorter.length / longer.length) >= 0.82;
+}
+
+function isLikelyMarkdownNarrative(value: string): boolean {
+    return /(^|\n)\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|```|~~~|>\s+)/.test(value)
+        || /\*\*[^*\n]+\*\*/.test(value)
+        || /`[^`\n]+`/.test(value);
+}
+
+function scoreNarrativeCandidate(value: string): number {
+    const lineBreaks = (value.match(/\n/g) ?? []).length;
+    return value.length
+        + (lineBreaks * 8)
+        + (isLikelyMarkdownNarrative(value) ? 4000 : 0);
+}
+
+function mergeUniqueAssistantNarrativeParts(base: string[], incoming: string[]): string[] {
+    const selected: string[] = [];
+    const selectedComparable: string[] = [];
+
+    for (const text of [...base, ...incoming]) {
+        const normalized = normalizeText(text);
+        if (!normalized) {
+            continue;
+        }
+
+        const comparable = normalizeAssistantNarrativeComparable(normalized);
+        if (!comparable) {
+            continue;
+        }
+
+        const existingIndex = selectedComparable.findIndex((candidate) => (
+            isNearDuplicateNarrative(candidate, comparable)
+        ));
+        if (existingIndex === -1) {
+            selected.push(normalized);
+            selectedComparable.push(comparable);
+            continue;
+        }
+
+        const existing = selected[existingIndex] ?? '';
+        if (scoreNarrativeCandidate(normalized) > scoreNarrativeCandidate(existing)) {
+            selected[existingIndex] = normalized;
+            selectedComparable[existingIndex] = comparable;
+        }
+    }
+
+    return selected;
+}
+
+function stripDuplicateLeadFromAssistantTurn(turn: AssistantTurnItem): AssistantTurnItem {
+    const lead = sanitizeDisplayText(turn.lead || '');
+    if (!lead) {
+        return {
+            ...turn,
+            lead: undefined,
+        };
+    }
+
+    const comparableLead = normalizeAssistantNarrativeComparable(lead);
+    if (!comparableLead) {
+        return {
+            ...turn,
+            lead: undefined,
+        };
+    }
+
+    const hasDuplicateMessage = turn.messages.some((message) => {
+        const comparableMessage = normalizeAssistantNarrativeComparable(message);
+        if (!comparableMessage) {
+            return false;
+        }
+        return isNearDuplicateNarrative(comparableLead, comparableMessage);
+    });
+
+    if (!hasDuplicateMessage) {
+        return {
+            ...turn,
+            lead,
+        };
+    }
+
+    return {
+        ...turn,
+        lead: undefined,
+    };
 }
 
 function mergeById<T extends { id: string }>(base: T[], incoming: T[]): T[] {
@@ -1229,18 +1341,19 @@ function mergeAssistantTurn(base: AssistantTurnItem, incoming: AssistantTurnItem
     const basePatches = base.patches ?? [];
     const incomingPatches = incoming.patches ?? [];
 
-    return {
+    const mergedTurn: AssistantTurnItem = {
         ...base,
         timestamp: incoming.timestamp,
         lead: mergedLead || undefined,
         steps: [...incomingSteps],
-        messages: mergeUniqueTextParts(base.messages, incoming.messages),
+        messages: mergeUniqueAssistantNarrativeParts(base.messages, incoming.messages),
         systemEvents: mergeUniqueTextParts(baseSystemEvents, incomingSystemEvents),
         toolCalls: mergeById(baseToolCalls, incomingToolCalls),
         effectRequests: mergeById(baseEffects, incomingEffects),
         patches: mergeById(basePatches, incomingPatches),
         taskCard: mergeTaskCard(base.taskCard, incoming.taskCard),
     };
+    return stripDuplicateLeadFromAssistantTurn(mergedTurn);
 }
 
 function mergeTrajectoryRoundsWithCanonicalRounds(
@@ -1307,15 +1420,14 @@ function normalizeTimelineToTurnRounds(items: TimelineItemType[]): TimelineItemT
                 if (last?.type === 'assistant_turn' && last.id === item.id) {
                     output[output.length - 1] = mergeAssistantTurn(last, item);
                 } else {
-                    output.push(cloneAssistantTurn(item));
+                    output.push(stripDuplicateLeadFromAssistantTurn(cloneAssistantTurn(item)));
                 }
                 break;
             }
             case 'assistant_message': {
                 const turn = ensureAssistantTurn({ id: item.id, timestamp: item.timestamp });
                 turn.timestamp = item.timestamp;
-                turn.lead = sanitizeDisplayText(item.content);
-                turn.messages = mergeUniqueTextParts(turn.messages, [sanitizeDisplayText(item.content)]);
+                turn.messages = mergeUniqueAssistantNarrativeParts(turn.messages, [sanitizeDisplayText(item.content)]);
                 break;
             }
             case 'system_event': {
@@ -1379,6 +1491,60 @@ function ensureVisibleUserEntry(items: TimelineItemType[], session: TaskSession)
         content,
         timestamp: fallbackUserMessage.timestamp || session.updatedAt,
     }, ...items];
+}
+
+function buildAssistantTurnNarrativeComparable(turn: AssistantTurnItem): string {
+    const parts = [
+        turn.lead ?? '',
+        ...turn.messages,
+        ...(turn.systemEvents ?? []),
+        turn.taskCard?.result?.summary ?? '',
+        turn.taskCard?.result?.error ?? '',
+        turn.taskCard?.result?.suggestion ?? '',
+    ]
+        .map((part) => sanitizeDisplayText(part))
+        .filter((part) => part.length > 0);
+    return normalizeComparableText(parts.join('\n'));
+}
+
+function collapseConsecutiveDuplicateAssistantTurns(items: TimelineItemType[]): TimelineItemType[] {
+    const merged: TimelineItemType[] = [];
+
+    for (const item of items) {
+        if (item.type !== 'assistant_turn') {
+            merged.push(item);
+            continue;
+        }
+
+        const last = merged[merged.length - 1];
+        if (!last || last.type !== 'assistant_turn') {
+            merged.push(item);
+            continue;
+        }
+
+        const previousComparable = buildAssistantTurnNarrativeComparable(last);
+        const nextComparable = buildAssistantTurnNarrativeComparable(item);
+        if (!previousComparable || !nextComparable) {
+            merged.push(item);
+            continue;
+        }
+
+        const shorter = previousComparable.length <= nextComparable.length ? previousComparable : nextComparable;
+        const longer = previousComparable.length <= nextComparable.length ? nextComparable : previousComparable;
+        const nearDuplicateByContainment = (
+            shorter.length >= 48
+            && longer.includes(shorter)
+            && shorter.length / longer.length >= 0.86
+        );
+        if (previousComparable === nextComparable || nearDuplicateByContainment) {
+            merged[merged.length - 1] = mergeAssistantTurn(last, item);
+            continue;
+        }
+
+        merged.push(item);
+    }
+
+    return merged;
 }
 
 function toLatencyLabel(metric: string, value: unknown): string {
@@ -1536,6 +1702,7 @@ export function buildTimelineItems(
     }
 
     items = ensureVisibleUserEntry(items, session);
+    items = collapseConsecutiveDuplicateAssistantTurns(items);
 
     return {
         items,

@@ -1,7 +1,7 @@
 import * as readline from 'readline';
 import * as path from 'path';
 import { getMastraHealth } from './mastra';
-import { handleApprovalResponse, handleUserMessage, rewindTaskContextCompression } from './ipc/streaming';
+import { handleApprovalResponse, handleUserMessage, rewindTaskContextCompression, warmupChatRuntime } from './ipc/streaming';
 import { createMastraEntrypointProcessor } from './mastra/entrypoint';
 import { createVoiceProviderBindings } from './mastra/runtimeBindings';
 import { getVoicePlaybackState, stopVoicePlayback } from './tools/core/voice';
@@ -73,7 +73,104 @@ function readBoundedIntEnv(
     }
     return parsed;
 }
+
+function ensureLlmBaseUrlBypassesProxy(): void {
+    const proxyUrl = process.env.COWORKANY_PROXY_URL
+        || process.env.HTTPS_PROXY
+        || process.env.https_proxy
+        || process.env.ALL_PROXY
+        || process.env.all_proxy
+        || process.env.HTTP_PROXY
+        || process.env.http_proxy;
+    if (!proxyUrl) {
+        return;
+    }
+    const baseUrl = process.env.OPENAI_BASE_URL?.trim();
+    if (!baseUrl) {
+        return;
+    }
+    let host: string;
+    try {
+        host = new URL(baseUrl).hostname.trim().toLowerCase();
+    } catch {
+        return;
+    }
+    if (!host) {
+        return;
+    }
+    const existing = (process.env.NO_PROXY || process.env.no_proxy || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    const hasHost = existing.some((entry) => {
+        const normalized = entry.toLowerCase();
+        return normalized === host || normalized === `.${host}`;
+    });
+    if (hasHost) {
+        return;
+    }
+    const next = [...existing, host];
+    const joined = next.join(',');
+    process.env.NO_PROXY = joined;
+    process.env.no_proxy = joined;
+}
+
+function parseBooleanEnv(name: string): boolean {
+    const value = process.env[name];
+    if (!value) {
+        return false;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function shouldDisableProxyForConfiguredLlmProvider(): boolean {
+    if (parseBooleanEnv('COWORKANY_KEEP_PROXY_FOR_OPENAI_COMPAT')) {
+        return false;
+    }
+    const provider = process.env.COWORKANY_LLM_CONFIG_PROVIDER?.trim().toLowerCase();
+    if (!provider) {
+        return false;
+    }
+    if (provider === 'custom') {
+        const customApiFormat = process.env.COWORKANY_LLM_CUSTOM_API_FORMAT?.trim().toLowerCase();
+        return customApiFormat !== 'anthropic';
+    }
+    return provider === 'openai'
+        || provider === 'aiberm'
+        || provider === 'nvidia'
+        || provider === 'siliconflow'
+        || provider === 'gemini'
+        || provider === 'qwen'
+        || provider === 'minimax'
+        || provider === 'kimi';
+}
+
+function disableProxyEnvForLlmPath(): void {
+    if (!shouldDisableProxyForConfiguredLlmProvider()) {
+        return;
+    }
+    const keys = [
+        'COWORKANY_PROXY_URL',
+        'HTTPS_PROXY',
+        'https_proxy',
+        'HTTP_PROXY',
+        'http_proxy',
+        'ALL_PROXY',
+        'all_proxy',
+        'GLOBAL_AGENT_HTTPS_PROXY',
+        'GLOBAL_AGENT_HTTP_PROXY',
+        'COWORKANY_PROXY_SOURCE',
+    ];
+    for (const key of keys) {
+        delete process.env[key];
+    }
+    process.env.NODE_USE_ENV_PROXY = '0';
+}
+
 async function run(): Promise<void> {
+    disableProxyEnvForLlmPath();
+    ensureLlmBaseUrlBypassesProxy();
     const rl = readline.createInterface({
         input: process.stdin,
         crlfDelay: Infinity,
@@ -141,6 +238,21 @@ async function run(): Promise<void> {
                 ).allowed,
             });
         },
+        listRuntimeCapabilities: () => ({
+            skills: additionalCommandRuntime.skillStore.list().map((skill) => ({
+                id: skill.manifest.name,
+                name: skill.manifest.name,
+                enabled: skill.enabled,
+                description: skill.manifest.description,
+            })),
+            toolpacks: additionalCommandRuntime.toolpackStore.list().map((toolpack) => ({
+                id: toolpack.manifest.id ?? toolpack.manifest.name,
+                name: toolpack.manifest.name,
+                enabled: toolpack.enabled,
+                description: toolpack.manifest.description,
+                tools: toolpack.manifest.tools ?? [],
+            })),
+        }),
         taskTranscriptStore,
         rewindTaskContext: ({ taskId, userTurns }) => rewindTaskContextCompression({
             taskId,
@@ -153,6 +265,7 @@ async function run(): Promise<void> {
         remoteSessionStore,
         remoteSessionGovernancePolicy,
         executeTaskMessage: taskExecutionService.executeTaskMessage,
+        warmupChatRuntime,
     });
     schedulerRuntime = createMastraSchedulerRuntime({
         appDataRoot,

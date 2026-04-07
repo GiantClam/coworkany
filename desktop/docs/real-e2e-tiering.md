@@ -25,6 +25,7 @@ Run on branch/nightly when deeper UI/state regressions need coverage:
 - follow-up final-result rendering
 - assistant-ui visual snapshots
 - shell authorization regression
+- markdown compact layout regression (list markers + paragraph rhythm)
 
 Command:
 

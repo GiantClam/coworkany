@@ -7,7 +7,8 @@ import { enterpriseTools } from '../tools/enterprise';
 import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
 import { runtimeScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
-const DEFAULT_MODEL = process.env.COWORKANY_MODEL || 'anthropic/claude-sonnet-4-5';
+import { resolveRuntimeModelConfig } from '../model/runtimeModel';
+const DEFAULT_MODEL = resolveRuntimeModelConfig();
 export const coworker = new Agent({
     id: 'coworker',
     name: 'CoworkAny Assistant',

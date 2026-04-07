@@ -1323,12 +1323,23 @@
     background: var(--bg-element);
     font-family: var(--font-code);
     font-size: 13px;
-    overflow-x: auto;
+    max-height: min(42vh, 320px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
 }
 
 .markdownBody {
     font-size: 15px;
-    line-height: 1.7;
+    line-height: 1.44;
+}
+
+.markdownBody > :first-child {
+    margin-top: 0 !important;
+}
+
+.markdownBody > :last-child {
+    margin-bottom: 0 !important;
 }
 
 .structuredSectionLines {
@@ -1355,8 +1366,8 @@
 .markdownBody h4,
 .markdownBody h5,
 .markdownBody h6 {
-    margin-top: var(--space-4);
-    margin-bottom: var(--space-2);
+    margin-top: 6px;
+    margin-bottom: 1px;
     font-weight: var(--font-semibold);
     line-height: var(--leading-tight);
     color: var(--text-primary);
@@ -1368,8 +1379,12 @@
 .markdownBody h4 { font-size: var(--font-size-base); }
 
 .markdownBody p {
-    margin-top: var(--space-2);
-    margin-bottom: var(--space-2);
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.markdownBody p + p {
+    margin-top: 4px;
 }
 
 .markdownBody code {
@@ -1384,12 +1399,15 @@
 }
 
 .markdownBody pre {
-    margin: var(--space-3) 0;
+    margin: var(--space-2) 0;
     padding: var(--space-3);
     background: var(--bg-element);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    overflow-x: auto;
+    max-height: min(42vh, 320px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
     max-width: 100%;
 }
 
@@ -1403,12 +1421,12 @@
 
 .markdownBody ul,
 .markdownBody ol {
-    margin: var(--space-2) 0;
-    padding-left: var(--space-6);
+    margin: 4px 0;
+    padding-left: var(--space-5);
 }
 
 .markdownBody li {
-    margin: var(--space-1) 0;
+    margin: 2px 0;
 }
 
 .markdownBody a {
@@ -1423,7 +1441,7 @@
 }
 
 .markdownBody blockquote {
-    margin: var(--space-3) 0;
+    margin: 4px 0;
     padding-left: var(--space-4);
     border-left: 3px solid var(--accent-primary);
     color: var(--text-secondary);
@@ -1433,7 +1451,7 @@
 .markdownBody table {
     width: 100%;
     border-collapse: collapse;
-    margin: var(--space-3) 0;
+    margin: 6px 0;
 }
 
 .markdownBody th,
@@ -1454,7 +1472,7 @@
     max-height: 380px;
     object-fit: contain;
     border-radius: var(--radius-md);
-    margin: var(--space-3) 0;
+    margin: 8px 0;
 }
 
 /* ============================================================================

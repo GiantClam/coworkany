@@ -114,15 +114,15 @@ function buildAssistantTurnText(round: TimelineTurnRound): string {
     const uniqueTaskCardResultLines = taskCardResultLines.filter((line) => !messageLineSet.has(line.trim().toLowerCase()));
 
     if (messageLines.length > 0) {
-        sections.push(messageLines.join('\n\n'));
+        sections.push(messageLines.join('\n'));
     }
     if (uniqueTaskCardResultLines.length > 0) {
-        sections.push(uniqueTaskCardResultLines.join('\n\n'));
+        sections.push(uniqueTaskCardResultLines.join('\n'));
     } else if (messageLines.length === 0 && taskCardSectionLines.length > 0) {
-        sections.push(taskCardSectionLines.join('\n\n'));
+        sections.push(taskCardSectionLines.join('\n'));
     }
 
-    return sections.join('\n\n').trim();
+    return sections.join('\n').trim();
 }
 
 function buildStructuredFallbackText(structured: AssistantUiStructuredPayload): string {

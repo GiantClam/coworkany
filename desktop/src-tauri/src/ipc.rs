@@ -6,9 +6,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,11 +25,8 @@ use crate::sidecar::{IpcCommand, SidecarState, TaskConfig, TaskContext};
 
 static STARTUP_PROCESS_INSTANT: OnceLock<Instant> = OnceLock::new();
 static STARTUP_PROCESS_EPOCH_MS: OnceLock<u128> = OnceLock::new();
-static RECENT_SEND_TASK_MESSAGE_KEYS: OnceLock<std::sync::Mutex<HashMap<(String, u64), Instant>>> =
-    OnceLock::new();
 const SKILLHUB_INSTALL_SCRIPT_URL: &str =
     "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh";
-const SEND_TASK_MESSAGE_DEDUP_WINDOW: Duration = Duration::from_secs(8);
 
 pub fn init_startup_clock() {
     STARTUP_PROCESS_INSTANT.get_or_init(Instant::now);
@@ -296,6 +291,10 @@ pub struct SendTaskMessageResult {
     pub turn_id: Option<String>,
     #[serde(rename = "queuePosition", skip_serializing_if = "Option::is_none")]
     pub queue_position: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deduplicated: Option<bool>,
+    #[serde(rename = "dedupReason", skip_serializing_if = "Option::is_none")]
+    pub dedup_reason: Option<String>,
     pub error: Option<String>,
 }
 
@@ -596,46 +595,6 @@ fn sanitize_skillhub_name(slug: &str, raw_name: Option<&str>) -> String {
     candidate.to_string()
 }
 
-fn send_task_message_cache() -> &'static std::sync::Mutex<HashMap<(String, u64), Instant>> {
-    RECENT_SEND_TASK_MESSAGE_KEYS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-}
-
-fn send_task_message_fingerprint(content: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    content.trim().hash(&mut hasher);
-    hasher.finish()
-}
-
-fn is_duplicate_recent_send_task_message(
-    task_id: &str,
-    content_fingerprint: u64,
-    now: Instant,
-) -> bool {
-    let Ok(mut cache) = send_task_message_cache().lock() else {
-        return false;
-    };
-
-    cache.retain(|_, last_seen| now.duration_since(*last_seen) <= SEND_TASK_MESSAGE_DEDUP_WINDOW);
-
-    let key = (task_id.to_string(), content_fingerprint);
-    if let Some(last_seen) = cache.get_mut(&key) {
-        if now.duration_since(*last_seen) <= SEND_TASK_MESSAGE_DEDUP_WINDOW {
-            // Extend suppression window for rapid repeated retries/clicks.
-            *last_seen = now;
-            return true;
-        }
-    }
-
-    cache.insert(key, now);
-    false
-}
-
-fn clear_recent_send_task_message(task_id: &str, content_fingerprint: u64) {
-    if let Ok(mut cache) = send_task_message_cache().lock() {
-        cache.remove(&(task_id.to_string(), content_fingerprint));
-    }
-}
-
 async fn ensure_sidecar_running(
     state: &State<'_, SidecarState>,
     app_handle: &AppHandle,
@@ -823,10 +782,7 @@ fn normalize_openai_compatible_model(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(default_model);
-    let without_openai_prefix = selected
-        .strip_prefix("openai/")
-        .unwrap_or(selected)
-        .trim();
+    let without_openai_prefix = selected.strip_prefix("openai/").unwrap_or(selected).trim();
 
     if provider == "minimax" && is_minimax_coding_model(without_openai_prefix) {
         return "MiniMax-M2.7".to_string();
@@ -1695,19 +1651,17 @@ pub async fn transcribe_audio(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_proxy_to_client_builder, build_validation_request_plan,
-        build_doctor_preflight_payload, is_duplicate_recent_send_task_message,
-        AnthropicProviderSettings, CustomProviderSettings, OpenAIProviderSettings,
-        OpenRouterProviderSettings, ProxySettings, ValidateLlmInput, ValidationAuthScheme,
-        normalize_openai_compatible_model, resolve_openai_compatible_base_url,
-        select_transcription_model_from_catalog, send_task_message_fingerprint, DoctorPreflightInput,
-        StartTaskConfigInput,
+        apply_proxy_to_client_builder, build_doctor_preflight_payload,
+        build_validation_request_plan, normalize_openai_compatible_model,
+        resolve_openai_compatible_base_url, select_transcription_model_from_catalog,
+        AnthropicProviderSettings, CustomProviderSettings, DoctorPreflightInput,
+        OpenAIProviderSettings, OpenRouterProviderSettings, ProxySettings, StartTaskConfigInput,
+        ValidateLlmInput, ValidationAuthScheme,
     };
     use crate::sidecar::TaskConfig;
     use serde_json::json;
     use std::env;
-    use std::time::{Duration, Instant};
-    use uuid::Uuid;
+    use std::time::Duration;
 
     #[test]
     fn prefers_openai_realtime_transcription_models_over_whisper() {
@@ -1831,29 +1785,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn send_task_message_dedup_window_blocks_rapid_retries() {
-        let task_id = format!("task-{}", Uuid::new_v4());
-        let fingerprint = send_task_message_fingerprint("同意");
-        let now = Instant::now();
-
-        assert!(!is_duplicate_recent_send_task_message(
-            &task_id,
-            fingerprint,
-            now
-        ));
-        assert!(is_duplicate_recent_send_task_message(
-            &task_id,
-            fingerprint,
-            now + Duration::from_secs(1)
-        ));
-        assert!(!is_duplicate_recent_send_task_message(
-            &task_id,
-            fingerprint,
-            now + Duration::from_secs(10)
-        ));
-    }
-
     async fn send_validation_request_real(
         client: &reqwest::Client,
         input: ValidateLlmInput,
@@ -1933,7 +1864,9 @@ mod tests {
         let mut client_builder = reqwest::Client::builder().timeout(Duration::from_secs(20));
         client_builder = apply_proxy_to_client_builder(client_builder, proxy.as_ref())
             .expect("proxy settings should be valid");
-        let client = client_builder.build().expect("build connectivity test client");
+        let client = client_builder
+            .build()
+            .expect("build connectivity test client");
 
         let mut cases: Vec<(&str, ValidateLlmInput)> = Vec::new();
         let mut missing: Vec<&str> = Vec::new();
@@ -1996,11 +1929,16 @@ mod tests {
         }
 
         if strict && !missing.is_empty() {
-            panic!("missing API keys for strict real connectivity matrix: {}", missing.join(", "));
+            panic!(
+                "missing API keys for strict real connectivity matrix: {}",
+                missing.join(", ")
+            );
         }
 
         if cases.is_empty() {
-            eprintln!("skip: no real provider API keys found. Set REAL_<PROVIDER>_API_KEY env vars.");
+            eprintln!(
+                "skip: no real provider API keys found. Set REAL_<PROVIDER>_API_KEY env vars."
+            );
             return;
         }
 
@@ -2008,7 +1946,8 @@ mod tests {
         if let Some(key) = custom_openai_key {
             let base_url = env::var("REAL_CUSTOM_OPENAI_BASE_URL")
                 .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
-            let model = env::var("REAL_CUSTOM_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+            let model =
+                env::var("REAL_CUSTOM_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
             cases.push((
                 "custom-openai",
                 ValidateLlmInput {
@@ -2097,7 +2036,6 @@ pub async fn send_task_message(
     });
 
     let task_id = input.task_id.clone();
-    let content_fingerprint = send_task_message_fingerprint(&input.content);
     let command = serde_json::to_value(IpcCommand::send_task_message(
         task_id.clone(),
         input.content,
@@ -2105,21 +2043,6 @@ pub async fn send_task_message(
         config,
     ))
     .map_err(|e| e.to_string())?;
-
-    let now = Instant::now();
-    if is_duplicate_recent_send_task_message(&task_id, content_fingerprint, now) {
-        warn!(
-            "Suppressed duplicate send_task_message within dedup window: task_id={}",
-            task_id
-        );
-        return Ok(SendTaskMessageResult {
-            success: true,
-            task_id,
-            turn_id: None,
-            queue_position: None,
-            error: None,
-        });
-    }
 
     let response = match send_command_and_wait_with_timeout_policy(&state, command, 30000, false)
         .await
@@ -2137,10 +2060,11 @@ pub async fn send_task_message(
                     task_id,
                     turn_id: None,
                     queue_position: None,
+                    deduplicated: None,
+                    dedup_reason: None,
                     error: None,
                 });
             }
-            clear_recent_send_task_message(&task_id, content_fingerprint);
             error!(
                 "Failed to send send_task_message command: {}",
                 error_message
@@ -2150,6 +2074,8 @@ pub async fn send_task_message(
                 task_id,
                 turn_id: None,
                 queue_position: None,
+                deduplicated: None,
+                dedup_reason: None,
                 error: Some(error_message),
             });
         }
@@ -2181,16 +2107,21 @@ pub async fn send_task_message(
         .get("queuePosition")
         .and_then(Value::as_u64)
         .map(|value| value as u32);
-
-    if !success {
-        clear_recent_send_task_message(&task_id, content_fingerprint);
-    }
+    let deduplicated = payload
+        .get("deduplicated")
+        .and_then(Value::as_bool);
+    let dedup_reason = payload
+        .get("dedupReason")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     Ok(SendTaskMessageResult {
         success,
         task_id,
         turn_id,
         queue_position,
+        deduplicated,
+        dedup_reason,
         error,
     })
 }
@@ -2572,9 +2503,7 @@ pub async fn validate_llm_settings(
 
     let mut client_builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10));
     client_builder = apply_proxy_to_client_builder(client_builder, proxy_settings)?;
-    let client = client_builder
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = client_builder.build().map_err(|e| e.to_string())?;
     let plan = build_validation_request_plan(input)?;
 
     let mut request = client.post(&plan.url);

@@ -6,8 +6,8 @@
     flex-direction: column;
     gap: 24px;
     background:
-        radial-gradient(720px 240px at 100% 0%, rgba(59, 130, 246, 0.04), transparent 58%),
-        linear-gradient(180deg, rgba(4, 12, 29, 0.76), rgba(3, 9, 23, 0.92));
+        radial-gradient(720px 240px at 100% 0%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 58%),
+        linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 88%, transparent), color-mix(in srgb, var(--bg-app) 96%, transparent));
 }
 
 .heroPanel {
@@ -15,11 +15,11 @@
     gap: 20px;
     padding: 22px;
     border-radius: 24px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     background:
-        radial-gradient(840px 280px at 100% 0%, rgba(59, 130, 246, 0.08), transparent 58%),
-        rgba(7, 17, 36, 0.76);
-    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.04);
+        radial-gradient(840px 280px at 100% 0%, color-mix(in srgb, var(--accent-primary) 18%, transparent), transparent 58%),
+        color-mix(in srgb, var(--bg-element) 76%, var(--bg-panel));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-on-dark) 8%, transparent);
 }
 
 .header {
@@ -44,8 +44,8 @@
     width: fit-content;
     padding: 0 10px;
     border-radius: 999px;
-    border: 1px solid rgba(96, 165, 250, 0.12);
-    background: rgba(4, 12, 29, 0.54);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 96%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 66%, var(--bg-panel));
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.1em;
@@ -78,8 +78,8 @@
     gap: 8px;
     min-height: 44px;
     padding: 0 16px;
-    background: rgba(4, 12, 29, 0.62);
-    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 96%, transparent);
     border-radius: 16px;
     font-family: var(--font-body);
     font-size: 13px;
@@ -91,8 +91,8 @@
 
 .refreshBtn:hover:not(:disabled) {
     transform: translateY(-1px);
-    background: rgba(8, 18, 40, 0.82);
-    border-color: rgba(96, 165, 250, 0.2);
+    background: color-mix(in srgb, var(--bg-element-hover) 84%, var(--bg-panel));
+    border-color: var(--border-strong);
 }
 
 .refreshBtn:disabled {
@@ -109,25 +109,25 @@
 }
 
 .errorBanner {
-    background: rgba(127, 29, 29, 0.2);
-    border: 1px solid rgba(251, 113, 133, 0.3);
-    color: #ffd6df;
+    background: color-mix(in srgb, var(--status-error) 18%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-error) 45%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 86%, var(--text-primary));
 }
 
 .successBanner {
-    background: rgba(5, 46, 22, 0.22);
-    border: 1px solid rgba(52, 211, 153, 0.24);
-    color: #c9ffe4;
+    background: color-mix(in srgb, var(--status-success) 20%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 86%, var(--text-primary));
 }
 
 .section {
     background:
-        radial-gradient(520px 180px at 100% 0%, rgba(59, 130, 246, 0.03), transparent 58%),
-        rgba(7, 17, 36, 0.7);
+        radial-gradient(520px 180px at 100% 0%, color-mix(in srgb, var(--accent-primary) 8%, transparent), transparent 58%),
+        color-mix(in srgb, var(--bg-element) 74%, var(--bg-panel));
     padding: 16px;
     border-radius: 18px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
-    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.03);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-on-dark) 6%, transparent);
     min-width: 0;
     overflow: hidden;
 }
@@ -175,10 +175,10 @@
     min-height: auto;
     padding: 15px 16px;
     border-radius: 18px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     background:
-        radial-gradient(240px 120px at 100% 0%, rgba(59, 130, 246, 0.06), transparent 60%),
-        rgba(7, 17, 36, 0.72);
+        radial-gradient(240px 120px at 100% 0%, color-mix(in srgb, var(--accent-primary) 14%, transparent), transparent 60%),
+        color-mix(in srgb, var(--bg-element) 75%, var(--bg-panel));
 }
 
 .summaryEyebrow {
@@ -188,8 +188,8 @@
     width: fit-content;
     padding: 0 10px;
     border-radius: 999px;
-    background: rgba(4, 12, 29, 0.62);
-    border: 1px solid rgba(96, 165, 250, 0.12);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 96%, transparent);
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -301,7 +301,7 @@
 
 .toggleBtn[aria-pressed="true"],
 .toggleBtn.active {
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 
 .validationMessage {
@@ -312,15 +312,15 @@
 }
 
 .validationMessage.success {
-    background: rgba(5, 46, 22, 0.2);
-    border-color: rgba(52, 211, 153, 0.24);
-    color: #c9ffe4;
+    background: color-mix(in srgb, var(--status-success) 18%, var(--bg-element));
+    border-color: color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-success) 86%, var(--text-primary));
 }
 
 .validationMessage.error {
-    background: rgba(127, 29, 29, 0.18);
-    border-color: rgba(251, 113, 133, 0.28);
-    color: #ffd6df;
+    background: color-mix(in srgb, var(--status-error) 16%, var(--bg-element));
+    border-color: color-mix(in srgb, var(--status-error) 40%, var(--border-subtle));
+    color: color-mix(in srgb, var(--status-error) 86%, var(--text-primary));
 }
 
 .field {
@@ -348,8 +348,8 @@
 .inputField {
     min-height: 44px;
     padding: 0 14px;
-    background: rgba(4, 12, 29, 0.82);
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: color-mix(in srgb, var(--bg-element) 88%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 14px;
     font-family: var(--font-body);
     font-size: 13px;
@@ -358,13 +358,13 @@
 }
 
 .inputField:hover:not(:disabled) {
-    border-color: rgba(96, 165, 250, 0.18);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
 }
 
 .inputField:focus {
     outline: none;
-    border-color: rgba(59, 130, 246, 0.28);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 44%, var(--border-strong));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
 
 .inputField:disabled {
@@ -396,9 +396,9 @@
 
 .profileCard {
     padding: 15px 16px;
-    background: rgba(4, 12, 29, 0.6);
+    background: color-mix(in srgb, var(--bg-element) 70%, var(--bg-panel));
     border-radius: 18px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     display: grid;
     gap: 12px;
     cursor: pointer;
@@ -407,14 +407,14 @@
 
 .profileCard:hover {
     transform: translateY(-1px);
-    border-color: rgba(96, 165, 250, 0.18);
-    background: rgba(7, 29, 30, 0.78);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-element-hover) 82%, var(--bg-panel));
 }
 
 .profileCard.active {
-    border-color: rgba(59, 130, 246, 0.24);
-    background: rgba(8, 44, 42, 0.5);
-    box-shadow: inset 0 1px 0 rgba(239, 246, 255, 0.03);
+    border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--accent-subtle) 74%, var(--bg-element));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-on-dark) 6%, transparent);
 }
 
 .profileCardContent {
@@ -440,12 +440,12 @@
 
 .statusIndicator.verified {
     background: var(--status-success);
-    box-shadow: 0 0 10px rgba(52, 211, 153, 0.5);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--status-success) 58%, transparent);
 }
 
 .statusIndicator.unverified {
     background: var(--status-warning);
-    box-shadow: 0 0 10px rgba(245, 158, 11, 0.34);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--status-warning) 44%, transparent);
 }
 
 .profileInfo {
@@ -480,8 +480,8 @@
 
 .profileMeta {
     color: var(--text-muted);
-    background: rgba(4, 12, 29, 0.45);
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: color-mix(in srgb, var(--bg-element) 58%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
@@ -489,9 +489,9 @@
 }
 
 .profileProviderBadge {
-    color: #bcecff;
-    background: rgba(14, 116, 144, 0.18);
-    border: 1px solid rgba(34, 211, 238, 0.22);
+    color: color-mix(in srgb, var(--status-info) 82%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-info) 20%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-info) 38%, var(--border-subtle));
 }
 
 .profileActions {
@@ -503,11 +503,11 @@
 
 .activeBadge {
     font-size: 10px;
-    background: rgba(37, 99, 235, 0.2);
+    background: color-mix(in srgb, var(--accent-primary) 24%, var(--bg-element));
     color: var(--text-primary);
     padding: 5px 8px;
     border-radius: 999px;
-    border: 1px solid rgba(59, 130, 246, 0.18);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, var(--border-strong));
     font-family: var(--font-code);
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -520,7 +520,7 @@
     width: 32px;
     height: 32px;
     background: transparent;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 12px;
     cursor: pointer;
     color: var(--text-muted);
@@ -529,8 +529,8 @@
 
 .deleteButton:hover {
     color: var(--status-error);
-    border-color: rgba(251, 113, 133, 0.2);
-    background: rgba(127, 29, 29, 0.14);
+    border-color: color-mix(in srgb, var(--status-error) 35%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 12%, var(--bg-element));
 }
 
 .emptyState {
@@ -542,9 +542,9 @@
     min-height: 132px;
     padding: 24px 22px;
     color: var(--text-muted);
-    border: 1px dashed rgba(96, 165, 250, 0.12);
+    border: 1px dashed color-mix(in srgb, var(--border-subtle) 96%, transparent);
     border-radius: 18px;
-    background: rgba(4, 12, 29, 0.36);
+    background: color-mix(in srgb, var(--bg-subtle) 82%, var(--bg-panel));
 }
 
 .emptyStateTitle {
@@ -592,9 +592,9 @@
     align-items: center;
     gap: 6px;
     font-size: 10px;
-    color: #c9ffe4;
-    background: rgba(5, 46, 22, 0.2);
-    border: 1px solid rgba(52, 211, 153, 0.24);
+    color: color-mix(in srgb, var(--status-success) 86%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-success) 18%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
     padding: 5px 8px;
     border-radius: 999px;
     font-family: var(--font-code);
@@ -611,8 +611,8 @@
 .infoBox {
     margin-top: 14px;
     padding: 12px 14px;
-    background: rgba(4, 12, 29, 0.52);
-    border: 1px solid rgba(96, 165, 250, 0.08);
+    background: color-mix(in srgb, var(--bg-element) 62%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
     border-radius: 16px;
     font-size: 12px;
     line-height: 1.6;
@@ -636,9 +636,9 @@
     min-width: 132px;
     min-height: 46px;
     padding: 10px 14px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 16px;
-    background: rgba(4, 12, 29, 0.62);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-body);
@@ -653,15 +653,15 @@
 
 .optionBtn[aria-pressed="true"],
 .optionBtn.selected {
-    border-color: rgba(59, 130, 246, 0.24);
-    background: rgba(8, 44, 42, 0.5);
+    border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--accent-subtle) 74%, var(--bg-element));
     font-weight: 600;
 }
 
 .optionBtn:hover:not([aria-pressed="true"]):not(.selected) {
     transform: translateY(-1px);
-    border-color: rgba(96, 165, 250, 0.18);
-    background: rgba(7, 29, 30, 0.78);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-element-hover) 82%, var(--bg-panel));
 }
 
 .optionIcon {
@@ -681,7 +681,7 @@
 .subsection {
     margin-top: 18px;
     padding-top: 18px;
-    border-top: 1px solid rgba(96, 165, 250, 0.08);
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
 }
 
 .stack {
@@ -695,8 +695,8 @@
     gap: 14px;
     padding: 14px 16px;
     border-radius: 18px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
-    background: rgba(4, 12, 29, 0.6);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 70%, var(--bg-panel));
 }
 
 .shortcutInfo,
@@ -772,8 +772,8 @@
     min-height: 24px;
     padding: 0 8px;
     border-radius: 999px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
-    background: rgba(4, 12, 29, 0.5);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 60%, var(--bg-panel));
     font-family: var(--font-code);
     font-size: 10px;
     letter-spacing: 0.06em;
@@ -783,8 +783,8 @@
 }
 
 .scopeBadgeGlobal {
-    border-color: rgba(59, 130, 246, 0.18);
-    background: rgba(37, 99, 235, 0.12);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-strong));
+    background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-element));
     color: var(--text-primary);
 }
 
@@ -806,9 +806,9 @@
     min-height: 36px;
     min-width: 116px;
     padding: 0 12px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 12px;
-    background: rgba(4, 12, 29, 0.62);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-code);
@@ -820,14 +820,14 @@
 
 .shortcutCapture:hover {
     transform: translateY(-1px);
-    border-color: rgba(96, 165, 250, 0.18);
-    background: rgba(7, 29, 30, 0.78);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-element-hover) 82%, var(--bg-panel));
 }
 
 .shortcutCaptureRecording {
-    border-color: rgba(59, 130, 246, 0.24);
-    background: rgba(8, 44, 42, 0.5);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--accent-subtle) 74%, var(--bg-element));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
 
 .iconButton {
@@ -836,7 +836,7 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 12px;
     background: transparent;
     color: var(--text-muted);
@@ -845,23 +845,23 @@
 }
 
 .iconButton:hover {
-    border-color: rgba(96, 165, 250, 0.18);
-    background: rgba(7, 29, 30, 0.54);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-element-hover) 62%, var(--bg-panel));
     color: var(--text-primary);
 }
 
 .iconButtonDanger:hover {
-    border-color: rgba(251, 113, 133, 0.2);
-    background: rgba(127, 29, 29, 0.14);
+    border-color: color-mix(in srgb, var(--status-error) 35%, var(--border-subtle));
+    background: color-mix(in srgb, var(--status-error) 12%, var(--bg-element));
     color: var(--status-error);
 }
 
 .toggleInline {
     min-height: 32px;
     padding: 0 10px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 999px;
-    background: rgba(4, 12, 29, 0.62);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
     color: var(--text-secondary);
     cursor: pointer;
     font-family: var(--font-code);
@@ -873,14 +873,14 @@
 }
 
 .toggleInline:hover {
-    border-color: rgba(96, 165, 250, 0.18);
-    background: rgba(7, 29, 30, 0.72);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-element-hover) 78%, var(--bg-panel));
     color: var(--text-primary);
 }
 
 .toggleInlineActive {
-    border-color: rgba(59, 130, 246, 0.24);
-    background: rgba(8, 44, 42, 0.5);
+    border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--accent-subtle) 74%, var(--bg-element));
     color: var(--text-primary);
 }
 
@@ -914,9 +914,9 @@
 .secondaryAction {
     min-height: 40px;
     padding: 0 14px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     border-radius: 14px;
-    background: rgba(4, 12, 29, 0.62);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
     color: var(--text-primary);
     cursor: pointer;
     font-family: var(--font-body);
@@ -927,8 +927,8 @@
 
 .secondaryAction:hover:not(:disabled) {
     transform: translateY(-1px);
-    border-color: rgba(96, 165, 250, 0.18);
-    background: rgba(7, 29, 30, 0.78);
+    border-color: color-mix(in srgb, var(--border-strong) 94%, var(--accent-primary));
+    background: color-mix(in srgb, var(--bg-element-hover) 82%, var(--bg-panel));
 }
 
 .secondaryAction:disabled {
@@ -941,10 +941,10 @@
     gap: 14px;
     padding: 16px;
     border-radius: 18px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
     background:
-        radial-gradient(360px 140px at 100% 0%, rgba(59, 130, 246, 0.05), transparent 60%),
-        rgba(7, 17, 36, 0.72);
+        radial-gradient(360px 140px at 100% 0%, color-mix(in srgb, var(--accent-primary) 12%, transparent), transparent 60%),
+        color-mix(in srgb, var(--bg-element) 75%, var(--bg-panel));
     flex-shrink: 0;
 }
 
@@ -955,8 +955,8 @@
     gap: 20px;
     padding: 18px;
     border-radius: 20px;
-    border: 1px solid rgba(96, 165, 250, 0.1);
-    background: rgba(4, 12, 29, 0.56);
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 64%, var(--bg-panel));
 }
 
 .runtimeSectionHeader {
@@ -1056,33 +1056,33 @@
 }
 
 .runtimeChipReady {
-    color: #c9ffe4;
-    background: rgba(5, 46, 22, 0.2);
-    border: 1px solid rgba(52, 211, 153, 0.24);
+    color: color-mix(in srgb, var(--status-success) 86%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-success) 18%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-success) 36%, var(--border-subtle));
 }
 
 .runtimeChipMuted {
     color: var(--text-muted);
-    background: rgba(4, 12, 29, 0.62);
-    border: 1px solid rgba(96, 165, 250, 0.1);
+    background: color-mix(in srgb, var(--bg-element) 72%, var(--bg-panel));
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
 }
 
 .runtimeChipInfo {
-    color: #bcecff;
-    background: rgba(14, 116, 144, 0.18);
-    border: 1px solid rgba(34, 211, 238, 0.22);
+    color: color-mix(in srgb, var(--status-info) 82%, var(--text-primary));
+    background: color-mix(in srgb, var(--status-info) 20%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--status-info) 38%, var(--border-subtle));
 }
 
 .footer {
     color: var(--text-muted);
     font-size: 12px;
     line-height: 1.6;
-    border-top: 1px solid rgba(96, 165, 250, 0.08);
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
     padding: 18px 4px 0;
 }
 
 .footer code {
-    background: rgba(4, 12, 29, 0.56);
+    background: color-mix(in srgb, var(--bg-element) 64%, var(--bg-panel));
     padding: 2px 6px;
     border-radius: 8px;
     font-family: var(--font-code);

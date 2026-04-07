@@ -20,7 +20,10 @@ const CONFIG_REQUIRED_PATTERNS: RegExp[] = [
 
 const TIMEOUT_PATTERNS: RegExp[] = [
     /chat_turn_timeout_budget_exhausted/i,
+    /chat_startup_timeout_budget_exhausted/i,
+    /generate_fallback_timeout/i,
     /stream_(?:start|idle|progress)_timeout/i,
+    /stream_max_duration_timeout/i,
     /\btimeout\b/i,
     /\btimed out\b/i,
     /gateway time-?out/i,

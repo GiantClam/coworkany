@@ -45,6 +45,7 @@ interface TimelineProps {
         content: string;
         timestamp: string;
     } | null;
+    onAssistantUiRetry?: (parentId: string | null) => Promise<void> | void;
     onTaskCollaborationSubmit?: (input: {
         taskId?: string;
         cardId: string;
@@ -231,6 +232,7 @@ export function resolveAssistantUiPendingLabel(
 const TimelineComponent: React.FC<TimelineProps> = ({
     session,
     optimisticUserEntry,
+    onAssistantUiRetry,
     onTaskCollaborationSubmit,
 }) => {
     const { t } = useTranslation();
@@ -294,6 +296,7 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 pendingLabel={resolvedPendingLabel}
                 pendingStatus={pendingStatus}
                 isRunning={Boolean(pendingStatus)}
+                onReloadMessage={onAssistantUiRetry}
             >
                 <LazyAssistantUiThreadView onApprovalDecision={handleAssistantUiApprovalDecision} />
             </LazyAssistantUiRuntimeBridge>
@@ -306,6 +309,7 @@ export const Timeline = React.memo(TimelineComponent, (prevProps, nextProps) => 
     && prevProps.optimisticUserEntry?.id === nextProps.optimisticUserEntry?.id
     && prevProps.optimisticUserEntry?.content === nextProps.optimisticUserEntry?.content
     && prevProps.optimisticUserEntry?.timestamp === nextProps.optimisticUserEntry?.timestamp
+    && prevProps.onAssistantUiRetry === nextProps.onAssistantUiRetry
     && prevProps.onTaskCollaborationSubmit === nextProps.onTaskCollaborationSubmit
 ));
 

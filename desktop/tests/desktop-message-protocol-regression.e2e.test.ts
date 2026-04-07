@@ -644,7 +644,7 @@ test.describe('desktop message protocol regression', () => {
 
         await expect(page.getByText('已从 skillhub 安装并启用技能')).toHaveCount(1);
         await expect(page.getByText('skill-vetter', { exact: true })).toHaveCount(1);
-        await expect(page.locator('main').getByText(latestFollowUp)).toBeVisible();
+        await expect(page.getByRole('heading', { name: latestFollowUp, exact: true })).toBeVisible();
         await expect(page.getByText('原始任务：')).toHaveCount(0);
         await expect(page.getByText('用户路由：')).toHaveCount(0);
     });
