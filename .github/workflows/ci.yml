@@ -32,7 +32,7 @@ jobs:
         run: npm run test:codex -- --mode pr --subset sidecar
 
       - name: Upload Codex PR sidecar report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-test-pr-sidecar
           path: artifacts/codex-test/**
@@ -60,7 +60,7 @@ jobs:
         run: npm run test:codex -- --mode pr --subset desktop
 
       - name: Upload Codex PR desktop report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-test-pr-desktop
           path: artifacts/codex-test/**
@@ -96,7 +96,7 @@ jobs:
         run: npm run test:codex -- --mode pr --subset desktop-e2e
 
       - name: Upload Codex PR desktop E2E report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-test-pr-desktop-e2e
           path: artifacts/codex-test/**
@@ -157,7 +157,7 @@ jobs:
         run: npx tauri build --target ${{ matrix.target }}
 
       - name: Upload CI desktop bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coworkany-ci-${{ matrix.artifact_name }}
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
