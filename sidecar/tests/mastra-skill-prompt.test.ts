@@ -2,6 +2,62 @@ import { describe, expect, test } from 'bun:test';
 import { buildSkillPromptFromStore } from '../src/mastra/skillPrompt';
 
 describe('skill prompt resolver', () => {
+    test('prefers user-installed domain-relevant skills for market queries even without direct trigger match', () => {
+        const output = buildSkillPromptFromStore({
+            list: () => [
+                {
+                    manifest: {
+                        name: 'stock-pro-research',
+                        description: 'Professional finance and stock signal analysis',
+                        tags: ['finance', 'market'],
+                        dependencies: [],
+                    },
+                    enabled: true,
+                    isBuiltin: false,
+                },
+                {
+                    manifest: {
+                        name: 'stock-research',
+                        description: 'Builtin stock analysis helper',
+                        tags: ['builtin', 'finance'],
+                        dependencies: [],
+                    },
+                    enabled: true,
+                    isBuiltin: true,
+                },
+            ] as any,
+            findByTrigger: () => [] as any,
+            get: (skillId: string) => {
+                const registry: Record<string, { manifest: { name: string; description: string; tags: string[] }; enabled: boolean; isBuiltin: boolean }> = {
+                    'stock-pro-research': {
+                        manifest: {
+                            name: 'stock-pro-research',
+                            description: 'Professional finance and stock signal analysis',
+                            tags: ['finance', 'market'],
+                        },
+                        enabled: true,
+                        isBuiltin: false,
+                    },
+                    'stock-research': {
+                        manifest: {
+                            name: 'stock-research',
+                            description: 'Builtin stock analysis helper',
+                            tags: ['builtin', 'finance'],
+                        },
+                        enabled: true,
+                        isBuiltin: true,
+                    },
+                };
+                return registry[skillId] as any;
+            },
+        } as any, {
+            userMessage: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+        });
+
+        expect(output.enabledSkillIds[0]).toBe('stock-pro-research');
+        expect(output.enabledSkillIds).toContain('stock-research');
+    });
+
     test('merges explicit and trigger-matched skills into a prompt block', () => {
         const output = buildSkillPromptFromStore({
             list: () => [

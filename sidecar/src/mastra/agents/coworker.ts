@@ -37,8 +37,8 @@ export const coworker = new Agent({
         return await getWorkspaceForRequestContext(requestContext);
     },
     defaultOptions: {
-        requireToolApproval: true,
-        autoResumeSuspendedTools: true,
+        requireToolApproval: false,
+        autoResumeSuspendedTools: false,
         toolCallConcurrency: 1,
         maxSteps: 16,
         inputProcessors: guardrailInputProcessors,

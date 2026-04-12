@@ -12,6 +12,7 @@ import { detectDependencyCycles, verifyAndDemotePlugins } from './pluginDependen
 import {
     getMcpConnectionSnapshot,
     getMcpSecuritySnapshot,
+    listMcpToolsetsSafe,
     refreshMcpConnections,
     removeMcpServerDefinition,
     setMcpServerApprovalPolicy,
@@ -19,6 +20,9 @@ import {
     upsertMcpServerDefinition,
 } from './mcp/clients';
 import { downloadMcpFromGitHub, downloadSkillFromGitHub } from '../utils/githubDownloader';
+import { globalToolRegistry } from '../tools/registry';
+import { STANDARD_TOOLS } from '../tools/standard';
+import { describeRuntimeToolpackState } from './runtimeToolCatalog';
 import {
     applyManagedSettingsFiles,
     ManagedSettingsSyncStore,
@@ -476,6 +480,10 @@ export function createMastraAdditionalCommandHandler(input?: {
     const workspaceStore = createWorkspaceStoreFacade(() => getResolvedAppDataRoot(appDataRoot));
     const directiveManager = new DirectiveManager(workspaceRoot);
     const managedSettingsSyncStore = new ManagedSettingsSyncStore(getResolvedAppDataRoot(appDataRoot));
+    const resolveInternalToolDefinition = (toolName: string) => (
+        globalToolRegistry.getTool(toolName)
+        ?? STANDARD_TOOLS.find((tool) => tool.name === toolName)
+    );
     registerFilesystemSkills(runtime.skillStore, runtime.workspaceRoot);
     const handler: AdditionalCommandHandler = async (raw: unknown) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -806,6 +814,19 @@ export function createMastraAdditionalCommandHandler(input?: {
             getPluginPolicySnapshot: runtime.getPluginPolicySnapshot,
             downloadSkillFromGitHub,
             downloadMcpFromGitHub,
+            resolveRuntimeToolpackState: async (toolpack) => {
+                const [mcpSecuritySnapshot, mcpToolsets] = await Promise.all([
+                    Promise.resolve(getMcpSecuritySnapshot()),
+                    listMcpToolsetsSafe().catch(() => ({})),
+                ]);
+                return describeRuntimeToolpackState({
+                    toolpack,
+                    resolveTool: resolveInternalToolDefinition,
+                    mcpToolsets,
+                    mcpAllowedServerIds: mcpSecuritySnapshot.allowedServerIds,
+                    mcpBlockedServerIds: mcpSecuritySnapshot.blockedServerIds,
+                });
+            },
             importSkillFromDirectory: async (
                 inputPath: string,
                 autoInstallDependencies = true,

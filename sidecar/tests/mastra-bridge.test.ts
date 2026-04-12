@@ -168,4 +168,25 @@ describe('mastra bridge mapping', () => {
             content: 'final response from uiMessages',
         });
     });
+
+    test('maps agent-execution-event-* wrapper approval chunks', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'agent-execution-event-tool-call-approval',
+            payload: {
+                toolCallId: 'call-agent-wrapper',
+                toolName: 'agent-researcher',
+                args: { prompt: 'wrapped approval' },
+                resumeSchema: '{"type":"object"}',
+            },
+        }, 'run-7');
+
+        expect(event).toEqual({
+            type: 'approval_required',
+            runId: 'run-7',
+            toolCallId: 'call-agent-wrapper',
+            toolName: 'agent-researcher',
+            args: { prompt: 'wrapped approval' },
+            resumeSchema: '{"type":"object"}',
+        });
+    });
 });

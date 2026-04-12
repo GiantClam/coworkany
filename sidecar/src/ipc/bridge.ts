@@ -61,11 +61,108 @@ export interface MastraChunkLike {
     payload?: unknown;
     [key: string]: unknown;
 }
+
+const AGENT_EXECUTION_EVENT_PREFIX = 'agent-execution-event-';
+const DATA_EVENT_PREFIX = 'data-';
+
 function toRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return null;
     }
     return value as Record<string, unknown>;
+}
+
+function normalizeChunkType(rawType: unknown): string | null {
+    if (typeof rawType !== 'string') {
+        return null;
+    }
+    const normalized = rawType.trim();
+    return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeMastraChunk(chunk: MastraChunkLike): MastraChunkLike {
+    let type = normalizeChunkType(chunk.type);
+    let payload = chunk.payload;
+    if (!type) {
+        return chunk;
+    }
+
+    const payloadRecord = toRecord(payload);
+    if (type === 'agent-execution-event' || type.startsWith(AGENT_EXECUTION_EVENT_PREFIX)) {
+        const prefixedType = type.startsWith(AGENT_EXECUTION_EVENT_PREFIX)
+            ? normalizeChunkType(type.slice(AGENT_EXECUTION_EVENT_PREFIX.length))
+            : null;
+        let nestedType = prefixedType;
+        let nestedPayload = payload;
+
+        const nestedEventRecord = payloadRecord ? toRecord(payloadRecord.event) : null;
+        if (nestedEventRecord) {
+            nestedType = normalizeChunkType(nestedEventRecord.type) ?? nestedType;
+            nestedPayload = Object.prototype.hasOwnProperty.call(nestedEventRecord, 'payload')
+                ? nestedEventRecord.payload
+                : nestedEventRecord;
+        } else if (payloadRecord) {
+            nestedType = normalizeChunkType(payloadRecord.type) ?? nestedType;
+            nestedPayload = Object.prototype.hasOwnProperty.call(payloadRecord, 'payload')
+                ? payloadRecord.payload
+                : payloadRecord;
+        }
+
+        if (nestedType) {
+            type = nestedType;
+            payload = nestedPayload;
+        }
+    }
+
+    if (type.startsWith(DATA_EVENT_PREFIX)) {
+        const strippedType = normalizeChunkType(type.slice(DATA_EVENT_PREFIX.length));
+        if (strippedType) {
+            type = strippedType;
+        }
+    }
+
+    return {
+        ...chunk,
+        type,
+        payload,
+    };
+}
+
+function resolveNormalizedChunkType(chunk: MastraChunkLike): string | null {
+    return normalizeChunkType(normalizeMastraChunk(chunk).type);
+}
+
+const STREAM_PROGRESS_EVENT_TYPES = new Set([
+    'start',
+    'step-start',
+    'step-finish',
+    'finish',
+    'text-delta',
+    'reasoning',
+    'reasoning-delta',
+    'tool-call',
+    'tool-call-approval',
+    'tool-call-suspended',
+    'tool-result',
+    'tool-input-start',
+    'tool-input-delta',
+    'tool-input-available',
+]);
+
+export function isMastraOperationalProgressChunk(chunk: MastraChunkLike): boolean {
+    const normalizedType = resolveNormalizedChunkType(chunk);
+    if (!normalizedType) {
+        return false;
+    }
+    if (STREAM_PROGRESS_EVENT_TYPES.has(normalizedType)) {
+        return true;
+    }
+    if (normalizedType.startsWith('tool-') || normalizedType.startsWith('step-')) {
+        return true;
+    }
+    return normalizedType.endsWith('-delta')
+        || normalizedType.endsWith('-start')
+        || normalizedType.endsWith('-finish');
 }
 function getNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -242,10 +339,11 @@ export function extractMastraFinalAssistantTextEvent(
     chunk: MastraChunkLike,
     runId?: string,
 ): DesktopEvent | null {
-    if (chunk.type !== 'finish') {
+    const normalizedChunk = normalizeMastraChunk(chunk);
+    if (normalizedChunk.type !== 'finish') {
         return null;
     }
-    const data = resolveChunkData(chunk);
+    const data = resolveChunkData(normalizedChunk);
     if (!data) {
         return null;
     }
@@ -297,10 +395,11 @@ export function extractMastraTokenUsageEvent(
     chunk: MastraChunkLike,
     runId?: string,
 ): DesktopEvent | null {
-    if (chunk.type !== 'step-finish' && chunk.type !== 'finish') {
+    const normalizedChunk = normalizeMastraChunk(chunk);
+    if (normalizedChunk.type !== 'step-finish' && normalizedChunk.type !== 'finish') {
         return null;
     }
-    const data = resolveChunkData(chunk);
+    const data = resolveChunkData(normalizedChunk);
     if (!data) {
         return null;
     }
@@ -328,22 +427,23 @@ export function extractMastraTokenUsageEvent(
     };
 }
 export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: string): DesktopEvent | null {
-    const data = resolveChunkData(chunk);
+    const normalizedChunk = normalizeMastraChunk(chunk);
+    const data = resolveChunkData(normalizedChunk);
     if (!data) {
-        if (chunk.type === 'finish') {
+        if (normalizedChunk.type === 'finish') {
             return { type: 'complete', runId };
         }
         return null;
     }
-    switch (chunk.type) {
+    switch (normalizedChunk.type) {
         case 'text-delta': {
-            const text = resolveStreamTextDelta(chunk, data);
+            const text = resolveStreamTextDelta(normalizedChunk, data);
             if (!text) return null;
             return { type: 'text_delta', content: text, runId, role: 'assistant' };
         }
         case 'reasoning':
         case 'reasoning-delta': {
-            const text = resolveStreamTextDelta(chunk, data);
+            const text = resolveStreamTextDelta(normalizedChunk, data);
             if (!text) return null;
             return { type: 'text_delta', content: text, runId, role: 'thinking' };
         }

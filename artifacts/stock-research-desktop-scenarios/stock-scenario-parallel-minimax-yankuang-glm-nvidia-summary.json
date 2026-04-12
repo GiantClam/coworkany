@@ -16,41 +16,62 @@
     "scenarioId": "parallel-minimax-yankuang-glm-nvidia",
     "query": "请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA",
     "submitted": true,
-    "taskFinished": true,
+    "taskFinished": false,
     "taskFailed": false,
     "taskFailedError": "",
-    "searchWebCallCount": 0,
-    "adviceKeywordHits": [],
-    "predictionKeywordHits": [],
+    "searchWebCallCount": 4,
+    "adviceKeywordHits": [
+      "买入",
+      "卖出",
+      "持有",
+      "建议"
+    ],
+    "predictionKeywordHits": [
+      "预测",
+      "未来",
+      "走势",
+      "概率"
+    ],
     "entityCoverage": [
       {
         "id": "minimax",
         "displayName": "MiniMax",
-        "matchedAliases": []
+        "matchedAliases": [
+          "minimax"
+        ]
       },
       {
         "id": "yankuang",
         "displayName": "兖矿能源",
-        "matchedAliases": []
+        "matchedAliases": [
+          "兖矿能源",
+          "yankuang"
+        ]
       },
       {
         "id": "glm",
         "displayName": "GLM",
-        "matchedAliases": []
+        "matchedAliases": [
+          "glm",
+          "智谱"
+        ]
       },
       {
         "id": "nvidia",
         "displayName": "NVIDIA",
-        "matchedAliases": []
+        "matchedAliases": [
+          "nvidia",
+          "nvda"
+        ]
       }
     ],
-    "allEntitiesCovered": false,
+    "allEntitiesCovered": true,
     "markerSeen": true,
-    "readyForFollowUpSeen": true,
-    "completedBySilence": false,
+    "readyForFollowUpSeen": false,
+    "completedBySilence": true,
     "completed": true,
     "externalFailure": false,
-    "evidenceTextLength": 48,
-    "rawLogLength": 63988
+    "evidenceTextLength": 20895,
+    "rawLogLength": 20895
   }
 }

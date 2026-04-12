@@ -1,1404 +1,200 @@
 start_task command received
 send_task_message command received
-Sending to sidecar: {"id":"0cf245be-669c-48db-9e09-771113720fad","timestamp":"2026-04-04T17:02:55.122Z","type":"start_task","payload":{"taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","title":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖","userQuery":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","context":{"workspacePath":"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace","displayText":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","environmentContext":{"platform":"macos","arch":"arm64","appDir":"/Users/beihuang/Documents/github/coworkany/desktop","appDataDir":"/Users/beihuang/Library/Application Support/com.coworkany.desktop","shell":"/bin/zsh","sidecarLaunchMode":"development","python":{"available":false,"source":"not_required_in_mastra_single_process"},"skillhub":{"available":true,"path":"/Users/beihuang/.local/bin/skillhub","source":"path_lookup"},"managedServices":[]}},"config":{"executionPath":"direct","enabledClaudeSkills":[],"enabledToolpacks":[],"enabledSkills":[],"voiceProviderMode":"auto","disabledTools":["install_coworkany_skill_from_marketplace","search_coworkany_skill_marketplace"]}}}
-Received from sidecar: {"type":"TASK_STARTED","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"turnId":"0cf245be-669c-48db-9e09-771113720fad","title":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖","description":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","context":{"workspacePath":"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace","userQuery":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","mode":"chat"}}}
-Received from sidecar: {"type":"start_task_response","commandId":"0cf245be-669c-48db-9e09-771113720fad","timestamp":"2026-04-04T17:02:55.139Z","payload":{"success":true,"taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","accepted":true,"queuePosition":0,"turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"我","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"会","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"先","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"并","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"行","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"检","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TEXT_DELTA","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"delta":"索","role":"assistant","messageId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","correlationId":"stream:7cf482f5-aeab-4203-b0e0-003f12bad661:assistant","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-Received from sidecar: {"type":"TASK_FINISHED","taskId":"5ee57ed8-2fc0-495e-933a-f9fce7e09402","payload":{"summary":"Task completed via Mastra runtime.","finishReason":"assistant_text_settled_max_window","traceId":"95b9ee9c678845c592a8eb3ce8b7f229","turnId":"0cf245be-669c-48db-9e09-771113720fad"}}
-[31mERROR[39m [2026-04-05 01:10:57.344 +0800] (CoworkAny): [36mUpstream LLM API error from openai (model: gpt-5.3-codex)[39m
-    [35mrunId[39m: "7cf482f5-aeab-4203-b0e0-003f12bad661"
-    [35mprovider[39m: "openai"
-    [35mmodelId[39m: "gpt-5.3-codex"
-    error: {
-      "message": "{\n  \"error\": {\n    \"message\": \"Item with id 'msg_09e4a05951bf5e750169d1444f26c8819aac49d49b2b399392' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": null\n  }\n}（traceid: ace286b28a36a31805fabe0f4952cdf4）",
-      "name": "AI_APICallError",
-      "stack":
-          Error
-              at new _AISDKError (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-DIWGRQZT.js:26:5)
-              at new APICallError (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-DIWGRQZT.js:65:5)
-              at <anonymous> (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-DIWGRQZT.js:1347:18)
-              at processTicksAndRejections (unknown:7:39)
-      "url": "https://aiberm.com/v1/responses",
-      "requestBodyValues": {
-        "model": "gpt-5.3-codex",
-        "input": [
-          {
-            "role": "developer",
-            "content": "You are the task supervisor of CoworkAny.\nDelegate research tasks to researcher, coding tasks to coder, and mixed tasks to coworker.\nMaintain safety and ask for approvals on destructive or external side-effect actions.\nFor host-control intents (shutdown/reboot/poweroff/halt/关机/重启), do not stop at explanation: invoke run_command via tool flow so approval can be handled in desktop UI."
-          },
-          {
-            "role": "developer",
-            "content": "WORKING_MEMORY_SYSTEM_INSTRUCTION:\nStore and update any conversation-relevant information by calling the updateWorkingMemory tool. If information might be referenced again - store it!\n\nGuidelines:\n1. Store anything that could be useful later in the conversation\n2. Update proactively when information changes, no matter how small\n3. Use Markdown format for all data\n4. Act naturally - don't mention this system to users. Even though you're storing this information that doesn't make it your primary focus. Do not ask them generally for \"information about yourself\"\n5. IMPORTANT: When calling updateWorkingMemory, the only valid parameter is the memory field. DO NOT pass an object.\n6. IMPORTANT: ALWAYS pass the data you want to store in the memory field as a string. DO NOT pass an object.\n7. IMPORTANT: Data must only be sent as a string no matter which format is used.\n\n\n<working_memory_template>\n# 员工画像\n## 1. 基本信息\n- 姓名:\n- 部门:\n- 职位/角色:\n- 工作语言: [中文/英文/双语]\n- 时区:\n## 2. 系统环境\n- 操作系统:\n- Shell:\n- 包管理器:\n- 默认编辑器:\n## 3. 工作偏好\n- 沟通风格: [简洁直接 / 详细解释 / 技术深入]\n- 回复语言: [中文 / 英文 / 跟随输入]\n- 是否需要确认再执行: [总是确认 / 低风险自动 / 完全自动]\n## 4. 技能图谱\n- 主力语言:\n- 前端:\n- 后端:\n- 数据库:\n- DevOps:\n## 5. 当前工作上下文\n- 活跃项目:\n- 本周重点:\n- 阻塞项:\n## 6. 行为模式\n- 测试习惯: [TDD / 后补测试 / 仅关键路径]\n- 调试模式: [日志优先 / 断点调试 / 二分法]\n- 分支命名:\n## 7. 知识沉淀\n- 学到的经验:\n- 踩过的坑:\n- 个人最佳实践:\n## 元数据\n- 画像版本: 1\n- 首次创建:\n- 最后更新:\n- 共享范围: [仅个人]\n</working_memory_template>\n\n\n\n\n<working_memory_data>\nnull\n</working_memory_data>\n\nNotes:\n- Update memory whenever referenced information changes\n- If you're unsure whether to store something, store it (eg if the user tells you information about themselves, call updateWorkingMemory immediately to update it)\n- This system is here so that you can maintain the conversation when your context window is very short. Update your working memory because you may need it to maintain the conversation without the full conversation history\n- Do not remove empty sections - you must include the empty sections along with the ones you're filling in\n- REMEMBER: the way you update your working memory is by calling the updateWorkingMemory tool with the entire Markdown content. The system will store it for you. The user will not see it.\n- IMPORTANT: You MUST call updateWorkingMemory in every response to a prompt where you received relevant information.\n- IMPORTANT: Preserve the Markdown formatting structure above while updating the content."
-          },
-          {
-            "role": "developer",
-            "content": "Local command execution. Working directory: \"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace\".\n\nLocal filesystem at \"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace\". Relative paths resolve from this directory. File access is restricted to this directory."
-          },
-          {
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": "请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA"
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 3ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 2ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 2ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 1ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 5ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 2ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 8ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 4ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 2ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "#### Completion Check Results\n\nOverall: ❌ NOT COMPLETE\nDuration: 2ms\n\n**coworkany-loop-has-answer** (coworkany-loop-has-answer)\nScore: 0 ❌\n\n**coworkany-loop-tools-settled** (coworkany-loop-tools-settled)\nScore: 1 ✅\n\n**coworkany-loop-iteration-guard** (coworkany-loop-iteration-guard)\nScore: 0 ❌\n\n🔄 The task is not yet complete. Please continue working based on the feedback above."
-              }
-            ]
-          },
-          {
-            "role": "assistant",
-            "content": [
-              {
-                "type": "output_text",
-                "text": "No meaningful progress detected. Stop and provide current findings plus blockers."
-              }
-            ]
-          },
-          {
-            "type": "item_reference",
-            "id": "msg_09e4a05951bf5e750169d1444f26c8819aac49d49b2b399392"
-          }
-        ],
-        "store": true,
-        "tools": [
-          {
-            "type": "function",
-            "name": "updateWorkingMemory",
-            "description": "Update the working memory with new information. Any data not included will be overwritten. Always pass data as string to the memory field. Never pass an object.",
-            "parameters": {
-              "type": "object",
-              "properties": {
-                "memory": {
-                  "type": "string",
-                  "description": "The Markdown formatted working memory content to store. This MUST be a string. Never pass an object."
-                }
-              },
-              "required": [
-Received from sidecar: "memory"
-                "memory"
-              ],
-              "additionalProperties": false,
-              "$schema": "http://json-schema.org/draft-07/schema#"
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "agent-coworker",
-            "description": "Enterprise-grade digital coworker for personal and team tasks.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "prompt": {
-                  "description": "The prompt to send to the agent",
-                  "type": "string"
-                },
-                "threadId": {
-                  "anyOf": [
-                    {
-                      "description": "Thread ID for conversation continuity for memory messages",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resourceId": {
-                  "anyOf": [
-                    {
-                      "description": "Resource/user identifier for memory messages",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "instructions": {
-                  "anyOf": [
-                    {
-                      "description": "Additional instructions to append to the agent instructions. Only provide if you have specific guidance beyond what the agent already knows. Leave empty in most cases.",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "maxSteps": {
-                  "anyOf": [
-                    {
-                      "description": "Maximum number of execution steps for the sub-agent",
-                      "type": [
-                        "number",
-Received from sidecar: "null"
-                        "null"
-                      ],
-                      "minimum": 3
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "prompt",
-                "threadId",
-                "resourceId",
-                "instructions",
-                "maxSteps",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "agent-researcher",
-            "description": "Collects and synthesizes information with reliable evidence.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "prompt": {
-                  "description": "The prompt to send to the agent",
-                  "type": "string"
-                },
-                "threadId": {
-                  "anyOf": [
-                    {
-                      "description": "Thread ID for conversation continuity for memory messages",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resourceId": {
-                  "anyOf": [
-                    {
-                      "description": "Resource/user identifier for memory messages",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "instructions": {
-                  "anyOf": [
-                    {
-                      "description": "Additional instructions to append to the agent instructions. Only provide if you have specific guidance beyond what the agent already knows. Leave empty in most cases.",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "maxSteps": {
-                  "anyOf": [
-                    {
-                      "description": "Maximum number of execution steps for the sub-agent",
-                      "type": [
-                        "number",
-Received from sidecar: "null"
-                        "null"
-                      ],
-                      "minimum": 3
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "prompt",
-                "threadId",
-                "resourceId",
-                "instructions",
-                "maxSteps",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "agent-coder",
-            "description": "Implements and validates code changes with tests.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "prompt": {
-                  "description": "The prompt to send to the agent",
-                  "type": "string"
-                },
-                "threadId": {
-                  "anyOf": [
-                    {
-                      "description": "Thread ID for conversation continuity for memory messages",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resourceId": {
-                  "anyOf": [
-                    {
-                      "description": "Resource/user identifier for memory messages",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "instructions": {
-                  "anyOf": [
-                    {
-                      "description": "Additional instructions to append to the agent instructions. Only provide if you have specific guidance beyond what the agent already knows. Leave empty in most cases.",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "maxSteps": {
-                  "anyOf": [
-                    {
-                      "description": "Maximum number of execution steps for the sub-agent",
-                      "type": [
-                        "number",
-Received from sidecar: "null"
-                        "null"
-                      ],
-                      "minimum": 3
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "prompt",
-                "threadId",
-                "resourceId",
-                "instructions",
-                "maxSteps",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_read_file",
-            "description": "Read the contents of a file from the workspace filesystem. Use offset/limit parameters to read specific line ranges for large files.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "The path to the file to read (e.g., \"/data/config.json\")",
-                  "type": "string"
-                },
-                "encoding": {
-                  "anyOf": [
-                    {
-                      "description": "The encoding to use when reading the file. Defaults to utf-8 for text files.",
-                      "type": "string",
-                      "enum": [
-                        "utf-8",
-                        "utf8",
-                        "base64",
-                        "hex",
-Received from sidecar: "binary"
-                        "binary"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "offset": {
-                  "anyOf": [
-                    {
-                      "description": "Line number to start reading from (1-indexed). If omitted, starts from line 1.",
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "limit": {
-                  "anyOf": [
-                    {
-                      "description": "Maximum number of lines to read. If omitted, reads to the end of the file.",
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "showLineNumbers": {
-                  "description": "Whether to prefix each line with its line number (default: true)",
-                  "default": true,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "encoding",
-                "offset",
-                "limit",
-                "showLineNumbers",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_write_file",
-            "description": "Write content to a file in the workspace filesystem. Creates parent directories if needed.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "The path where to write the file (e.g., \"/data/output.txt\")",
-                  "type": "string"
-                },
-                "content": {
-                  "description": "The content to write to the file",
-                  "type": "string"
-                },
-                "overwrite": {
-                  "description": "Whether to overwrite the file if it already exists",
-                  "default": true,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "content",
-                "overwrite",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_edit_file",
-            "description": "Edit a file by replacing specific text. The old_string must match exactly and be unique in the file.\n\nUsage:\n- Read the file first to get the exact text to replace.\n- By default, read file output includes line number prefixes (e.g., \"     1→\"). Ensure you preserve the exact indentation as it appears AFTER the arrow. Never include any part of the line number prefix in old_string or new_string.\n- Include enough surrounding context (multiple lines) to make old_string unique. If it still isn't unique, include more lines.\n- Use replace_all only when intentionally replacing all occurrences.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "The path to the file to edit",
-                  "type": "string"
-                },
-                "old_string": {
-                  "description": "The exact text to find and replace. Must be unique in the file.",
-                  "type": "string"
-                },
-                "new_string": {
-                  "description": "The text to replace old_string with",
-                  "type": "string"
-                },
-                "replace_all": {
-                  "description": "If true, replace all occurrences. If false (default), old_string must be unique.",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "old_string",
-                "new_string",
-                "replace_all",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_list_files",
-            "description": "List files and directories in the workspace filesystem.\nReturns a compact tab-indented listing for efficient token usage.\nOptions mirror common tree command flags for familiarity.\n\nExamples:\n- List workspace root: { path: \".\" }\n- Deep listing: { path: \"src\", maxDepth: 5 }\n- Directories only: { path: \".\", dirsOnly: true }\n- Exclude node_modules: { path: \".\", exclude: \"node_modules\" }\n- Find TypeScript files: { path: \"src\", pattern: \"**/*.ts\" }\n- Find config files: { path: \".\", pattern: \"*.config.{js,ts}\" }\n- Multiple patterns: { path: \".\", pattern: [\"**/*.ts\", \"**/*.tsx\"] }",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "Directory path to list",
-                  "default": ".",
-                  "type": "string"
-                },
-                "maxDepth": {
-                  "description": "Maximum depth to descend (default: 2). Similar to tree -L flag.",
-                  "default": 2,
-                  "type": "number"
-                },
-                "showHidden": {
-                  "description": "Show hidden files starting with \".\" (default: false). Similar to tree -a flag.",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "dirsOnly": {
-                  "description": "List directories only, no files (default: false). Similar to tree -d flag.",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "exclude": {
-                  "anyOf": [
-                    {
-                      "description": "Pattern to exclude (e.g., \"node_modules\"). Similar to tree -I flag.",
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "extension": {
-                  "anyOf": [
-                    {
-                      "description": "Filter by file extension (e.g., \".ts\"). Similar to tree -P flag.",
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "pattern": {
-                  "description": "Glob pattern(s) to filter files. Examples: \"**/*.ts\", \"src/**/*.test.ts\", \"*.config.{js,ts}\". Directories always pass through.",
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    }
-                  ]
-                },
-                "respectGitignore": {
-                  "description": "Respect .gitignore in the listed directory (default: true).",
-                  "default": true,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "maxDepth",
-                "showHidden",
-                "dirsOnly",
-                "exclude",
-                "extension",
-                "pattern",
-                "respectGitignore",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_delete",
-            "description": "Delete a file or directory from the workspace filesystem",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "The path to the file or directory to delete",
-                  "type": "string"
-                },
-                "recursive": {
-                  "description": "If true, delete directories and their contents recursively. Required for non-empty directories.",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "recursive",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_file_stat",
-            "description": "Get file or directory metadata from the workspace. Returns existence, type, size, and modification time.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "The path to check",
-                  "type": "string"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_mkdir",
-            "description": "Create a directory in the workspace filesystem",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "The path of the directory to create",
-                  "type": "string"
-                },
-                "recursive": {
-                  "description": "Whether to create parent directories if they do not exist",
-                  "default": true,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "recursive",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_grep",
-            "description": "Search file contents using a regex pattern. Walks the filesystem and returns matching lines with file paths and line numbers.\n\nUsage:\n- Basic search: { pattern: \"TODO\" }\n- Regex: { pattern: \"function\\s+\\w+\\(\" }\n- Multiple terms: { pattern: \"TODO|FIXME|HACK\" }\n- Case-insensitive: { pattern: \"error\", caseSensitive: false }\n- Search in directory: { pattern: \"import\", path: \"./src\" }\n- Filter by glob: { pattern: \"import\", path: \"**/*.ts\" }\n- Combined path + glob: { pattern: \"import\", path: \"src/**/*.ts\" }\n- Multiple file types: { pattern: \"import\", path: \"**/*.{ts,tsx,js}\" }\n- Multiple directories: { pattern: \"TODO\", path: \"{src,lib}/**/*.ts\" }\n- With context: { pattern: \"function\", contextLines: 2 }",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "pattern": {
-                  "description": "Regex pattern to search for",
-                  "type": "string"
-                },
-                "path": {
-                  "description": "File, directory, or glob pattern to search within (default: \".\"). A plain path searches that file or directory. A glob pattern (e.g., \"**/*.ts\", \"src/**/*.test.ts\") filters which files to search.",
-                  "default": ".",
-                  "type": "string"
-                },
-                "contextLines": {
-                  "description": "Number of lines of context to include before and after each match (default: 0)",
-                  "default": 0,
-                  "type": "number"
-                },
-                "maxCount": {
-                  "anyOf": [
-                    {
-                      "description": "Maximum matches per file. Moves on to the next file after this many matches. Similar to grep -m flag.",
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "caseSensitive": {
-                  "description": "Whether the search is case-sensitive (default: true)",
-                  "default": true,
-                  "type": "boolean"
-                },
-                "includeHidden": {
-                  "description": "Include hidden files and directories (names starting with \".\") in the search (default: false)",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "pattern",
-                "path",
-                "contextLines",
-                "maxCount",
-                "caseSensitive",
-                "includeHidden",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_execute_command",
-            "description": "Execute a shell command in the workspace sandbox.\n\nExamples:\n  \"npm install && npm run build\"\n  \"ls -la src/\"\n  \"cat config.json | jq '.database'\"\n  \"cd /app && python main.py\"\n\nUsage:\n- Commands run in a shell, so pipes, redirects, and chaining (&&, ||, ;) all work.\n- Always quote file paths that contain spaces (e.g., cd \"/path/with spaces\").\n- Use the timeout parameter (in seconds) to limit execution time. Behavior when omitted depends on the sandbox provider.\n- Optionally use cwd to override the working directory. Commands run from the sandbox default if omitted.\n\nSet background: true to run long-running commands (dev servers, watchers) without blocking. You'll get a PID to track the process.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "command": {
-                  "description": "The shell command to execute (e.g., \"npm install\", \"ls -la src/\", \"cat file.txt | grep error\")",
-                  "type": "string"
-                },
-                "timeout": {
-                  "anyOf": [
-                    {
-                      "description": "Maximum execution time in seconds. Example: 60 for 1 minute.",
-                      "type": [
-                        "number",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "cwd": {
-                  "anyOf": [
-                    {
-                      "description": "Working directory for the command",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "tail": {
-                  "anyOf": [
-                    {
-                      "description": "For foreground commands: limit output to the last N lines, similar to tail -n. Defaults to 200. Use 0 for no limit.",
-                      "type": [
-                        "number",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "background": {
-                  "anyOf": [
-                    {
-                      "description": "Run the command in the background. Returns a PID immediately instead of waiting for completion. Use get_process_output to check on it later.",
-                      "type": "boolean"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "command",
-                "timeout",
-                "cwd",
-                "tail",
-                "background",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_get_process_output",
-            "description": "Get the current output (stdout, stderr) and status of a background process by its PID.\n\nUse this after starting a background command with execute_command (background: true) to check if the process is still running and read its output.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "pid": {
-                  "description": "The process ID returned when the background command was started",
-                  "type": "string"
-                },
-                "tail": {
-                  "anyOf": [
-                    {
-                      "description": "Number of lines to return, similar to tail -n. Positive or negative returns last N lines from end. Defaults to 200. Use 0 for no limit.",
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "wait": {
-                  "anyOf": [
-                    {
-                      "description": "If true, block until the process exits and return the final output. Useful for short-lived background commands where you want to wait for the result.",
-                      "type": "boolean"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "pid",
-                "tail",
-                "wait",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_kill_process",
-            "description": "Kill a background process by its PID.\n\nUse this to stop a long-running background process that was started with execute_command (background: true). Returns the last 50 lines of output.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "pid": {
-                  "description": "The process ID of the background process to kill",
-                  "type": "string"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "pid",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          },
-          {
-            "type": "function",
-            "name": "mastra_workspace_lsp_inspect",
-            "description": "Inspect code at a specific symbol position using the Language Server Protocol. Provide an absolute file path, a 1-indexed line number, and the exact line content with <<< marking the cursor position. Exactly one <<< marker is required. Returns hover information, any diagnostics reported on that line, plus definition and implementation locations when available. Use this for type information, symbol navigation, and go-to-definition; use view to read the surrounding implementation.",
-            "parameters": {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "properties": {
-                "path": {
-                  "description": "Absolute path to the file",
-                  "type": "string"
-                },
-                "line": {
-                  "description": "Line number (1-indexed)",
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "match": {
-                  "description": "Line content with <<< marking the cursor position. Exactly one <<< marker is required. Example: \"const foo = <<<bar()\" means cursor is at bar",
-                  "type": "string"
-                },
-                "suspendedToolRunId": {
-                  "anyOf": [
-                    {
-                      "description": "The runId of the suspended tool",
-                      "type": [
-                        "string",
-Received from sidecar: "null"
-                        "null"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "resumeData": {
-                  "anyOf": [
-                    {
-                      "description": "The resumeData object created from the resumeSchema of suspended tool"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "path",
-                "line",
-                "match",
-                "suspendedToolRunId",
-Received from sidecar: "resumeData"
-                "resumeData"
-              ],
-              "additionalProperties": false
-            },
-            "strict": false
-          }
-        ],
-        "tool_choice": "auto",
-        "stream": true
-      },
-      "statusCode": 404,
-      "responseHeaders": {
-        "cache-control": "no-cache",
-        "connection": "keep-alive",
-        "content-type": "text/event-stream",
-        "date": "Sat, 04 Apr 2026 17:10:48 GMT",
-        "transfer-encoding": "chunked",
-        "x-accel-buffering": "no",
-        "x-new-api-version": "v0.0.0",
-        "x-oneapi-request-id": "20260404171020139376140cOTQ2zlV"
-      },
-      "responseBody": "{\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"message\\\": \\\"Item with id 'msg_09e4a05951bf5e750169d1444f26c8819aac49d49b2b399392' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.\\\",\\n    \\\"type\\\": \\\"invalid_request_error\\\",\\n    \\\"param\\\": \\\"input\\\",\\n    \\\"code\\\": null\\n  }\\n}（traceid: ace286b28a36a31805fabe0f4952cdf4）\",\"type\":\"invalid_request_error\",\"param\":\"\",\"code\":null}}",
-      "isRetryable": false,
-      "data": {
-        "error": {
-          "message": "{\n  \"error\": {\n    \"message\": \"Item with id 'msg_09e4a05951bf5e750169d1444f26c8819aac49d49b2b399392' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": null\n  }\n}（traceid: ace286b28a36a31805fabe0f4952cdf4）",
-          "type": "invalid_request_error",
-          "param": "",
-          "code": null
-        }
-      }
-    }
+Sending to sidecar: {"id":"e30af8ca-958e-4416-aead-768acbd2852d","timestamp":"2026-04-07T15:01:38.406Z","type":"start_task","payload":{"taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","title":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖","userQuery":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","context":{"workspacePath":"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace","displayText":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","environmentContext":{"platform":"macos","arch":"arm64","appDir":"/Users/beihuang/Documents/github/coworkany/desktop","appDataDir":"/Users/beihuang/Library/Application Support/com.coworkany.desktop","shell":"/bin/zsh","sidecarLaunchMode":"development","python":{"available":false,"source":"not_required_in_mastra_single_process"},"skillhub":{"available":true,"path":"/Users/beihuang/.local/bin/skillhub","source":"path_lookup"},"managedServices":[]}},"config":{"executionPath":"direct","enabledClaudeSkills":[],"enabledToolpacks":[],"enabledSkills":[],"enableChatSkills":false,"voiceProviderMode":"auto","disabledTools":["install_coworkany_skill_from_marketplace","search_coworkany_skill_marketplace"]}}}
+Received from sidecar: {"type":"TASK_STARTED","taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","payload":{"turnId":"e30af8ca-958e-4416-aead-768acbd2852d","title":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖","description":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","context":{"workspacePath":"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace","userQuery":"请并行完成股票检索分析任务：MiniMax、兖矿能源、GLM、NVIDIA\n分析重点：并行给出每个标的的方向性预测与买卖建议\n预测周期：未来 3 个月\n硬性要求：\n1) 必须先检索最新信息，再给结论；\n2) 对每个标的都给出买入/持有/卖出之一；\n3) 对每个标的都给出未来走势预测与主要不确定性；\n4) 输出一个结构化对比表。\n5) 回复末尾附带标记 STOCK_SCENARIO_PARALLEL_MINIMAX_YANKUANG_GLM_NVIDIA","mode":"immediate_task"}}}
+Received from sidecar: {"type":"start_task_response","commandId":"e30af8ca-958e-4416-aead-768acbd2852d","timestamp":"2026-04-07T15:01:38.445Z","payload":{"success":true,"taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","accepted":true,"queuePosition":0,"turnId":"e30af8ca-958e-4416-aead-768acbd2852d"}}
+[PromptInjectionDetector] Detection agent failed, allowing content: [0m[1m23153 |[0m           },
+[0m[1m23154 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23155 |[0m           ...observabilityContext
+[0m[1m23156 |[0m         })[0m[2m;[0m
+[0m[1m23157 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23158 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23158[0m[2m:[33m17[0m
+
+[PIIDetector] Detection agent failed, allowing content: [0m[1m23410 |[0m           },
+[0m[1m23411 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23412 |[0m           ...observabilityContext
+[0m[1m23413 |[0m         })[0m[2m;[0m
+[0m[1m23414 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23415 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23415[0m[2m:[33m17[0m
+
+[ModerationProcessor] Agent moderation failed, allowing content: [0m[1m22927 |[0m           },
+[0m[1m22928 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m22929 |[0m           ...observabilityContext
+[0m[1m22930 |[0m         })[0m[2m;[0m
+[0m[1m22931 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m22932 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m22932[0m[2m:[33m17[0m
+
+Received from sidecar: {"type":"TASK_EVENT","taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","payload":{"type":"tool_call","runId":"601550b9-9cce-49fb-90bc-ddd722e8392c","toolName":"agent-researcher","args":{"prompt":"你是一名证券研究员。请针对“MiniMax（中国AI公司）”做3个月方向性研判。必须先检索最新信息（尽量最近30天内，至少最近90天内），并提供可核验来源（标题+日期+链接）。输出：1) 标的可交易性（是否上市、若未上市给可替代交易标的如相关产业ETF/受益股）；2) 最新基本面与事件驱动；3) 技术面/估值面简述（若有公开数据）；4) 未来3个月走势预测（上涨/震荡/下跌及概率）；5) 买入/持有/卖出三选一建议（若未上市需说明建议适用于可交易替代标的）；6) 主要不确定性（至少3条）；7) 给出一句话结论。请用中文，简洁但信息密度高。"},"traceId":"467bc5b57f60476fa4d8225485840382","turnId":"e30af8ca-958e-4416-aead-768acbd2852d"}}
+Received from sidecar: {"type":"TASK_EVENT","taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","payload":{"type":"tool_call","runId":"601550b9-9cce-49fb-90bc-ddd722e8392c","toolName":"agent-researcher","args":{"prompt":"你是一名证券研究员。请针对“兖矿能源（A/H股）”做3个月方向性研判。必须先检索最新信息（尽量最近30天内，至少最近90天内），并提供可核验来源（标题+日期+链接）。输出：1) 标的信息与代码（A股/H股）；2) 最新基本面（煤价、产销、业绩指引、分红/回购、政策）；3) 技术面/估值面简述；4) 未来3个月走势预测（上涨/震荡/下跌及概率）；5) 买入/持有/卖出三选一建议；6) 主要不确定性（至少3条）；7) 一句话结论。请用中文，简洁但信息密度高。"},"traceId":"467bc5b57f60476fa4d8225485840382","turnId":"e30af8ca-958e-4416-aead-768acbd2852d"}}
+Received from sidecar: {"type":"TASK_EVENT","taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","payload":{"type":"tool_call","runId":"601550b9-9cce-49fb-90bc-ddd722e8392c","toolName":"agent-researcher","args":{"prompt":"你是一名证券研究员。请针对“GLM”先做同名歧义澄清，再选择最可能的股票标的并做3个月方向性研判。候选包括但不限于：Galmed Pharmaceuticals(GLMD)、Global Masters Fund(如有)、与‘智谱GLM’相关但未上市主体。必须先检索最新信息（最近30-90天）并提供来源（标题+日期+链接）。输出：1) 歧义判断与你选择的标的理由；2) 标的信息与代码；3) 最新基本面与事件；4) 未来3个月走势预测（上涨/震荡/下跌及概率）；5) 买入/持有/卖出建议；6) 主要不确定性（至少3条）；7) 一句话结论。中文输出。"},"traceId":"467bc5b57f60476fa4d8225485840382","turnId":"e30af8ca-958e-4416-aead-768acbd2852d"}}
+Received from sidecar: {"type":"TASK_EVENT","taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","payload":{"type":"tool_call","runId":"601550b9-9cce-49fb-90bc-ddd722e8392c","toolName":"agent-researcher","args":{"prompt":"你是一名证券研究员。请针对“NVIDIA（NVDA）”做3个月方向性研判。必须先检索最新信息（尽量最近30天内，至少最近90天内），并提供可核验来源（标题+日期+链接）。输出：1) 标的信息与交易所代码；2) 最新基本面（财报/指引、数据中心需求、供应链、监管）；3) 技术面/估值面简述；4) 未来3个月走势预测（上涨/震荡/下跌及概率）；5) 买入/持有/卖出三选一建议；6) 主要不确定性（至少3条）；7) 一句话结论。中文输出。"},"traceId":"467bc5b57f60476fa4d8225485840382","turnId":"e30af8ca-958e-4416-aead-768acbd2852d"}}
+[PromptInjectionDetector] Detection agent failed, allowing content: [0m[1m23153 |[0m           },
+[0m[1m23154 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23155 |[0m           ...observabilityContext
+[0m[1m23156 |[0m         })[0m[2m;[0m
+[0m[1m23157 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23158 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23158[0m[2m:[33m17[0m
+
+[PromptInjectionDetector] Detection agent failed, allowing content: [0m[1m23153 |[0m           },
+[0m[1m23154 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23155 |[0m           ...observabilityContext
+[0m[1m23156 |[0m         })[0m[2m;[0m
+[0m[1m23157 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23158 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23158[0m[2m:[33m17[0m
+
+[PIIDetector] Detection agent failed, allowing content: [0m[1m23410 |[0m           },
+[0m[1m23411 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23412 |[0m           ...observabilityContext
+[0m[1m23413 |[0m         })[0m[2m;[0m
+[0m[1m23414 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23415 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23415[0m[2m:[33m17[0m
+
+[PIIDetector] Detection agent failed, allowing content: [0m[1m23410 |[0m           },
+[0m[1m23411 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23412 |[0m           ...observabilityContext
+[0m[1m23413 |[0m         })[0m[2m;[0m
+[0m[1m23414 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23415 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23415[0m[2m:[33m17[0m
+
+[ModerationProcessor] Agent moderation failed, allowing content: [0m[1m22927 |[0m           },
+[0m[1m22928 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m22929 |[0m           ...observabilityContext
+[0m[1m22930 |[0m         })[0m[2m;[0m
+[0m[1m22931 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m22932 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m22932[0m[2m:[33m17[0m
+
+[ModerationProcessor] Agent moderation failed, allowing content: [0m[1m22927 |[0m           },
+[0m[1m22928 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m22929 |[0m           ...observabilityContext
+[0m[1m22930 |[0m         })[0m[2m;[0m
+[0m[1m22931 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m22932 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m22932[0m[2m:[33m17[0m
+
+[coworkany-metrics] {"event":"llm_timing","taskId":"783c07d9-9981-4c46-b62c-ce119c3cd510","threadId":"783c07d9-9981-4c46-b62c-ce119c3cd510","turnId":"e30af8ca-958e-4416-aead-768acbd2852d","modelId":"openai/gpt-5.3-codex","provider":"openai","phase":"stream","outcome":"success","attempt":1,"maxAttempts":3,"assistantChars":0,"finishReason":"stream_exhausted","error":null,"timings":{"elapsedMs":77479,"dnsMs":null,"connectMs":null,"ttfbMs":16656,"firstTokenMs":null,"lastTokenMs":null},"proxy":{"before":{"enabled":false,"source":null,"endpoint":null,"noProxy":null},"after":{"enabled":false,"source":null,"endpoint":null,"noProxy":null}},"timestamp":"2026-04-07T15:02:55.971Z"}
+[PromptInjectionDetector] Detection agent failed, allowing content: [0m[1m23153 |[0m           },
+[0m[1m23154 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23155 |[0m           ...observabilityContext
+[0m[1m23156 |[0m         })[0m[2m;[0m
+[0m[1m23157 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23158 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23158[0m[2m:[33m17[0m
+
+[PromptInjectionDetector] Detection agent failed, allowing content: [0m[1m23153 |[0m           },
+[0m[1m23154 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23155 |[0m           ...observabilityContext
+[0m[1m23156 |[0m         })[0m[2m;[0m
+[0m[1m23157 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23158 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23158[0m[2m:[33m17[0m
+
+[PromptInjectionDetector] Detection agent failed, allowing content: [0m[1m23153 |[0m           },
+[0m[1m23154 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23155 |[0m           ...observabilityContext
+[0m[1m23156 |[0m         })[0m[2m;[0m
+[0m[1m23157 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23158 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23158[0m[2m:[33m17[0m
+
+[PIIDetector] Detection agent failed, allowing content: [0m[1m23410 |[0m           },
+[0m[1m23411 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23412 |[0m           ...observabilityContext
+[0m[1m23413 |[0m         })[0m[2m;[0m
+[0m[1m23414 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23415 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23415[0m[2m:[33m17[0m
+
+[PIIDetector] Detection agent failed, allowing content: [0m[1m23410 |[0m           },
+[0m[1m23411 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23412 |[0m           ...observabilityContext
+[0m[1m23413 |[0m         })[0m[2m;[0m
+[0m[1m23414 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23415 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23415[0m[2m:[33m17[0m
+
+[PIIDetector] Detection agent failed, allowing content: [0m[1m23410 |[0m           },
+[0m[1m23411 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m23412 |[0m           ...observabilityContext
+[0m[1m23413 |[0m         })[0m[2m;[0m
+[0m[1m23414 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m23415 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m23415[0m[2m:[33m17[0m
+
+[ModerationProcessor] Agent moderation failed, allowing content: [0m[1m22927 |[0m           },
+[0m[1m22928 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m22929 |[0m           ...observabilityContext
+[0m[1m22930 |[0m         })[0m[2m;[0m
+[0m[1m22931 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m22932 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m22932[0m[2m:[33m17[0m
+
+[ModerationProcessor] Agent moderation failed, allowing content: [0m[1m22927 |[0m           },
+[0m[1m22928 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m22929 |[0m           ...observabilityContext
+[0m[1m22930 |[0m         })[0m[2m;[0m
+[0m[1m22931 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m22932 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m22932[0m[2m:[33m17[0m
+
+[ModerationProcessor] Agent moderation failed, allowing content: [0m[1m22927 |[0m           },
+[0m[1m22928 |[0m           providerOptions: [0m[33mthis[0m.providerOptions,
+[0m[1m22929 |[0m           ...observabilityContext
+[0m[1m22930 |[0m         })[0m[2m;[0m
+[0m[1m22931 |[0m         [0m[35mif[0m (!response.[0m[34mobject[0m) {
+[0m[1m22932 |[0m           [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"Structured output returned no object"[0m)[0m[2m;[0m
+                        [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mStructured output returned no object[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m22932[0m[2m:[33m17[0m
+
+[0m[31mconsumeStream error [0m[1m10528 |[0m     [0m[35mconst[0m snapshot = [0m[35mawait[0m workflowsStore?[0m[3m[1m.loadWorkflowSnapshot[0m({
+[0m[1m10529 |[0m       workflowName: [0m[33mthis[0m.workflowId,
+[0m[1m10530 |[0m       runId: [0m[33mthis[0m.runId
+[0m[1m10531 |[0m     })[0m[2m;[0m
+[0m[1m10532 |[0m     [0m[35mif[0m (!snapshot) {
+[0m[1m10533 |[0m       [0m[35mthrow[0m [0m[35mnew[0m [0m[1mError[0m([0m[32m"No snapshot found for this workflow run: "[0m + [0m[33mthis[0m.workflowId + [0m[32m" "[0m + [0m[33mthis[0m.runId)[0m[2m;[0m
+                    [31m[1m^[0m
+[0m[31merror[0m[2m:[0m [1mNo snapshot found for this workflow run: agentic-loop 38708d83-c34a-4ce6-958d-7cf8039b0639[0m
+[0m      [2mat [0m[0m[36m/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js[0m[2m:[0m[33m10533[0m[2m:[33m13[0m
+[0m

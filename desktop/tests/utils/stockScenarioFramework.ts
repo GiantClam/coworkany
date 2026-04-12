@@ -200,8 +200,48 @@ function parseSidecarEvents(rawLogs: string): SidecarEvent[] {
 
         try {
             const event = JSON.parse(jsonPart) as SidecarEvent;
-            if (event && typeof event.type === 'string') {
-                events.push(event);
+            if (!event || typeof event.type !== 'string') {
+                continue;
+            }
+
+            events.push(event);
+
+            if (event.type === 'TASK_EVENT') {
+                const payload = (event.payload ?? {}) as Record<string, unknown>;
+                const taskEventType = String(payload.type ?? '').toLowerCase();
+                if (taskEventType === 'tool_call') {
+                    events.push({
+                        type: 'TOOL_CALL',
+                        payload: {
+                            name: payload.toolName,
+                            args: payload.args,
+                        },
+                    });
+                } else if (taskEventType === 'tool_result') {
+                    events.push({
+                        type: 'TOOL_RESULT',
+                        payload: {
+                            name: payload.toolName,
+                            result: payload.result,
+                            resultSummary: payload.resultSummary,
+                        },
+                    });
+                } else if (taskEventType === 'text_delta') {
+                    events.push({
+                        type: 'TEXT_DELTA',
+                        payload: {
+                            delta: payload.content,
+                            role: payload.role,
+                        },
+                    });
+                } else if (taskEventType === 'complete') {
+                    events.push({
+                        type: 'TASK_FINISHED',
+                        payload: {
+                            summary: payload.finishReason,
+                        },
+                    });
+                }
             }
         } catch {
             // Ignore malformed lines.
@@ -357,9 +397,16 @@ export async function runStockDesktopScenario(options: {
             || rawLogs.includes('"type":"start_task"');
 
         const events = parseSidecarEvents(rawLogs);
+        const researchToolCalls = events.filter((event) => {
+            if (event.type !== 'TOOL_CALL') return false;
+            const toolName = String(event.payload?.name ?? '');
+            if (toolName === 'search_web' || toolName === 'crawl_url') return true;
+            if (toolName === 'agent-researcher') return true;
+            return false;
+        }).length;
         searchWebCallCount = Math.max(
             searchWebCallCount,
-            events.filter((event) => event.type === 'TOOL_CALL' && String(event.payload?.name ?? '') === 'search_web').length,
+            researchToolCalls,
         );
 
         taskFinished = taskFinished
@@ -411,13 +458,11 @@ export async function runStockDesktopScenario(options: {
             && allEntitiesCovered
             && hasAdvice
             && hasPrediction
-            && (taskFinished || readyForFollowUpSeen || quietForMs > 15_000)
+            && (taskFinished || readyForFollowUpSeen)
         ) {
-            if (!taskFinished && !readyForFollowUpSeen && quietForMs > 15_000) {
-                completedBySilence = true;
-            }
             break;
         }
+
     }
 
     const finalLogs = tauriLogs.getRawSinceBaseline();
@@ -429,7 +474,7 @@ export async function runStockDesktopScenario(options: {
     const finalCoverage = collectEntityCoverage(finalEvidenceText, scenario.entities);
     const allEntitiesCovered = finalCoverage.every((item) => item.matchedAliases.length > 0);
 
-    const completed = taskFinished || readyForFollowUpSeen || completedBySilence;
+    const completed = taskFinished || readyForFollowUpSeen;
 
     return {
         scenarioId: scenario.id,

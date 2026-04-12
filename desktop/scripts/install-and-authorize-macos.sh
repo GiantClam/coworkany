@@ -52,7 +52,7 @@ If SOURCE is omitted:
 Examples:
   ./desktop/scripts/install-and-authorize-macos.sh
   ./desktop/scripts/install-and-authorize-macos.sh "/tmp/CoworkAny.app"
-  ./desktop/scripts/install-and-authorize-macos.sh "/tmp/CoworkAny_0.1.0-beta.1_aarch64.dmg"
+  ./desktop/scripts/install-and-authorize-macos.sh "/tmp/CoworkAny_0.1.0-beta.2_aarch64.dmg"
   ./desktop/scripts/install-and-authorize-macos.sh "https://example.com/CoworkAny.dmg" --sha256 <HEX>
   ./desktop/scripts/install-and-authorize-macos.sh --skip-settings
 EOF
@@ -254,6 +254,7 @@ choose_default_source() {
 mount_dmg_and_locate_app() {
     local dmg_path="$1"
     local attach_output
+    log "Mounting DMG: ${dmg_path}"
     attach_output="$(hdiutil attach "${dmg_path}" -nobrowse -readonly)"
     MOUNT_POINT="$(printf '%s\n' "${attach_output}" | awk -F'\t' '/\/Volumes\// {print $NF}' | tail -n 1)"
     if [[ -z "${MOUNT_POINT}" || ! -d "${MOUNT_POINT}" ]]; then
@@ -344,17 +345,19 @@ stop_running_processes() {
 
 install_app_bundle() {
     local source_app="$1"
-    log "Installing ${APP_NAME} to ${DEST_APP}..."
+    log "Installing ${APP_NAME} to ${DEST_APP} (source: ${source_app})"
     if [[ -w "/Applications" ]]; then
-        rm -rf "${DEST_APP}" || true
+        rm -rf "${DEST_APP}"
         ditto "${source_app}" "${DEST_APP}"
         xattr -dr com.apple.quarantine "${DEST_APP}" >/dev/null 2>&1 || true
     else
         log "Requesting administrator privileges for /Applications..."
-        sudo rm -rf "${DEST_APP}" || true
+        sudo rm -rf "${DEST_APP}"
         sudo ditto "${source_app}" "${DEST_APP}"
         sudo xattr -dr com.apple.quarantine "${DEST_APP}" >/dev/null 2>&1 || true
     fi
+    [[ -d "${DEST_APP}" ]] || die "Install failed: destination app not found after copy: ${DEST_APP}"
+    log "Installed app timestamp: $(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "${DEST_APP}")"
 }
 
 open_privacy_pages() {
@@ -426,6 +429,7 @@ fi
 
 RESOLVED_APP_PATH="$(resolve_source_to_app "${SOURCE_SPEC}")"
 [[ -d "${RESOLVED_APP_PATH}" ]] || die "Resolved app path invalid: ${RESOLVED_APP_PATH}"
+log "Resolved install source app: ${RESOLVED_APP_PATH}"
 check_arch_compatibility "${RESOLVED_APP_PATH}"
 
 stop_running_processes

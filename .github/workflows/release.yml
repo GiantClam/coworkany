@@ -56,7 +56,6 @@ jobs:
         run: bun install
 
       - name: Run release readiness gate
-        working-directory: sidecar
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -64,7 +63,15 @@ jobs:
           E2E_AIBERM_BASE_URL: ${{ secrets.E2E_AIBERM_BASE_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: bun run scripts/release-readiness.ts --build-desktop --real-e2e --real-model-smoke
+        run: npm run test:codex -- --mode release
+
+      - name: Upload Codex release gate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-test-release-${{ env.RELEASE_TAG }}
+          path: artifacts/codex-test/**
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload release readiness report
         uses: actions/upload-artifact@v4

@@ -12,7 +12,9 @@ import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 const DEFAULT_MODEL = process.env.COWORKANY_GUARDRAIL_MODEL
     || process.env.COWORKANY_MODEL
     || 'anthropic/claude-sonnet-4-5';
-const GUARDRAILS_ENABLED = process.env.COWORKANY_ENABLE_GUARDRAILS !== '0';
+// Guardrails are opt-in in desktop runtime because some OpenAI-compatible providers
+// do not reliably support structured-object detector outputs, which can stall turns.
+const GUARDRAILS_ENABLED = process.env.COWORKANY_ENABLE_GUARDRAILS === '1';
 const OUTPUT_GUARDRAILS_ENABLED = process.env.COWORKANY_ENABLE_OUTPUT_GUARDRAILS === '1';
 
 const sharedModelConfig = resolveRuntimeModelConfig(DEFAULT_MODEL);

@@ -1,4 +1,5 @@
 import { Agent } from '@mastra/core/agent';
+import { memoryConfig } from '../memory/config';
 import { bashTool, bashApprovalTool } from '../tools/bash';
 import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
 import { runtimeScorers } from '../scorers/runtime';
@@ -15,6 +16,7 @@ export const coder = new Agent({
         'Use bash for build/test commands and bash_approval for mutating commands that need confirmation.',
     ].join('\n'),
     model: DEFAULT_MODEL,
+    memory: memoryConfig,
     tools: {
         bash: bashTool,
         bash_approval: bashApprovalTool,
@@ -23,8 +25,8 @@ export const coder = new Agent({
         return await getWorkspaceForRequestContext(requestContext);
     },
     defaultOptions: {
-        requireToolApproval: true,
-        autoResumeSuspendedTools: true,
+        requireToolApproval: false,
+        autoResumeSuspendedTools: false,
         toolCallConcurrency: 1,
         maxSteps: 20,
         inputProcessors: guardrailInputProcessors,

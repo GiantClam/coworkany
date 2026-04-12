@@ -42,6 +42,21 @@ describe('mastra mcp connection manager', () => {
         expect(manager.getSnapshot().status).toBe('disabled');
     });
 
+    test('does not eagerly create MCP client before first tool request', async () => {
+        let createCalls = 0;
+        const manager = createMcpConnectionManager({
+            enabled: true,
+            createClient: () => {
+                createCalls += 1;
+                return createFakeClient();
+            },
+        });
+
+        expect(createCalls).toBe(0);
+        await manager.listToolsetsSafe();
+        expect(createCalls).toBe(1);
+    });
+
     test('caches toolsets within TTL window', async () => {
         const fake = createFakeClient({
             toolsets: {
@@ -65,7 +80,7 @@ describe('mastra mcp connection manager', () => {
         expect(manager.getSnapshot().cachedToolsetCount).toBe(1);
     });
 
-    test('reconnects after listToolsets failure and keeps runtime alive', async () => {
+    test('recovers in the same call after listToolsets failure when reconnect target is healthy', async () => {
         const first = createFakeClient({ failToolsets: true });
         const second = createFakeClient({
             toolsets: {
@@ -85,10 +100,6 @@ describe('mastra mcp connection manager', () => {
         const originalWarn = console.warn;
         console.warn = () => {};
         try {
-            const failedResult = await manager.listToolsetsSafe();
-            expect(failedResult).toEqual({});
-            expect(manager.getSnapshot().status).toBe('idle');
-
             const recovered = await manager.listToolsetsSafe();
             expect(Object.keys(recovered)).toContain('playwright');
             expect(first.calls.disconnect).toBeGreaterThanOrEqual(1);
@@ -96,5 +107,60 @@ describe('mastra mcp connection manager', () => {
         } finally {
             console.warn = originalWarn;
         }
+    });
+
+    test('invokes onFailure callback when MCP request fails', async () => {
+        const fake = createFakeClient({ failToolsets: true });
+        const failures: string[] = [];
+        const manager = createMcpConnectionManager({
+            enabled: true,
+            cacheTtlMs: 0,
+            reconnectMinIntervalMs: 0,
+            createClient: () => fake,
+            onFailure: (error) => {
+                failures.push(String(error));
+            },
+        });
+
+        const originalWarn = console.warn;
+        console.warn = () => {};
+        try {
+            await manager.listToolsetsSafe();
+        } finally {
+            console.warn = originalWarn;
+        }
+
+        expect(failures.length).toBeGreaterThanOrEqual(1);
+        expect(failures[0]).toContain('toolsets_failed');
+    });
+
+    test('stays alive when createClient throws and returns cached fallback', async () => {
+        let createAttempts = 0;
+        const failures: string[] = [];
+        const manager = createMcpConnectionManager({
+            enabled: true,
+            cacheTtlMs: 0,
+            reconnectMinIntervalMs: 0,
+            createClient: () => {
+                createAttempts += 1;
+                throw new Error('client_init_failed');
+            },
+            onFailure: (error) => {
+                failures.push(String(error));
+            },
+        });
+
+        const originalWarn = console.warn;
+        console.warn = () => {};
+        try {
+            const toolsets = await manager.listToolsetsSafe();
+            expect(toolsets).toEqual({});
+            expect(manager.getSnapshot().status).toBe('degraded');
+        } finally {
+            console.warn = originalWarn;
+        }
+
+        expect(createAttempts).toBeGreaterThan(0);
+        expect(failures.some((entry) => entry.includes('client_init_failed'))).toBe(true);
     });
 });

@@ -31,6 +31,12 @@ type UserMessageCall = {
         autoResumeSuspendedTools?: boolean;
         toolCallConcurrency?: number;
         maxSteps?: number;
+        executionPath?: 'direct' | 'workflow';
+        forcedRouteMode?: 'chat' | 'task';
+        useDirectChatResponder?: boolean;
+        forcePostAssistantCompletion?: boolean;
+        chatTurnDeadlineAtMs?: number;
+        chatStartupDeadlineAtMs?: number;
         onPreCompact?: (payload: Record<string, unknown>) => void;
         onPostCompact?: (payload: Record<string, unknown>) => void;
     };
@@ -149,6 +155,14 @@ function createHarness(overrides?: {
             description?: string;
             tools?: string[];
         }>;
+    };
+    onListRuntimeToolsets?: () => Record<string, Record<string, unknown>> | Promise<Record<string, Record<string, unknown>>>;
+    onIsRuntimeMcpEnabled?: () => boolean;
+    onGetRuntimeMcpSnapshot?: () => {
+        enabled: boolean;
+        status: 'disabled' | 'idle' | 'ready' | 'degraded';
+        cachedToolCount: number;
+        cachedToolsetCount: number;
     };
     onWarmupChatRuntime?: () => Promise<{
         mcpServerCount: number;
@@ -271,6 +285,9 @@ function createHarness(overrides?: {
         createId: () => 'req-fixed',
         resolveSkillPrompt: (input) => overrides?.onResolveSkillPrompt?.(input) ?? { enabledSkillIds: [] },
         listRuntimeCapabilities: overrides?.onListRuntimeCapabilities,
+        listRuntimeToolsets: overrides?.onListRuntimeToolsets,
+        isRuntimeMcpEnabled: overrides?.onIsRuntimeMcpEnabled,
+        getRuntimeMcpSnapshot: overrides?.onGetRuntimeMcpSnapshot,
         taskTranscriptStore: {
             append: (taskId, role, content) => {
                 const normalized = content.trim();
@@ -493,6 +510,43 @@ describe('mastra entrypoint processor', () => {
         expect((thinkingDelta?.payload as Record<string, unknown>)?.delta).toBe('thinking...');
     });
 
+    test('uses stable assistant stream id per task turn', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-stream-stable-id',
+                    role: 'assistant',
+                    content: 'hello',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-stream-stable-id',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-stream-stable-id' };
+            },
+        });
+        await harness.process({
+            id: 'cmd-stream-id',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-stream-id',
+                userQuery: 'hi',
+                executionPath: 'direct',
+                routeMode: 'chat',
+            },
+        });
+
+        const textDelta = harness.outgoing.find((message) =>
+            message.type === 'TEXT_DELTA'
+            && (message.payload as Record<string, unknown>)?.role === 'assistant',
+        );
+        expect(textDelta).toBeDefined();
+        expect((textDelta?.payload as Record<string, unknown>)?.messageId).toBe('stream:task-stream-id:cmd-stream-id:assistant');
+        expect((textDelta?.payload as Record<string, unknown>)?.correlationId).toBe('stream:task-stream-id:cmd-stream-id:assistant');
+    });
+
     test('start_task maps to handleUserMessage and emits protocol response + task events', async () => {
         const harness = createHarness();
         await harness.process({
@@ -501,7 +555,7 @@ describe('mastra entrypoint processor', () => {
             payload: {
                 taskId: 'task-1',
                 title: 'demo',
-                userQuery: 'hello',
+                userQuery: '请先检查项目目录并输出模块清单，然后给出改进建议',
                 context: { workspacePath: '/tmp/workspace' },
             },
         });
@@ -509,6 +563,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls.length).toBe(1);
         expect(harness.userMessageCalls[0]?.threadId).toBe('task-1');
         expect(harness.userMessageCalls[0]?.resourceId).toBe('employee-task-1');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
         const startResponse = harness.outgoing.find((message) => message.type === 'start_task_response');
         expect(startResponse).toBeDefined();
         expect((startResponse?.payload as Record<string, unknown>)?.success).toBe(true);
@@ -517,6 +572,559 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_STARTED')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TEXT_DELTA')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('start_task auto-routes chat intent to direct chat path', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-chat-intent-auto-route',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-chat-intent-auto-route',
+                title: 'chat intent',
+                userQuery: '你好',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('chat');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.enabledSkills).toEqual([]);
+        expect(harness.userMessageCalls[0]?.options?.skillPrompt).toBeUndefined();
+    });
+
+    test('start_task routes market-data query to direct task path for tool-first execution', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-market-tool-first',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-market-tool-first',
+                title: 'market intent',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('web_research');
+    });
+
+    test('start_task returns capability_missing when market query has no runtime research tools', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [
+                    { id: 'builtin-websearch', name: 'websearch', enabled: true, tools: ['search_web'] },
+                ],
+            }),
+            onListRuntimeToolsets: () => ({}),
+            onIsRuntimeMcpEnabled: () => false,
+        });
+
+        await harness.process({
+            id: 'cmd-start-market-capability-missing',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-market-capability-missing',
+                title: 'market capability missing',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_missing');
+        const delta = toString(toRecord(harness.outgoing.find((message) => message.type === 'TEXT_DELTA')?.payload).delta);
+        expect(delta).toContain('缺少所需工具能力');
+        expect(delta).toContain('required_capabilities=web_research');
+        expect(delta).toContain('missing_capabilities=web_research');
+        expect(delta).toContain('mcp_enabled=no');
+    });
+
+    test('start_task keeps tool-first execution when runtime market tools are available', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [
+                    { id: 'builtin-websearch', name: 'websearch', enabled: true, tools: ['search_web'] },
+                ],
+            }),
+            onListRuntimeToolsets: () => ({
+                websearch: {
+                    search_web: {
+                        id: 'search_web',
+                        description: 'Search public web',
+                    },
+                },
+            }),
+            onIsRuntimeMcpEnabled: () => true,
+        });
+
+        await harness.process({
+            id: 'cmd-start-market-capability-ok',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-market-capability-ok',
+                title: 'market capability ok',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+    });
+
+    test('start_task keeps tool-first execution when only browser runtime tools are available', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [],
+            }),
+            onListRuntimeToolsets: () => ({
+                playwright: {
+                    browser_navigate: {
+                        id: 'browser_navigate',
+                        description: 'Navigate browser page',
+                    },
+                    browser_snapshot: {
+                        id: 'browser_snapshot',
+                        description: 'Capture browser snapshot',
+                    },
+                },
+            }),
+            onIsRuntimeMcpEnabled: () => true,
+            onGetRuntimeMcpSnapshot: () => ({
+                enabled: true,
+                status: 'ready',
+                cachedToolCount: 2,
+                cachedToolsetCount: 1,
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-start-market-browser-fallback-capability-ok',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-market-browser-fallback-capability-ok',
+                title: 'market browser fallback capability ok',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED'
+            && toString(toRecord(message.payload).finishReason) === 'capability_missing')).toBe(false);
+    });
+
+    test('start_task bypasses capability missing when MCP runtime is still loading', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [
+                    { id: 'builtin-websearch', name: 'websearch', enabled: true, tools: ['search_web'] },
+                ],
+            }),
+            onListRuntimeToolsets: () => ({}),
+            onIsRuntimeMcpEnabled: () => true,
+            onGetRuntimeMcpSnapshot: () => ({
+                enabled: true,
+                status: 'idle',
+                cachedToolCount: 4,
+                cachedToolsetCount: 1,
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-start-market-capability-loading',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-market-capability-loading',
+                title: 'market capability loading',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED'
+            && toString(toRecord(message.payload).finishReason) === 'capability_missing')).toBe(false);
+    });
+
+    test('start_task bypasses capability missing when runtime toolset lookup times out', async () => {
+        const previousTimeout = process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS;
+        process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = '40';
+        try {
+            const harness = createHarness({
+                onListRuntimeCapabilities: () => ({
+                    skills: [],
+                    toolpacks: [],
+                }),
+                onListRuntimeToolsets: async () => {
+                    await new Promise((resolve) => setTimeout(resolve, 120));
+                    return {};
+                },
+                onIsRuntimeMcpEnabled: () => true,
+                onGetRuntimeMcpSnapshot: () => ({
+                    enabled: true,
+                    status: 'degraded',
+                    cachedToolCount: 0,
+                    cachedToolsetCount: 0,
+                }),
+            });
+
+            await harness.process({
+                id: 'cmd-start-market-capability-timeout-bypass',
+                type: 'start_task',
+                payload: {
+                    taskId: 'task-start-market-capability-timeout-bypass',
+                    title: 'market capability timeout bypass',
+                    userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                },
+            });
+
+            expect(harness.userMessageCalls).toHaveLength(1);
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED'
+                && toString(toRecord(message.payload).finishReason) === 'capability_missing')).toBe(false);
+        } finally {
+            if (typeof previousTimeout === 'string') {
+                process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = previousTimeout;
+            } else {
+                delete process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('start_task returns capability_missing for generic browser task when browser tools are unavailable', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [
+                    { id: 'builtin-websearch', name: 'websearch', enabled: true, tools: ['search_web'] },
+                ],
+            }),
+            onListRuntimeToolsets: () => ({}),
+            onIsRuntimeMcpEnabled: () => false,
+        });
+
+        await harness.process({
+            id: 'cmd-start-browser-capability-missing',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-browser-capability-missing',
+                title: 'browser capability missing',
+                userQuery: '请打开 https://example.com 并截图给我',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_missing');
+        const delta = toString(toRecord(harness.outgoing.find((message) => message.type === 'TEXT_DELTA')?.payload).delta);
+        expect(delta).toContain('browser_automation');
+    });
+
+    test('start_task returns capability_missing for generic web research task when research tools are unavailable', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [],
+            }),
+            onListRuntimeToolsets: () => ({}),
+            onIsRuntimeMcpEnabled: () => false,
+        });
+
+        await harness.process({
+            id: 'cmd-start-generic-web-research-capability-missing',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-generic-web-research-capability-missing',
+                title: 'generic web research capability missing',
+                userQuery: '请搜索并整理 React 生态在 2026 年的最新变化',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_missing');
+        const delta = toString(toRecord(harness.outgoing.find((message) => message.type === 'TEXT_DELTA')?.payload).delta);
+        expect(delta).toContain('required_capabilities=web_research');
+        expect(delta).toContain('missing_capabilities=web_research');
+    });
+
+    test('start_task generic code task bypasses capability gate when external capabilities are not required', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [],
+            }),
+            onListRuntimeToolsets: () => ({}),
+            onIsRuntimeMcpEnabled: () => false,
+        });
+
+        await harness.process({
+            id: 'cmd-start-code-capability-not-required',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-code-capability-not-required',
+                title: 'code capability not required',
+                userQuery: '请修复 src/index.ts 的类型错误并补充测试',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+    });
+
+    test('send_task_message fails completion when task turn has no required tool evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-no-tool-evidence',
+                    role: 'assistant',
+                    content: '我无法直接获取实时股价数据，建议你查看交易平台。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-no-tool-evidence',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-no-tool-evidence' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-no-tool-evidence',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-no-tool-evidence',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+    });
+
+    test('send_task_message treats delegated agent tool_call without follow-up as missing required tool evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-agent-call-no-follow-up',
+                    role: 'assistant',
+                    content: '我来帮你查询 MiniMax 的港股股价情况和本周趋势。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-agent-call-no-follow-up',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: '查询 MiniMax 港股股价和本周趋势',
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-agent-call-no-follow-up',
+                    finishReason: 'stream_exhausted',
+                });
+                return { runId: 'run-agent-call-no-follow-up' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-agent-call-no-follow-up',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-agent-call-no-follow-up',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+    });
+
+    test('send_task_message auto-retries missing tool evidence when retry budget is configured', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '100';
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    emit({
+                        type: 'text_delta',
+                        runId: `run-no-tool-evidence-${Date.now()}`,
+                        role: 'assistant',
+                        content: '我无法直接获取实时股价数据，建议你查看交易平台。',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: `run-no-tool-evidence-complete-${Date.now()}`,
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-no-tool-evidence' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-no-tool-evidence-auto-retry',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-no-tool-evidence-auto-retry',
+                    content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                    config: {
+                        maxRetries: 1,
+                    },
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 350);
+            });
+
+            const rateLimited = harness.outgoing.find((message) => message.type === 'RATE_LIMITED');
+            expect(rateLimited).toBeDefined();
+            const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+            expect(failed).toBeDefined();
+            expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+            expect(harness.userMessageCalls.length).toBe(2);
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('start_task uses chat route defaults when executionPath is direct', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-direct-chat',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-direct-chat',
+                title: 'direct chat',
+                userQuery: '请简短回复',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('chat');
+    });
+
+    test('start_task with direct executionPath still forces task route for market-data query', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-direct-market-query',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-direct-market-query',
+                title: 'direct market query',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+    });
+
+    test('start_task keeps task deadline budget fixed across recovery attempts for direct market route', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                if (input.threadId === 'task-task-deadline-recover') {
+                    emit({
+                        type: 'error',
+                        runId: 'run-task-deadline-recover-1',
+                        message: 'Items are not persisted when `store` is set to false.',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-task-deadline-recover-1',
+                        finishReason: 'error',
+                    });
+                    return { runId: 'run-task-deadline-recover-1' };
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-task-deadline-recover-2',
+                    content: 'task recovery narrative',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-task-deadline-recover-2',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-task-deadline-recover-2' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-direct-market-query-deadline',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-task-deadline-recover',
+                title: 'direct market deadline recover',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(2);
+        const firstOptions = harness.userMessageCalls[0]?.options;
+        const secondOptions = harness.userMessageCalls[1]?.options;
+        expect(firstOptions?.executionPath).toBe('direct');
+        expect(firstOptions?.forcedRouteMode).toBe('task');
+        expect(typeof firstOptions?.chatTurnDeadlineAtMs).toBe('number');
+        expect(typeof firstOptions?.chatStartupDeadlineAtMs).toBe('number');
+        expect(secondOptions?.chatTurnDeadlineAtMs).toBe(firstOptions?.chatTurnDeadlineAtMs);
+        expect(secondOptions?.chatStartupDeadlineAtMs).toBe(firstOptions?.chatStartupDeadlineAtMs);
+        expect((secondOptions?.chatTurnDeadlineAtMs ?? 0) >= (secondOptions?.chatStartupDeadlineAtMs ?? 0)).toBe(true);
+    });
+
+    test('start_task overrides chat route envelope and workflow config for market-data query', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-chat-envelope-market-query',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-chat-envelope-market-query',
+                title: 'chat envelope market query',
+                userQuery: '__route_chat__\n今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    executionPath: 'workflow',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
     });
 
     test('start_task resolves skill prompt and passes enabled skills into execution options', async () => {
@@ -593,6 +1201,73 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls).toHaveLength(1);
         expect(harness.userMessageCalls[0]?.options?.enabledSkills).toEqual([]);
         expect(harness.userMessageCalls[0]?.options?.skillPrompt).toBeUndefined();
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('chat');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBe(true);
+    });
+
+    test('send_task_message defaults first chat turn to direct execution and trims auto-triggered skills', async () => {
+        const harness = createHarness({
+            onResolveSkillPrompt: () => ({
+                prompt: '[Enabled Skills]\n- verification-loop: evidence before completion',
+                enabledSkillIds: ['verification-loop'],
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-chat-default-direct',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-chat-default-direct',
+                content: '请用一句中文回复“桌面端回复回归验证通过”，不要执行命令或调用工具。',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.enabledSkills).toEqual([]);
+        expect(harness.userMessageCalls[0]?.options?.skillPrompt).toBeUndefined();
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('chat');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBe(true);
+    });
+
+    test('send_task_message with direct executionPath forces task route for market-data query', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-send-direct-market-query',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-send-direct-market-query',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+    });
+
+    test('send_task_message overrides chat route envelope and workflow config for market-data query', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-send-chat-envelope-market-query',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-send-chat-envelope-market-query',
+                content: '__route_chat__\n今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    executionPath: 'workflow',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
     });
 
     test('send_task_message returns runtime skill and toolpack list for capability queries without model execution', async () => {
@@ -629,6 +1304,40 @@ describe('mastra entrypoint processor', () => {
         expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_query');
         const persisted = harness.persistedTaskStates().find((state) => state.taskId === 'task-capability-query');
         expect(persisted?.status).toBe('idle');
+    });
+
+    test('start_task answers generic capability query with concise summary without model/tool execution', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [
+                    { id: 'release-checker', enabled: true },
+                    { id: 'incident-tracker', enabled: false },
+                ],
+                toolpacks: [
+                    { id: 'filesystem', name: 'Filesystem', enabled: true, tools: ['view_file', 'run_command'] },
+                    { id: 'browser', name: 'Browser', enabled: false, tools: ['browse'] },
+                ],
+            }),
+        });
+
+        await harness.process({
+            id: 'cmd-capability-general-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-capability-general-start',
+                title: 'general capability query',
+                userQuery: '你能做什么？',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
+        const delta = toString(toRecord(textDelta?.payload).delta);
+        expect(delta).toContain('我可以帮你');
+        expect(delta).toContain('skills 1 个');
+        expect(delta).toContain('toolpacks 1 个');
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_query');
     });
 
     test('send_task_message returns name and description for capability explanation queries', async () => {
@@ -972,6 +1681,56 @@ describe('mastra entrypoint processor', () => {
         expect(calls[calls.length - 1]?.threadId).toBe('task-recover-recovery-req-fixed');
     });
 
+    test('send_task_message keeps chat deadline budget fixed across recovery attempts', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                if (input.threadId === 'task-deadline-recover') {
+                    emit({
+                        type: 'error',
+                        runId: 'run-deadline-retry-1',
+                        message: 'Items are not persisted when `store` is set to false.',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-deadline-retry-1',
+                        finishReason: 'error',
+                    });
+                    return { runId: 'run-deadline-retry-1' };
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-deadline-retry-2',
+                    content: 'recovered narrative',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-deadline-retry-2',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-deadline-retry-2' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-chat-deadline-recover',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-deadline-recover',
+                content: '请把这句话改写得更简洁一些',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(2);
+        const firstOptions = harness.userMessageCalls[0]?.options;
+        const secondOptions = harness.userMessageCalls[1]?.options;
+        expect(firstOptions?.forcePostAssistantCompletion).toBe(true);
+        expect(typeof firstOptions?.chatTurnDeadlineAtMs).toBe('number');
+        expect(typeof firstOptions?.chatStartupDeadlineAtMs).toBe('number');
+        expect(secondOptions?.chatTurnDeadlineAtMs).toBe(firstOptions?.chatTurnDeadlineAtMs);
+        expect(secondOptions?.chatStartupDeadlineAtMs).toBe(firstOptions?.chatStartupDeadlineAtMs);
+        expect((secondOptions?.chatTurnDeadlineAtMs ?? 0) >= (secondOptions?.chatStartupDeadlineAtMs ?? 0)).toBe(true);
+    });
+
     test('send_task_message retries recovery thread when error only states store=false persistence', async () => {
         const calls: Array<{ threadId: string; message: string }> = [];
         const harness = createHarness({
@@ -1186,6 +1945,51 @@ describe('mastra entrypoint processor', () => {
         expect(failed.length).toBe(1);
     });
 
+    test('send_task_message suppresses duplicate assistant deltas from secondary run in same turn', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-primary',
+                    role: 'assistant',
+                    content: '这里是同一轮回复的正文，应该只展示一次。',
+                });
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-secondary',
+                    role: 'assistant',
+                    content: '这里是同一轮回复的正文，应该只展示一次。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-primary',
+                    finishReason: 'stop',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-secondary',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-primary' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-duplicate-delta-same-turn',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-duplicate-delta-same-turn',
+                content: '请继续',
+            },
+        });
+
+        const assistantDeltas = harness.outgoing.filter((message) =>
+            message.type === 'TEXT_DELTA'
+            && toString((message.payload as Record<string, unknown>)?.delta).includes('应该只展示一次'),
+        );
+        expect(assistantDeltas).toHaveLength(1);
+    });
+
     test('send_task_message treats complete without assistant narrative as false completion failure', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -1219,47 +2023,133 @@ describe('mastra entrypoint processor', () => {
         expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_FALSE_COMPLETION');
     });
 
-    test('send_task_message suppresses late approval events after false completion failure', async () => {
+    test('send_task_message fails when stream has tooling progress but never emits a terminal event', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-missing-terminal',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'collect stock data' },
+                });
+                return { runId: 'run-missing-terminal' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-missing-terminal',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-missing-terminal',
+                content: '今天 minimax 的港股股价怎么样？',
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
+    });
+
+    test('send_task_message tolerates zero-progress complete before late approval and resumes successfully', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
                     type: 'complete',
-                    runId: 'run-false-complete-late-approval',
+                    runId: 'run-zero-progress-complete-late-approval',
                     finishReason: 'stream_exhausted',
                 });
                 emit({
                     type: 'approval_required',
-                    runId: 'run-false-complete-late-approval',
-                    toolCallId: 'call-late',
+                    runId: 'run-zero-progress-complete-late-approval',
+                    toolCallId: 'tool-zero-progress-complete-late-approval',
                     toolName: 'agent-researcher',
                     args: { query: 'minimax' },
                     resumeSchema: '{}',
                 });
                 emit({
                     type: 'tool_call',
-                    runId: 'run-false-complete-late-approval',
+                    runId: 'run-zero-progress-complete-late-approval',
                     toolName: 'agent-researcher',
                     args: { query: 'minimax' },
                 });
-                return { runId: 'run-false-complete-late-approval' };
+                return { runId: 'run-zero-progress-complete-late-approval' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-zero-progress-complete-late-approval-resumed',
+                    role: 'assistant',
+                    content: 'MiniMax 本体未在港股上市，可进一步确认相关港股概念标的。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-zero-progress-complete-late-approval-resumed',
+                    finishReason: 'stop',
+                });
             },
         });
 
         await harness.process({
-            id: 'cmd-false-complete-late-approval',
+            id: 'cmd-zero-progress-complete-late-approval',
             type: 'send_task_message',
             payload: {
-                taskId: 'task-false-complete-late-approval',
+                taskId: 'task-zero-progress-complete-late-approval',
                 content: '今天 minimax 的港股股价是什么表现？',
             },
         });
 
-        const failures = harness.outgoing.filter((message) => message.type === 'TASK_FAILED');
-        expect(failures).toHaveLength(1);
-        expect((failures[0]?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_FALSE_COMPLETION');
-        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
-        expect(harness.outgoing.some((message) => message.type === 'TASK_EVENT')).toBe(false);
-        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        expect(harness.approvalCalls).toHaveLength(1);
+        expect(
+            harness.outgoing.some((message) =>
+                message.type === 'TASK_FAILED'
+                && (message.payload as Record<string, unknown>)?.errorCode === 'E_PROTOCOL_FALSE_COMPLETION',
+            ),
+        ).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message reports missing-terminal instead of false-completion when late tooling arrives after zero-progress complete', async () => {
+        const previousLateApprovalGrace = process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+        process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = '0';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'complete',
+                    runId: 'run-zero-progress-complete-late-tooling',
+                    finishReason: 'stream_exhausted',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-zero-progress-complete-late-tooling',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'lookup minimax late tooling' },
+                });
+                return { runId: 'run-zero-progress-complete-late-tooling' };
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-zero-progress-complete-late-tooling',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-zero-progress-complete-late-tooling',
+                    content: '今天 minimax 的港股股价是什么表现？',
+                },
+            });
+        } finally {
+            if (typeof previousLateApprovalGrace === 'string') {
+                process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = previousLateApprovalGrace;
+            } else {
+                delete process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+            }
+        }
+
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).not.toBe('E_PROTOCOL_FALSE_COMPLETION');
     });
 
     test('token usage desktop events are forwarded as TOKEN_USAGE payloads', async () => {
@@ -1427,6 +2317,1178 @@ describe('mastra entrypoint processor', () => {
         ).toBe(true);
     });
 
+    test('send_task_message auto-approves low-risk workspace execute command without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-workspace-exec',
+                    toolCallId: 'tool-safe-workspace-exec',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: "date '+%Y-%m-%d %H:%M:%S %Z' && curl -s 'https://qt.gtimg.cn/q=r_hk09896' | head -c 400",
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-workspace-exec' };
+            },
+            onHandleApprovalResponse: async ({ runId }, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId,
+                    content: '已获取行情并生成简报。',
+                });
+                emit({
+                    type: 'complete',
+                    runId,
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-workspace-exec',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-workspace-exec',
+                content: '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-workspace-exec',
+            toolCallId: 'tool-safe-workspace-exec',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves browser_navigate for market web_research tasks without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-market-browser-auto-approve',
+                    toolCallId: 'tool-market-browser-auto-approve',
+                    toolName: 'browser_navigate',
+                    args: {
+                        url: 'https://www.google.com/search?q=MiniMax+港股+股价+今日',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-market-browser-auto-approve' };
+            },
+            onHandleApprovalResponse: async ({ runId }, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId,
+                    content: '已通过浏览器获取行情数据。',
+                });
+                emit({
+                    type: 'complete',
+                    runId,
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-market-browser-auto-approve',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-market-browser-auto-approve',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-market-browser-auto-approve',
+            toolCallId: 'tool-market-browser-auto-approve',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message keeps browser_navigate approval for non-web-research turns', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-browser-manual-approval',
+                    toolCallId: 'tool-browser-manual-approval',
+                    toolName: 'browser_navigate',
+                    args: {
+                        url: 'https://example.com',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-browser-manual-approval' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-browser-manual-approval',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-browser-manual-approval',
+                content: '打开官网并点击登录按钮',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(true);
+    });
+
+    test('send_task_message auto-approves low-risk workspace rg command without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-rg-workspace-exec',
+                    toolCallId: 'tool-safe-rg-workspace-exec',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: "rg -n \"approval_required\" sidecar/src | head -n 20",
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-rg-workspace-exec' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-rg-workspace-exec',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-rg-workspace-exec',
+                content: '检查代码中的审批触发点',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-rg-workspace-exec',
+            toolCallId: 'tool-safe-rg-workspace-exec',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves low-risk workspace ls/pwd/whoami command without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-filesystem-inspection',
+                    toolCallId: 'tool-safe-filesystem-inspection',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: 'pwd && ls -la sidecar | head -n 20 && whoami',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-filesystem-inspection' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-filesystem-inspection',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-filesystem-inspection',
+                content: '查看当前目录信息',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-filesystem-inspection',
+            toolCallId: 'tool-safe-filesystem-inspection',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves low-risk workspace git status command without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-git-status',
+                    toolCallId: 'tool-safe-git-status',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: 'git status --short',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-git-status' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-git-status',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-git-status',
+                content: '查看当前变更',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-git-status',
+            toolCallId: 'tool-safe-git-status',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves updateWorkingMemory without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-update-memory',
+                    toolCallId: 'tool-update-memory',
+                    toolName: 'updateWorkingMemory',
+                    args: {
+                        memory: '# 用户画像\n- 偏好：简洁直接',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-update-memory' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-update-memory',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-update-memory',
+                content: '记住我的偏好',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-update-memory',
+            toolCallId: 'tool-update-memory',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves agent tools without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-agent-researcher',
+                    toolCallId: 'tool-agent-researcher',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-agent-researcher' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-agent-researcher',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-agent-researcher',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-agent-researcher',
+            toolCallId: 'tool-agent-researcher',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approval prefers latest task run id for agent tools', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-main-turn',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'research this' },
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-sub-agent-loop',
+                    toolCallId: 'tool-agent-researcher-main',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-main-turn' };
+            },
+            onHandleApprovalResponse: async (input, emit) => {
+                if (input.runId !== 'run-main-turn') {
+                    throw new Error(`unexpected_run_id:${input.runId}`);
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-main-turn',
+                    role: 'assistant',
+                    content: '已完成调研。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-main-turn',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-latest-run',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-latest-run',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-main-turn',
+            toolCallId: 'tool-agent-researcher-main',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message auto-approval keeps task run id stable when suspended sub-run events arrive', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-main-turn',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'research this' },
+                });
+                emit({
+                    type: 'suspended',
+                    runId: 'run-sub-agent-loop',
+                    toolCallId: 'tool-sub-loop',
+                    toolName: 'agent-researcher',
+                    payload: {},
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-sub-agent-loop',
+                    toolCallId: 'tool-agent-researcher-main',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-main-turn' };
+            },
+            onHandleApprovalResponse: async (input, emit) => {
+                if (input.runId !== 'run-main-turn') {
+                    throw new Error(`unexpected_run_id:${input.runId}`);
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-main-turn',
+                    role: 'assistant',
+                    content: '调研完成。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-main-turn',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-stable-run',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-stable-run',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-main-turn',
+            toolCallId: 'tool-agent-researcher-main',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message auto-approval deduplicates repeated approval_required for same toolCallId', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-main-turn',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'research this' },
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-main-turn',
+                    toolCallId: 'tool-agent-researcher-dup',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-main-turn',
+                    toolCallId: 'tool-agent-researcher-dup',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-main-turn' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-main-turn',
+                    role: 'assistant',
+                    content: '调研完成。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-main-turn',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-duplicate',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-duplicate',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-main-turn',
+            toolCallId: 'tool-agent-researcher-dup',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message does not fail immediately when auto-approval resume handshake exceeds timeout', async () => {
+        const previousAutoApprovalTimeout = process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
+        process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = '1000';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-auto-approval-timeout',
+                    toolCallId: 'tool-auto-approval-timeout',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-auto-approval-timeout' };
+            },
+            onHandleApprovalResponse: async () => {
+                await new Promise<void>(() => {});
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-auto-approval-timeout',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-auto-approval-timeout',
+                    content: '请帮我调研',
+                },
+            });
+        } finally {
+            if (typeof previousAutoApprovalTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = previousAutoApprovalTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
+            }
+        }
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeUndefined();
+    });
+
+    test('send_task_message does not fail auto-approval when resume stream starts before timeout but finishes later', async () => {
+        const previousAutoApprovalTimeout = process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
+        process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = '1000';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-auto-approval-long-resume',
+                    toolCallId: 'tool-auto-approval-long-resume',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                        maxSteps: 4,
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-auto-approval-long-resume',
+                    finishReason: 'stream_exhausted',
+                });
+                return { runId: 'run-auto-approval-long-resume' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-auto-approval-long-resume-followup',
+                    role: 'assistant',
+                    content: '已收到，开始整理结果。',
+                });
+                await new Promise((resolve) => setTimeout(resolve, 1200));
+                emit({
+                    type: 'complete',
+                    runId: 'run-auto-approval-long-resume-followup',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-auto-approval-long-resume',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-auto-approval-long-resume',
+                    content: '请帮我调研',
+                },
+            });
+            await new Promise((resolve) => setTimeout(resolve, 1300));
+        } finally {
+            if (typeof previousAutoApprovalTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = previousAutoApprovalTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
+            }
+        }
+
+        expect(harness.approvalCalls.length).toBe(1);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(String((failed?.payload as Record<string, unknown>)?.error ?? '')).not.toContain('auto_approval_resume_timeout');
+        expect(
+            harness.outgoing.some((message) => (
+                message.type === 'TEXT_DELTA'
+                && (message.payload as Record<string, unknown>)?.delta === '已收到，开始整理结果。'
+            )),
+        ).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message keeps auto-approved resume events on task channel and avoids false completion', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-auto-approval-resume',
+                    toolCallId: 'tool-auto-approval-resume',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-auto-approval-resume',
+                    finishReason: 'stream_exhausted',
+                });
+                return { runId: 'run-auto-approval-resume' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-auto-approval-resume-followup',
+                    role: 'assistant',
+                    content: 'Minimax 今日股价震荡上行，本周整体偏强。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-auto-approval-resume-followup',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-resume',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-resume',
+                content: '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(
+            harness.outgoing.some((message) => (
+                message.type === 'TEXT_DELTA'
+                && (message.payload as Record<string, unknown>)?.delta === 'Minimax 今日股价震荡上行，本周整体偏强。'
+            )),
+        ).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'text_delta')).toBe(false);
+    });
+
+    test('send_task_message ignores no-narrative error while auto-approved resume is in-flight', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-auto-approval-inflight-error',
+                    toolCallId: 'tool-auto-approval-inflight-error',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-auto-approval-inflight-error',
+                    message: 'Error: stream_exhausted_without_assistant_text',
+                });
+                return { runId: 'run-auto-approval-inflight-error' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-auto-approval-inflight-error-followup',
+                    role: 'assistant',
+                    content: '最终答复已生成。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-auto-approval-inflight-error-followup',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-inflight-error',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-inflight-error',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message ignores stream timeout error while auto-approved resume is in-flight', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-auto-approval-inflight-timeout',
+                    toolCallId: 'tool-auto-approval-inflight-timeout',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-auto-approval-inflight-timeout',
+                    message: 'Error: stream_idle_timeout:60000',
+                });
+                return { runId: 'run-auto-approval-inflight-timeout' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-auto-approval-inflight-timeout-followup',
+                    role: 'assistant',
+                    content: '最终答复已生成。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-auto-approval-inflight-timeout-followup',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-inflight-timeout',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-inflight-timeout',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message fails fast when auto-approved resume drains without narrative and without terminal event', async () => {
+        const previousLateApprovalGrace = process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+        process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = '120';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-auto-approval-stalled',
+                    toolCallId: 'tool-auto-approval-stalled',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-auto-approval-stalled',
+                    message: 'Error: stream_exhausted_without_assistant_text',
+                });
+                return { runId: 'run-auto-approval-stalled' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                emit({
+                    type: 'error',
+                    runId: 'run-auto-approval-stalled',
+                    message: 'Error: stream_exhausted_without_assistant_text',
+                });
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-auto-approval-stalled',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-auto-approval-stalled',
+                    content: '请帮我调研',
+                },
+            });
+        } finally {
+            if (typeof previousLateApprovalGrace === 'string') {
+                process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = previousLateApprovalGrace;
+            } else {
+                delete process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+            }
+        }
+
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(Boolean(finished) || Boolean(failed)).toBe(true);
+        if (finished) {
+            const finishedSummary = String((finished.payload as Record<string, unknown>)?.summary ?? '');
+            expect(finishedSummary).toContain('上游检索流在输出正文前中断');
+        } else {
+            const errorCode = String((failed?.payload as Record<string, unknown>)?.errorCode ?? '');
+            expect(['E_PROTOCOL_MISSING_TERMINAL_EVENT', 'MASTRA_RUNTIME_ERROR', 'UPSTREAM_TIMEOUT']).toContain(errorCode);
+        }
+    });
+
+    test('send_task_message recovers when auto-approved resume reports missing workflow snapshot', async () => {
+        let attempt = 0;
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                attempt += 1;
+                if (attempt === 1) {
+                    emit({
+                        type: 'approval_required',
+                        runId: 'run-missing-snapshot-main',
+                        toolCallId: 'tool-missing-snapshot-main',
+                        toolName: 'agent-researcher',
+                        args: {
+                            prompt: 'research this',
+                        },
+                        resumeSchema: '{}',
+                    });
+                    emit({
+                        type: 'error',
+                        runId: 'run-missing-snapshot-main',
+                        message: 'Error: stream_exhausted_without_assistant_text',
+                    });
+                    return { runId: 'run-missing-snapshot-main' };
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-missing-snapshot-recovery',
+                    role: 'assistant',
+                    content: '恢复成功，以下是结果摘要。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-missing-snapshot-recovery',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-missing-snapshot-recovery' };
+            },
+            onHandleApprovalResponse: async () => {
+                throw new Error('No snapshot found for this workflow run: agentic-loop run-missing-snapshot-main');
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-missing-snapshot',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-missing-snapshot',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(attempt).toBe(2);
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        expect(
+            harness.outgoing.some((message) => (
+                message.type === 'TEXT_DELTA'
+                && String((message.payload as Record<string, unknown>)?.delta ?? '').includes('恢复成功')
+            )),
+        ).toBe(true);
+    });
+
+    test('send_task_message keeps task route during auto-approval missing-snapshot recovery', async () => {
+        let attempt = 0;
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                attempt += 1;
+                if (attempt === 1) {
+                    emit({
+                        type: 'approval_required',
+                        runId: 'run-missing-snapshot-task-main',
+                        toolCallId: 'tool-missing-snapshot-task-main',
+                        toolName: 'agent-researcher',
+                        args: {
+                            prompt: 'lookup market data',
+                        },
+                        resumeSchema: '{}',
+                    });
+                    emit({
+                        type: 'error',
+                        runId: 'run-missing-snapshot-task-main',
+                        message: 'Error: stream_exhausted_without_assistant_text',
+                    });
+                    return { runId: 'run-missing-snapshot-task-main' };
+                }
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-missing-snapshot-task-recovery',
+                    role: 'assistant',
+                    content: '已进入恢复流程。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-missing-snapshot-task-recovery',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-missing-snapshot-task-recovery' };
+            },
+            onHandleApprovalResponse: async () => {
+                throw new Error('No snapshot found for this workflow run: agentic-loop run-missing-snapshot-task-main');
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-auto-approval-missing-snapshot-task-route',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-auto-approval-missing-snapshot-task-route',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(2);
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[1]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[1]?.options?.useDirectChatResponder).toBeUndefined();
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message ignores retryable stale-run errors from superseded runs', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-current',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'research this' },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-current',
+                    toolCallId: 'tool-current',
+                    toolName: 'agent-researcher',
+                    result: 'research complete',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-stale',
+                    message: 'Error: stream_idle_timeout:60000',
+                });
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-current',
+                    role: 'assistant',
+                    content: '完成。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-current',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-current' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-stale-run-retryable-error',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-stale-run-retryable-error',
+                content: '请帮我调研',
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message tolerates complete-before-approval race and still resumes auto-approved agent tool', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-complete-before-approval',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'lookup minimax' },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-complete-before-approval',
+                    finishReason: 'stream_exhausted',
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-complete-before-approval',
+                    toolCallId: 'tool-complete-before-approval',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'lookup minimax' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-complete-before-approval' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-complete-before-approval-resumed',
+                    role: 'assistant',
+                    content: 'MiniMax 本体未在港股上市。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-complete-before-approval-resumed',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-complete-before-approval',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-complete-before-approval',
+                content: '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message tolerates delayed late approval after provisional completion', async () => {
+        const previousLateApprovalGrace = process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+        process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = '200';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-delayed-approval-race',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'lookup minimax delayed approval' },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-delayed-approval-race',
+                    finishReason: 'stream_exhausted',
+                });
+                setTimeout(() => {
+                    emit({
+                        type: 'approval_required',
+                        runId: 'run-delayed-approval-race',
+                        toolCallId: 'tool-delayed-approval-race',
+                        toolName: 'agent-researcher',
+                        args: { prompt: 'lookup minimax delayed approval' },
+                        resumeSchema: '{}',
+                    });
+                }, 30);
+                return { runId: 'run-delayed-approval-race' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-delayed-approval-race-resumed',
+                    role: 'assistant',
+                    content: 'MiniMax 未在港股上市，需确认是否指相关概念股。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-delayed-approval-race-resumed',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-delayed-approval-race',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-delayed-approval-race',
+                    content: '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+                },
+            });
+        } finally {
+            if (typeof previousLateApprovalGrace === 'string') {
+                process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = previousLateApprovalGrace;
+            } else {
+                delete process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+            }
+        }
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message still requires approval for mutating workspace execute command', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-risky-workspace-exec',
+                    toolCallId: 'tool-risky-workspace-exec',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: 'rm -rf /tmp/demo',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-risky-workspace-exec' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-risky-workspace-exec',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-risky-workspace-exec',
+                content: '执行危险命令',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(true);
+    });
+
+    test('send_task_message still requires approval for mutating workspace git command', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-risky-git-command',
+                    toolCallId: 'tool-risky-git-command',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: 'git checkout -b test-branch',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-risky-git-command' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-risky-git-command',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-risky-git-command',
+                content: '创建一个新分支',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(true);
+    });
+
     test('send_task_message forwards approval_required while run is still waiting for approval', async () => {
         let releaseRun: (() => void) | undefined;
         const harness = createHarness({
@@ -1474,8 +3536,8 @@ describe('mastra entrypoint processor', () => {
                     type: 'approval_required',
                     runId: 'run-approval-complete-before-resume',
                     toolCallId: 'tool-approval-complete-before-resume',
-                    toolName: 'mastra_workspace_execute_command',
-                    args: { command: 'curl -s https://example.com' },
+                    toolName: 'bash_approval',
+                    args: { command: 'rm -rf /tmp/demo' },
                     resumeSchema: '{}',
                 });
                 emit({
@@ -2075,6 +4137,107 @@ describe('mastra entrypoint processor', () => {
         expect(retry.attempts).toBe(1);
         expect(retry.maxAttempts).toBe(1);
         expect(toString(retry.lastError)).toContain('network timeout');
+    });
+
+    test('retry_task recovers complete-before-approval race without duplicate assistant reply', async () => {
+        let attempt = 0;
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                attempt += 1;
+                if (attempt === 1) {
+                    emit({
+                        type: 'complete',
+                        runId: 'run-retry-race-initial',
+                        finishReason: 'stream_exhausted',
+                    });
+                    return { runId: 'run-retry-race-initial' };
+                }
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-retry-race-followup',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'lookup minimax hk stock' },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-retry-race-followup',
+                    finishReason: 'stream_exhausted',
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-retry-race-followup',
+                    toolCallId: 'tool-retry-race-followup',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'lookup minimax hk stock' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-retry-race-followup' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-retry-race-followup-resumed',
+                    role: 'assistant',
+                    content: 'MiniMax 本体未在港股上市，可提供相关概念股供你确认。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-retry-race-followup-resumed',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-retry-race',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-retry-race',
+                userQuery: '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+                config: {
+                    maxRetries: 5,
+                },
+            },
+        });
+
+        expect(
+            harness.outgoing.some((message) =>
+                message.type === 'TASK_FAILED'
+                && toString((message.payload as Record<string, unknown>)?.errorCode) === 'E_PROTOCOL_FALSE_COMPLETION',
+            ),
+        ).toBe(true);
+
+        await harness.process({
+            id: 'cmd-retry-race',
+            type: 'retry_task',
+            payload: {
+                taskId: 'task-retry-race',
+            },
+        });
+
+        const retryResponse = harness.outgoing.find((message) =>
+            message.type === 'retry_task_response' && message.commandId === 'cmd-retry-race',
+        );
+        expect((retryResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(harness.approvalCalls).toHaveLength(1);
+        expect(
+            harness.outgoing.some((message) =>
+                message.type === 'TASK_FAILED'
+                && toString((message.payload as Record<string, unknown>)?.turnId) === 'cmd-retry-race',
+            ),
+        ).toBe(false);
+        expect(
+            harness.outgoing.some((message) =>
+                message.type === 'TASK_FINISHED'
+                && toString((message.payload as Record<string, unknown>)?.turnId) === 'cmd-retry-race',
+            ),
+        ).toBe(true);
+
+        const resumedAssistantDeltas = harness.outgoing.filter((message) =>
+            message.type === 'TEXT_DELTA'
+            && toString((message.payload as Record<string, unknown>)?.delta).includes('MiniMax 本体未在港股上市'),
+        );
+        expect(resumedAssistantDeltas).toHaveLength(1);
     });
 
     test('retry_task deduplicates repeated operationId without triggering another run', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
     extractMastraFinalAssistantTextEvent,
     extractMastraTokenUsageEvent,
+    isMastraOperationalProgressChunk,
     mapMastraChunkToDesktopEvent,
 } from '../src/ipc/bridge';
 
@@ -93,6 +94,40 @@ describe('ipc bridge', () => {
             args: { command: 'echo hi' },
             resumeSchema: '{"type":"object"}',
         });
+    });
+
+    test('maps wrapped data-tool-call-approval chunks from agent execution events', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'agent-execution-event',
+            payload: {
+                type: 'data-tool-call-approval',
+                payload: {
+                    toolCallId: 'call-wrapped',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'check market data' },
+                    resumeSchema: '{"type":"object"}',
+                },
+            },
+        }, 'run-3b');
+
+        expect(event).toEqual({
+            type: 'approval_required',
+            runId: 'run-3b',
+            toolCallId: 'call-wrapped',
+            toolName: 'agent-researcher',
+            args: { prompt: 'check market data' },
+            resumeSchema: '{"type":"object"}',
+        });
+    });
+
+    test('treats agent execution wrapper chunks as stream progress', () => {
+        expect(isMastraOperationalProgressChunk({
+            type: 'agent-execution-event-tool-call',
+            payload: {
+                toolName: 'agent-researcher',
+                args: { prompt: 'hello' },
+            },
+        })).toBe(true);
     });
 
     test('maps finish chunk to complete event', () => {

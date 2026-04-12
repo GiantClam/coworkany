@@ -31,8 +31,7 @@ jobs:
         working-directory: sidecar
         run: bun install
 
-      - name: Run desktop real e2e tier2
-        working-directory: desktop
+      - name: Run Codex nightly tier2 gate
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -41,7 +40,16 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TEST_MODEL_ID: ${{ secrets.TEST_MODEL_ID }}
-        run: npm run test:e2e:tier2
+          COWORKANY_REQUIRE_REAL_MODEL_SMOKE: '1'
+        run: npm run test:codex -- --mode nightly --subset nightly-tier2
+
+      - name: Upload Codex nightly tier2 report
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-test-nightly-tier2
+          path: artifacts/codex-test/**
+          if-no-files-found: error
+          retention-days: 14
 
   desktop-tier3-macos:
     runs-on: macos-15
@@ -68,8 +76,7 @@ jobs:
         working-directory: sidecar
         run: bun install
 
-      - name: Run desktop real e2e tier3
-        working-directory: desktop
+      - name: Run Codex nightly tier3 gate
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -78,4 +85,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TEST_MODEL_ID: ${{ secrets.TEST_MODEL_ID }}
-        run: npm run test:e2e:tier3
+        run: npm run test:codex -- --mode nightly --subset nightly-tier3
+
+      - name: Upload Codex nightly tier3 report
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-test-nightly-tier3
+          path: artifacts/codex-test/**
+          if-no-files-found: error
+          retention-days: 14

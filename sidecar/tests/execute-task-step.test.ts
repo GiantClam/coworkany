@@ -4,12 +4,26 @@ import { executeFrozenTask } from '../src/mastra/workflows/steps/execute-task';
 
 describe('execute-task workflow step', () => {
     test('uses task-scoped resource id instead of shared org resource', async () => {
-        const calls: Array<{ thread: string; resource: string }> = [];
+        const calls: Array<{
+            thread: string;
+            resource: string;
+            requireToolApproval?: boolean;
+            autoResumeSuspendedTools?: boolean;
+        }> = [];
         const coworker = {
-            generate: async (_query: string, options: { memory?: { thread?: string; resource?: string } }) => {
+            generate: async (
+                _query: string,
+                options: {
+                    memory?: { thread?: string; resource?: string };
+                    requireToolApproval?: boolean;
+                    autoResumeSuspendedTools?: boolean;
+                },
+            ) => {
                 calls.push({
                     thread: options.memory?.thread ?? '',
                     resource: options.memory?.resource ?? '',
+                    requireToolApproval: options.requireToolApproval,
+                    autoResumeSuspendedTools: options.autoResumeSuspendedTools,
                 });
                 return {
                     text: 'ok',
@@ -44,5 +58,9 @@ describe('execute-task workflow step', () => {
         expect(calls[0]?.resource).not.toBe(calls[1]?.resource);
         expect(calls[0]?.thread).toBe('control-plane-frozen-task-a');
         expect(calls[1]?.thread).toBe('control-plane-frozen-task-b');
+        expect(calls[0]?.requireToolApproval).toBe(true);
+        expect(calls[0]?.autoResumeSuspendedTools).toBe(false);
+        expect(calls[1]?.requireToolApproval).toBe(true);
+        expect(calls[1]?.autoResumeSuspendedTools).toBe(false);
     });
 });

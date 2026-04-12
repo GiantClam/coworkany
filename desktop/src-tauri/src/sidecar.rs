@@ -1023,6 +1023,20 @@ impl SidecarManager {
             || line.to_ascii_lowercase().contains("failed")
     }
 
+    fn is_expected_mcp_warning_stderr_line(line: &str) -> bool {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("mcp_client_connect_failed")
+            || lower.contains("mcp_client_get_toolsets_failed")
+            || lower.contains("failed to connect to mcp server")
+            || lower.contains("failed to list toolsets from server")
+            || lower.contains("mcp error -32000")
+            || lower.contains("connection closed")
+            || lower.contains("npm error code e404")
+            || lower.contains("npm error 404")
+            || lower.contains("not found - get https://registry.npmjs.org/")
+            || lower.contains("could not determine executable to run")
+    }
+
     fn log_sidecar_stderr_line(line: &str, category: SidecarStderrCategory) {
         match category {
             SidecarStderrCategory::Heartbeat
@@ -1038,7 +1052,9 @@ impl SidecarManager {
                 info!("Sidecar {}", line);
             }
             SidecarStderrCategory::Important => {
-                if Self::is_likely_error_stderr_line(line) {
+                if Self::is_likely_error_stderr_line(line)
+                    && !Self::is_expected_mcp_warning_stderr_line(line)
+                {
                     error!("Sidecar {}", line);
                 } else {
                     warn!("Sidecar {}", line);
@@ -1510,6 +1526,8 @@ impl SidecarManager {
     }
 
     fn apply_chat_runtime_env(command: &mut Command) {
+        let enable_mcp =
+            Self::first_non_empty_env(&["COWORKANY_ENABLE_MCP"]).unwrap_or_else(|| "1".to_string());
         let guardrails = Self::first_non_empty_env(&["COWORKANY_ENABLE_GUARDRAILS"])
             .unwrap_or_else(|| "0".to_string());
         let output_guardrails = Self::first_non_empty_env(&["COWORKANY_ENABLE_OUTPUT_GUARDRAILS"])
@@ -1568,21 +1586,69 @@ impl SidecarManager {
             30_000,
             180_000,
         );
+        let stream_progress_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS"],
+            20_000,
+            1_000,
+            60_000,
+        );
+        let stream_idle_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS"],
+            25_000,
+            2_000,
+            60_000,
+        );
         let post_assistant_max_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS"],
-            30_000,
+            20_000,
             5_000,
             90_000,
         );
+        let post_assistant_idle_complete_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS"],
+            12_000,
+            1_000,
+            60_000,
+        );
         let mcp_toolsets_timeout_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS"],
-            2_000,
+            5_000,
             200,
             20_000,
         );
+        let mcp_server_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MCP_SERVER_TIMEOUT_MS"],
+            10_000,
+            1_000,
+            60_000,
+        );
+        let task_turn_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS"],
+            240_000,
+            30_000,
+            240_000,
+        );
+        let task_startup_budget_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS"],
+            90_000,
+            15_000,
+            120_000,
+        );
+        let task_stream_progress_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS"],
+            20_000,
+            1_000,
+            120_000,
+        );
+        let task_stream_idle_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS"],
+            30_000,
+            2_000,
+            120_000,
+        );
         let task_workflow_timeout_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"],
-            120_000,
+            45_000,
             15_000,
             180_000,
         );
@@ -1600,7 +1666,7 @@ impl SidecarManager {
         );
         let task_execute_step_timeout_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS"],
-            90_000,
+            30_000,
             15_000,
             90_000,
         );
@@ -1618,6 +1684,7 @@ impl SidecarManager {
         );
 
         command
+            .env("COWORKANY_ENABLE_MCP", &enable_mcp)
             .env("COWORKANY_ENABLE_GUARDRAILS", &guardrails)
             .env("COWORKANY_ENABLE_OUTPUT_GUARDRAILS", &output_guardrails)
             .env(
@@ -1657,12 +1724,44 @@ impl SidecarManager {
                 stream_max_duration_ms.to_string(),
             )
             .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS",
+                stream_progress_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS",
+                stream_idle_timeout_ms.to_string(),
+            )
+            .env(
                 "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS",
                 post_assistant_max_ms.to_string(),
             )
             .env(
+                "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS",
+                post_assistant_idle_complete_ms.to_string(),
+            )
+            .env(
                 "COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS",
                 mcp_toolsets_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MCP_SERVER_TIMEOUT_MS",
+                mcp_server_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS",
+                task_turn_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS",
+                task_startup_budget_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS",
+                task_stream_progress_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS",
+                task_stream_idle_timeout_ms.to_string(),
             )
             .env(
                 "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
@@ -1690,7 +1789,7 @@ impl SidecarManager {
             );
 
         info!(
-            "Sidecar chat runtime configured: guardrails={} output_guardrails={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} post_assistant_max_ms={} mcp_toolsets_timeout_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
+            "Sidecar chat runtime configured: guardrails={} output_guardrails={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} stream_progress_timeout_ms={} stream_idle_timeout_ms={} post_assistant_max_ms={} post_assistant_idle_complete_ms={} mcp_toolsets_timeout_ms={} mcp_server_timeout_ms={} task_turn_timeout_ms={} task_startup_budget_ms={} task_stream_progress_timeout_ms={} task_stream_idle_timeout_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
             guardrails,
             output_guardrails,
             start_retry_count,
@@ -1702,8 +1801,16 @@ impl SidecarManager {
             generate_fallback_timeout_ms,
             turn_timeout_ms,
             stream_max_duration_ms,
+            stream_progress_timeout_ms,
+            stream_idle_timeout_ms,
             post_assistant_max_ms,
+            post_assistant_idle_complete_ms,
             mcp_toolsets_timeout_ms,
+            mcp_server_timeout_ms,
+            task_turn_timeout_ms,
+            task_startup_budget_ms,
+            task_stream_progress_timeout_ms,
+            task_stream_idle_timeout_ms,
             task_workflow_timeout_ms,
             task_workflow_retry_count,
             task_workflow_retry_delay_ms,
@@ -1734,8 +1841,7 @@ impl SidecarManager {
     fn is_openai_compatible_provider(provider: &str) -> bool {
         matches!(
             provider,
-            "openai" | "aiberm" | "nvidia" | "siliconflow" | "gemini" | "qwen" | "minimax"
-                | "kimi"
+            "openai" | "aiberm" | "nvidia" | "siliconflow" | "gemini" | "qwen" | "minimax" | "kimi"
         )
     }
 
@@ -3406,8 +3512,7 @@ impl Default for SidecarState {
 mod tests {
     use super::{
         classify_sidecar_message, extract_stream_delta_log_entry, is_json_object_line,
-        is_sidecar_metrics_line,
-        truncate_log_line, SidecarManager, SidecarMessageKind,
+        is_sidecar_metrics_line, truncate_log_line, SidecarManager, SidecarMessageKind,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -3529,6 +3634,7 @@ mod tests {
     fn apply_chat_runtime_env_sets_safe_defaults() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let keys = [
+            "COWORKANY_ENABLE_MCP",
             "COWORKANY_ENABLE_GUARDRAILS",
             "COWORKANY_ENABLE_OUTPUT_GUARDRAILS",
             "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
@@ -3540,8 +3646,16 @@ mod tests {
             "COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS",
             "COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS",
             "COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS",
             "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS",
+            "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS",
             "COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS",
+            "COWORKANY_MCP_SERVER_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS",
+            "COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
@@ -3558,6 +3672,7 @@ mod tests {
         SidecarManager::apply_chat_runtime_env(&mut command);
         let envs = command_env_map(&command);
 
+        assert_eq!(envs.get("COWORKANY_ENABLE_MCP"), Some(&"1".to_string()));
         assert_eq!(
             envs.get("COWORKANY_ENABLE_GUARDRAILS"),
             Some(&"0".to_string())
@@ -3603,16 +3718,48 @@ mod tests {
             Some(&"180000".to_string())
         );
         assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS"),
+            Some(&"20000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS"),
+            Some(&"25000".to_string())
+        );
+        assert_eq!(
             envs.get("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS"),
-            Some(&"30000".to_string())
+            Some(&"20000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS"),
+            Some(&"12000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS"),
-            Some(&"2000".to_string())
+            Some(&"5000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MCP_SERVER_TIMEOUT_MS"),
+            Some(&"10000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS"),
+            Some(&"240000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS"),
+            Some(&"90000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS"),
+            Some(&"20000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS"),
+            Some(&"30000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"),
-            Some(&"120000".to_string())
+            Some(&"45000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT"),
@@ -3624,7 +3771,7 @@ mod tests {
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS"),
-            Some(&"90000".to_string())
+            Some(&"30000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT"),
@@ -3642,6 +3789,7 @@ mod tests {
     fn apply_chat_runtime_env_clamps_extreme_values() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let keys = [
+            "COWORKANY_ENABLE_MCP",
             "COWORKANY_ENABLE_GUARDRAILS",
             "COWORKANY_ENABLE_OUTPUT_GUARDRAILS",
             "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
@@ -3653,8 +3801,16 @@ mod tests {
             "COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS",
             "COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS",
             "COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS",
             "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS",
+            "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS",
             "COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS",
+            "COWORKANY_MCP_SERVER_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS",
+            "COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
@@ -3664,6 +3820,7 @@ mod tests {
         ];
         let snapshot = snapshot_env(&keys);
 
+        std::env::set_var("COWORKANY_ENABLE_MCP", "0");
         std::env::set_var("COWORKANY_ENABLE_GUARDRAILS", "1");
         std::env::set_var("COWORKANY_ENABLE_OUTPUT_GUARDRAILS", "1");
         std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT", "99");
@@ -3678,19 +3835,34 @@ mod tests {
         std::env::set_var("COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS", "9999999");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS", "1");
+        std::env::set_var(
+            "COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS",
+            "999999",
+        );
         std::env::set_var("COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MCP_SERVER_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS", "999999");
+        std::env::set_var("COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT", "99");
         std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS", "999999");
         std::env::set_var("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT", "-1");
-        std::env::set_var("COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS", "999999");
+        std::env::set_var(
+            "COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS",
+            "999999",
+        );
 
         let mut command = Command::new("env");
         SidecarManager::apply_chat_runtime_env(&mut command);
         let envs = command_env_map(&command);
 
+        assert_eq!(envs.get("COWORKANY_ENABLE_MCP"), Some(&"0".to_string()));
         assert_eq!(
             envs.get("COWORKANY_ENABLE_GUARDRAILS"),
             Some(&"1".to_string())
@@ -3736,12 +3908,44 @@ mod tests {
             Some(&"180000".to_string())
         );
         assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_PROGRESS_TIMEOUT_MS"),
+            Some(&"60000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS"),
+            Some(&"2000".to_string())
+        );
+        assert_eq!(
             envs.get("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS"),
             Some(&"5000".to_string())
         );
         assert_eq!(
+            envs.get("COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS"),
+            Some(&"60000".to_string())
+        );
+        assert_eq!(
             envs.get("COWORKANY_MASTRA_CHAT_MCP_TOOLSETS_TIMEOUT_MS"),
             Some(&"20000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MCP_SERVER_TIMEOUT_MS"),
+            Some(&"60000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_TURN_TIMEOUT_MS"),
+            Some(&"240000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS"),
+            Some(&"15000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS"),
+            Some(&"120000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS"),
+            Some(&"2000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"),
@@ -4105,5 +4309,31 @@ mod tests {
         });
 
         assert!(extract_stream_delta_log_entry(&message).is_none());
+    }
+
+    #[test]
+    fn expected_mcp_stderr_failures_are_not_hard_errors() {
+        assert!(SidecarManager::is_likely_error_stderr_line(
+            "Failed to connect to MCP server demo-user-server: MCP error -32000: Connection closed"
+        ));
+        assert!(SidecarManager::is_expected_mcp_warning_stderr_line(
+            "Failed to connect to MCP server demo-user-server: MCP error -32000: Connection closed"
+        ));
+        assert!(SidecarManager::is_expected_mcp_warning_stderr_line(
+            "npm error 404 Not Found - GET https://registry.npmjs.org/demo-mcp - Not found"
+        ));
+        assert!(SidecarManager::is_expected_mcp_warning_stderr_line(
+            "{\"code\":\"MCP_CLIENT_GET_TOOLSETS_FAILED\",\"message\":\"Failed to list toolsets from server\"}"
+        ));
+    }
+
+    #[test]
+    fn unexpected_stderr_failures_remain_hard_errors() {
+        assert!(SidecarManager::is_likely_error_stderr_line(
+            "Unhandled panic: failed to bind rpc socket"
+        ));
+        assert!(!SidecarManager::is_expected_mcp_warning_stderr_line(
+            "Unhandled panic: failed to bind rpc socket"
+        ));
     }
 }

@@ -41,8 +41,12 @@ export const supervisor = new Agent({
         return await getWorkspaceForRequestContext(requestContext);
     },
     defaultOptions: {
-        requireToolApproval: true,
-        autoResumeSuspendedTools: true,
+        // Supervisor-level delegation tools are side-effect free (agent handoff);
+        // keep high-risk approvals at concrete mutating tools instead.
+        requireToolApproval: false,
+        // Keep approval resume on the CoworkAny entrypoint path to avoid
+        // Mastra internal resume races (e.g. late stream_exhausted vs approval).
+        autoResumeSuspendedTools: false,
         toolCallConcurrency: 1,
         maxSteps: 20,
         inputProcessors: guardrailInputProcessors,
@@ -88,6 +92,12 @@ export const supervisor = new Agent({
         onIterationComplete: ({ iteration, toolCalls, text, isFinal }) => {
             if (isFinal) {
                 return undefined;
+            }
+            if (toolCalls.length === 0 && text.trim().length >= 12) {
+                return {
+                    continue: false,
+                    feedback: 'Answer is already complete with no pending tool calls. Stop iteration.',
+                };
             }
             if (iteration >= 10 && toolCalls.length === 0 && text.trim().length < 20) {
                 return {

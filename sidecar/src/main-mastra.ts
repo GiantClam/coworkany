@@ -9,7 +9,13 @@ import { globalToolRegistry } from './tools/registry';
 import { STANDARD_TOOLS } from './tools/standard';
 import { createMastraAdditionalCommandHandler } from './mastra/additionalCommands';
 import { createMastraSchedulerRuntime } from './mastra/schedulerRuntime';
-import { disconnectMcpSafe } from './mastra/mcp/clients';
+import {
+    disconnectMcpSafe,
+    getMcpConnectionSnapshot,
+    getMcpSecuritySnapshot,
+    isMcpEnabled,
+    listMcpToolsetsSafe,
+} from './mastra/mcp/clients';
 import { replayWorkflowRunTimeTravel } from './mastra/workflowReplay';
 import { destroyWorkspaceRuntime } from './mastra/workspace/runtime';
 import { buildSkillPromptFromStore } from './mastra/skillPrompt';
@@ -23,6 +29,11 @@ import { evaluateSkillPolicy } from './mastra/pluginPolicy';
 import { loadRemoteSessionGovernancePolicy } from './mastra/remoteSessionGovernance';
 import { createMastraTaskExecutionService } from './mastra/taskExecutionService';
 import { resolveRuntimeAppDataRoot } from './config/runtimeConfig';
+import {
+    buildInternalRuntimeToolsets,
+    countToolsInToolsets,
+    describeRuntimeToolpackState,
+} from './mastra/runtimeToolCatalog';
 const workspaceRoot = process.cwd();
 const appDataRoot = resolveRuntimeAppDataRoot({ cwd: workspaceRoot });
 const additionalCommandRuntime = createMastraAdditionalCommandHandler({
@@ -48,6 +59,12 @@ setHookRuntimeEventsEnabled(true);
 const policyEngine = createMastraPolicyEngineFromEnv();
 const remoteSessionGovernancePolicy = loadRemoteSessionGovernancePolicy(workspaceRoot);
 const taskExecutionService = createMastraTaskExecutionService();
+
+function resolveInternalToolDefinition(toolName: string) {
+    return globalToolRegistry.getTool(toolName)
+        ?? STANDARD_TOOLS.find((tool) => tool.name === toolName);
+}
+
 function writeEvent(event: Record<string, unknown>): void {
     process.stdout.write(`${JSON.stringify(event)}\n`);
 }
@@ -238,21 +255,77 @@ async function run(): Promise<void> {
                 ).allowed,
             });
         },
-        listRuntimeCapabilities: () => ({
-            skills: additionalCommandRuntime.skillStore.list().map((skill) => ({
-                id: skill.manifest.name,
-                name: skill.manifest.name,
-                enabled: skill.enabled,
-                description: skill.manifest.description,
-            })),
-            toolpacks: additionalCommandRuntime.toolpackStore.list().map((toolpack) => ({
-                id: toolpack.manifest.id ?? toolpack.manifest.name,
-                name: toolpack.manifest.name,
-                enabled: toolpack.enabled,
-                description: toolpack.manifest.description,
-                tools: toolpack.manifest.tools ?? [],
-            })),
-        }),
+        listRuntimeCapabilities: async () => {
+            const [mcpSecuritySnapshot, mcpToolsets] = await Promise.all([
+                Promise.resolve(getMcpSecuritySnapshot()),
+                listMcpToolsetsSafe().catch(() => ({})),
+            ]);
+            return {
+                skills: additionalCommandRuntime.skillStore.list().map((skill) => ({
+                    id: skill.manifest.name,
+                    name: skill.manifest.name,
+                    enabled: skill.enabled,
+                    description: skill.manifest.description,
+                })),
+                toolpacks: additionalCommandRuntime.toolpackStore.list().map((toolpack) => {
+                    const runtimeDescriptor = describeRuntimeToolpackState({
+                        toolpack,
+                        resolveTool: resolveInternalToolDefinition,
+                        mcpToolsets,
+                        mcpAllowedServerIds: mcpSecuritySnapshot.allowedServerIds,
+                        mcpBlockedServerIds: mcpSecuritySnapshot.blockedServerIds,
+                    });
+                    return {
+                        id: toolpack.manifest.id ?? toolpack.manifest.name,
+                        name: toolpack.manifest.name,
+                        enabled: toolpack.enabled,
+                        description: toolpack.manifest.description,
+                        tools: toolpack.manifest.tools ?? [],
+                        runtimeStatus: runtimeDescriptor.status,
+                        callableToolCount: runtimeDescriptor.callableToolCount,
+                        unresolvedTools: runtimeDescriptor.unresolvedTools,
+                        blockedReason: runtimeDescriptor.blockedReason,
+                    };
+                }),
+            };
+        },
+        listRuntimeToolsets: async () => {
+            const [mcpToolsets, internalToolsets] = await Promise.all([
+                listMcpToolsetsSafe(),
+                Promise.resolve(buildInternalRuntimeToolsets({
+                    toolpacks: additionalCommandRuntime.toolpackStore.listEnabled(),
+                    resolveTool: resolveInternalToolDefinition,
+                })),
+            ]);
+            return {
+                ...(mcpToolsets as Record<string, Record<string, unknown>>),
+                ...internalToolsets,
+            };
+        },
+        isRuntimeMcpEnabled: () => isMcpEnabled(),
+        getRuntimeMcpSnapshot: () => {
+            const snapshot = getMcpConnectionSnapshot();
+            const securitySnapshot = getMcpSecuritySnapshot();
+            const hasAllowedServers = securitySnapshot.allowedServerIds.length > 0;
+            const inferredStatus = (
+                snapshot.status === 'ready'
+                && hasAllowedServers
+                && snapshot.cachedToolCount === 0
+            )
+                ? 'degraded'
+                : snapshot.status;
+            return {
+                enabled: snapshot.enabled,
+                status: inferredStatus,
+                cachedToolCount: snapshot.cachedToolCount,
+                cachedToolsetCount: snapshot.cachedToolsetCount,
+                allowedServerCount: securitySnapshot.allowedServerIds.length,
+                runtimeToolCount: countToolsInToolsets(buildInternalRuntimeToolsets({
+                    toolpacks: additionalCommandRuntime.toolpackStore.listEnabled(),
+                    resolveTool: resolveInternalToolDefinition,
+                })),
+            };
+        },
         taskTranscriptStore,
         rewindTaskContext: ({ taskId, userTurns }) => rewindTaskContextCompression({
             taskId,

@@ -55,6 +55,20 @@ export type CapabilityCommandDeps = {
         source: string,
         workspacePath: string,
     ) => Promise<GitHubDownloadResult>;
+    resolveRuntimeToolpackState?: (input: {
+        manifest: ToolpackManifest;
+        enabled: boolean;
+        workingDir: string;
+        installedAt: string;
+        lastUsedAt?: string;
+        isBuiltin?: boolean;
+    }) => Promise<{
+        status: 'configured' | 'resolved' | 'callable' | 'blocked';
+        blockedReason?: string;
+        callableToolCount: number;
+        resolvedToolCount: number;
+        unresolvedTools: string[];
+    }>;
 };
 
 type SkillSnapshot = {
@@ -139,6 +153,12 @@ function toToolpackRecord(stored: {
     lastUsedAt?: string;
     workingDir: string;
     isBuiltin?: boolean;
+}, runtimeState?: {
+    status: 'configured' | 'resolved' | 'callable' | 'blocked';
+    blockedReason?: string;
+    callableToolCount: number;
+    resolvedToolCount: number;
+    unresolvedTools: string[];
 }): Record<string, unknown> {
     const source = stored.isBuiltin ? 'built_in' : 'local_folder';
     return {
@@ -148,7 +168,11 @@ function toToolpackRecord(stored: {
         installedAt: stored.installedAt,
         enabled: stored.enabled,
         lastUsedAt: stored.lastUsedAt,
-        status: 'stopped',
+        status: runtimeState?.status ?? 'configured',
+        blocked_reason: runtimeState?.blockedReason,
+        callableToolCount: runtimeState?.callableToolCount ?? 0,
+        resolvedToolCount: runtimeState?.resolvedToolCount ?? 0,
+        unresolvedTools: runtimeState?.unresolvedTools ?? [],
     };
 }
 function toSkillRecord(stored: {
@@ -791,10 +815,15 @@ export async function handleCapabilityCommand(
     switch (command.type) {
         case 'list_toolpacks': {
             const includeDisabled = readBoolean(payload, 'includeDisabled', false);
-            const toolpacks = deps.toolpackStore
+            const listedToolpacks = deps.toolpackStore
                 .list()
-                .filter((toolpack) => includeDisabled || toolpack.enabled)
-                .map((toolpack) => toToolpackRecord(toolpack));
+                .filter((toolpack) => includeDisabled || toolpack.enabled);
+            const toolpacks = await Promise.all(listedToolpacks.map(async (toolpack) => {
+                const runtimeState = deps.resolveRuntimeToolpackState
+                    ? await deps.resolveRuntimeToolpackState(toolpack)
+                    : undefined;
+                return toToolpackRecord(toolpack, runtimeState);
+            }));
             return respond(command.id, 'list_toolpacks_response', {
                 toolpacks,
             });

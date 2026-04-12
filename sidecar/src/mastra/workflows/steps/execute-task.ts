@@ -64,19 +64,19 @@ export async function executeFrozenTask(input: {
     });
     const executeStepTimeoutMs = readBoundedInt(
         'COWORKANY_MASTRA_TASK_EXECUTE_STEP_TIMEOUT_MS',
-        25_000,
+        30_000,
         3_000,
         90_000,
     );
     const executeStepRetryCount = readBoundedInt(
         'COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT',
-        1,
+        5,
         0,
-        3,
+        5,
     );
     const executeStepRetryDelayMs = readBoundedInt(
         'COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS',
-        500,
+        1_000,
         100,
         10_000,
     );
@@ -99,7 +99,7 @@ export async function executeFrozenTask(input: {
                     }
                     : undefined,
                 requireToolApproval: true,
-                autoResumeSuspendedTools: true,
+                autoResumeSuspendedTools: false,
                 toolCallConcurrency: 1,
                 maxSteps: 8,
                 signal: abortController.signal,

@@ -23,16 +23,13 @@ Confirm the following:
 Recommended validation:
 
 ```bash
-cd desktop
-npm ci
-npm run test:ci
+npm run test:codex -- --mode pr --subset sidecar
+npm run test:codex -- --mode pr --subset desktop
+npm run test:codex -- --mode pr --subset desktop-e2e
 ```
 
 ```bash
-cd sidecar
-bun install
-npm run typecheck
-npm run test:ci
+npm run test:codex -- --mode release
 ```
 
 ## Release Paths

@@ -1,0 +1,1002 @@
+# coworkany — AI Context Map
+
+> **Stack:** raw-http | none | unknown | javascript
+
+> 3 routes | 0 models | 0 components | 167 lib files | 184 env vars | 11 middleware | 4352 import links
+> **Token savings:** this file is ~16,700 tokens. Without it, AI exploration would cost ~80,900 tokens. **Saves ~64,200 tokens per conversation.**
+
+---
+
+# Routes
+
+- `GET` `/killkillkill` [auth, db]
+- `ALL` `/sse` [auth, db]
+- `GET` `/json` [db]
+
+---
+
+# Libraries
+
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/config/files/index-browser.ts`
+  - function findConfigUpwards: (// eslint-disable-next-line @typescript-eslint/no-unused-vars
+  rootDir) => string | null
+  - function resolvePlugin: (name, dirname) => Resolved | null
+  - function resolvePreset: (name, dirname) => Resolved | null
+  - function loadPlugin: (name, dirname) => Handler<
+  - function loadPreset: (name, dirname) => Handler<
+  - const ROOT_CONFIG_FILENAMES: string[]
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/config/resolve-targets-browser.ts` — function resolveBrowserslistConfigFile: (// eslint-disable-next-line @typescript-eslint/no-unused-vars
+  browserslistConfigFile, // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  configFilePath) => string | void, function resolveTargets: (options, // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  root) => Targets
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/config/resolve-targets.ts` — function resolveBrowserslistConfigFile: (browserslistConfigFile, configFileDir) => string | undefined, function resolveTargets: (options, root) => Targets
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/transform-file-browser.ts`
+  - function transformFileSync: () => never
+  - function transformFileAsync: () => void
+  - const transformFile: TransformFile
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/transform-file.ts`
+  - function transformFile: (filename, callback) => void;
+  - function transformFile: (filename, opts, callback) => void;
+  - function transformFile: (...args) => void
+  - function transformFileSync: (...args) => void
+  - function transformFileAsync: (...args) => void
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/gen-mapping/src/gen-mapping.ts`
+  - function addSegment: (map, genLine, genColumn, source?, sourceLine?, sourceColumn?, name?, content?) => void;
+  - function addSegment: (map, genLine, genColumn, source, sourceLine, sourceColumn, name?, content?) => void;
+  - function addSegment: (map, genLine, genColumn, source, sourceLine, sourceColumn, name, content?) => void;
+  - function addSegment: (map, genLine, genColumn, source?, sourceLine?, sourceColumn?, name?, content?) => void
+  - function addMapping: (map, mapping) => void;
+  - function addMapping: (map, mapping) => void;
+  - _...16 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/gen-mapping/src/set-array.ts`
+  - function get: (setarr, key) => number | undefined
+  - function put: (setarr, key) => number
+  - function pop: (setarr) => void
+  - function remove: (setarr, key) => void
+  - class SetArray
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/remapping/src/source-map-tree.ts`
+  - function MapSource: (map, sources) => MapSource
+  - function OriginalSource: (source, content, ignore) => OriginalSource
+  - function traceMappings: (tree) => GenMapping
+  - function originalPositionFor: (source, line, column, name) => SourceMapSegmentObject | null
+  - type SourceMapSegmentObject
+  - type OriginalSource
+  - _...2 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/scopes.ts`
+  - function decodeOriginalScopes: (input) => OriginalScope[]
+  - function encodeOriginalScopes: (scopes) => string
+  - function decodeGeneratedRanges: (input) => GeneratedRange[]
+  - function encodeGeneratedRanges: (ranges) => string
+  - type OriginalScope
+  - type GeneratedRange
+  - _...2 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/sourcemap-codec.ts`
+  - function decode: (mappings) => SourceMapMappings
+  - function encode: (decoded) => string;
+  - function encode: (decoded) => string;
+  - function encode: (decoded) => string
+  - type SourceMapSegment
+  - type SourceMapLine
+  - _...1 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/strings.ts` — class StringWriter, class StringReader
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/vlq.ts`
+  - function decodeInteger: (reader, relative) => number
+  - function encodeInteger: (builder, num, relative) => number
+  - function hasMoreVlq: (reader, max) => void
+  - const comma
+  - const semicolon
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/binary-search.ts`
+  - function binarySearch: (haystack, needle, low, high) => number
+  - function upperBound: (haystack, needle, index) => number
+  - function lowerBound: (haystack, needle, index) => number
+  - function memoizedState: () => MemoState
+  - function memoizedBinarySearch: (haystack, needle, state, key) => number
+  - type MemoState
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/sort.ts` — function sortComparator: (a, b) => number
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/trace-mapping.ts`
+  - function encodedMappings: (map) => EncodedSourceMap['mappings']
+  - function decodedMappings: (map) => Readonly<DecodedSourceMap['mappings']>
+  - function traceSegment: (map, line, column) => Readonly<SourceMapSegment> | null
+  - function originalPositionFor: (map, needle) => OriginalMapping | InvalidOriginalMapping
+  - function generatedPositionFor: (map, needle) => GeneratedMapping | InvalidGeneratedMapping
+  - function allGeneratedPositionsFor: (map, needle) => GeneratedMapping[]
+  - _...9 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/types.ts`
+  - function parse: (map) => Exclude<T, string>
+  - class SourceMap
+  - interface SourceMapV3
+  - interface EncodedSourceMap
+  - interface DecodedSourceMap
+  - interface Section
+  - _...17 more_
+- `desktop/node_modules.bak-20260319-2215/@ungap/structured-clone/esm/deserialize.js` — function deserialize
+- `desktop/node_modules.bak-20260319-2215/@ungap/structured-clone/esm/json.js` — function parse, function stringify
+- `desktop/node_modules.bak-20260319-2215/@ungap/structured-clone/esm/serialize.js` — function serialize
+- `desktop/node_modules.bak-20260319-2215/jiti/lib/jiti-hooks.mjs`
+  - function initialize: () => void
+  - function resolve: (specifier, context, nextResolve) => void
+  - function load: (url, context, nextLoad) => void
+- `desktop/node_modules.bak-20260319-2215/jiti/lib/jiti-native.mjs` — function createJiti: (parentURL, jitiOptions) => void
+- `desktop/node_modules.bak-20260319-2215/jiti/lib/jiti.mjs` — function createJiti: (id, opts) => void
+- `desktop/node_modules.bak-20260319-2215/tslib/tslib.es6.js`
+  - function __extends: (d, b) => void
+  - function __rest: (s, e) => void
+  - function __decorate: (decorators, target, key, desc) => void
+  - function __param: (paramIndex, decorator) => void
+  - function __esDecorate: (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) => void
+  - function __runInitializers: (thisArg, initializers, value) => void
+  - _...24 more_
+- `desktop/node_modules.bak-20260319-2215/tslib/tslib.es6.mjs`
+  - function __extends: (d, b) => void
+  - function __rest: (s, e) => void
+  - function __decorate: (decorators, target, key, desc) => void
+  - function __param: (paramIndex, decorator) => void
+  - function __esDecorate: (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) => void
+  - function __runInitializers: (thisArg, initializers, value) => void
+  - _...24 more_
+- `desktop/src/bridges/canonicalTaskStream.ts`
+  - function createEmptyCanonicalTaskStreamState: (taskId) => CanonicalTaskStreamState
+  - function applyCanonicalStreamEvent: (state, event) => CanonicalTaskStreamState
+  - function materializeCanonicalMessages: (taskId, events) => CanonicalTaskMessage[]
+  - type CanonicalTaskStreamState
+- `desktop/src/bridges/taskEventStore.ts` — class TaskEventStore, type TaskStateListener
+- `desktop/src/bridges/taskEvents.ts`
+  - function createEmptyTaskState: (taskId) => TaskUiState
+  - function applyTaskEvent: (state, event) => TaskUiState
+  - type TaskUiState
+- `desktop/src/hooks/useClearTaskHistory.ts`
+  - function useClearTaskHistory: () => void
+  - interface ClearTaskHistoryInput
+  - interface ClearTaskHistoryResult
+- `desktop/src/hooks/useDependencyManager.ts`
+  - function useDependencyManager: () => void
+  - interface DependencyStatus
+  - interface RuntimeContextStatus
+- `desktop/src/hooks/useFileAttachment.ts` — function useFileAttachment: () => void, interface FileAttachment
+- `desktop/src/hooks/useGitHubValidation.ts` — function useGitHubValidation: (url, type) => void
+- `desktop/src/hooks/useGlobalShortcuts.ts` — function useGlobalShortcuts: (callbacks, () => void, type GlobalShortcutAction
+- `desktop/src/hooks/useMarketplaceSearch.ts`
+  - function useMarketplaceSearch: () => void
+  - interface MarketplaceItem
+  - type MarketplaceItemType
+- `desktop/src/hooks/useNetworkStatus.ts` — function useNetworkStatus: () => NetworkStatus, interface NetworkStatus
+- `desktop/src/hooks/useRepositoryScan.ts`
+  - function useRepositoryScan: () => void
+  - interface DiscoveredSkill
+  - interface DiscoveredMcp
+- `desktop/src/hooks/useSendTaskMessage.ts`
+  - function useSendTaskMessage: () => void
+  - function useResumeInterruptedTask: () => void
+  - interface SendTaskMessageInput
+  - interface SendTaskMessageResult
+  - interface ResumeInterruptedTaskInput
+  - interface ResumeInterruptedTaskResult
+- `desktop/src/hooks/useServiceManager.ts`
+  - function useServiceManager: () => void
+  - function startAllServices: () => Promise<ServiceOperationResult>
+  - function startAllServicesBackground: () => Promise<ServiceOperationResult>
+  - function stopAllServices: () => Promise<ServiceOperationResult>
+  - function getAllServicesStatus: () => Promise<ServiceInfo[]>
+  - function isRagServiceHealthy: () => Promise<boolean>
+  - _...2 more_
+- `desktop/src/hooks/useSkillDiscovery.ts`
+  - function useSkillDiscovery: () => void
+  - interface DiscoveredSkill
+  - interface DiscoveredMcp
+- `desktop/src/hooks/useSkills.ts`
+  - function useSkills: (options) => void
+  - interface SkillManifest
+  - interface SkillRecord
+- `desktop/src/hooks/useStartTask.ts`
+  - function useStartTask: () => void
+  - function useCancelTask: () => void
+  - function useSpawnSidecar: () => void
+  - function useShutdownSidecar: () => void
+  - interface StartTaskInput
+  - interface StartTaskConfig
+  - _...3 more_
+- `desktop/src/hooks/useTasks.ts`
+  - function useTasks: (workspacePath) => void
+  - interface Task
+  - interface GetTasksResult
+- `desktop/src/hooks/useTauriEvents.ts` — function useTauriEvents: () => void, function useSidecarStatus: () => void
+- `desktop/src/hooks/useToolpacks.ts`
+  - function useToolpacks: (options) => void
+  - interface ToolpackManifest
+  - interface ToolpackRecord
+- `desktop/src/hooks/useVoiceInput.ts`
+  - function useVoiceInput: (language, continuous) => VoiceInputState & VoiceInputActions
+  - interface VoiceInputState
+  - interface VoiceInputActions
+- `desktop/src/hooks/useVoicePlayback.ts` — function useVoicePlayback: () => void
+- `desktop/src/hooks/useWindowShortcuts.ts` — function useWindowShortcuts: (callbacks, () => void
+- `desktop/src/hooks/useWorkspace.ts` — function useWorkspace: (options) => void
+- `desktop/src/i18n/index.ts`
+  - function hydrateLanguagePreference: () => Promise<void>
+  - function changeLanguage: (lang) => void
+  - function getCurrentLanguage: () => string
+- `desktop/src/lib/appLog.ts` — function emitBootJsonLog: (payload) => void, function installMinimalConsoleMode: () => void
+- `desktop/src/lib/configStore.ts`
+  - function getConfig: (key) => Promise<T | null>
+  - function saveConfig: (key, value) => Promise<void>
+  - function deleteConfig: (key) => Promise<void>
+  - function getApiKey: (provider) => Promise<string | null>
+  - function setApiKey: (provider, key) => Promise<void>
+  - function getShortcuts: () => Promise<ShortcutConfig>
+  - _...8 more_
+- `desktop/src/lib/effectApprovalCommands.ts` — function invokeConfirmEffectCommand: (invokeCommand, input) => Promise<void>, function invokeDenyEffectCommand: (invokeCommand, input) => Promise<void>
+- `desktop/src/lib/exportConversation.ts`
+  - function sessionToMarkdown: (session) => string
+  - function downloadMarkdown: (content, filename) => void
+  - function exportSession: (session) => void
+- `desktop/src/lib/externalLinks.ts`
+  - function parseExternalUrl: (rawHref) => URL | null
+  - function isExternalHref: (rawHref) => boolean
+  - function openExternalUrl: (rawHref) => Promise<void>
+- `desktop/src/lib/fileActions.ts`
+  - function openLocalFile: (path) => Promise<void>
+  - function downloadRemoteFile: (url, suggestedName?) => Promise<DownloadRemoteFileResult>
+  - function readLocalTextPreview: (path, maxBytes) => Promise<TextPreviewResult>
+  - function fetchRemoteTextPreview: (url, maxBytes) => Promise<TextPreviewResult>
+  - function openRemoteUrl: (url) => Promise<void>
+  - interface DownloadRemoteFileResult
+  - _...1 more_
+- `desktop/src/lib/llmValidationErrors.ts` — function mapValidationErrorToUserMessage: (input) => string
+- `desktop/src/lib/parsers/qualityParser.ts` — function parseMessageContent: (content) => ParsedContent, interface ParsedContent
+- `desktop/src/lib/shortcuts.ts` — function isMacPlatform: () => boolean, function formatShortcutForDisplay: (shortcut) => string
+- `desktop/src/lib/skillImport.ts`
+  - function extractSkillImportFeedback: (value) => SkillImportFeedback | null
+  - type SkillImportPlan
+  - type SkillImportDependencyCheck
+  - type SkillImportAttempt
+  - type SkillImportFeedback
+- `desktop/src/lib/startupMetrics.ts`
+  - function getStartupMeasurementConfig: () => Promise<StartupMeasurementConfig>
+  - function recordStartupMetric: (mark, frontendElapsedMs?, perfNowMs?, windowLabel?) => Promise<void>
+  - interface StartupMeasurementConfig
+- `desktop/src/lib/taskFailureUi.ts`
+  - function getTaskFailureUiDescriptor: (session, 'failure' | 'suspension' | 'status'> | undefined) => TaskFailureUiDescriptor | null
+  - interface TaskFailureUiDescriptor
+  - type TaskFailureUiCategory
+  - type TaskFailureUiAction
+- `desktop/src/lib/tauri.ts` — function isTauri: () => boolean, function safeTauriCall: (fn) => void
+- `desktop/src/lib/telemetry.ts`
+  - function getTelemetryConfig: () => Promise<TelemetryConfig>
+  - function saveTelemetryConfig: (config) => Promise<void>
+  - function trackEvent: (event, properties?, string | number | boolean>) => Promise<void>
+  - function reportCrash: (error, context?) => Promise<void>
+  - interface TelemetryEvent
+  - interface TelemetryConfig
+- `desktop/src/lib/text/inlineAttachments.ts`
+  - function parseInlineAttachments: (content) => void
+  - type InlineImageAttachment
+  - type InlineFileAttachment
+- `desktop/src/lib/text/messageProcessor.ts`
+  - function processMessageContent: (text, options, useCache) => string
+  - function clearProcessingCache: () => void
+  - function getProcessingCacheSize: () => number
+  - function isInProcessingCache: (text, options) => boolean
+- `desktop/src/lib/text/richMessageSegments.ts`
+  - function looksLikeHtmlDocument: (content) => boolean
+  - function isLikelyLocalPath: (raw) => boolean
+  - function buildRichMessageSegments: (content, inlineFiles) => RichMessageSegment[]
+  - type RichMessageFileRef
+  - type RichMessageSegment
+- `desktop/src/stores/taskEvents/index.ts`
+  - function hydrateSessions: () => Promise<void>
+  - function useActiveSession
+  - function useSidecarConnected
+  - const useTaskEventStore
+- `desktop/src/stores/taskEvents/persistence.ts`
+  - function schedulePersist: (snapshot, options) => void
+  - function cancelScheduledPersist: () => void
+  - interface SessionsSnapshot
+  - interface PersistScheduleOptions
+- `desktop/src/stores/taskEvents/reducers/chatReducer.ts` — function applyChatEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/effectReducer.ts` — function applyEffectEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/patchReducer.ts` — function applyPatchEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/skillRecommendationReducer.ts`
+  - function applySkillRecommendationEvent: (session, event) => TaskSession
+  - interface SkillRecommendation
+  - interface SkillRecommendationData
+- `desktop/src/stores/taskEvents/reducers/taskReducer.ts` — function applyTaskEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/toolReducer.ts` — function applyToolEvent: (session, event) => TaskSession
+- `desktop/src/stores/themeStore.ts` — function initializeTheme: () => Promise<void>, const useThemeStore
+- `desktop/src/stores/useVoicePlaybackStore.ts`
+  - function getDefaultVoicePlaybackState: () => VoicePlaybackState
+  - interface VoicePlaybackState
+  - const useVoicePlaybackStore
+- `desktop/src/types/events.ts`
+  - function isUserMessage: (item) => item is UserMessageItem
+  - function isAssistantMessage: (item) => item is AssistantMessageItem
+  - function isAssistantTurn: (item) => item is AssistantTurnItem
+  - function isToolCall: (item) => item is ToolCallItem
+  - function isSystemEvent: (item) => item is SystemEventItem
+  - function isTaskCard: (item) => item is TaskCardItem
+  - _...57 more_
+- `desktop/src/types/ui.ts`
+  - function isValidationError: (msg) => boolean
+  - function isValidationSuccess: (msg) => boolean
+  - function hasError: (state) => boolean
+  - function isLoading: (state) => boolean
+  - interface Workspace
+  - interface AnthropicProviderSettings
+  - _...34 more_
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `desktop/src-tauri/target/debug/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/debug/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/debug/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/debug/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `desktop/src-tauri/target/release/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `desktop/src-tauri/target/release/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/release/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/release/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `sidecar/builtin-mcp/websearch/index.ts`
+  - function webSearch: (input) => Promise<WebSearchOutput>
+  - function fetchWebpage: (input) => Promise<FetchWebpageOutput>
+  - interface SearchResult
+  - interface WebSearchInput
+  - interface FetchWebpageInput
+  - interface WebSearchOutput
+  - _...2 more_
+- `sidecar/ops/controlPlaneEvalRunner.ts` — function runControlPlaneEvalRunnerCli: () => Promise<void>
+- `sidecar/ops/readiness.ts`
+  - function classifyRealModelGateFailure: (input) => RealModelGateFailureClassification | undefined
+  - function createDefaultControlPlaneEvalThresholds: () => ControlPlaneEvalThresholds
+  - function loadControlPlaneEvalThresholds: (sourcePath, requestedProfile?) => LoadedControlPlaneEvalThresholds
+  - function summarizeControlPlaneEvalSummary: (summaryPath) => ControlPlaneEvalSummary
+  - function summarizeProductionReplayImportSummary: (summaryPath) => ProductionReplayImportSummary
+  - function evaluateControlPlaneEvalReadiness: (summary, thresholds, thresholdSourcePath?, thresholdProfile?) => ControlPlaneEvalGate
+  - _...41 more_
+- `sidecar/ops/sidecarDoctor.ts`
+  - function runSidecarDoctor: (input) => SidecarDoctorReport
+  - function formatSidecarDoctorReport: (report) => string
+  - type SidecarDoctorReport
+- `sidecar/protocol-core/canonicalStream.ts`
+  - function taskEventToCanonicalStreamEvents: (event) => CanonicalStreamEvent[]
+  - type CanonicalMessageRole
+  - type CanonicalTaskStatus
+  - type CanonicalTaskMessagePart
+  - type CanonicalTaskMessage
+  - type CanonicalStreamEvent
+- `sidecar/scripts/release-readiness.ts` — function hasGitRemoteHeadMatch: (output) => boolean
+- `sidecar/src/config/runtimeConfig.ts`
+  - function resolveRuntimeAppDataRoot: (input) => string
+  - function resolveRuntimeConfigCandidatePaths: (input) => string[]
+  - function loadRuntimeLlmConfigSnapshot: (input) => RuntimeConfigSnapshot
+  - function loadRuntimeSearchConfigSnapshot: (input) => void
+  - function resolveRuntimeSearchConfig: (input) => RuntimeSearchConfigResolution
+  - function buildRuntimeConfigDoctorSummary: (input) => RuntimeConfigDoctorSummary
+  - _...6 more_
+- `sidecar/src/directives/directiveManager.ts`
+  - class DirectiveManager
+  - interface Directive
+  - interface Persona
+- `sidecar/src/extensions/workspaceExtensionAllowlist.ts`
+  - function getWorkspaceExtensionAllowlistPath: (repositoryRoot) => string
+  - function loadWorkspaceExtensionAllowlistPolicy: (repositoryRoot) => WorkspaceExtensionAllowlistPolicy
+  - type WorkspaceExtensionAllowlistMode
+  - type WorkspaceExtensionAllowlistPolicy
+- `sidecar/src/handlers/capabilities.ts`
+  - function handleCapabilityCommand: (command, deps) => Promise<IpcResponse | null>
+  - type SkillImportResponsePayload
+  - type CapabilityCommandDeps
+- `sidecar/src/handlers/workspaces.ts` — function handleWorkspaceCommand: (command, deps) => Promise<IpcResponse | null>, type WorkspaceCommandDeps
+- `sidecar/src/ipc/bridge.ts`
+  - function isMastraOperationalProgressChunk: (chunk) => boolean
+  - function extractMastraFinalAssistantTextEvent: (chunk, runId?) => DesktopEvent | null
+  - function extractMastraTokenUsageEvent: (chunk, runId?) => DesktopEvent | null
+  - function mapMastraChunkToDesktopEvent: (chunk, runId?) => DesktopEvent | null
+  - interface MastraChunkLike
+  - type DesktopEvent
+- `sidecar/src/ipc/streaming.ts`
+  - function resolveMissingApiKeyForModel: (modelId, env, string | undefined>) => string | null
+  - function warmupChatRuntime: () => Promise<
+  - function handleUserMessage: (message, threadId, resourceId, sendToDesktop, options?) => void
+  - function handleApprovalResponse: (runId, toolCallId, approved, sendToDesktop) => Promise<void>
+  - function rewindTaskContextCompression: (input) => void
+- `sidecar/src/mastra/additionalCommands.ts` — function createMastraAdditionalCommandHandler: (input?) => void, type AdditionalCommandHandler
+- `sidecar/src/mastra/contextCompression.ts`
+  - class TaskContextCompressionStore
+  - type TaskContextCompressionSnapshot
+  - type RecalledTopicMemory
+  - type ContextPromptPack
+- `sidecar/src/mastra/entrypoint.ts`
+  - function createMastraEntrypointProcessor: (deps) => void
+  - type TaskMessageExecutionDelegateInput
+  - type TaskMessageExecutionDelegateResult
+- `sidecar/src/mastra/entrypointGuardPipeline.ts`
+  - function passGuard: () => GuardPass
+  - function failGuard: (error, payload) => GuardFail<TPayload>
+  - function runGuardPipeline: (guards) => Promise<GuardResult<TPayload>>
+  - type GuardPass
+  - type GuardFail
+  - type GuardResult
+- `sidecar/src/mastra/entrypointRecoveryCommands.ts` — function handleRecoveryAndCheckpointCommands: (input) => Promise<boolean>
+- `sidecar/src/mastra/entrypointRemoteSessionCommands.ts` — function handleRemoteSessionCommands: (input) => Promise<boolean>
+- `sidecar/src/mastra/entrypointTaskCommands.ts` — function handleStartOrSendTaskCommand: (input) => Promise<boolean>
+- `sidecar/src/mastra/entrypointTaskControlCommands.ts` — function handleTaskControlCommands: (input) => Promise<boolean>
+- `sidecar/src/mastra/hookEventBus.ts`
+  - function registerRuntimeHookEventHandler: (handler) => void
+  - function emitRuntimeHookEvent: (event) => void
+  - function setAllRuntimeHookEventsEnabled: (enabled) => void
+  - function clearRuntimeHookEventState: () => void
+  - type RuntimeHookEvent
+  - type RuntimeHookEventHandler
+- `sidecar/src/mastra/hookRuntime.ts`
+  - function registerHookRuntimeEventHandler: (handler) => void
+  - function setHookRuntimeEventsEnabled: (enabled) => void
+  - function clearHookRuntimeEvents: () => void
+  - class MastraHookRuntimeStore
+  - type HookRuntimeEventType
+  - type HookRuntimeEvent
+  - _...1 more_
+- `sidecar/src/mastra/index.ts` — function getMastraHealth: () => void, const mastra
+- `sidecar/src/mastra/managedSettings.ts`
+  - function readManagedSettingsPayload: (input, unknown>;
+}) => void
+  - function applyManagedSettingsFiles: (input) => void
+  - function restoreManagedSettingsFiles: (input) => void
+  - class ManagedSettingsSyncStore
+  - type ManagedSettingsPayload
+  - type ManagedSettingsSyncEntry
+- `sidecar/src/mastra/marketplaceGovernance.ts`
+  - function loadMarketplaceTrustPolicy: (workspaceRoot, env, string | undefined>) => MarketplaceTrustPolicy
+  - function evaluateMarketplaceSourceTrust: (source, policy) => MarketplaceTrustDecision
+  - class MarketplaceAuditStore
+  - type MarketplaceTrustMode
+  - type MarketplaceTrustPolicy
+  - type MarketplaceTrustDecision
+  - _...1 more_
+- `sidecar/src/mastra/mcp/clients.ts`
+  - function listMcpToolsSafe: () => Promise<Record<string, Tool<unknown, unknown, unknown, unknown>>>
+  - function listMcpToolsetsSafe: () => Promise<Record<string, Record<string, Tool<unknown, unknown, unknown, unknown>>>>
+  - function disconnectMcpSafe: () => Promise<void>
+  - function refreshMcpConnections: () => Promise<void>
+  - function getMcpConnectionSnapshot: () => McpConnectionSnapshot
+  - function getMcpSecuritySnapshot: () => McpServerSecuritySnapshot
+  - _...5 more_
+- `sidecar/src/mastra/mcp/connectionManager.ts`
+  - function createMcpConnectionManager: (options) => McpConnectionManager
+  - type McpClientLike
+  - type McpConnectionSnapshot
+  - type McpConnectionManager
+- `sidecar/src/mastra/mcp/security.ts`
+  - function toMastraServerMap: (snapshot) => Record<string,
+  - class McpServerSecurityStore
+  - type McpServerScope
+  - type McpServerDefinition
+  - type McpServerPolicyDecision
+  - type McpServerSecuritySnapshot
+- `sidecar/src/mastra/model/runtimeModel.ts`
+  - function shouldUseOpenAICompatibleChatModel: (input) => boolean
+  - function resolveRuntimeModelConfig: (fallbackModelId) => RuntimeModelConfig
+  - type RuntimeModelId
+  - type RuntimeModelConfig
+- `sidecar/src/mastra/pluginDependencyResolver.ts`
+  - function detectDependencyCycles: (plugins, rootId?) => string[][]
+  - function verifyAndDemotePlugins: (plugins) => void
+  - function findReverseDependents: (pluginId, plugins) => string[]
+  - type DependencyAwarePlugin
+  - type DependencyError
+- `sidecar/src/mastra/pluginPolicy.ts`
+  - function loadPluginPolicySnapshot: (workspaceRoot, env, string | undefined>) => PluginPolicySnapshot
+  - function evaluateSkillPolicy: (input, snapshot) => PluginPolicyDecision
+  - function evaluateToolpackPolicy: (input, snapshot) => PluginPolicyDecision
+  - type PluginPolicySnapshot
+  - type PluginPolicyDecision
+- `sidecar/src/mastra/policyDecisionLog.ts`
+  - class MastraPolicyDecisionLogStore
+  - type PolicyDecisionLogEntry
+  - type PolicyDecisionLogStore
+- `sidecar/src/mastra/policyEngine.ts`
+  - function createMastraPolicyEngine: (config) => PolicyEngine
+  - function createMastraPolicyEngineFromEnv: (env, string | undefined>) => PolicyEngine
+  - type PolicyDecisionAction
+  - type PolicyDecisionInput
+  - type PolicyDecision
+  - type PolicyEngine
+- `sidecar/src/mastra/remoteSessionGovernance.ts`
+  - function loadRemoteSessionGovernancePolicy: (workspaceRoot, env, string | undefined>) => RemoteSessionGovernancePolicy
+  - type RemoteSessionConflictStrategy
+  - type RemoteSessionGovernancePolicy
+  - const DEFAULT_REMOTE_SESSION_GOVERNANCE_POLICY: RemoteSessionGovernancePolicy
+- `sidecar/src/mastra/remoteSessionStore.ts`
+  - class MastraRemoteSessionStore
+  - type RemoteSessionStatus
+  - type ChannelDeliveryStatus
+  - type RemoteSessionState
+  - type ChannelDeliveryEvent
+- `sidecar/src/mastra/requestContext.ts` — function createTaskRequestContext: (input) => RequestContext<CoworkanyRequestContextValues>, type CoworkanyRequestContextValues
+- `sidecar/src/mastra/runtimeBindings.ts` — function createVoiceProviderBindings: (input) => VoiceProviderBindings
+- `sidecar/src/mastra/runtimeErrorClassifier.ts`
+  - function classifyRuntimeErrorMessage: (message) => RuntimeFailureClassification
+  - interface RuntimeFailureClassification
+  - type RuntimeFailureClass
+- `sidecar/src/mastra/runtimeIdentity.ts` — function deriveDefaultResourceId: (taskId) => string
+- `sidecar/src/mastra/schedulerLeaseLock.ts` — function tryAcquireSchedulerLease: (input) => SchedulerLeaseHandle | null, type SchedulerLeaseHandle
+- `sidecar/src/mastra/schedulerRuntime.ts`
+  - function createMastraSchedulerRuntime: (input) => void
+  - type SchedulerFaultInjectionPhase
+  - type ScheduleDecision
+  - type ScheduledCancelResult
+- `sidecar/src/mastra/skillPrompt.ts` — function buildSkillPromptFromStore: (store, 'list' | 'findByTrigger' | 'get'>, input) => SkillPromptOutput
+- `sidecar/src/mastra/taskExecutionService.ts` — function createMastraTaskExecutionService: () => void
+- `sidecar/src/mastra/taskRuntimeState.ts`
+  - function toTaskRuntimeState: (value) => TaskRuntimeState | null
+  - function recoverTaskRuntimeStateAfterRestart: (state) => TaskRuntimeState
+  - type TaskRuntimeStatus
+  - type TaskRuntimeExecutionPath
+  - type TaskRuntimeCheckpoint
+  - type TaskRuntimeRetryState
+  - _...4 more_
+- `sidecar/src/mastra/taskRuntimeStateStore.ts` — class MastraTaskRuntimeStateStore
+- `sidecar/src/mastra/taskTranscriptStore.ts`
+  - class MastraTaskTranscriptStore
+  - type TaskTranscriptRole
+  - type TaskTranscriptEntry
+- `sidecar/src/mastra/telemetry.ts`
+  - function resolveTelemetryPolicy: (env, string | undefined>) => TelemetryPolicy
+  - function createTelemetryRunContext: (input, string | undefined>;
+    randomValue?) => TelemetryRunContext
+  - type TelemetrySamplingMode
+  - type TelemetryPolicy
+  - type TelemetryRunContext
+- `sidecar/src/mastra/tools/bash.ts`
+  - function isDangerousCommand: (command) => boolean
+  - function needsApprovalForCommand: (command) => boolean
+  - type BashExecutionResult
+  - const DANGEROUS_PATTERNS: RegExp[]
+  - const APPROVAL_PATTERNS: RegExp[]
+  - const bashTool
+  - _...1 more_
+- `sidecar/src/mastra/workflowReplay.ts`
+  - function replayWorkflowRunTimeTravel: (input) => Promise<WorkflowTimeTravelReplayResult>
+  - type WorkflowTimeTravelReplayInput
+  - type WorkflowTimeTravelReplayResult
+- `sidecar/src/mastra/workflows/steps/analyze-intent.ts`
+  - function analyzeWorkRequest: (input) => AnalyzeIntentResult
+  - interface AnalyzeIntentInput
+  - interface AnalyzeIntentResult
+- `sidecar/src/mastra/workflows/steps/assess-risk.ts` — function buildExecutionProfile: (normalized) => AssessRiskResult, interface AssessRiskResult
+- `sidecar/src/mastra/workflows/steps/execute-task.ts`
+  - function executeFrozenTask: (input) => Promise<ExecuteTaskOutput>
+  - interface ExecuteTaskInput
+  - interface ExecuteTaskOutput
+- `sidecar/src/mastra/workflows/steps/freeze-contract.ts`
+  - function freezeContract: (input) => FreezeContractOutput
+  - interface FreezeContractInput
+  - interface FreezeContractOutput
+- `sidecar/src/mastra/workflows/steps/research-loop.ts`
+  - function runResearchLoop: (input, resumeData?, string> }) => Promise<ResearchLoopOutput>
+  - interface ResearchLoopInput
+  - interface ResearchLoopOutput
+- `sidecar/src/mastra/workspace/runtime.ts`
+  - function resolveWorkspacePathFromRequestContext: (requestContext?) => string
+  - function getWorkspacePolicySnapshot: () => void
+  - function getWorkspaceForRequestContext: (requestContext?) => Promise<Workspace | undefined>
+  - function destroyWorkspaceRuntime: () => Promise<void>
+- `sidecar/src/orchestration/researchLoop.ts`
+  - function runPreFreezeResearchLoop: (input) => Promise<NormalizedWorkRequest>
+  - type ResearchLoopResolvers
+  - type ResearchLoopOptions
+- `sidecar/src/orchestration/routedInput.ts`
+  - function parseRoutedInput: (input) => RoutedInputParseResult
+  - function resolveForcedWorkMode: (forcedRouteMode) => 'chat' | 'immediate_task' | undefined
+  - type ForcedRouteMode
+  - type RoutedInputParseResult
+- `sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - function analyzeWorkRequest: (input) => NormalizedWorkRequest
+  - function freezeWorkRequest: (request) => FrozenWorkRequest
+  - function buildExecutionPlan: (request) => ExecutionPlan
+  - function buildExecutionQueryForTaskIds: (request, 'tasks' | 'deliverables' | 'checkpoints'>, taskIds?, options?) => string
+- `sidecar/src/orchestration/workRequestPolicy.ts` — function buildExecutionProfile: (input) => ExecutionProfile
+- `sidecar/src/protocol/patches.ts`
+  - function createDiffHeader: (oldPath, newPath, operation) => string
+  - function calculatePatchStats: (hunks) => void
+  - type PatchOperation
+  - type DiffHunk
+  - const PatchOperationSchema
+  - const DiffHunkSchema
+  - _...5 more_
+- `sidecar/src/runtime/jarvis/voiceInterface.ts`
+  - function normalizeMacOSTextForSpeech: (text) => string
+  - function createVoiceInterface: (config?) => VoiceInterface
+  - class VoiceInterface
+  - interface VoiceConfig
+  - interface SpeechRecognitionResult
+  - interface VoicePlaybackState
+  - _...1 more_
+- `sidecar/src/scheduling/scheduledTaskRules.ts`
+  - function resolveRelativeUnitKind: (unitRaw) => RelativeUnitKind | null
+  - type RelativeUnitKind
+  - const SCHEDULED_TASK_PREFIX_PATTERNS: ReadonlyArray<RegExp>
+  - const RECURRING_MARKER_PATTERN
+  - const RECURRING_INTERVAL_PATTERN
+  - const INLINE_ENGLISH_RELATIVE_TIME_PATTERN
+  - _...8 more_
+- `sidecar/src/scheduling/scheduledTasks.ts`
+  - function parseScheduledTimeExpression: (expression, now) => void
+  - function detectScheduledIntent: (query, now) => void
+  - function getRecurrenceIntervalMs: (recurrence?) => number | null
+  - function computeNextRecurringExecuteAt: (input) => Date | null
+  - function formatScheduledTime: (date) => string
+  - class ScheduledTaskStore
+  - _...7 more_
+- `sidecar/src/storage/skillStore.ts`
+  - class SkillStore
+  - interface SkillRequirements
+  - interface ClaudeSkillManifest
+  - interface StoredSkill
+- `sidecar/src/storage/toolpackStore.ts` — class ToolpackStore, interface StoredToolpack
+- `sidecar/src/storage/workspaceStore.ts`
+  - class WorkspaceStore
+  - interface Workspace
+  - interface WorkspaceConfig
+- `sidecar/src/storage/workspaceStoreFacade.ts` — function createWorkspaceStoreFacade: (getRoot) => void
+- `sidecar/src/tools/commandSandbox.ts`
+  - function checkCommand: (command) => CommandCheckResult
+  - function getDangerousPatterns: () => Array<
+  - interface CommandCheckResult
+- `sidecar/src/tools/core/speechProviders.ts`
+  - function listSpeechProviders: (skills, kind, getTool) => void
+  - function getPreferredSpeechProvider: (skills, kind, getTool) => void
+  - function getSpeechProviderStatus: (skills, getTool) => void
+  - function invokeCustomAsrProvider: (skills, getTool) => void
+  - function invokeCustomTtsProvider: (skills, getTool) => void
+  - type SpeechProviderKind
+  - _...2 more_
+- `sidecar/src/tools/core/voice.ts`
+  - function configureVoiceProviders: (input) => void
+  - function setVoicePlaybackReporter: (reporter) => void
+  - function speakText: (text, context, source) => Promise<
+  - function stopVoicePlayback: (reason) => Promise<boolean>
+  - function getVoicePlaybackState: () => VoicePlaybackState
+  - const voiceSpeakTool: ToolDefinition
+- `sidecar/src/tools/registry.ts`
+  - class ToolRegistry
+  - interface RegisteredTool
+  - interface ToolFilter
+  - type ToolSource
+  - const globalToolRegistry
+- `sidecar/src/utils/commandAlternatives.ts`
+  - function getCurrentPlatform: () => Platform
+  - function extractBaseCommand: (command) => string
+  - function findAlternatives: (failedCommand, platform) => void
+  - function getAlternativeCommands: (failedCommand) => string[]
+  - function formatAlternativesMessage: (failedCommand) => string
+  - function hasAlternatives: (command) => boolean
+  - _...3 more_
+- `sidecar/src/utils/githubDownloader.ts`
+  - function parseGitHubSource: (source) => void
+  - function downloadFromGitHub: (source, targetDir, options) => Promise<GitHubDownloadResult>
+  - function downloadSkillFromGitHub: (source, workspacePath, options) => Promise<GitHubDownloadResult>
+  - function downloadMcpFromGitHub: (source, workspacePath, options) => Promise<GitHubDownloadResult>
+  - interface GitHubDownloadOptions
+  - interface GitHubDownloadResult
+
+---
+
+# Config
+
+## Environment Variables
+
+- `ALL_PROXY` **required** — sidecar/src/main-mastra.ts
+- `ANTHROPIC_API_KEY` **required** — desktop/tests/coworkany-self-management-update-config-e2e.test.ts
+- `APPDATA` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `AWS_ACCESS_KEY_ID` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `AWS_DEFAULT_REGION` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `AWS_REGION` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `AWS_SECRET_ACCESS_KEY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `AWS_SESSION_TOKEN` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `BRAVE_API_KEY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `BROWSER_USE_HOST` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `BROWSER_USE_LLM_MODEL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `BROWSER_USE_PORT` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `BUN_INSTALL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `CARGO_HOME` **required** — desktop/tests/interrupted-task-resume-native-shell-mac.test.ts
+- `CDP_PORT` **required** — sidecar/tests/browser-automation.test.ts
+- `CHROMA_PATH` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py
+- `CI` **required** — desktop/playwright.config.ts
+- `CLOUD_RUN_JOB` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COLLECTION_NAME` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py
+- `COWORKANY_ALLOW_INSECURE_TLS` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_APP_DATA_DIR` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_ARTIFACT_TELEMETRY_PATH` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_BROWSER_SCENARIO_POLL_MS` **required** — desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts
+- `COWORKANY_BROWSER_SCENARIO_TIMEOUT_MS` **required** — desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts
+- `COWORKANY_BROWSER_USE_AUTOSTART` **required** — desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_BUNDLED_NODE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_CANARY_EVIDENCE_PATH` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_CONTROL_PLANE_THRESHOLD_PROFILE` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_CONTROL_PLANE_THRESHOLDS` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_DB_HOST_ALLOWLIST` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_DB_URL` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_DEBUG_AUTO_APPROVAL` **required** — sidecar/src/ipc/streaming.ts
+- `COWORKANY_DEBUG_STREAM_RECOVERY` **required** — sidecar/src/ipc/streaming.ts
+- `COWORKANY_DISABLE_BROWSER_CDP` **required** — desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts
+- `COWORKANY_DOCTOR_REQUIRED_STATUS` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_ENABLE_GUARDRAILS` **required** — sidecar/src/mastra/guardrails/processors.ts
+- `COWORKANY_ENABLE_MCP` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_ENABLE_OBSERVATIONAL_MEMORY` **required** — sidecar/src/mastra/memory/config.ts
+- `COWORKANY_ENABLE_OUTPUT_GUARDRAILS` **required** — sidecar/src/mastra/guardrails/processors.ts
+- `COWORKANY_ENABLE_WORKING_MEMORY` **required** — sidecar/src/mastra/memory/config.ts
+- `COWORKANY_GUARDRAIL_MODEL` **required** — sidecar/src/mastra/guardrails/processors.ts
+- `COWORKANY_LLM_CONFIG_PROVIDER` **required** — sidecar/src/main-mastra.ts
+- `COWORKANY_LLM_CUSTOM_API_FORMAT` **required** — sidecar/src/main-mastra.ts
+- `COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS` **required** — sidecar/tests/mastra-entrypoint.test.ts
+- `COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_POST_ASSISTANT_MAX_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STARTUP_BUDGET_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_MAX_DURATION_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_COUNT` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_STREAM_TAIL_RETRY_DELAY_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_CHAT_TURN_TIMEOUT_MS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_FORCE_POST_MAX_STEPS` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS` **required** — sidecar/tests/mastra-entrypoint.test.ts
+- `COWORKANY_MASTRA_NO_NARRATIVE_RETRY_COUNT` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_MASTRA_RESOURCE_ID` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT` **required** — sidecar/src/ipc/streaming.ts
+- `COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS` **required** — sidecar/src/ipc/streaming.ts
+- `COWORKANY_MASTRA_STREAM_RETRY_COUNT` **required** — sidecar/src/ipc/streaming.ts
+- `COWORKANY_MASTRA_STREAM_RETRY_DELAY_MS` **required** — sidecar/src/ipc/streaming.ts
+- `COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT` **required** — sidecar/tests/task-execution-service.test.ts
+- `COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS` **required** — sidecar/tests/task-execution-service.test.ts
+- `COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS` **required** — sidecar/tests/task-execution-service.test.ts
+- `COWORKANY_MCP_RECONNECT_MIN_INTERVAL_MS` **required** — sidecar/src/mastra/mcp/clients.ts
+- `COWORKANY_MCP_TOOLSETS_CACHE_TTL_MS` **required** — sidecar/src/mastra/mcp/clients.ts
+- `COWORKANY_MODEL` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_OPENAI_RESPONSES_STORE` **required** — sidecar/tests/phase3-agent-loop.test.ts
+- `COWORKANY_PACKAGE_MANAGER` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_PLAYWRIGHT_BRIDGE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_PLAYWRIGHT_BROWSERS_PATH` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_PRODUCTION_REPLAY_DATASET` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_PROXY_SOURCE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_PROXY_URL` **required** — sidecar/src/main-mastra.ts
+- `COWORKANY_REAL_MODEL_SMOKE` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_REPO_MATRIX` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_REPO_MATRIX_EVIDENCE_DIR` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_REPO_MATRIX_OUT` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_REQUIRE_CANARY_EVIDENCE` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_REQUIRE_REAL_MODEL_SMOKE` **required** — scripts/test-codex.ts
+- `COWORKANY_RUNTIME_MODE` **required** — desktop/tests/phase1-acceptance.test.ts
+- `COWORKANY_SCORER_SAMPLING_RATE` **required** — sidecar/src/mastra/scorers/runtime.ts
+- `COWORKANY_SIDECAR_SINGLETON` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_SIDECAR_SOCKET_PATH` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `COWORKANY_STARTUP_PROFILE` **required** — sidecar/scripts/release-readiness.ts
+- `COWORKANY_STOCK_SCENARIO_TIMEOUT_MS` **required** — desktop/tests/stock-research-desktop-scenarios.e2e.test.ts
+- `COWORKANY_TASK_EXECUTION_DEFAULT` **required** — sidecar/src/mastra/taskExecutionService.ts
+- `COWORKANY_TEST_BROWSER_USE_SERVICE_URL` **required** — desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts
+- `COWORKANY_TEST_CHROME_PATH` **required** — desktop/tests/tauriFixtureNoChrome.ts
+- `COWORKANY_TEST_ENABLE_BROWSER_SHARED_CDP` **required** — desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts
+- `COWORKANY_TEST_ISOLATE_APP_DATA` **required** — desktop/tests/browser-concurrent-desktop-scenarios.e2e.test.ts
+- `COWORKANY_TEST_SHARED_CDP_PORT` **required** — desktop/tests/tauriFixtureNoChrome.ts
+- `COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT` **required** — sidecar/tests/task-execution-service.test.ts
+- `DEBUG` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `DEBUG_AUTH` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `DEBUG_FD` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `DETECT_GCP_RETRIES` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `E2E_AIBERM_API_KEY` **required** — desktop/tests/coworkany-self-management-update-config-e2e.test.ts
+- `E2E_AIBERM_BASE_URL` **required** — desktop/tests/desktop-message-protocol-regression.e2e.test.ts
+- `E2E_ALLOW_INSECURE_TLS` **required** — sidecar/tests/real-model-smoke.e2e.test.ts
+- `E2E_SILICONFLOW_API_KEY` **required** — desktop/tests/siliconflow-settings-e2e.test.ts
+- `E2E_SILICONFLOW_MODEL` **required** — desktop/tests/siliconflow-settings-e2e.test.ts
+- `EMBEDDING_MODEL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py
+- `ENABLE_NEWS_RSS_FALLBACK` **required** — desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/sidecar/coworkany-sidecar-node.mjs
+- `ENABLE_WEBSEARCH_FREE_FALLBACK` **required** — desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/sidecar/coworkany-sidecar-node.mjs
+- `FUNCTION_NAME` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `FUNCTION_TARGET` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GAE_MODULE_NAME` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GAE_SERVICE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GCE_METADATA_HOST` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GCE_METADATA_IP` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GCLOUD_PROJECT` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GH_TOKEN` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GITHUB_STEP_SUMMARY` **required** — scripts/test-codex.ts
+- `GITHUB_TOKEN` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GLOBAL_AGENT_HTTPS_PROXY` **required** — sidecar/tests/proxy-settings-env.test.ts
+- `GOOGLE_APPLICATION_CREDENTIALS` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GOOGLE_CLIENT_ID` (has default) — .env.example
+- `GOOGLE_CLIENT_SECRET` (has default) — .env.example
+- `GOOGLE_CLOUD_PROJECT` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GOOGLE_CLOUD_QUOTA_PROJECT` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GOOGLE_CLOUD_UNIVERSE_DOMAIN` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `GOOGLE_GENERATIVE_AI_API_KEY` **required** — sidecar/tests/real-model-smoke.e2e.test.ts
+- `GOOGLE_REDIRECT_URI` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `HOME` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `HTTP_PROXY` **required** — sidecar/src/main-mastra.ts
+- `HTTPS_PROXY` **required** — sidecar/src/main-mastra.ts
+- `K_CONFIGURATION` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `K_SERVICE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `LIBSQL_JS_DEV` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `LITELLM_BASE_URL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `LOCALAPPDATA` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `LOG_LEVEL` (has default) — .env.example
+- `LOG_STREAM` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `LOG_TOKENS` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `MASTRA_AUTO_REFRESH_PROVIDERS` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `MASTRA_DEV` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `MASTRA_DISABLE_STORAGE_INIT` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `METADATA_SERVER_DETECTION` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `NETLIFY_SITE_ID` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `NETLIFY_TOKEN` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `NEWS_API_KEY` (has default) — .env.example
+- `NO_DEPRECATION` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `NO_PROXY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `NODE_OPTIONS` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `NODE_TLS_REJECT_UNAUTHORIZED` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `NODE_USE_ENV_PROXY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `NODE_V8_COVERAGE` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `OM_DEBUG` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `OM_REPRO_CAPTURE` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `OM_REPRO_CAPTURE_DIR` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `OPENAI_API_KEY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `OPENAI_BASE_URL` **required** — desktop/tests/skillhub-ppt-generator-e2e.test.ts
+- `OPENROUTER_API_KEY` **required** — desktop/tests/coworkany-self-management-update-config-e2e.test.ts
+- `OPENWEATHER_API_KEY` (has default) — .env.example
+- `OSTYPE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `PATH` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `PATHEXT` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `PLAYWRIGHT_BROWSERS_PATH` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `PROGRAMFILES` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py
+- `RAG_HOST` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py
+- `RAG_PORT` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py
+- `RAG_SERVICE_URL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `RUSTUP_HOME` **required** — desktop/tests/interrupted-task-resume-native-shell-mac.test.ts
+- `SEARCH_PROVIDER` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `SEARXNG_URL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `SERPER_API_KEY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `SHELL` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `TAURI_DEBUG` **required** — desktop/vite.config.ts
+- `TAURI_DEV_PORT` **required** — desktop/scripts/start-tauri-dev-server.mjs
+- `TAURI_PLATFORM` **required** — desktop/vite.config.ts
+- `TAVILY_API_KEY` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `TEST_MODEL_ID` **required** — desktop/tests/desktop-message-protocol-regression.e2e.test.ts
+- `TRACE_DEPRECATION` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `USERPROFILE` **required** — desktop/src-tauri/target/aarch64-apple-darwin/release/sidecar/coworkany-sidecar-node.mjs
+- `VAULT_PATH` **required** — .env.example
+- `VERCEL_OIDC_TOKEN` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `WORKSPACE_PATH` (has default) — .env.example
+- `WS_NO_BUFFER_UTIL` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `WS_NO_UTF_8_VALIDATE` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+- `XDG_DATA_HOME` **required** — desktop/src-tauri/target/debug/sidecar/coworkany-sidecar-node.mjs
+
+## Config Files
+
+- `.env.example`
+- `desktop/tailwind.config.js`
+- `desktop/vite.config.ts`
+- `sidecar/.env.example`
+
+---
+
+# Middleware
+
+## custom
+- generate — `desktop/node_modules.bak-20260319-2215/@babel/core/lib/transformation/file/generate.js`
+- applyDecoratedDescriptor — `desktop/node_modules.bak-20260319-2215/@babel/runtime/helpers/applyDecoratedDescriptor.js`
+- decorate — `desktop/node_modules.bak-20260319-2215/@babel/runtime/helpers/decorate.js`
+- applyDecoratedDescriptor — `desktop/node_modules.bak-20260319-2215/@babel/runtime/helpers/esm/applyDecoratedDescriptor.js`
+- decorate — `desktop/node_modules.bak-20260319-2215/@babel/runtime/helpers/esm/decorate.js`
+- integrate — `desktop/node_modules.bak-20260319-2215/fraction.js/examples/integrate.js`
+- generateAgents — `desktop/node_modules.bak-20260319-2215/playwright/lib/agents/generateAgents.js`
+- pirates — `desktop/node_modules.bak-20260319-2215/playwright/lib/third_party/pirates.js`
+- processors — `sidecar/src/mastra/guardrails/processors.ts`
+
+## cors
+- cors — `desktop/node_modules.bak-20260319-2215/caniuse-lite/data/features/cors.js`
+
+## auth
+- rate-limited-timeout-stage.test — `desktop/tests/rate-limited-timeout-stage.test.ts`
+
+---
+
+# Dependency Graph
+
+## Most Imported Files (change these carefully)
+
+- `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/Resolver.js` — imported by **128** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utils.js` — imported by **63** files
+- `desktop/src/types/index.ts` — imported by **48** files
+- `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/declaration.js` — imported by **45** files
+- `desktop/node_modules.bak-20260319-2215/playwright/lib/util.js` — imported by **38** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utilsBundle.js` — imported by **32** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utils/isomorphic/manualPromise.js` — imported by **27** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/instrumentation.js` — imported by **26** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/utils/debugLogger.js` — imported by **25** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browserContext.js` — imported by **24** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/utils/eventsHelper.js` — imported by **23** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/dispatchers/dispatcher.js` — imported by **23** files
+- `desktop/tests/tauriFixtureNoChrome.ts` — imported by **23** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/client/channelOwner.js` — imported by **22** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utils/isomorphic/assert.js` — imported by **22** files
+- `desktop/node_modules.bak-20260319-2215/@babel/types/lib/validators/generated/index.js` — imported by **21** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/page.js` — imported by **21** files
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utilsBundleImpl/index.js` — imported by **21** files
+- `desktop/node_modules.bak-20260319-2215/playwright/lib/mcp/browser/tools/tool.js` — imported by **20** files
+- `desktop/node_modules.bak-20260319-2215/resolve/index.js` — imported by **20** files
+
+## Import Map (who imports what)
+
+- `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/Resolver.js` ← `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/AliasFieldPlugin.js`, `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/AliasFieldPlugin.js`, `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/AliasFieldPlugin.js`, `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/AliasFieldPlugin.js`, `desktop/node_modules.bak-20260319-2215/enhanced-resolve/lib/AliasPlugin.js` +123 more
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utils.js` ← `desktop/node_modules.bak-20260319-2215/playwright-core/lib/cli/program.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/cli/program.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/cli/programWithTestStub.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/remote/playwrightConnection.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/remote/playwrightServer.js` +58 more
+- `desktop/src/types/index.ts` ← `desktop/src/components/Chat/ChatInterface.tsx`, `desktop/src/components/Chat/SkillRecommendationCard.tsx`, `desktop/src/components/Chat/Timeline/components/AssistantTurnBlock.tsx`, `desktop/src/components/Chat/Timeline/components/TaskCardMessage.tsx`, `desktop/src/components/Chat/Timeline/components/ToolCard.tsx` +43 more
+- `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/declaration.js` ← `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/hacks/align-content.js`, `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/hacks/align-items.js`, `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/hacks/align-self.js`, `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/hacks/animation.js`, `desktop/node_modules.bak-20260319-2215/autoprefixer/lib/hacks/appearance.js` +40 more
+- `desktop/node_modules.bak-20260319-2215/playwright/lib/util.js` ← `desktop/node_modules.bak-20260319-2215/playwright/lib/common/config.js`, `desktop/node_modules.bak-20260319-2215/playwright/lib/common/configLoader.js`, `desktop/node_modules.bak-20260319-2215/playwright/lib/common/fixtures.js`, `desktop/node_modules.bak-20260319-2215/playwright/lib/common/poolBuilder.js`, `desktop/node_modules.bak-20260319-2215/playwright/lib/common/process.js` +33 more
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utilsBundle.js` ← `desktop/node_modules.bak-20260319-2215/playwright-core/lib/androidServerImpl.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/browserServerImpl.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/cli/program.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/cli/program.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/agent/actionRunner.js` +27 more
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/utils/isomorphic/manualPromise.js` ← `desktop/node_modules.bak-20260319-2215/playwright-core/lib/client/network.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/client/page.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/client/video.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/client/worker.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/outofprocess.js` +22 more
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/instrumentation.js` ← `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/android/android.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/artifact.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browser.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browserContext.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browserType.js` +21 more
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/utils/debugLogger.js` ← `desktop/node_modules.bak-20260319-2215/playwright-core/lib/remote/playwrightConnection.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/android/android.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/bidi/bidiConnection.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/bidi/bidiOverCdp.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/bidi/bidiPage.js` +20 more
+- `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browserContext.js` ← `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/agent/context.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/android/android.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/bidi/bidiBrowser.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browser.js`, `desktop/node_modules.bak-20260319-2215/playwright-core/lib/server/browserType.js` +19 more
+
+---
+
+_Generated by [codesight](https://github.com/Houseofmvps/codesight) — see your codebase clearly_

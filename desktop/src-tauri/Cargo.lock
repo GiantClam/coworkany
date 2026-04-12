@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "coworkany-desktop"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "cc",

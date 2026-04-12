@@ -26,6 +26,7 @@ type McpConnectionManagerOptions = {
     createClient: () => McpClientLike;
     cacheTtlMs?: number;
     reconnectMinIntervalMs?: number;
+    onFailure?: (error: unknown) => void | Promise<void>;
 };
 
 export type McpConnectionManager = {
@@ -47,7 +48,9 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
         ? Math.floor(options.reconnectMinIntervalMs)
         : 2_000;
 
-    let client: McpClientLike | null = options.enabled ? options.createClient() : null;
+    // Lazily create MCP clients on first use to avoid duplicate client initialization
+    // during module bootstrap and to keep startup resilient when MCP is unavailable.
+    let client: McpClientLike | null = null;
     let status: McpConnectionSnapshot['status'] = options.enabled ? 'idle' : 'disabled';
     let consecutiveFailures = 0;
     let lastConnectedAt: string | undefined;
@@ -58,6 +61,7 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
     let toolsetsCache: ToolsetMap = {};
     let toolsRefreshInFlight: Promise<ToolMap> | null = null;
     let toolsetsRefreshInFlight: Promise<ToolsetMap> | null = null;
+    let reconnectInFlight: Promise<void> | null = null;
 
     function nowIso(): string {
         return new Date().toISOString();
@@ -77,11 +81,16 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
         cacheUpdatedAtMs = Date.now();
     }
 
-    function markFailure(error: unknown): void {
+    async function markFailure(error: unknown): Promise<void> {
         consecutiveFailures += 1;
         lastFailureAt = nowIso();
         status = 'degraded';
         console.warn('[Mastra MCP] request failed:', error);
+        try {
+            await options.onFailure?.(error);
+        } catch (onFailureError) {
+            console.warn('[Mastra MCP] failure hook failed:', onFailureError);
+        }
     }
 
     function shouldRefreshCache(): boolean {
@@ -106,6 +115,11 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
         if (!options.enabled || (!force && !shouldReconnect())) {
             return;
         }
+        if (reconnectInFlight) {
+            await reconnectInFlight;
+            return;
+        }
+        reconnectInFlight = (async () => {
         const previous = client;
         client = null;
         lastReconnectAt = nowIso();
@@ -118,6 +132,10 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
         }
         client = options.createClient();
         status = 'idle';
+        })().finally(() => {
+            reconnectInFlight = null;
+        });
+        await reconnectInFlight;
     }
 
     async function refreshTools(): Promise<ToolMap> {
@@ -137,8 +155,20 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
                 markSuccess();
                 return next;
             } catch (error) {
-                markFailure(error);
-                await reconnectSafe();
+                await markFailure(error);
+                try {
+                    await reconnectSafe();
+                } catch (reconnectError) {
+                    console.warn('[Mastra MCP] reconnect after listTools failure failed:', reconnectError);
+                }
+                try {
+                    const recovered = await ensureClient().listTools();
+                    toolsCache = recovered;
+                    markSuccess();
+                    return recovered;
+                } catch (retryError) {
+                    await markFailure(retryError);
+                }
                 return toolsCache;
             } finally {
                 toolsRefreshInFlight = null;
@@ -164,8 +194,20 @@ export function createMcpConnectionManager(options: McpConnectionManagerOptions)
                 markSuccess();
                 return next;
             } catch (error) {
-                markFailure(error);
-                await reconnectSafe();
+                await markFailure(error);
+                try {
+                    await reconnectSafe();
+                } catch (reconnectError) {
+                    console.warn('[Mastra MCP] reconnect after listToolsets failure failed:', reconnectError);
+                }
+                try {
+                    const recovered = await ensureClient().listToolsets();
+                    toolsetsCache = recovered;
+                    markSuccess();
+                    return recovered;
+                } catch (retryError) {
+                    await markFailure(retryError);
+                }
                 return toolsetsCache;
             } finally {
                 toolsetsRefreshInFlight = null;

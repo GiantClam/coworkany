@@ -2107,9 +2107,7 @@ pub async fn send_task_message(
         .get("queuePosition")
         .and_then(Value::as_u64)
         .map(|value| value as u32);
-    let deduplicated = payload
-        .get("deduplicated")
-        .and_then(Value::as_bool);
+    let deduplicated = payload.get("deduplicated").and_then(Value::as_bool);
     let dedup_reason = payload
         .get("dedupReason")
         .and_then(Value::as_str)

@@ -81,8 +81,22 @@ const completionScorerForLoop = createScorer({
 }).generateScore(async ({ run }) => {
     const context = run.input as {
         currentText?: string;
+        text?: string;
+        assistantText?: string;
+        responseText?: string;
     };
-    return typeof context.currentText === 'string' && context.currentText.trim().length >= 12 ? 1 : 0;
+    const candidateText = [
+        context.currentText,
+        context.text,
+        context.assistantText,
+        context.responseText,
+    ]
+        .find((value) => typeof value === 'string' && value.trim().length > 0);
+    if (typeof candidateText === 'string' && candidateText.trim().length >= 12) {
+        return 1;
+    }
+    const outputText = extractOutputText(run.output);
+    return outputText.length >= 12 ? 1 : 0;
 });
 
 const completionToolSettledForLoop = createScorer({
@@ -98,7 +112,7 @@ const completionToolSettledForLoop = createScorer({
 
 const completionIterationGuardForLoop = createScorer({
     id: 'coworkany-loop-iteration-guard',
-    description: 'Allows termination near max iteration to avoid unbounded loops.',
+    description: 'Does not block completion while iterations remain within configured bounds.',
 }).generateScore(async ({ run }) => {
     const context = run.input as {
         iteration?: number;
@@ -109,7 +123,7 @@ const completionIterationGuardForLoop = createScorer({
     if (maxIterations <= 0) {
         return 1;
     }
-    return iteration >= Math.max(1, maxIterations - 1) ? 1 : 0;
+    return iteration <= maxIterations ? 1 : 0;
 });
 
 const samplingRate = parseSamplingRate(process.env.COWORKANY_SCORER_SAMPLING_RATE, 0.15);

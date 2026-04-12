@@ -3,13 +3,20 @@ import type {
     TaskRuntimeExecutionPath,
     TaskRuntimeOperationAction,
     TaskRuntimeOperationRecord,
+    TaskTurnContract,
     TaskRuntimeState,
 } from './taskRuntimeState';
 import { failGuard, passGuard, runGuardPipeline } from './entrypointGuardPipeline';
+import { buildTaskMessageDispatchKey } from './capabilityRegistry';
 
 type UserMessageExecutionOptions = {
     enabledSkills?: string[];
     executionPath?: 'direct' | 'workflow';
+    forcedRouteMode?: 'chat' | 'task';
+    requireToolEvidenceForCompletion?: boolean;
+    requiredCompletionCapabilities?: string[];
+    turnContractHash?: string;
+    turnContractDomain?: string;
 };
 
 type RecoveryOrCheckpointCommandType =
@@ -77,6 +84,7 @@ type HandleRecoveryAndCheckpointCommandsInput = {
     claimTaskMessageDispatch?: (input: {
         taskId: string;
         message: string;
+        dedupeKey?: string;
     }) => {
         deduplicated: boolean;
         reason?: 'in_flight';
@@ -103,6 +111,37 @@ function isRetryableTaskStatus(status: TaskRuntimeState['status']): boolean {
         || status === 'interrupted'
         || status === 'suspended'
         || status === 'retrying';
+}
+
+function buildRetryExecutionOptions(input: {
+    state: TaskRuntimeState;
+}): UserMessageExecutionOptions {
+    const contract = input.state.turnContract;
+    return {
+        enabledSkills: input.state.enabledSkills,
+        executionPath: input.state.executionPath === 'direct' ? 'direct' : 'workflow',
+        forcedRouteMode: contract?.mode === 'chat' ? 'chat' : 'task',
+        requireToolEvidenceForCompletion: (contract?.requiredCapabilities?.length ?? 0) > 0,
+        requiredCompletionCapabilities: contract?.requiredCapabilities,
+        turnContractHash: contract?.hash,
+        turnContractDomain: contract?.domain,
+    };
+}
+
+function buildRetryDispatchKey(input: {
+    message: string;
+    contract?: TaskTurnContract;
+    executionPath?: TaskRuntimeExecutionPath;
+}): string | undefined {
+    if (!input.contract) {
+        return undefined;
+    }
+    return buildTaskMessageDispatchKey({
+        message: input.message,
+        route: input.executionPath === 'workflow' ? 'workflow' : 'direct',
+        mode: input.contract.mode,
+        contractHash: input.contract.hash,
+    });
 }
 
 async function runTaskCommandPolicyGuard(input: {
@@ -252,8 +291,7 @@ export async function handleRecoveryAndCheckpointCommands(
             preferredThreadId: state.conversationThreadId,
             workspacePath: state.workspacePath,
             executionOptions: {
-                enabledSkills: state.enabledSkills,
-                executionPath: state.executionPath === 'direct' ? 'direct' : 'workflow',
+                ...buildRetryExecutionOptions({ state }),
             },
         });
         if (resumeExecutionPath !== state.executionPath) {
@@ -486,6 +524,11 @@ export async function handleRecoveryAndCheckpointCommands(
             const claim = input.claimTaskMessageDispatch({
                 taskId,
                 message: retryMessage,
+                dedupeKey: buildRetryDispatchKey({
+                    message: retryMessage,
+                    contract: existing.turnContract,
+                    executionPath: existing.executionPath,
+                }),
             });
             if (claim.deduplicated) {
                 input.emitFor('retry_task_response', {
@@ -562,8 +605,7 @@ export async function handleRecoveryAndCheckpointCommands(
                 preferredThreadId: updated.conversationThreadId,
                 workspacePath: updated.workspacePath,
                 executionOptions: {
-                    enabledSkills: updated.enabledSkills,
-                    executionPath: updated.executionPath === 'direct' ? 'direct' : 'workflow',
+                    ...buildRetryExecutionOptions({ state: updated }),
                 },
             });
         } finally {
@@ -759,8 +801,7 @@ export async function handleRecoveryAndCheckpointCommands(
                     preferredThreadId: resumed.conversationThreadId,
                     workspacePath: resumed.workspacePath,
                     executionOptions: {
-                        enabledSkills: resumed.enabledSkills,
-                        executionPath: resumed.executionPath === 'direct' ? 'direct' : 'workflow',
+                        ...buildRetryExecutionOptions({ state: resumed }),
                     },
                 });
                 if (recoveredExecutionPath !== resumed.executionPath) {
@@ -817,8 +858,7 @@ export async function handleRecoveryAndCheckpointCommands(
                 preferredThreadId: retried.conversationThreadId,
                 workspacePath: retried.workspacePath,
                 executionOptions: {
-                    enabledSkills: retried.enabledSkills,
-                    executionPath: retried.executionPath === 'direct' ? 'direct' : 'workflow',
+                    ...buildRetryExecutionOptions({ state: retried }),
                 },
             });
             if (recoveredExecutionPath !== retried.executionPath) {

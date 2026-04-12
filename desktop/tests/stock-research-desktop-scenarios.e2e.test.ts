@@ -86,7 +86,7 @@ test.describe('Desktop stock-research scenarios (batch)', () => {
             expect(result.allEntitiesCovered, 'all target stocks should be covered in analysis evidence').toBe(true);
             expect(result.adviceKeywordHits.length, 'analysis should include buy/sell/hold style advice').toBeGreaterThan(0);
             expect(result.predictionKeywordHits.length, 'analysis should include forecast/prediction terms').toBeGreaterThan(0);
-            expect(result.completed, 'task should reach finish/ready/quiet completion state').toBe(true);
+            expect(result.completed, 'task should reach finish/ready completion state').toBe(true);
         });
     }
 });

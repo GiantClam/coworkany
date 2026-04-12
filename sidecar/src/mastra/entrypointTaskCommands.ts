@@ -1,6 +1,14 @@
 import type { TaskRuntimeExecutionPath, TaskRuntimeRetryState, TaskRuntimeState } from './taskRuntimeState';
 import { failGuard, passGuard, runGuardPipeline } from './entrypointGuardPipeline';
+import { analyzeWorkRequest } from '../orchestration/workRequestAnalyzer';
 import { parseRoutedInput } from '../orchestration/routedInput';
+import {
+    buildTaskMessageDispatchKey,
+    buildTaskTurnContract,
+    formatTaskCapabilityRequirement,
+    resolveTaskCapabilityRequirements as resolveTaskCapabilityRequirementsFromRegistry,
+    type TaskCapabilityRequirement,
+} from './capabilityRegistry';
 
 type UserMessageExecutionOptions = {
     enabledSkills?: string[];
@@ -11,7 +19,12 @@ type UserMessageExecutionOptions = {
     maxSteps?: number;
     executionPath?: 'direct' | 'workflow';
     forcedRouteMode?: 'chat' | 'task';
+    useDirectChatResponder?: boolean;
     forcePostAssistantCompletion?: boolean;
+    requireToolEvidenceForCompletion?: boolean;
+    requiredCompletionCapabilities?: string[];
+    turnContractHash?: string;
+    turnContractDomain?: string;
 };
 
 type StartOrSendCommandType = 'start_task' | 'send_task_message';
@@ -31,11 +44,32 @@ type RuntimeCapabilityToolpack = {
     enabled: boolean;
     description?: string;
     tools?: string[];
+    runtimeStatus?: 'disabled' | 'configured_only' | 'configured' | 'resolved' | 'callable' | 'blocked';
+    callableToolCount?: number;
+    unresolvedTools?: string[];
+    blockedReason?: string;
 };
 
 type RuntimeCapabilitySnapshot = {
     skills: RuntimeCapabilitySkill[];
     toolpacks: RuntimeCapabilityToolpack[];
+};
+
+type RuntimeToolsetMap = Record<string, Record<string, unknown>>;
+type RuntimeMcpSnapshot = {
+    enabled: boolean;
+    status: 'disabled' | 'idle' | 'ready' | 'degraded';
+    cachedToolCount: number;
+    cachedToolsetCount: number;
+    allowedServerCount?: number;
+    runtimeToolCount?: number;
+};
+
+
+type TaskCapabilityGateResult = {
+    ready: boolean;
+    requirements: TaskCapabilityRequirement[];
+    summary?: string;
 };
 
 type HandleStartOrSendTaskCommandInput = {
@@ -65,6 +99,9 @@ type HandleStartOrSendTaskCommandInput = {
         enabledSkillIds: string[];
     };
     listRuntimeCapabilities?: () => RuntimeCapabilitySnapshot | Promise<RuntimeCapabilitySnapshot>;
+    listRuntimeToolsets?: () => RuntimeToolsetMap | Promise<RuntimeToolsetMap>;
+    isRuntimeMcpEnabled?: () => boolean;
+    getRuntimeMcpSnapshot?: () => RuntimeMcpSnapshot;
     resolveTaskResourceId: (
         taskId: string,
         payload: Record<string, unknown>,
@@ -155,6 +192,7 @@ type HandleStartOrSendTaskCommandInput = {
     claimTaskMessageDispatch?: (input: {
         taskId: string;
         message: string;
+        dedupeKey?: string;
     }) => {
         deduplicated: boolean;
         reason?: 'in_flight';
@@ -183,6 +221,266 @@ const CAPABILITY_QUERY_HINT_PATTERN = /[?？]|哪些|什么|列表|列出|有哪
 const CAPABILITY_QUERY_SHORT_PATTERN = /^\s*(?:skills?|tools?|toolpacks?|技能|工具)\s*[?？]?\s*$/iu;
 const CAPABILITY_EXPLAIN_HINT_PATTERN = /说明|介绍|解释|用途|作用|怎么用|如何用|详情|明细|逐个|分别|含义|describe|explain|usage|what\s+is|what\s+does|tell\s+me\s+about/iu;
 const CAPABILITY_REFERENCE_HINT_PATTERN = /\b(these|those|them)\b|这些|上述|以上|它们/u;
+const GENERAL_CAPABILITY_QUERY_PATTERN = /你(?:能|可)做什么|你会什么|能帮我做什么|可以帮我做什么|what\s+can\s+you\s+do|what\s+are\s+you\s+capable\s+of|your\s+capabilities/iu;
+const WEB_RESEARCH_AVAILABLE_TOOL_PATTERN = /\b(search_web|crawl_url|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|websearch|lookup|research)\b|股|行情|涨跌|天气|新闻|资讯|预报|查询|检索/iu;
+const BROWSER_AVAILABLE_TOOL_PATTERN = /\b(browser_[a-z_]+|playwright|browser|navigate|screenshot|click|fill)\b/iu;
+const TOOL_PREVIEW_LIMIT = 12;
+
+function hasToolBackedCapabilityRequirement(requirements: TaskCapabilityRequirement[]): boolean {
+    return requirements.length > 0;
+}
+
+function normalizeCapabilityValues(values: string[]): string[] {
+    return Array.from(new Set(
+        values
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0),
+    )).sort((left, right) => left.localeCompare(right, 'zh-Hans-CN', { sensitivity: 'base' }));
+}
+
+function collectEnabledToolpackHints(snapshot: RuntimeCapabilitySnapshot | null): string[] {
+    if (!snapshot) {
+        return [];
+    }
+    const values: string[] = [];
+    for (const toolpack of snapshot.toolpacks) {
+        if (!toolpack.enabled) {
+            continue;
+        }
+        if (typeof toolpack.id === 'string') {
+            values.push(toolpack.id);
+        }
+        if (typeof toolpack.name === 'string') {
+            values.push(toolpack.name);
+        }
+        if (typeof toolpack.description === 'string') {
+            values.push(toolpack.description);
+        }
+        if (Array.isArray(toolpack.tools)) {
+            for (const tool of toolpack.tools) {
+                if (typeof tool === 'string') {
+                    values.push(tool);
+                }
+            }
+        }
+    }
+    return normalizeCapabilityValues(values);
+}
+
+function collectCallableToolpackHints(snapshot: RuntimeCapabilitySnapshot | null): string[] {
+    if (!snapshot) {
+        return [];
+    }
+    const values: string[] = [];
+    for (const toolpack of snapshot.toolpacks) {
+        if (!toolpack.enabled) {
+            continue;
+        }
+        const hasCallableTools = (
+            toolpack.runtimeStatus === 'callable'
+            || (typeof toolpack.callableToolCount === 'number' && toolpack.callableToolCount > 0)
+        );
+        if (!hasCallableTools) {
+            continue;
+        }
+        if (typeof toolpack.id === 'string') {
+            values.push(toolpack.id);
+        }
+        if (typeof toolpack.name === 'string') {
+            values.push(toolpack.name);
+        }
+        if (Array.isArray(toolpack.tools)) {
+            for (const tool of toolpack.tools) {
+                if (typeof tool === 'string') {
+                    values.push(tool);
+                }
+            }
+        }
+    }
+    return normalizeCapabilityValues(values);
+}
+
+function collectRuntimeToolHints(toolsets: RuntimeToolsetMap): string[] {
+    const values: string[] = [];
+    for (const serverTools of Object.values(toolsets)) {
+        if (!serverTools || typeof serverTools !== 'object') {
+            continue;
+        }
+        for (const [toolName, toolMeta] of Object.entries(serverTools)) {
+            values.push(toolName);
+            if (toolMeta && typeof toolMeta === 'object') {
+                const record = toolMeta as Record<string, unknown>;
+                const id = typeof record.id === 'string' ? record.id : '';
+                const description = typeof record.description === 'string' ? record.description : '';
+                if (id) {
+                    values.push(id);
+                }
+                if (description) {
+                    values.push(description);
+                }
+            }
+        }
+    }
+    return normalizeCapabilityValues(values);
+}
+
+function truncateCapabilityPreview(values: string[]): string {
+    if (values.length === 0) {
+        return '(none)';
+    }
+    const preview = values.slice(0, TOOL_PREVIEW_LIMIT);
+    const suffix = values.length > TOOL_PREVIEW_LIMIT ? ` ...(+${values.length - TOOL_PREVIEW_LIMIT})` : '';
+    return `${preview.join(', ')}${suffix}`;
+}
+
+function resolveTaskCapabilityRequirements(input: {
+    message: string;
+    workspacePath: string;
+}): TaskCapabilityRequirement[] {
+    return resolveTaskCapabilityRequirementsFromRegistry(input);
+}
+
+function isRequirementAvailable(
+    requirement: TaskCapabilityRequirement,
+    hints: string[],
+): boolean {
+    if (requirement === 'web_research') {
+        return hints.some((hint) => (
+            WEB_RESEARCH_AVAILABLE_TOOL_PATTERN.test(hint)
+            || BROWSER_AVAILABLE_TOOL_PATTERN.test(hint)
+        ));
+    }
+    if (requirement === 'browser_automation') {
+        return hints.some((hint) => BROWSER_AVAILABLE_TOOL_PATTERN.test(hint));
+    }
+    return false;
+}
+
+function formatRequirementLabel(requirement: TaskCapabilityRequirement): string {
+    return formatTaskCapabilityRequirement(requirement);
+}
+
+async function evaluateTaskCapabilityGate(input: {
+    message: string;
+    workspacePath: string;
+    requirements?: TaskCapabilityRequirement[];
+    listRuntimeCapabilities?: () => RuntimeCapabilitySnapshot | Promise<RuntimeCapabilitySnapshot>;
+    listRuntimeToolsets?: () => RuntimeToolsetMap | Promise<RuntimeToolsetMap>;
+    isRuntimeMcpEnabled?: () => boolean;
+    getRuntimeMcpSnapshot?: () => RuntimeMcpSnapshot;
+}): Promise<TaskCapabilityGateResult> {
+    const requirements = input.requirements ?? resolveTaskCapabilityRequirements({
+        message: input.message,
+        workspacePath: input.workspacePath,
+    });
+    if (requirements.length === 0) {
+        return { ready: true, requirements };
+    }
+
+    let snapshot: RuntimeCapabilitySnapshot | null = null;
+    if (input.listRuntimeCapabilities) {
+        try {
+            snapshot = await input.listRuntimeCapabilities();
+        } catch {
+            snapshot = null;
+        }
+    }
+
+    let runtimeToolsets: RuntimeToolsetMap = {};
+    let runtimeToolsetLookupOk = false;
+    let runtimeToolsetLookupTimedOut = false;
+    const runtimeToolsetLookupTimeoutMs = (() => {
+        const raw = Number.parseInt(process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS ?? '', 10);
+        if (!Number.isFinite(raw)) {
+            return 1_500;
+        }
+        return Math.min(10_000, Math.max(200, Math.floor(raw)));
+    })();
+    if (input.listRuntimeToolsets) {
+        try {
+            runtimeToolsets = await Promise.race([
+                Promise.resolve(input.listRuntimeToolsets()),
+                new Promise<RuntimeToolsetMap>((_, reject) => {
+                    setTimeout(() => reject(new Error(`runtime_toolset_timeout:${runtimeToolsetLookupTimeoutMs}`)), runtimeToolsetLookupTimeoutMs);
+                }),
+            ]);
+            runtimeToolsetLookupOk = true;
+        } catch (error) {
+            runtimeToolsets = {};
+            runtimeToolsetLookupOk = false;
+            runtimeToolsetLookupTimedOut = String(error).includes('runtime_toolset_timeout:');
+            if (runtimeToolsetLookupTimedOut) {
+                console.warn('[coworkany-capability-gate] runtime toolset lookup timed out; bypassing strict gate for this turn.', {
+                    timeoutMs: runtimeToolsetLookupTimeoutMs,
+                });
+            }
+        }
+    }
+
+    const configuredToolHints = collectEnabledToolpackHints(snapshot);
+    const callableConfiguredToolHints = collectCallableToolpackHints(snapshot);
+    const runtimeToolHints = collectRuntimeToolHints(runtimeToolsets);
+    const hasCapabilitySnapshot = snapshot !== null;
+    const hasRuntimeToolsetSnapshot = runtimeToolsetLookupOk;
+    if (!hasCapabilitySnapshot && !hasRuntimeToolsetSnapshot) {
+        return {
+            ready: true,
+            requirements,
+        };
+    }
+    const mcpEnabled = input.isRuntimeMcpEnabled ? input.isRuntimeMcpEnabled() : null;
+    const mcpSnapshot = input.getRuntimeMcpSnapshot?.();
+    if (!runtimeToolsetLookupOk) {
+        return {
+            ready: true,
+            requirements,
+        };
+    }
+    const combinedHints = normalizeCapabilityValues([...runtimeToolHints, ...callableConfiguredToolHints]);
+    const availableRequirements = requirements.filter((requirement) => isRequirementAvailable(requirement, combinedHints));
+    const missingRequirements = requirements.filter((requirement) => !availableRequirements.includes(requirement));
+    const isRuntimeMcpStillLoading = Boolean(
+        mcpSnapshot?.enabled
+        && (
+            runtimeToolsetLookupTimedOut
+            || (
+                runtimeToolsetLookupOk
+                && runtimeToolHints.length === 0
+                && mcpSnapshot.status !== 'ready'
+            )
+        ),
+    );
+    if (isRuntimeMcpStillLoading) {
+        return {
+            ready: true,
+            requirements,
+        };
+    }
+    const ready = missingRequirements.length === 0;
+    if (ready) {
+        return {
+            ready: true,
+            requirements,
+        };
+    }
+
+    const requirementLabels = requirements.map(formatRequirementLabel).join(', ');
+    const missingLabels = missingRequirements.map(formatRequirementLabel).join(', ');
+    const summary = [
+        '当前无法稳定执行该任务：缺少所需工具能力。',
+        `required_capabilities=${requirementLabels}; missing_capabilities=${missingLabels}; mcp_enabled=${mcpEnabled === null ? 'unknown' : (mcpEnabled ? 'yes' : 'no')}; mcp_status=${mcpSnapshot?.status ?? 'unknown'}; mcp_allowed_servers=${mcpSnapshot?.allowedServerCount ?? 'unknown'}.`,
+        `运行时工具预览：${truncateCapabilityPreview(runtimeToolHints)}`,
+        `运行时可调用工具包预览：${truncateCapabilityPreview(callableConfiguredToolHints)}`,
+        `已启用工具包预览：${truncateCapabilityPreview(configuredToolHints)}`,
+        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*）。',
+    ].join('\n');
+
+    return {
+        ready: false,
+        requirements,
+        summary,
+    };
+}
 
 type CapabilitySummaryMode = 'list' | 'details';
 
@@ -331,6 +629,20 @@ function buildCapabilitySummary(
     return lines.length > 0 ? lines.join('\n') : null;
 }
 
+function isGeneralCapabilityQuery(message: string): boolean {
+    return GENERAL_CAPABILITY_QUERY_PATTERN.test(message.trim());
+}
+
+function buildGeneralCapabilitySummary(snapshot: RuntimeCapabilitySnapshot): string {
+    const enabledSkillCount = snapshot.skills.filter((skill) => skill.enabled).length;
+    const enabledToolpackCount = snapshot.toolpacks.filter((toolpack) => toolpack.enabled).length;
+    return [
+        '我可以帮你：问答与写作、代码与调试、资料检索与总结、文件与命令操作（涉及风险操作会先审批）。',
+        `当前已启用能力：skills ${enabledSkillCount} 个，toolpacks ${enabledToolpackCount} 个。`,
+        '直接告诉我目标即可，例如“写一份紧凑日报”或“解释这段报错原因”。',
+    ].join('\n');
+}
+
 function resolveTaskStartedMode(input: {
     forcedRouteMode?: UserMessageExecutionOptions['forcedRouteMode'];
     executionPath?: UserMessageExecutionOptions['executionPath'];
@@ -346,6 +658,36 @@ function resolveTaskStartedMode(input: {
         return 'immediate_task';
     }
     return input.executionPath === 'direct' ? 'chat' : 'immediate_task';
+}
+
+function resolveStartTaskIntentRoute(input: {
+    message: string;
+    workspacePath: string;
+    capabilityRequirements: TaskCapabilityRequirement[];
+}): {
+    executionPath: 'direct' | 'workflow';
+    forcedRouteMode: 'chat' | 'task';
+} {
+    if (hasToolBackedCapabilityRequirement(input.capabilityRequirements)) {
+        return {
+            executionPath: 'direct',
+            forcedRouteMode: 'task',
+        };
+    }
+    const mode = analyzeWorkRequest({
+        sourceText: input.message,
+        workspacePath: input.workspacePath,
+    }).mode;
+    if (mode === 'chat') {
+        return {
+            executionPath: 'direct',
+            forcedRouteMode: 'chat',
+        };
+    }
+    return {
+        executionPath: 'workflow',
+        forcedRouteMode: 'task',
+    };
 }
 
 export async function handleStartOrSendTaskCommand(
@@ -405,13 +747,50 @@ export async function handleStartOrSendTaskCommand(
         input.appendTranscript(taskId, 'user', message);
     };
     const workspacePath = input.getString(input.toRecord(payload.context).workspacePath) ?? process.cwd();
+    const inferredCapabilityRequirements = resolveTaskCapabilityRequirements({
+        message,
+        workspacePath,
+    });
     const commandConfig = input.toRecord(payload.config);
     const allowDuplicateTaskMessage = input.pickBooleanConfigValue(commandConfig, 'allowDuplicateTaskMessage') === true;
     const explicitEnabledSkills = input.pickStringArrayConfigValue(commandConfig, 'enabledSkills');
     const retryConfig = input.pickTaskRuntimeRetryConfig(commandConfig);
-    const resolvedExecutionPath = input.pickTaskExecutionPath(commandConfig) ?? input.toUserMessageExecutionPath(previousState?.executionPath);
-    const shouldDisableChatSkillsByDefault = commandType === 'send_task_message'
+    const inheritedExecutionPath = input.toUserMessageExecutionPath(previousState?.executionPath);
+    const configuredExecutionPath = input.pickTaskExecutionPath(commandConfig);
+    const hasKnownExecutionPath = previousState?.executionPath === 'direct' || previousState?.executionPath === 'workflow';
+    const defaultExecutionPath = (
+        commandType === 'send_task_message'
+        && routedMessage.forcedRouteMode !== 'task'
+        && !hasKnownExecutionPath
+    )
+        ? 'direct'
+        : inheritedExecutionPath;
+    let resolvedExecutionPath = configuredExecutionPath ?? defaultExecutionPath;
+    let resolvedForcedRouteMode = routedMessage.forcedRouteMode ?? (
+        commandType === 'start_task'
+            ? (resolvedExecutionPath === 'direct' ? 'chat' : 'task')
+            : undefined
+    );
+    if (
+        commandType === 'send_task_message'
+        && routedMessage.forcedRouteMode == null
         && resolvedExecutionPath === 'direct'
+    ) {
+        resolvedForcedRouteMode = 'chat';
+    }
+    const shouldApplyStartTaskIntentRouting = commandType === 'start_task'
+        && routedMessage.forcedRouteMode == null
+        && configuredExecutionPath === undefined;
+    if (shouldApplyStartTaskIntentRouting) {
+        const intentRoute = resolveStartTaskIntentRoute({
+            message,
+            workspacePath,
+            capabilityRequirements: inferredCapabilityRequirements,
+        });
+        resolvedExecutionPath = intentRoute.executionPath;
+        resolvedForcedRouteMode = intentRoute.forcedRouteMode;
+    }
+    const shouldDisableChatSkillsByDefault = resolvedExecutionPath === 'direct'
         && routedMessage.forcedRouteMode !== 'task'
         && input.pickBooleanConfigValue(commandConfig, 'enableChatSkills') !== true;
     const resolvedSkillPrompt = shouldDisableChatSkillsByDefault
@@ -439,12 +818,18 @@ export async function handleStartOrSendTaskCommand(
         toolCallConcurrency: input.pickPositiveIntegerConfigValue(commandConfig, 'toolCallConcurrency', 1, 32),
         maxSteps: input.pickPositiveIntegerConfigValue(commandConfig, 'maxSteps', 1, 128),
         executionPath: resolvedExecutionPath,
-        forcedRouteMode: routedMessage.forcedRouteMode ?? undefined,
+        forcedRouteMode: resolvedForcedRouteMode,
+        useDirectChatResponder: (
+            resolvedExecutionPath === 'direct'
+            && resolvedForcedRouteMode !== 'task'
+        )
+            ? true
+            : undefined,
         forcePostAssistantCompletion: (
             resolvedExecutionPath === 'direct'
             || routedMessage.forcedRouteMode === 'chat'
             || (
-                routedMessage.forcedRouteMode === undefined
+                routedMessage.forcedRouteMode == null
                 && previousState?.executionPath === 'direct'
             )
         )
@@ -574,6 +959,70 @@ export async function handleStartOrSendTaskCommand(
             // Best-effort optimization; fall back to normal LLM execution on capability lookup failure.
         }
     }
+    if (isGeneralCapabilityQuery(message) && input.listRuntimeCapabilities) {
+        try {
+            const capabilitySummary = buildGeneralCapabilitySummary(await input.listRuntimeCapabilities());
+            appendUserTranscript();
+            const state = input.upsertTaskState(taskId, {
+                title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
+                workspacePath,
+                status: 'idle',
+                suspended: false,
+                suspensionReason: undefined,
+                lastUserMessage: message,
+                enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+                resourceId,
+                checkpoint: undefined,
+                retry: nextRetryState,
+                executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
+            });
+            if (commandType === 'start_task') {
+                input.emitHookEvent('SessionStart', {
+                    taskId,
+                    payload: {
+                        threadId: state.conversationThreadId,
+                        workspacePath: state.workspacePath,
+                        resourceId: state.resourceId,
+                    },
+                });
+                input.emitHookEvent('TaskCreated', {
+                    taskId,
+                    payload: {
+                        title: state.title,
+                        workspacePath: state.workspacePath,
+                        enabledSkills: state.enabledSkills ?? [],
+                    },
+                });
+                input.emitTaskStarted({
+                    taskId,
+                    title: input.getString(payload.title) ?? 'Task',
+                    message,
+                    workspacePath,
+                    mode: resolveTaskStartedMode({
+                        forcedRouteMode: executionOptions.forcedRouteMode,
+                        executionPath: executionOptions.executionPath,
+                    }),
+                    turnId,
+                });
+            }
+            input.emitCurrent({
+                success: true,
+                taskId,
+                accepted: true,
+                queuePosition: 0,
+                turnId,
+            });
+            input.emitTaskSummary({
+                taskId,
+                summary: capabilitySummary,
+                finishReason: 'capability_query',
+                turnId,
+            });
+            return true;
+        } catch {
+            // Best-effort optimization; fall back to normal LLM execution on capability lookup failure.
+        }
+    }
 
     const hasExplicitSchedulePrefix = EXPLICIT_SCHEDULE_PREFIX.test(rawMessage);
     const isHighRiskHostAction = HIGH_RISK_HOST_ACTION_PATTERN.test(message);
@@ -589,6 +1038,7 @@ export async function handleStartOrSendTaskCommand(
             ...executionOptions,
             executionPath: 'direct',
             forcedRouteMode: 'task',
+            useDirectChatResponder: undefined,
             forcePostAssistantCompletion: undefined,
         };
     }
@@ -599,8 +1049,106 @@ export async function handleStartOrSendTaskCommand(
             ...executionOptions,
             executionPath: 'direct',
             forcedRouteMode: 'task',
+            useDirectChatResponder: undefined,
             forcePostAssistantCompletion: undefined,
         };
+    }
+    const shouldForceToolFirstTaskPath = hasToolBackedCapabilityRequirement(inferredCapabilityRequirements);
+    if (shouldForceToolFirstTaskPath) {
+        executionOptions = {
+            ...executionOptions,
+            executionPath: 'direct',
+            forcedRouteMode: 'task',
+            useDirectChatResponder: undefined,
+            forcePostAssistantCompletion: undefined,
+        };
+    }
+    const shouldRunTaskCapabilityGate = executionOptions.forcedRouteMode === 'task';
+    if (shouldRunTaskCapabilityGate) {
+        const taskCapabilityGate = await evaluateTaskCapabilityGate({
+            message,
+            workspacePath,
+            requirements: inferredCapabilityRequirements,
+            listRuntimeCapabilities: input.listRuntimeCapabilities,
+            listRuntimeToolsets: input.listRuntimeToolsets,
+            isRuntimeMcpEnabled: input.isRuntimeMcpEnabled,
+            getRuntimeMcpSnapshot: input.getRuntimeMcpSnapshot,
+        });
+        if (!taskCapabilityGate.ready && taskCapabilityGate.summary) {
+            appendUserTranscript();
+            const turnContract = buildTaskTurnContract({
+                message,
+                workspacePath,
+                mode: 'task',
+                route: 'direct',
+                requiredCapabilities: taskCapabilityGate.requirements.map(formatTaskCapabilityRequirement),
+                createdAt: new Date().toISOString(),
+            });
+            const state = input.upsertTaskState(taskId, {
+                title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
+                workspacePath,
+                status: 'idle',
+                suspended: false,
+                suspensionReason: undefined,
+                lastUserMessage: message,
+                enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+                resourceId,
+                checkpoint: undefined,
+                retry: nextRetryState,
+                executionPath: 'direct',
+                turnContract,
+            });
+            if (commandType === 'start_task') {
+                input.emitHookEvent('SessionStart', {
+                    taskId,
+                    payload: {
+                        threadId: state.conversationThreadId,
+                        workspacePath: state.workspacePath,
+                        resourceId: state.resourceId,
+                    },
+                });
+                input.emitHookEvent('TaskCreated', {
+                    taskId,
+                    payload: {
+                        title: state.title,
+                        workspacePath: state.workspacePath,
+                        enabledSkills: state.enabledSkills ?? [],
+                    },
+                });
+                input.emitTaskStarted({
+                    taskId,
+                    title: input.getString(payload.title) ?? 'Task',
+                    message,
+                    workspacePath,
+                    mode: resolveTaskStartedMode({
+                        forcedRouteMode: 'task',
+                        executionPath: 'direct',
+                    }),
+                    turnId,
+                });
+            }
+            input.emitCurrent({
+                success: true,
+                taskId,
+                accepted: true,
+                queuePosition: 0,
+                turnId,
+            });
+            input.emitTaskSummary({
+                taskId,
+                summary: taskCapabilityGate.summary,
+                finishReason: 'capability_missing',
+                turnId,
+            });
+            return true;
+        }
+        if (taskCapabilityGate.requirements.length > 0) {
+            executionOptions = {
+                ...executionOptions,
+                requireToolEvidenceForCompletion: true,
+                requiredCompletionCapabilities: taskCapabilityGate.requirements.map(formatRequirementLabel),
+            };
+        }
     }
     const shouldDisableChatSkills = commandType === 'send_task_message'
         && executionOptions.executionPath === 'direct'
@@ -613,6 +1161,22 @@ export async function handleStartOrSendTaskCommand(
             skillPrompt: undefined,
         };
     }
+
+    const turnContract = buildTaskTurnContract({
+        message,
+        workspacePath,
+        mode: executionOptions.forcedRouteMode === 'task' ? 'task' : 'chat',
+        route: executionOptions.executionPath === 'workflow' ? 'workflow' : 'direct',
+        requiredCapabilities: executionOptions.requiredCompletionCapabilities,
+        createdAt: new Date().toISOString(),
+    });
+    executionOptions = {
+        ...executionOptions,
+        requiredCompletionCapabilities: turnContract.requiredCapabilities,
+        requireToolEvidenceForCompletion: turnContract.requiredCapabilities.length > 0,
+        turnContractHash: turnContract.hash,
+        turnContractDomain: turnContract.domain,
+    };
 
     if (input.scheduleTaskIfNeeded && !skipImplicitSchedule) {
         const scheduleDecision = await input.scheduleTaskIfNeeded({
@@ -692,6 +1256,12 @@ export async function handleStartOrSendTaskCommand(
         const claim = input.claimTaskMessageDispatch({
             taskId,
             message,
+            dedupeKey: buildTaskMessageDispatchKey({
+                message,
+                route: turnContract.route,
+                mode: turnContract.mode,
+                contractHash: turnContract.hash,
+            }),
         });
         if (claim.deduplicated) {
             input.emitFor('send_task_message_response', {
@@ -721,6 +1291,7 @@ export async function handleStartOrSendTaskCommand(
         checkpoint: undefined,
         retry: nextRetryState,
         executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
+        turnContract,
     });
     if (commandType === 'start_task') {
         input.emitHookEvent('SessionStart', {

@@ -1,0 +1,722 @@
+# Libraries
+
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/config/files/index-browser.ts`
+  - function findConfigUpwards: (// eslint-disable-next-line @typescript-eslint/no-unused-vars
+  rootDir) => string | null
+  - function resolvePlugin: (name, dirname) => Resolved | null
+  - function resolvePreset: (name, dirname) => Resolved | null
+  - function loadPlugin: (name, dirname) => Handler<
+  - function loadPreset: (name, dirname) => Handler<
+  - const ROOT_CONFIG_FILENAMES: string[]
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/config/resolve-targets-browser.ts` — function resolveBrowserslistConfigFile: (// eslint-disable-next-line @typescript-eslint/no-unused-vars
+  browserslistConfigFile, // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  configFilePath) => string | void, function resolveTargets: (options, // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  root) => Targets
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/config/resolve-targets.ts` — function resolveBrowserslistConfigFile: (browserslistConfigFile, configFileDir) => string | undefined, function resolveTargets: (options, root) => Targets
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/transform-file-browser.ts`
+  - function transformFileSync: () => never
+  - function transformFileAsync: () => void
+  - const transformFile: TransformFile
+- `desktop/node_modules.bak-20260319-2215/@babel/core/src/transform-file.ts`
+  - function transformFile: (filename, callback) => void;
+  - function transformFile: (filename, opts, callback) => void;
+  - function transformFile: (...args) => void
+  - function transformFileSync: (...args) => void
+  - function transformFileAsync: (...args) => void
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/gen-mapping/src/gen-mapping.ts`
+  - function addSegment: (map, genLine, genColumn, source?, sourceLine?, sourceColumn?, name?, content?) => void;
+  - function addSegment: (map, genLine, genColumn, source, sourceLine, sourceColumn, name?, content?) => void;
+  - function addSegment: (map, genLine, genColumn, source, sourceLine, sourceColumn, name, content?) => void;
+  - function addSegment: (map, genLine, genColumn, source?, sourceLine?, sourceColumn?, name?, content?) => void
+  - function addMapping: (map, mapping) => void;
+  - function addMapping: (map, mapping) => void;
+  - _...16 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/gen-mapping/src/set-array.ts`
+  - function get: (setarr, key) => number | undefined
+  - function put: (setarr, key) => number
+  - function pop: (setarr) => void
+  - function remove: (setarr, key) => void
+  - class SetArray
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/remapping/src/source-map-tree.ts`
+  - function MapSource: (map, sources) => MapSource
+  - function OriginalSource: (source, content, ignore) => OriginalSource
+  - function traceMappings: (tree) => GenMapping
+  - function originalPositionFor: (source, line, column, name) => SourceMapSegmentObject | null
+  - type SourceMapSegmentObject
+  - type OriginalSource
+  - _...2 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/scopes.ts`
+  - function decodeOriginalScopes: (input) => OriginalScope[]
+  - function encodeOriginalScopes: (scopes) => string
+  - function decodeGeneratedRanges: (input) => GeneratedRange[]
+  - function encodeGeneratedRanges: (ranges) => string
+  - type OriginalScope
+  - type GeneratedRange
+  - _...2 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/sourcemap-codec.ts`
+  - function decode: (mappings) => SourceMapMappings
+  - function encode: (decoded) => string;
+  - function encode: (decoded) => string;
+  - function encode: (decoded) => string
+  - type SourceMapSegment
+  - type SourceMapLine
+  - _...1 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/strings.ts` — class StringWriter, class StringReader
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/sourcemap-codec/src/vlq.ts`
+  - function decodeInteger: (reader, relative) => number
+  - function encodeInteger: (builder, num, relative) => number
+  - function hasMoreVlq: (reader, max) => void
+  - const comma
+  - const semicolon
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/binary-search.ts`
+  - function binarySearch: (haystack, needle, low, high) => number
+  - function upperBound: (haystack, needle, index) => number
+  - function lowerBound: (haystack, needle, index) => number
+  - function memoizedState: () => MemoState
+  - function memoizedBinarySearch: (haystack, needle, state, key) => number
+  - type MemoState
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/sort.ts` — function sortComparator: (a, b) => number
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/trace-mapping.ts`
+  - function encodedMappings: (map) => EncodedSourceMap['mappings']
+  - function decodedMappings: (map) => Readonly<DecodedSourceMap['mappings']>
+  - function traceSegment: (map, line, column) => Readonly<SourceMapSegment> | null
+  - function originalPositionFor: (map, needle) => OriginalMapping | InvalidOriginalMapping
+  - function generatedPositionFor: (map, needle) => GeneratedMapping | InvalidGeneratedMapping
+  - function allGeneratedPositionsFor: (map, needle) => GeneratedMapping[]
+  - _...9 more_
+- `desktop/node_modules.bak-20260319-2215/@jridgewell/trace-mapping/src/types.ts`
+  - function parse: (map) => Exclude<T, string>
+  - class SourceMap
+  - interface SourceMapV3
+  - interface EncodedSourceMap
+  - interface DecodedSourceMap
+  - interface Section
+  - _...17 more_
+- `desktop/node_modules.bak-20260319-2215/@ungap/structured-clone/esm/deserialize.js` — function deserialize
+- `desktop/node_modules.bak-20260319-2215/@ungap/structured-clone/esm/json.js` — function parse, function stringify
+- `desktop/node_modules.bak-20260319-2215/@ungap/structured-clone/esm/serialize.js` — function serialize
+- `desktop/node_modules.bak-20260319-2215/jiti/lib/jiti-hooks.mjs`
+  - function initialize: () => void
+  - function resolve: (specifier, context, nextResolve) => void
+  - function load: (url, context, nextLoad) => void
+- `desktop/node_modules.bak-20260319-2215/jiti/lib/jiti-native.mjs` — function createJiti: (parentURL, jitiOptions) => void
+- `desktop/node_modules.bak-20260319-2215/jiti/lib/jiti.mjs` — function createJiti: (id, opts) => void
+- `desktop/node_modules.bak-20260319-2215/tslib/tslib.es6.js`
+  - function __extends: (d, b) => void
+  - function __rest: (s, e) => void
+  - function __decorate: (decorators, target, key, desc) => void
+  - function __param: (paramIndex, decorator) => void
+  - function __esDecorate: (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) => void
+  - function __runInitializers: (thisArg, initializers, value) => void
+  - _...24 more_
+- `desktop/node_modules.bak-20260319-2215/tslib/tslib.es6.mjs`
+  - function __extends: (d, b) => void
+  - function __rest: (s, e) => void
+  - function __decorate: (decorators, target, key, desc) => void
+  - function __param: (paramIndex, decorator) => void
+  - function __esDecorate: (ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) => void
+  - function __runInitializers: (thisArg, initializers, value) => void
+  - _...24 more_
+- `desktop/src/bridges/canonicalTaskStream.ts`
+  - function createEmptyCanonicalTaskStreamState: (taskId) => CanonicalTaskStreamState
+  - function applyCanonicalStreamEvent: (state, event) => CanonicalTaskStreamState
+  - function materializeCanonicalMessages: (taskId, events) => CanonicalTaskMessage[]
+  - type CanonicalTaskStreamState
+- `desktop/src/bridges/taskEventStore.ts` — class TaskEventStore, type TaskStateListener
+- `desktop/src/bridges/taskEvents.ts`
+  - function createEmptyTaskState: (taskId) => TaskUiState
+  - function applyTaskEvent: (state, event) => TaskUiState
+  - type TaskUiState
+- `desktop/src/hooks/useClearTaskHistory.ts`
+  - function useClearTaskHistory: () => void
+  - interface ClearTaskHistoryInput
+  - interface ClearTaskHistoryResult
+- `desktop/src/hooks/useDependencyManager.ts`
+  - function useDependencyManager: () => void
+  - interface DependencyStatus
+  - interface RuntimeContextStatus
+- `desktop/src/hooks/useFileAttachment.ts` — function useFileAttachment: () => void, interface FileAttachment
+- `desktop/src/hooks/useGitHubValidation.ts` — function useGitHubValidation: (url, type) => void
+- `desktop/src/hooks/useGlobalShortcuts.ts` — function useGlobalShortcuts: (callbacks, () => void, type GlobalShortcutAction
+- `desktop/src/hooks/useMarketplaceSearch.ts`
+  - function useMarketplaceSearch: () => void
+  - interface MarketplaceItem
+  - type MarketplaceItemType
+- `desktop/src/hooks/useNetworkStatus.ts` — function useNetworkStatus: () => NetworkStatus, interface NetworkStatus
+- `desktop/src/hooks/useRepositoryScan.ts`
+  - function useRepositoryScan: () => void
+  - interface DiscoveredSkill
+  - interface DiscoveredMcp
+- `desktop/src/hooks/useSendTaskMessage.ts`
+  - function useSendTaskMessage: () => void
+  - function useResumeInterruptedTask: () => void
+  - interface SendTaskMessageInput
+  - interface SendTaskMessageResult
+  - interface ResumeInterruptedTaskInput
+  - interface ResumeInterruptedTaskResult
+- `desktop/src/hooks/useServiceManager.ts`
+  - function useServiceManager: () => void
+  - function startAllServices: () => Promise<ServiceOperationResult>
+  - function startAllServicesBackground: () => Promise<ServiceOperationResult>
+  - function stopAllServices: () => Promise<ServiceOperationResult>
+  - function getAllServicesStatus: () => Promise<ServiceInfo[]>
+  - function isRagServiceHealthy: () => Promise<boolean>
+  - _...2 more_
+- `desktop/src/hooks/useSkillDiscovery.ts`
+  - function useSkillDiscovery: () => void
+  - interface DiscoveredSkill
+  - interface DiscoveredMcp
+- `desktop/src/hooks/useSkills.ts`
+  - function useSkills: (options) => void
+  - interface SkillManifest
+  - interface SkillRecord
+- `desktop/src/hooks/useStartTask.ts`
+  - function useStartTask: () => void
+  - function useCancelTask: () => void
+  - function useSpawnSidecar: () => void
+  - function useShutdownSidecar: () => void
+  - interface StartTaskInput
+  - interface StartTaskConfig
+  - _...3 more_
+- `desktop/src/hooks/useTasks.ts`
+  - function useTasks: (workspacePath) => void
+  - interface Task
+  - interface GetTasksResult
+- `desktop/src/hooks/useTauriEvents.ts` — function useTauriEvents: () => void, function useSidecarStatus: () => void
+- `desktop/src/hooks/useToolpacks.ts`
+  - function useToolpacks: (options) => void
+  - interface ToolpackManifest
+  - interface ToolpackRecord
+- `desktop/src/hooks/useVoiceInput.ts`
+  - function useVoiceInput: (language, continuous) => VoiceInputState & VoiceInputActions
+  - interface VoiceInputState
+  - interface VoiceInputActions
+- `desktop/src/hooks/useVoicePlayback.ts` — function useVoicePlayback: () => void
+- `desktop/src/hooks/useWindowShortcuts.ts` — function useWindowShortcuts: (callbacks, () => void
+- `desktop/src/hooks/useWorkspace.ts` — function useWorkspace: (options) => void
+- `desktop/src/i18n/index.ts`
+  - function hydrateLanguagePreference: () => Promise<void>
+  - function changeLanguage: (lang) => void
+  - function getCurrentLanguage: () => string
+- `desktop/src/lib/appLog.ts` — function emitBootJsonLog: (payload) => void, function installMinimalConsoleMode: () => void
+- `desktop/src/lib/configStore.ts`
+  - function getConfig: (key) => Promise<T | null>
+  - function saveConfig: (key, value) => Promise<void>
+  - function deleteConfig: (key) => Promise<void>
+  - function getApiKey: (provider) => Promise<string | null>
+  - function setApiKey: (provider, key) => Promise<void>
+  - function getShortcuts: () => Promise<ShortcutConfig>
+  - _...8 more_
+- `desktop/src/lib/effectApprovalCommands.ts` — function invokeConfirmEffectCommand: (invokeCommand, input) => Promise<void>, function invokeDenyEffectCommand: (invokeCommand, input) => Promise<void>
+- `desktop/src/lib/exportConversation.ts`
+  - function sessionToMarkdown: (session) => string
+  - function downloadMarkdown: (content, filename) => void
+  - function exportSession: (session) => void
+- `desktop/src/lib/externalLinks.ts`
+  - function parseExternalUrl: (rawHref) => URL | null
+  - function isExternalHref: (rawHref) => boolean
+  - function openExternalUrl: (rawHref) => Promise<void>
+- `desktop/src/lib/fileActions.ts`
+  - function openLocalFile: (path) => Promise<void>
+  - function downloadRemoteFile: (url, suggestedName?) => Promise<DownloadRemoteFileResult>
+  - function readLocalTextPreview: (path, maxBytes) => Promise<TextPreviewResult>
+  - function fetchRemoteTextPreview: (url, maxBytes) => Promise<TextPreviewResult>
+  - function openRemoteUrl: (url) => Promise<void>
+  - interface DownloadRemoteFileResult
+  - _...1 more_
+- `desktop/src/lib/llmValidationErrors.ts` — function mapValidationErrorToUserMessage: (input) => string
+- `desktop/src/lib/parsers/qualityParser.ts` — function parseMessageContent: (content) => ParsedContent, interface ParsedContent
+- `desktop/src/lib/shortcuts.ts` — function isMacPlatform: () => boolean, function formatShortcutForDisplay: (shortcut) => string
+- `desktop/src/lib/skillImport.ts`
+  - function extractSkillImportFeedback: (value) => SkillImportFeedback | null
+  - type SkillImportPlan
+  - type SkillImportDependencyCheck
+  - type SkillImportAttempt
+  - type SkillImportFeedback
+- `desktop/src/lib/startupMetrics.ts`
+  - function getStartupMeasurementConfig: () => Promise<StartupMeasurementConfig>
+  - function recordStartupMetric: (mark, frontendElapsedMs?, perfNowMs?, windowLabel?) => Promise<void>
+  - interface StartupMeasurementConfig
+- `desktop/src/lib/taskFailureUi.ts`
+  - function getTaskFailureUiDescriptor: (session, 'failure' | 'suspension' | 'status'> | undefined) => TaskFailureUiDescriptor | null
+  - interface TaskFailureUiDescriptor
+  - type TaskFailureUiCategory
+  - type TaskFailureUiAction
+- `desktop/src/lib/tauri.ts` — function isTauri: () => boolean, function safeTauriCall: (fn) => void
+- `desktop/src/lib/telemetry.ts`
+  - function getTelemetryConfig: () => Promise<TelemetryConfig>
+  - function saveTelemetryConfig: (config) => Promise<void>
+  - function trackEvent: (event, properties?, string | number | boolean>) => Promise<void>
+  - function reportCrash: (error, context?) => Promise<void>
+  - interface TelemetryEvent
+  - interface TelemetryConfig
+- `desktop/src/lib/text/inlineAttachments.ts`
+  - function parseInlineAttachments: (content) => void
+  - type InlineImageAttachment
+  - type InlineFileAttachment
+- `desktop/src/lib/text/messageProcessor.ts`
+  - function processMessageContent: (text, options, useCache) => string
+  - function clearProcessingCache: () => void
+  - function getProcessingCacheSize: () => number
+  - function isInProcessingCache: (text, options) => boolean
+- `desktop/src/lib/text/richMessageSegments.ts`
+  - function looksLikeHtmlDocument: (content) => boolean
+  - function isLikelyLocalPath: (raw) => boolean
+  - function buildRichMessageSegments: (content, inlineFiles) => RichMessageSegment[]
+  - type RichMessageFileRef
+  - type RichMessageSegment
+- `desktop/src/stores/taskEvents/index.ts`
+  - function hydrateSessions: () => Promise<void>
+  - function useActiveSession
+  - function useSidecarConnected
+  - const useTaskEventStore
+- `desktop/src/stores/taskEvents/persistence.ts`
+  - function schedulePersist: (snapshot, options) => void
+  - function cancelScheduledPersist: () => void
+  - interface SessionsSnapshot
+  - interface PersistScheduleOptions
+- `desktop/src/stores/taskEvents/reducers/chatReducer.ts` — function applyChatEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/effectReducer.ts` — function applyEffectEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/patchReducer.ts` — function applyPatchEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/skillRecommendationReducer.ts`
+  - function applySkillRecommendationEvent: (session, event) => TaskSession
+  - interface SkillRecommendation
+  - interface SkillRecommendationData
+- `desktop/src/stores/taskEvents/reducers/taskReducer.ts` — function applyTaskEvent: (session, event) => TaskSession
+- `desktop/src/stores/taskEvents/reducers/toolReducer.ts` — function applyToolEvent: (session, event) => TaskSession
+- `desktop/src/stores/themeStore.ts` — function initializeTheme: () => Promise<void>, const useThemeStore
+- `desktop/src/stores/useVoicePlaybackStore.ts`
+  - function getDefaultVoicePlaybackState: () => VoicePlaybackState
+  - interface VoicePlaybackState
+  - const useVoicePlaybackStore
+- `desktop/src/types/events.ts`
+  - function isUserMessage: (item) => item is UserMessageItem
+  - function isAssistantMessage: (item) => item is AssistantMessageItem
+  - function isAssistantTurn: (item) => item is AssistantTurnItem
+  - function isToolCall: (item) => item is ToolCallItem
+  - function isSystemEvent: (item) => item is SystemEventItem
+  - function isTaskCard: (item) => item is TaskCardItem
+  - _...57 more_
+- `desktop/src/types/ui.ts`
+  - function isValidationError: (msg) => boolean
+  - function isValidationSuccess: (msg) => boolean
+  - function hasError: (state) => boolean
+  - function isLoading: (state) => boolean
+  - interface Workspace
+  - interface AnthropicProviderSettings
+  - _...34 more_
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/aarch64-apple-darwin/release/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `desktop/src-tauri/target/debug/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/debug/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/debug/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/debug/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `desktop/src-tauri/target/release/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/browser-use-service/main.py`
+  - function lifespan: (app)
+  - function health: ()
+  - function connect: (req)
+  - function disconnect: ()
+  - function navigate: (req)
+  - function click: (req)
+  - _...23 more_
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/release/bundle/macos/CoworkAny.app/Contents/Resources/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `desktop/src-tauri/target/release/rag-service/embeddings.py` — class EmbeddingModel
+- `desktop/src-tauri/target/release/rag-service/indexer.py` — class ParsedDocument, class VaultIndexer
+- `desktop/src-tauri/target/release/rag-service/main.py`
+  - function lifespan: (app)
+  - function health_check: ()
+  - function index_document: (request, background_tasks)
+  - function search_vault: (request)
+  - function index_entire_vault: (background_tasks)
+  - function delete_document: (path)
+  - _...11 more_
+- `sidecar/builtin-mcp/websearch/index.ts`
+  - function webSearch: (input) => Promise<WebSearchOutput>
+  - function fetchWebpage: (input) => Promise<FetchWebpageOutput>
+  - interface SearchResult
+  - interface WebSearchInput
+  - interface FetchWebpageInput
+  - interface WebSearchOutput
+  - _...2 more_
+- `sidecar/ops/controlPlaneEvalRunner.ts` — function runControlPlaneEvalRunnerCli: () => Promise<void>
+- `sidecar/ops/readiness.ts`
+  - function classifyRealModelGateFailure: (input) => RealModelGateFailureClassification | undefined
+  - function createDefaultControlPlaneEvalThresholds: () => ControlPlaneEvalThresholds
+  - function loadControlPlaneEvalThresholds: (sourcePath, requestedProfile?) => LoadedControlPlaneEvalThresholds
+  - function summarizeControlPlaneEvalSummary: (summaryPath) => ControlPlaneEvalSummary
+  - function summarizeProductionReplayImportSummary: (summaryPath) => ProductionReplayImportSummary
+  - function evaluateControlPlaneEvalReadiness: (summary, thresholds, thresholdSourcePath?, thresholdProfile?) => ControlPlaneEvalGate
+  - _...41 more_
+- `sidecar/ops/sidecarDoctor.ts`
+  - function runSidecarDoctor: (input) => SidecarDoctorReport
+  - function formatSidecarDoctorReport: (report) => string
+  - type SidecarDoctorReport
+- `sidecar/protocol-core/canonicalStream.ts`
+  - function taskEventToCanonicalStreamEvents: (event) => CanonicalStreamEvent[]
+  - type CanonicalMessageRole
+  - type CanonicalTaskStatus
+  - type CanonicalTaskMessagePart
+  - type CanonicalTaskMessage
+  - type CanonicalStreamEvent
+- `sidecar/scripts/release-readiness.ts` — function hasGitRemoteHeadMatch: (output) => boolean
+- `sidecar/src/config/runtimeConfig.ts`
+  - function resolveRuntimeAppDataRoot: (input) => string
+  - function resolveRuntimeConfigCandidatePaths: (input) => string[]
+  - function loadRuntimeLlmConfigSnapshot: (input) => RuntimeConfigSnapshot
+  - function loadRuntimeSearchConfigSnapshot: (input) => void
+  - function resolveRuntimeSearchConfig: (input) => RuntimeSearchConfigResolution
+  - function buildRuntimeConfigDoctorSummary: (input) => RuntimeConfigDoctorSummary
+  - _...6 more_
+- `sidecar/src/directives/directiveManager.ts`
+  - class DirectiveManager
+  - interface Directive
+  - interface Persona
+- `sidecar/src/extensions/workspaceExtensionAllowlist.ts`
+  - function getWorkspaceExtensionAllowlistPath: (repositoryRoot) => string
+  - function loadWorkspaceExtensionAllowlistPolicy: (repositoryRoot) => WorkspaceExtensionAllowlistPolicy
+  - type WorkspaceExtensionAllowlistMode
+  - type WorkspaceExtensionAllowlistPolicy
+- `sidecar/src/handlers/capabilities.ts`
+  - function handleCapabilityCommand: (command, deps) => Promise<IpcResponse | null>
+  - type SkillImportResponsePayload
+  - type CapabilityCommandDeps
+- `sidecar/src/handlers/workspaces.ts` — function handleWorkspaceCommand: (command, deps) => Promise<IpcResponse | null>, type WorkspaceCommandDeps
+- `sidecar/src/ipc/bridge.ts`
+  - function isMastraOperationalProgressChunk: (chunk) => boolean
+  - function extractMastraFinalAssistantTextEvent: (chunk, runId?) => DesktopEvent | null
+  - function extractMastraTokenUsageEvent: (chunk, runId?) => DesktopEvent | null
+  - function mapMastraChunkToDesktopEvent: (chunk, runId?) => DesktopEvent | null
+  - interface MastraChunkLike
+  - type DesktopEvent
+- `sidecar/src/ipc/streaming.ts`
+  - function resolveMissingApiKeyForModel: (modelId, env, string | undefined>) => string | null
+  - function warmupChatRuntime: () => Promise<
+  - function handleUserMessage: (message, threadId, resourceId, sendToDesktop, options?) => void
+  - function handleApprovalResponse: (runId, toolCallId, approved, sendToDesktop) => Promise<void>
+  - function rewindTaskContextCompression: (input) => void
+- `sidecar/src/mastra/additionalCommands.ts` — function createMastraAdditionalCommandHandler: (input?) => void, type AdditionalCommandHandler
+- `sidecar/src/mastra/contextCompression.ts`
+  - class TaskContextCompressionStore
+  - type TaskContextCompressionSnapshot
+  - type RecalledTopicMemory
+  - type ContextPromptPack
+- `sidecar/src/mastra/entrypoint.ts`
+  - function createMastraEntrypointProcessor: (deps) => void
+  - type TaskMessageExecutionDelegateInput
+  - type TaskMessageExecutionDelegateResult
+- `sidecar/src/mastra/entrypointGuardPipeline.ts`
+  - function passGuard: () => GuardPass
+  - function failGuard: (error, payload) => GuardFail<TPayload>
+  - function runGuardPipeline: (guards) => Promise<GuardResult<TPayload>>
+  - type GuardPass
+  - type GuardFail
+  - type GuardResult
+- `sidecar/src/mastra/entrypointRecoveryCommands.ts` — function handleRecoveryAndCheckpointCommands: (input) => Promise<boolean>
+- `sidecar/src/mastra/entrypointRemoteSessionCommands.ts` — function handleRemoteSessionCommands: (input) => Promise<boolean>
+- `sidecar/src/mastra/entrypointTaskCommands.ts` — function handleStartOrSendTaskCommand: (input) => Promise<boolean>
+- `sidecar/src/mastra/entrypointTaskControlCommands.ts` — function handleTaskControlCommands: (input) => Promise<boolean>
+- `sidecar/src/mastra/hookEventBus.ts`
+  - function registerRuntimeHookEventHandler: (handler) => void
+  - function emitRuntimeHookEvent: (event) => void
+  - function setAllRuntimeHookEventsEnabled: (enabled) => void
+  - function clearRuntimeHookEventState: () => void
+  - type RuntimeHookEvent
+  - type RuntimeHookEventHandler
+- `sidecar/src/mastra/hookRuntime.ts`
+  - function registerHookRuntimeEventHandler: (handler) => void
+  - function setHookRuntimeEventsEnabled: (enabled) => void
+  - function clearHookRuntimeEvents: () => void
+  - class MastraHookRuntimeStore
+  - type HookRuntimeEventType
+  - type HookRuntimeEvent
+  - _...1 more_
+- `sidecar/src/mastra/index.ts` — function getMastraHealth: () => void, const mastra
+- `sidecar/src/mastra/managedSettings.ts`
+  - function readManagedSettingsPayload: (input, unknown>;
+}) => void
+  - function applyManagedSettingsFiles: (input) => void
+  - function restoreManagedSettingsFiles: (input) => void
+  - class ManagedSettingsSyncStore
+  - type ManagedSettingsPayload
+  - type ManagedSettingsSyncEntry
+- `sidecar/src/mastra/marketplaceGovernance.ts`
+  - function loadMarketplaceTrustPolicy: (workspaceRoot, env, string | undefined>) => MarketplaceTrustPolicy
+  - function evaluateMarketplaceSourceTrust: (source, policy) => MarketplaceTrustDecision
+  - class MarketplaceAuditStore
+  - type MarketplaceTrustMode
+  - type MarketplaceTrustPolicy
+  - type MarketplaceTrustDecision
+  - _...1 more_
+- `sidecar/src/mastra/mcp/clients.ts`
+  - function listMcpToolsSafe: () => Promise<Record<string, Tool<unknown, unknown, unknown, unknown>>>
+  - function listMcpToolsetsSafe: () => Promise<Record<string, Record<string, Tool<unknown, unknown, unknown, unknown>>>>
+  - function disconnectMcpSafe: () => Promise<void>
+  - function refreshMcpConnections: () => Promise<void>
+  - function getMcpConnectionSnapshot: () => McpConnectionSnapshot
+  - function getMcpSecuritySnapshot: () => McpServerSecuritySnapshot
+  - _...5 more_
+- `sidecar/src/mastra/mcp/connectionManager.ts`
+  - function createMcpConnectionManager: (options) => McpConnectionManager
+  - type McpClientLike
+  - type McpConnectionSnapshot
+  - type McpConnectionManager
+- `sidecar/src/mastra/mcp/security.ts`
+  - function toMastraServerMap: (snapshot) => Record<string,
+  - class McpServerSecurityStore
+  - type McpServerScope
+  - type McpServerDefinition
+  - type McpServerPolicyDecision
+  - type McpServerSecuritySnapshot
+- `sidecar/src/mastra/model/runtimeModel.ts`
+  - function shouldUseOpenAICompatibleChatModel: (input) => boolean
+  - function resolveRuntimeModelConfig: (fallbackModelId) => RuntimeModelConfig
+  - type RuntimeModelId
+  - type RuntimeModelConfig
+- `sidecar/src/mastra/pluginDependencyResolver.ts`
+  - function detectDependencyCycles: (plugins, rootId?) => string[][]
+  - function verifyAndDemotePlugins: (plugins) => void
+  - function findReverseDependents: (pluginId, plugins) => string[]
+  - type DependencyAwarePlugin
+  - type DependencyError
+- `sidecar/src/mastra/pluginPolicy.ts`
+  - function loadPluginPolicySnapshot: (workspaceRoot, env, string | undefined>) => PluginPolicySnapshot
+  - function evaluateSkillPolicy: (input, snapshot) => PluginPolicyDecision
+  - function evaluateToolpackPolicy: (input, snapshot) => PluginPolicyDecision
+  - type PluginPolicySnapshot
+  - type PluginPolicyDecision
+- `sidecar/src/mastra/policyDecisionLog.ts`
+  - class MastraPolicyDecisionLogStore
+  - type PolicyDecisionLogEntry
+  - type PolicyDecisionLogStore
+- `sidecar/src/mastra/policyEngine.ts`
+  - function createMastraPolicyEngine: (config) => PolicyEngine
+  - function createMastraPolicyEngineFromEnv: (env, string | undefined>) => PolicyEngine
+  - type PolicyDecisionAction
+  - type PolicyDecisionInput
+  - type PolicyDecision
+  - type PolicyEngine
+- `sidecar/src/mastra/remoteSessionGovernance.ts`
+  - function loadRemoteSessionGovernancePolicy: (workspaceRoot, env, string | undefined>) => RemoteSessionGovernancePolicy
+  - type RemoteSessionConflictStrategy
+  - type RemoteSessionGovernancePolicy
+  - const DEFAULT_REMOTE_SESSION_GOVERNANCE_POLICY: RemoteSessionGovernancePolicy
+- `sidecar/src/mastra/remoteSessionStore.ts`
+  - class MastraRemoteSessionStore
+  - type RemoteSessionStatus
+  - type ChannelDeliveryStatus
+  - type RemoteSessionState
+  - type ChannelDeliveryEvent
+- `sidecar/src/mastra/requestContext.ts` — function createTaskRequestContext: (input) => RequestContext<CoworkanyRequestContextValues>, type CoworkanyRequestContextValues
+- `sidecar/src/mastra/runtimeBindings.ts` — function createVoiceProviderBindings: (input) => VoiceProviderBindings
+- `sidecar/src/mastra/runtimeErrorClassifier.ts`
+  - function classifyRuntimeErrorMessage: (message) => RuntimeFailureClassification
+  - interface RuntimeFailureClassification
+  - type RuntimeFailureClass
+- `sidecar/src/mastra/runtimeIdentity.ts` — function deriveDefaultResourceId: (taskId) => string
+- `sidecar/src/mastra/schedulerLeaseLock.ts` — function tryAcquireSchedulerLease: (input) => SchedulerLeaseHandle | null, type SchedulerLeaseHandle
+- `sidecar/src/mastra/schedulerRuntime.ts`
+  - function createMastraSchedulerRuntime: (input) => void
+  - type SchedulerFaultInjectionPhase
+  - type ScheduleDecision
+  - type ScheduledCancelResult
+- `sidecar/src/mastra/skillPrompt.ts` — function buildSkillPromptFromStore: (store, 'list' | 'findByTrigger' | 'get'>, input) => SkillPromptOutput
+- `sidecar/src/mastra/taskExecutionService.ts` — function createMastraTaskExecutionService: () => void
+- `sidecar/src/mastra/taskRuntimeState.ts`
+  - function toTaskRuntimeState: (value) => TaskRuntimeState | null
+  - function recoverTaskRuntimeStateAfterRestart: (state) => TaskRuntimeState
+  - type TaskRuntimeStatus
+  - type TaskRuntimeExecutionPath
+  - type TaskRuntimeCheckpoint
+  - type TaskRuntimeRetryState
+  - _...4 more_
+- `sidecar/src/mastra/taskRuntimeStateStore.ts` — class MastraTaskRuntimeStateStore
+- `sidecar/src/mastra/taskTranscriptStore.ts`
+  - class MastraTaskTranscriptStore
+  - type TaskTranscriptRole
+  - type TaskTranscriptEntry
+- `sidecar/src/mastra/telemetry.ts`
+  - function resolveTelemetryPolicy: (env, string | undefined>) => TelemetryPolicy
+  - function createTelemetryRunContext: (input, string | undefined>;
+    randomValue?) => TelemetryRunContext
+  - type TelemetrySamplingMode
+  - type TelemetryPolicy
+  - type TelemetryRunContext
+- `sidecar/src/mastra/tools/bash.ts`
+  - function isDangerousCommand: (command) => boolean
+  - function needsApprovalForCommand: (command) => boolean
+  - type BashExecutionResult
+  - const DANGEROUS_PATTERNS: RegExp[]
+  - const APPROVAL_PATTERNS: RegExp[]
+  - const bashTool
+  - _...1 more_
+- `sidecar/src/mastra/workflowReplay.ts`
+  - function replayWorkflowRunTimeTravel: (input) => Promise<WorkflowTimeTravelReplayResult>
+  - type WorkflowTimeTravelReplayInput
+  - type WorkflowTimeTravelReplayResult
+- `sidecar/src/mastra/workflows/steps/analyze-intent.ts`
+  - function analyzeWorkRequest: (input) => AnalyzeIntentResult
+  - interface AnalyzeIntentInput
+  - interface AnalyzeIntentResult
+- `sidecar/src/mastra/workflows/steps/assess-risk.ts` — function buildExecutionProfile: (normalized) => AssessRiskResult, interface AssessRiskResult
+- `sidecar/src/mastra/workflows/steps/execute-task.ts`
+  - function executeFrozenTask: (input) => Promise<ExecuteTaskOutput>
+  - interface ExecuteTaskInput
+  - interface ExecuteTaskOutput
+- `sidecar/src/mastra/workflows/steps/freeze-contract.ts`
+  - function freezeContract: (input) => FreezeContractOutput
+  - interface FreezeContractInput
+  - interface FreezeContractOutput
+- `sidecar/src/mastra/workflows/steps/research-loop.ts`
+  - function runResearchLoop: (input, resumeData?, string> }) => Promise<ResearchLoopOutput>
+  - interface ResearchLoopInput
+  - interface ResearchLoopOutput
+- `sidecar/src/mastra/workspace/runtime.ts`
+  - function resolveWorkspacePathFromRequestContext: (requestContext?) => string
+  - function getWorkspacePolicySnapshot: () => void
+  - function getWorkspaceForRequestContext: (requestContext?) => Promise<Workspace | undefined>
+  - function destroyWorkspaceRuntime: () => Promise<void>
+- `sidecar/src/orchestration/researchLoop.ts`
+  - function runPreFreezeResearchLoop: (input) => Promise<NormalizedWorkRequest>
+  - type ResearchLoopResolvers
+  - type ResearchLoopOptions
+- `sidecar/src/orchestration/routedInput.ts`
+  - function parseRoutedInput: (input) => RoutedInputParseResult
+  - function resolveForcedWorkMode: (forcedRouteMode) => 'chat' | 'immediate_task' | undefined
+  - type ForcedRouteMode
+  - type RoutedInputParseResult
+- `sidecar/src/orchestration/workRequestAnalyzer.ts`
+  - function analyzeWorkRequest: (input) => NormalizedWorkRequest
+  - function freezeWorkRequest: (request) => FrozenWorkRequest
+  - function buildExecutionPlan: (request) => ExecutionPlan
+  - function buildExecutionQueryForTaskIds: (request, 'tasks' | 'deliverables' | 'checkpoints'>, taskIds?, options?) => string
+- `sidecar/src/orchestration/workRequestPolicy.ts` — function buildExecutionProfile: (input) => ExecutionProfile
+- `sidecar/src/protocol/patches.ts`
+  - function createDiffHeader: (oldPath, newPath, operation) => string
+  - function calculatePatchStats: (hunks) => void
+  - type PatchOperation
+  - type DiffHunk
+  - const PatchOperationSchema
+  - const DiffHunkSchema
+  - _...5 more_
+- `sidecar/src/runtime/jarvis/voiceInterface.ts`
+  - function normalizeMacOSTextForSpeech: (text) => string
+  - function createVoiceInterface: (config?) => VoiceInterface
+  - class VoiceInterface
+  - interface VoiceConfig
+  - interface SpeechRecognitionResult
+  - interface VoicePlaybackState
+  - _...1 more_
+- `sidecar/src/scheduling/scheduledTaskRules.ts`
+  - function resolveRelativeUnitKind: (unitRaw) => RelativeUnitKind | null
+  - type RelativeUnitKind
+  - const SCHEDULED_TASK_PREFIX_PATTERNS: ReadonlyArray<RegExp>
+  - const RECURRING_MARKER_PATTERN
+  - const RECURRING_INTERVAL_PATTERN
+  - const INLINE_ENGLISH_RELATIVE_TIME_PATTERN
+  - _...8 more_
+- `sidecar/src/scheduling/scheduledTasks.ts`
+  - function parseScheduledTimeExpression: (expression, now) => void
+  - function detectScheduledIntent: (query, now) => void
+  - function getRecurrenceIntervalMs: (recurrence?) => number | null
+  - function computeNextRecurringExecuteAt: (input) => Date | null
+  - function formatScheduledTime: (date) => string
+  - class ScheduledTaskStore
+  - _...7 more_
+- `sidecar/src/storage/skillStore.ts`
+  - class SkillStore
+  - interface SkillRequirements
+  - interface ClaudeSkillManifest
+  - interface StoredSkill
+- `sidecar/src/storage/toolpackStore.ts` — class ToolpackStore, interface StoredToolpack
+- `sidecar/src/storage/workspaceStore.ts`
+  - class WorkspaceStore
+  - interface Workspace
+  - interface WorkspaceConfig
+- `sidecar/src/storage/workspaceStoreFacade.ts` — function createWorkspaceStoreFacade: (getRoot) => void
+- `sidecar/src/tools/commandSandbox.ts`
+  - function checkCommand: (command) => CommandCheckResult
+  - function getDangerousPatterns: () => Array<
+  - interface CommandCheckResult
+- `sidecar/src/tools/core/speechProviders.ts`
+  - function listSpeechProviders: (skills, kind, getTool) => void
+  - function getPreferredSpeechProvider: (skills, kind, getTool) => void
+  - function getSpeechProviderStatus: (skills, getTool) => void
+  - function invokeCustomAsrProvider: (skills, getTool) => void
+  - function invokeCustomTtsProvider: (skills, getTool) => void
+  - type SpeechProviderKind
+  - _...2 more_
+- `sidecar/src/tools/core/voice.ts`
+  - function configureVoiceProviders: (input) => void
+  - function setVoicePlaybackReporter: (reporter) => void
+  - function speakText: (text, context, source) => Promise<
+  - function stopVoicePlayback: (reason) => Promise<boolean>
+  - function getVoicePlaybackState: () => VoicePlaybackState
+  - const voiceSpeakTool: ToolDefinition
+- `sidecar/src/tools/registry.ts`
+  - class ToolRegistry
+  - interface RegisteredTool
+  - interface ToolFilter
+  - type ToolSource
+  - const globalToolRegistry
+- `sidecar/src/utils/commandAlternatives.ts`
+  - function getCurrentPlatform: () => Platform
+  - function extractBaseCommand: (command) => string
+  - function findAlternatives: (failedCommand, platform) => void
+  - function getAlternativeCommands: (failedCommand) => string[]
+  - function formatAlternativesMessage: (failedCommand) => string
+  - function hasAlternatives: (command) => boolean
+  - _...3 more_
+- `sidecar/src/utils/githubDownloader.ts`
+  - function parseGitHubSource: (source) => void
+  - function downloadFromGitHub: (source, targetDir, options) => Promise<GitHubDownloadResult>
+  - function downloadSkillFromGitHub: (source, workspacePath, options) => Promise<GitHubDownloadResult>
+  - function downloadMcpFromGitHub: (source, workspacePath, options) => Promise<GitHubDownloadResult>
+  - interface GitHubDownloadOptions
+  - interface GitHubDownloadResult

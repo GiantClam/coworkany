@@ -24,6 +24,9 @@ const TIMEOUT_PATTERNS: RegExp[] = [
     /generate_fallback_timeout/i,
     /stream_(?:start|idle|progress)_timeout/i,
     /stream_max_duration_timeout/i,
+    /stream_exhausted_without_assistant_text/i,
+    /complete_without_assistant_text/i,
+    /missing_terminal_after_tooling_progress/i,
     /\btimeout\b/i,
     /\btimed out\b/i,
     /gateway time-?out/i,
@@ -38,6 +41,7 @@ const TEMPORARY_UNAVAILABLE_PATTERNS: RegExp[] = [
     /insufficient[_\s-]?quota|insufficient credits/i,
     /temporar(?:y|ily).*(unavailable|error)?/i,
     /econnreset|enotfound|network error/i,
+    /No snapshot found for this workflow run/i,
 ];
 
 export function classifyRuntimeErrorMessage(message: string): RuntimeFailureClassification {

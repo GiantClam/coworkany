@@ -25,6 +25,20 @@ export type TaskRuntimeRetryState = {
     lastError?: string;
 };
 
+export type TaskTurnContractMode = 'chat' | 'task';
+
+export type TaskTurnContractDomain = 'market' | 'weather' | 'news' | 'browser' | 'general';
+
+export type TaskTurnContract = {
+    hash: string;
+    mode: TaskTurnContractMode;
+    domain: TaskTurnContractDomain;
+    route: 'direct' | 'workflow';
+    messageFingerprint: string;
+    requiredCapabilities: string[];
+    createdAt: string;
+};
+
 export type TaskRuntimeOperationAction =
     | 'set_checkpoint'
     | 'resume'
@@ -62,6 +76,7 @@ export type TaskRuntimeState = {
     retry?: TaskRuntimeRetryState;
     operationLog?: TaskRuntimeOperationRecord[];
     executionPath?: TaskRuntimeExecutionPath;
+    turnContract?: TaskTurnContract;
 };
 
 const VALID_STATUSES = new Set<TaskRuntimeStatus>([
@@ -195,6 +210,51 @@ function normalizeOperationLog(value: unknown): TaskRuntimeOperationRecord[] | u
     return records.length > 0 ? records : undefined;
 }
 
+function normalizeTurnContract(value: unknown): TaskTurnContract | undefined {
+    const raw = pickRecord(value);
+    if (!raw) {
+        return undefined;
+    }
+    const hash = pickNonEmptyString(raw.hash);
+    const mode = pickNonEmptyString(raw.mode);
+    const domain = pickNonEmptyString(raw.domain);
+    const route = pickNonEmptyString(raw.route);
+    const messageFingerprint = pickNonEmptyString(raw.messageFingerprint);
+    const createdAt = pickNonEmptyString(raw.createdAt);
+    if (!hash || !mode || !domain || !route || !messageFingerprint || !createdAt) {
+        return undefined;
+    }
+    if (mode !== 'chat' && mode !== 'task') {
+        return undefined;
+    }
+    if (
+        domain !== 'market'
+        && domain !== 'weather'
+        && domain !== 'news'
+        && domain !== 'browser'
+        && domain !== 'general'
+    ) {
+        return undefined;
+    }
+    if (route !== 'direct' && route !== 'workflow') {
+        return undefined;
+    }
+    const requiredCapabilities = Array.isArray(raw.requiredCapabilities)
+        ? raw.requiredCapabilities
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((item) => item.trim())
+        : [];
+    return {
+        hash,
+        mode,
+        domain,
+        route,
+        messageFingerprint,
+        requiredCapabilities: Array.from(new Set(requiredCapabilities)),
+        createdAt,
+    };
+}
+
 export function toTaskRuntimeState(value: unknown): TaskRuntimeState | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return null;
@@ -247,6 +307,7 @@ export function toTaskRuntimeState(value: unknown): TaskRuntimeState | null {
         executionPath: VALID_EXECUTION_PATHS.has(raw.executionPath as TaskRuntimeExecutionPath)
             ? raw.executionPath as TaskRuntimeExecutionPath
             : undefined,
+        turnContract: normalizeTurnContract(raw.turnContract),
     };
 }
 

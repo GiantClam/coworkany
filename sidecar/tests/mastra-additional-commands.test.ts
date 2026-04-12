@@ -110,6 +110,42 @@ describe('mastra additional command handler', () => {
         expect((remove?.payload as Record<string, unknown>)?.success).toBe(true);
     });
 
+    test('list_toolpacks reports runtime callable state and blocked reason', async () => {
+        const workspaceRoot = createTempDir('coworkany-mastra-toolpack-runtime-state-');
+        const appDataRoot = createTempDir('coworkany-mastra-toolpack-runtime-state-appdata-');
+        const { handler } = createMastraAdditionalCommandHandler({
+            workspaceRoot,
+            appDataRoot,
+        });
+        const missingToolpackDir = createTempDir('coworkany-mastra-toolpack-missing-tool-');
+        fs.writeFileSync(path.join(missingToolpackDir, 'mcp.json'), JSON.stringify({
+            id: 'missing-toolpack',
+            name: 'missing-toolpack',
+            version: '1.0.0',
+            runtime: 'internal',
+            tools: ['definitely_missing_tool_for_runtime_state_test'],
+        }, null, 2));
+
+        const install = await handler(createCommand('install_toolpack', {
+            path: missingToolpackDir,
+        }));
+        expect((install?.payload as Record<string, unknown>)?.success).toBe(true);
+
+        const listed = await handler(createCommand('list_toolpacks', {
+            includeDisabled: true,
+        }));
+        expect(listed?.type).toBe('list_toolpacks_response');
+        const payload = (listed?.payload as Record<string, unknown>) ?? {};
+        const toolpacks = (payload.toolpacks as Array<Record<string, unknown>> | undefined) ?? [];
+        const installed = toolpacks.find((entry) => (
+            ((entry.manifest as Record<string, unknown> | undefined)?.id as string | undefined) === 'missing-toolpack'
+        ));
+        expect(installed).toBeDefined();
+        expect(installed?.status).toBe('blocked');
+        expect(installed?.blocked_reason).toBe('internal_tools_unresolved');
+        expect(installed?.callableToolCount).toBe(0);
+    });
+
     test('skill lifecycle commands install, toggle, and uninstall skill correctly', async () => {
         const workspaceRoot = createTempDir('coworkany-mastra-skill-lifecycle-');
         const appDataRoot = createTempDir('coworkany-mastra-skill-lifecycle-appdata-');
