@@ -44,7 +44,7 @@ jobs:
         run: npm run test:codex -- --mode nightly --subset nightly-tier2
 
       - name: Upload Codex nightly tier2 report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-test-nightly-tier2
           path: artifacts/codex-test/**
@@ -88,7 +88,7 @@ jobs:
         run: npm run test:codex -- --mode nightly --subset nightly-tier3
 
       - name: Upload Codex nightly tier3 report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-test-nightly-tier3
           path: artifacts/codex-test/**

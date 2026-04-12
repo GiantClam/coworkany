@@ -123,7 +123,7 @@ jobs:
 
       - name: Upload desktop bundle
         if: ${{ inputs.platform == 'all' || inputs.platform == matrix.artifact_name }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coworkany-${{ inputs.version_label || 'manual' }}-${{ matrix.artifact_name }}
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
