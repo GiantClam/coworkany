@@ -23,6 +23,174 @@ import * as path from 'path';
 export const SIDECAR_INIT_WAIT_MS = 5000;
 export const POLL_INTERVAL_MS = 2000;
 export const LOG_DIR = path.join(process.cwd(), '.coworkany', 'logs');
+const OPENAI_COMPATIBLE_PROFILE_PROVIDERS = new Set([
+    'openai',
+    'aiberm',
+    'nvidia',
+    'siliconflow',
+    'gemini',
+    'qwen',
+    'minimax',
+    'kimi',
+]);
+
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+function toNonEmpty(value: unknown): string | null {
+    if (typeof value !== 'string') {
+        return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOpenAiBaseUrl(value: string | null): string | null {
+    if (!value) {
+        return null;
+    }
+    if (value.endsWith('/chat/completions')) {
+        return value.slice(0, -'/chat/completions'.length);
+    }
+    return value.replace(/\/+$/u, '');
+}
+
+function withModelPrefix(provider: string, model: string | null): string | null {
+    if (!model) {
+        return null;
+    }
+    if (model.includes('/')) {
+        return model;
+    }
+    return `${provider}/${model}`;
+}
+
+function resolveLlmConfigCandidatePaths(cwd: string): string[] {
+    const candidates = [
+        path.join(cwd, 'llm-config.json'),
+    ];
+    const appDataDir = toNonEmpty(process.env.COWORKANY_APP_DATA_DIR);
+    if (appDataDir) {
+        candidates.push(path.join(appDataDir, 'llm-config.json'));
+    }
+    const home = toNonEmpty(process.env.HOME);
+    if (home) {
+        candidates.push(path.join(home, 'Library', 'Application Support', 'com.coworkany.desktop', 'llm-config.json'));
+    }
+    return Array.from(new Set(candidates));
+}
+
+function resolveHarnessProviderEnv(cwd: string): NodeJS.ProcessEnv {
+    for (const configPath of resolveLlmConfigCandidatePaths(cwd)) {
+        if (!fs.existsSync(configPath)) {
+            continue;
+        }
+        try {
+            const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as unknown;
+            const root = toRecord(parsed);
+            const provider = toNonEmpty(root.provider)?.toLowerCase();
+            if (!provider) {
+                continue;
+            }
+            const seeded: NodeJS.ProcessEnv = {
+                COWORKANY_LLM_CONFIG_PROVIDER: provider,
+            };
+            if (provider === 'anthropic') {
+                const config = toRecord(root.anthropic);
+                const apiKey = toNonEmpty(config.apiKey);
+                const modelId = withModelPrefix('anthropic', toNonEmpty(config.model));
+                if (apiKey) {
+                    seeded.ANTHROPIC_API_KEY = apiKey;
+                }
+                if (modelId) {
+                    seeded.COWORKANY_MODEL = modelId;
+                }
+                return seeded;
+            }
+            if (provider === 'custom') {
+                const config = toRecord(root.custom);
+                const apiFormat = toNonEmpty(config.apiFormat)?.toLowerCase() ?? 'openai';
+                seeded.COWORKANY_LLM_CUSTOM_API_FORMAT = apiFormat;
+                const apiKey = toNonEmpty(config.apiKey);
+                const baseUrl = normalizeOpenAiBaseUrl(toNonEmpty(config.baseUrl));
+                if (apiFormat === 'anthropic') {
+                    const modelId = withModelPrefix('anthropic', toNonEmpty(config.model));
+                    if (apiKey) {
+                        seeded.ANTHROPIC_API_KEY = apiKey;
+                    }
+                    if (modelId) {
+                        seeded.COWORKANY_MODEL = modelId;
+                    }
+                } else {
+                    const modelId = withModelPrefix('openai', toNonEmpty(config.model));
+                    if (apiKey) {
+                        seeded.OPENAI_API_KEY = apiKey;
+                    }
+                    if (baseUrl) {
+                        seeded.OPENAI_BASE_URL = baseUrl;
+                    }
+                    if (modelId) {
+                        seeded.COWORKANY_MODEL = modelId;
+                    }
+                }
+                return seeded;
+            }
+            if (OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(provider)) {
+                const config = toRecord(root.openai);
+                const apiKey = toNonEmpty(config.apiKey);
+                const baseUrl = normalizeOpenAiBaseUrl(toNonEmpty(config.baseUrl));
+                const modelId = withModelPrefix('openai', toNonEmpty(config.model));
+                if (apiKey) {
+                    seeded.OPENAI_API_KEY = apiKey;
+                }
+                if (baseUrl) {
+                    seeded.OPENAI_BASE_URL = baseUrl;
+                }
+                if (modelId) {
+                    seeded.COWORKANY_MODEL = modelId;
+                }
+                return seeded;
+            }
+            return seeded;
+        } catch {
+            // continue loading the next candidate path
+        }
+    }
+    return {};
+}
+
+function resolveHarnessBunExecutable(): string {
+    const envOverride = toNonEmpty(process.env.COWORKANY_TEST_BUN_BIN);
+    if (envOverride) {
+        return envOverride;
+    }
+
+    const runtimeExecPath = toNonEmpty(process.execPath);
+    if (runtimeExecPath && path.basename(runtimeExecPath).toLowerCase().includes('bun')) {
+        try {
+            return fs.realpathSync(runtimeExecPath);
+        } catch {
+            return runtimeExecPath;
+        }
+    }
+
+    const bunWhich = typeof Bun !== 'undefined' && typeof Bun.which === 'function'
+        ? toNonEmpty(Bun.which('bun') ?? null)
+        : null;
+    if (bunWhich) {
+        try {
+            return fs.realpathSync(bunWhich);
+        } catch {
+            return bunWhich;
+        }
+    }
+
+    return 'bun';
+}
 
 // ============================================================================
 // Types
@@ -61,8 +229,10 @@ export function buildStartTaskCommand(opts: {
     disabledTools?: string[];
     workspacePath?: string;
     modelId?: string;
+    requireToolApproval?: boolean;
+    autoResumeSuspendedTools?: boolean;
 }): string {
-    const modelId = opts.modelId || process.env.TEST_MODEL_ID;
+    const modelId = opts.modelId || process.env.TEST_MODEL_ID || process.env.COWORKANY_MODEL;
     return JSON.stringify({
         type: 'start_task',
         id: randomUUID(),
@@ -79,6 +249,8 @@ export function buildStartTaskCommand(opts: {
                 enabledSkills: opts.enabledSkills || [],
                 disabledTools: opts.disabledTools || [],
                 modelId,
+                requireToolApproval: opts.requireToolApproval ?? false,
+                autoResumeSuspendedTools: opts.autoResumeSuspendedTools ?? true,
             },
         },
     });
@@ -142,12 +314,174 @@ export class EventCollector {
     taskFailed = false;
     taskError: string | null = null;
     idleTimeoutReached = false;
+    private recentToolCallEvents = new Map<string, number>();
+    private recentToolResultEvents = new Map<string, number>();
+    private readonly duplicateWindowMs = 600;
+
+    private normalizeToolName(toolName: string): string {
+        const legacyMap: Record<string, string> = {
+            mastra_workspace_read_file: 'view_file',
+            mastra_workspace_write_file: 'write_to_file',
+            mastra_workspace_replace_in_file: 'replace_file_content',
+            mastra_workspace_list_directory: 'list_dir',
+            mastra_workspace_list_files: 'list_dir',
+            mastra_workspace_execute_command: 'run_command',
+            mastra_workspace_edit_file: 'replace_file_content',
+            mastra_workspace_move_path: 'move_file',
+            mastra_workspace_delete_path: 'delete_path',
+        };
+        return legacyMap[toolName] ?? toolName;
+    }
+
+    private normalizeTimestampMs(timestamp?: string): number {
+        if (typeof timestamp === 'string' && timestamp.trim().length > 0) {
+            const parsed = Date.parse(timestamp);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+        }
+        return Date.now();
+    }
+
+    private normalizeForFingerprint(value: unknown): string {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        if (typeof value === 'string') {
+            return value;
+        }
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+
+    private isDuplicate(
+        cache: Map<string, number>,
+        fingerprint: string,
+        timestampMs: number,
+    ): boolean {
+        const previous = cache.get(fingerprint);
+        cache.set(fingerprint, timestampMs);
+        for (const [key, ts] of cache.entries()) {
+            if (timestampMs - ts > this.duplicateWindowMs * 4) {
+                cache.delete(key);
+            }
+        }
+        if (typeof previous !== 'number') {
+            return false;
+        }
+        return timestampMs - previous <= this.duplicateWindowMs;
+    }
+
+    private recordToolCall(rawToolName: string, toolArgs: Record<string, any>, timestamp?: string): void {
+        const toolName = this.normalizeToolName(rawToolName);
+        const timestampMs = this.normalizeTimestampMs(timestamp);
+        const fingerprint = `call|${toolName}|${this.normalizeForFingerprint(toolArgs)}`;
+        if (this.isDuplicate(this.recentToolCallEvents, fingerprint, timestampMs)) {
+            return;
+        }
+        this.toolCalls.push({
+            toolName,
+            toolArgs,
+            timestamp: typeof timestamp === 'string' ? timestamp : new Date(timestampMs).toISOString(),
+        });
+        const ts = new Date().toLocaleTimeString();
+        const argsStr = JSON.stringify(toolArgs).slice(0, 300);
+        console.log(`[${ts}] TOOL_CALL: ${toolName} - ${argsStr}`);
+    }
+
+    private recordToolResult(
+        rawToolName: string | undefined,
+        isError: boolean,
+        resultValue: unknown,
+        timestamp?: string,
+    ): void {
+        const toolName = rawToolName ? this.normalizeToolName(rawToolName) : undefined;
+        const timestampMs = this.normalizeTimestampMs(timestamp);
+        const fingerprint = `result|${toolName ?? 'unknown'}|${isError ? 'error' : 'ok'}|${this.normalizeForFingerprint(resultValue)}`;
+        if (this.isDuplicate(this.recentToolResultEvents, fingerprint, timestampMs)) {
+            return;
+        }
+        this.toolResults.push({
+            toolName,
+            success: !isError,
+            result: resultValue,
+            timestamp: typeof timestamp === 'string' ? timestamp : new Date(timestampMs).toISOString(),
+        });
+        const ts = new Date().toLocaleTimeString();
+        const icon = isError ? 'FAIL' : 'OK';
+        console.log(`[${ts}] TOOL_RESULT [${icon}]${toolName ? ` (${toolName})` : ''}: ${String(resultValue).slice(0, 300)}`);
+    }
+
+    private processRuntimeTaskEvent(payload: Record<string, any>): void {
+        const runtimeType = typeof payload.type === 'string' ? payload.type : '';
+        if (!runtimeType) {
+            return;
+        }
+        switch (runtimeType) {
+            case 'text_delta': {
+                const delta = typeof payload.content === 'string'
+                    ? payload.content
+                    : typeof payload.delta === 'string'
+                        ? payload.delta
+                        : '';
+                this.textBuffer += delta;
+                break;
+            }
+            case 'tool_call': {
+                const rawToolName = typeof payload.toolName === 'string'
+                    ? payload.toolName
+                    : typeof payload.name === 'string'
+                        ? payload.name
+                        : 'unknown';
+                const toolArgs = (payload.args && typeof payload.args === 'object')
+                    ? payload.args as Record<string, any>
+                    : (payload.input && typeof payload.input === 'object')
+                        ? payload.input as Record<string, any>
+                        : {};
+                this.recordToolCall(rawToolName, toolArgs, payload.timestamp);
+                break;
+            }
+            case 'tool_result': {
+                const rawToolName = typeof payload.toolName === 'string'
+                    ? payload.toolName
+                    : typeof payload.name === 'string'
+                        ? payload.name
+                        : undefined;
+                const isError = payload.isError === true;
+                const resultValue = payload.result ?? payload.resultSummary ?? '';
+                this.recordToolResult(rawToolName, isError, resultValue, payload.timestamp);
+                break;
+            }
+            case 'error': {
+                this.taskFailed = true;
+                const message = typeof payload.message === 'string'
+                    ? payload.message
+                    : 'Unknown runtime error';
+                this.taskError = message;
+                break;
+            }
+            case 'complete': {
+                this.taskFinished = true;
+                this.taskFinishedByEvent = true;
+                break;
+            }
+            default:
+                break;
+        }
+    }
 
     processEvent(event: TaskEvent): void {
         this.events.push(event);
         const ts = new Date().toLocaleTimeString();
 
         switch (event.type) {
+            case 'TASK_EVENT': {
+                this.processRuntimeTaskEvent(event.payload || {});
+                break;
+            }
             case 'TASK_STARTED':
                 this.taskStarted = true;
                 console.log(`[${ts}] TASK_STARTED: ${event.payload?.title || 'untitled'}`);
@@ -158,28 +492,23 @@ export class EventCollector {
                 break;
 
             case 'TOOL_CALL': {
-                const toolCall: ToolCallEvent = {
-                    toolName: event.payload?.name || 'unknown',
-                    toolArgs: event.payload?.input || {},
-                    timestamp: event.timestamp,
-                };
-                this.toolCalls.push(toolCall);
-                const argsStr = JSON.stringify(toolCall.toolArgs).slice(0, 300);
-                console.log(`[${ts}] TOOL_CALL: ${toolCall.toolName} - ${argsStr}`);
+                const rawToolName = typeof event.payload?.name === 'string'
+                    ? event.payload.name
+                    : 'unknown';
+                const toolArgs = (event.payload?.input && typeof event.payload.input === 'object')
+                    ? event.payload.input as Record<string, any>
+                    : {};
+                this.recordToolCall(rawToolName, toolArgs, event.timestamp);
                 break;
             }
 
             case 'TOOL_RESULT': {
-                const toolResult: ToolResultEvent = {
-                    toolName: event.payload?.name || undefined,
-                    success: !(event.payload?.isError),
-                    result: event.payload?.result || event.payload?.resultSummary || '',
-                    timestamp: event.timestamp,
-                };
-                this.toolResults.push(toolResult);
-                const icon = toolResult.success ? 'OK' : 'FAIL';
-                const nameTag = toolResult.toolName ? ` (${toolResult.toolName})` : '';
-                console.log(`[${ts}] TOOL_RESULT [${icon}]${nameTag}: ${String(toolResult.result).slice(0, 300)}`);
+                const rawToolName = typeof event.payload?.name === 'string'
+                    ? event.payload.name
+                    : undefined;
+                const isError = event.payload?.isError === true;
+                const resultValue = event.payload?.result || event.payload?.resultSummary || '';
+                this.recordToolResult(rawToolName, isError, resultValue, event.timestamp);
                 break;
             }
 
@@ -195,6 +524,18 @@ export class EventCollector {
                 console.log(`[${ts}] TASK_FAILED: ${this.taskError}`);
                 break;
 
+            case 'tool_call':
+            case 'tool_result':
+            case 'text_delta':
+            case 'error':
+            case 'complete':
+                this.processRuntimeTaskEvent({
+                    ...event.payload,
+                    type: event.type,
+                    timestamp: event.timestamp,
+                });
+                break;
+
             default:
                 break;
         }
@@ -207,7 +548,18 @@ export class EventCollector {
 
     /** Get all text (agent output + tool results) */
     getAllText(): string {
-        const toolResultTexts = this.toolResults.map(r => String(r.result)).join('\n');
+        const toolResultTexts = this.toolResults
+            .map((r) => {
+                if (typeof r.result === 'string') {
+                    return r.result;
+                }
+                try {
+                    return JSON.stringify(r.result);
+                } catch {
+                    return String(r.result);
+                }
+            })
+            .join('\n');
         return (this.textBuffer + '\n' + toolResultTexts).toLowerCase();
     }
 
@@ -285,18 +637,25 @@ export class SidecarProcess {
         }
     ) {
         this.collector = collector || new EventCollector();
-        this.cwd = options?.cwd || process.cwd();
+        const requestedCwd = options?.cwd || process.cwd();
+        this.cwd = fs.existsSync(requestedCwd) ? requestedCwd : process.cwd();
+        const seededProviderEnv = resolveHarnessProviderEnv(this.cwd);
         this.env = {
+            ...seededProviderEnv,
             ...process.env,
+            COWORKANY_DISABLE_SCHEDULER: options?.env?.COWORKANY_DISABLE_SCHEDULER
+                ?? process.env.COWORKANY_DISABLE_SCHEDULER
+                ?? '1',
             ...(options?.env || {}),
         };
     }
 
     async start(): Promise<void> {
         console.log('[SIDECAR] Spawning sidecar process...');
+        const bunExecutable = resolveHarnessBunExecutable();
 
         this.proc = spawn({
-            cmd: ['bun', 'run', 'src/main.ts'],
+            cmd: [bunExecutable, 'run', 'src/main.ts'],
             cwd: this.cwd,
             env: this.env,
             stdin: 'pipe',

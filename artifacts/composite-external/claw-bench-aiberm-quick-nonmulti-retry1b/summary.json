@@ -1,0 +1,217 @@
+{
+  "schema_version": "1.2.0",
+  "framework": "openclaw",
+  "model": "claude-sonnet-4-6",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": null,
+  "scores": {
+    "overall": 70.8,
+    "tasks_total": 12,
+    "tasks_passed": 6,
+    "tasks_failed": 6,
+    "tasks_errored": 0,
+    "tasks_tested": 12,
+    "pass_rate": 50.0,
+    "pass_rate_tested": 50.0
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "other_error": 0,
+    "total_errors": 0
+  },
+  "task_results": [
+    {
+      "task_id": "comm-004",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 31.03,
+      "tokens_input": 83,
+      "tokens_output": 1333,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".................                                                        [100%]\n17 passed in 0.02s\n"
+    },
+    {
+      "task_id": "debug-002",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 160.27,
+      "tokens_input": 225,
+      "tokens_output": 4328,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...................                                                      [100%]\n19 passed in 0.02s\n"
+    },
+    {
+      "task_id": "code-001",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 286.13,
+      "tokens_input": 228,
+      "tokens_output": 2646,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".......F..                                                               [100%]\n=================================== FAILURES ===================================\n___________________________ test_no_extraneous_files ___________________________\ntasks/code-assistance/code-001-write-unittest/verifier/test_output.py:90: in test_no_extraneous_files\n    assert pat not in f.name, f\"Extraneous file found: {f.name}\"\nE   AssertionError: Extraneous file found: calculator.cpython-312.pyc\nE   assert '.pyc' not in 'calculator.cpython-312.pyc'\nE     \nE     '.pyc' is contained here:\nE       calculator.cpython-312.pyc\nE     ?                       ++++\n=========================== short test summary info ============================\nFAILED tasks/code-assistance/code-001-write-unittest/verifier/test_output.py::test_no_extraneous_files\n1 failed, 9 passed in 0.22s\n"
+    },
+    {
+      "task_id": "eml-004",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 70.35,
+      "tokens_input": 82,
+      "tokens_output": 2011,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..............                                                           [100%]\n14 passed in 0.02s\n"
+    },
+    {
+      "task_id": "db-002",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 485.9,
+      "tokens_input": 524,
+      "tokens_output": 3525,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "......F.FFF.FFFF....                                                     [100%]\n=================================== FAILURES ===================================\n____________________________ test_correct_row_count ____________________________\ntasks/database/db-002/verifier/test_output.py:102: in test_correct_row_count\n    assert len(query_result_rows) == 5, (\nE   AssertionError: Expected 5 rows, got 3\nE   assert 3 == 5\nE    +  where 3 = len([{'city': 'New York', 'customer_name': 'Alice', 'total_spend': 1500.0}, {'city': 'Los Angeles', 'customer_name': 'Bob', 'total_spend': 750.0}, {'city': 'Chicago', 'customer_name': 'Charlie', 'total_spend': 500.0}])\n____________________________ test_total_spend_alice ____________________________\ntasks/database/db-002/verifier/test_output.py:127: in test_total_spend_alice\n    pytest.fail(\"Alice Wang not found in results\")\nE   Failed: Alice Wang not found in results\n_____________________________ test_total_spend_bob _____________________________\ntasks/database/db-002/verifier/test_output.py:139: in test_total_spend_bob\n    pytest.fail(\"Bob Smith not found in results\")\nE   Failed: Bob Smith not found in results\n_____________________________ test_total_spend_eva _____________________________\ntasks/database/db-002/verifier/test_output.py:151: in test_total_spend_eva\n    pytest.fail(\"Eva Garcia not found in results\")\nE   Failed: Eva Garcia not found in results\n____________________________ test_first_row_is_eva _____________________________\ntasks/database/db-002/verifier/test_output.py:168: in test_first_row_is_eva\n    assert query_result_rows[0][\"customer_name\"] == \"Eva Garcia\"\nE   AssertionError: assert 'Alice' == 'Eva Garcia'\nE     \nE     - Eva Garcia\nE     + Alice\n____________________________ test_last_row_is_carol ____________________________\ntasks/database/db-002/verifier/test_output.py:174: in test_last_row_is_carol\n    assert query_result_rows[-1][\"customer_name\"] == \"Carol Jones\"\nE   AssertionError: assert 'Charlie' == 'Carol Jones'\nE     \nE     - Carol Jones\nE     + Charlie\n____________________________ test_total_spend_david ____________________________\ntasks/database/db-002/verifier/test_output.py:184: in test_total_spend_david\n    pytest.fail(\"David Lee not found in results\")\nE   Failed: David Lee not found in results\n____________________________ test_total_spend_carol ____________________________\ntasks/database/db-002/verifier/test_output.py:194: in test_total_spend_carol\n    pytest.fail(\"Carol Jones not found in results\")\nE   Failed: Carol Jones not found in results\n=========================== short test summary info ============================\nFAILED tasks/database/db-002/verifier/test_output.py::test_correct_row_count\nFAILED tasks/database/db-002/verifier/test_output.py::test_total_spend_alice\nFAILED tasks/database/db-002/verifier/test_output.py::test_total_spend_bob - ...\nFAILED tasks/database/db-002/verifier/test_output.py::test_total_spend_eva - ...\nFAILED tasks/database/db-002/verifier/test_output.py::test_first_row_is_eva\nFAILED tasks/database/db-002/verifier/test_output.py::test_last_row_is_carol\nFAILED tasks/database/db-002/verifier/test_output.py::test_total_spend_david\nFAILED tasks/database/db-002/verifier/test_output.py::test_total_spend_carol\n8 failed, 12 passed in 0.05s\n"
+    },
+    {
+      "task_id": "fin-008",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 335.89,
+      "tokens_input": 216,
+      "tokens_output": 4194,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "......                                                                   [100%]\n6 passed in 0.33s\n"
+    },
+    {
+      "task_id": "doc-004",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 671.4,
+      "tokens_input": 350,
+      "tokens_output": 5074,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...........F......                                                       [100%]\n=================================== FAILURES ===================================\n__________________________ test_no_placeholder_values __________________________\ntasks/document-editing/doc-004-find-replace/verifier/test_output.py:86: in test_no_placeholder_values\n    assert p.lower() not in content, f\"Placeholder '{p}' found in {f.name}\"\nE   AssertionError: Placeholder 'TODO' found in replacements.json\nE   assert 'todo' not in '[\\n  {\\n   ...t\"\\n  }\\n]\\n'\nE     \nE     'todo' is contained here:\nE       attern\": \"todo:\",\nE     ?           ++++\nE           \"replacement\": \"[ ]\",\nE           \"description\": \"convert todo markers to checkbox format\"\nE         },...\nE     \nE     ...Full output truncated (11 lines hidden), use '-vv' to show\n=========================== short test summary info ============================\nFAILED tasks/document-editing/doc-004-find-replace/verifier/test_output.py::test_no_placeholder_values\n1 failed, 17 passed in 0.03s\n"
+    },
+    {
+      "task_id": "edu-001",
+      "passed": false,
+      "score": 0.0,
+      "duration_s": 825.3,
+      "tokens_input": 305,
+      "tokens_output": 3441,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________________ test_output_exists ______________________________\ntasks/education/edu-001-crt-and-logistic-reasoning/verifier/test_output.py:12: in test_output_exists\n    assert len(files) > 0, \"No output files found\"\nE   AssertionError: No output files found\nE   assert 0 > 0\nE    +  where 0 = len([])\n=========================== short test summary info ============================\nFAILED tasks/education/edu-001-crt-and-logistic-reasoning/verifier/test_output.py::test_output_exists\n1 failed in 0.02s\n"
+    },
+    {
+      "task_id": "web-004",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 473.43,
+      "tokens_input": 246,
+      "tokens_output": 3341,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "FEEEEEEEEEEE.s.ss..                                                      [100%]\n==================================== ERRORS ====================================\n__________________ ERROR at setup of test_correct_field_count __________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n__________ ERROR at setup of test_all_fields_have_required_properties __________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n___________________ ERROR at setup of test_first_name_field ____________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n______________________ ERROR at setup of test_email_field ______________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n_________________ ERROR at setup of test_password_has_pattern __________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n__________________ ERROR at setup of test_phone_not_required ___________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n____________________ ERROR at setup of test_age_has_min_max ____________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory/workspace/claude-sonnet-4-6_run0/form_fields.json').exists\n___________________ ERROR at setup of test_country_is_select ___________________\ntasks/web-browsing/web-004-form-inventory/verifier/test_output.py:17: in fields\n    assert path.exists(), \"form_fields.json not found\"\nE   AssertionError: form_fields.json not found\nE   assert False\nE    +  where Fal"
+    },
+    {
+      "task_id": "math-002",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 1286.31,
+      "tokens_input": 344,
+      "tokens_output": 4561,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".................                                                        [100%]\n17 passed in 0.02s\n"
+    },
+    {
+      "task_id": "plan-002",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 1122.55,
+      "tokens_input": 260,
+      "tokens_output": 2844,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".................                                                        [100%]\n17 passed in 0.02s\n"
+    },
+    {
+      "task_id": "tool-002",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 1221.99,
+      "tokens_input": 418,
+      "tokens_output": 4716,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...F..F...FFFF...                                                        [100%]\n=================================== FAILURES ===================================\n________________________ test_resolved_has_all_packages ________________________\ntasks/real-tools/tool-002/verifier/test_output.py:79: in test_resolved_has_all_packages\n    assert pkg in resolved_packages, f\"Package '{pkg}' missing from resolved.txt\"\nE   AssertionError: Package 'boto3' missing from resolved.txt\nE   assert 'boto3' in {'celery': '==5.1.2', 'django': '==3.2.0', 'flask': '==2.0.1', 'numpy': '==1.21.0', ...}\n____________________ test_conflicts_detect_known_conflicts _____________________\ntasks/real-tools/tool-002/verifier/test_output.py:105: in test_conflicts_detect_known_conflicts\n    assert pkg in conflict_pkgs, f\"Conflict for '{pkg}' not detected\"\nE   AssertionError: Conflict for 'flask' not detected\nE   assert 'flask' in {'django', 'numpy', 'pandas', 'pytest', 'requests', 'sqlalchemy'}\n_____________________ test_resolved_has_packages_only_in_a _____________________\ntasks/real-tools/tool-002/verifier/test_output.py:133: in test_resolved_has_packages_only_in_a\n    assert pkg in resolved_packages, f\"Package '{pkg}' (only in requirements_a) missing from resolved.txt\"\nE   AssertionError: Package 'redis' (only in requirements_a) missing from resolved.txt\nE   assert 'redis' in {'celery': '==5.1.2', 'django': '==3.2.0', 'flask': '==2.0.1', 'numpy': '==1.21.0', ...}\n_____________________ test_resolved_has_packages_only_in_b _____________________\ntasks/real-tools/tool-002/verifier/test_output.py:139: in test_resolved_has_packages_only_in_b\n    assert pkg in resolved_packages, f\"Package '{pkg}' (only in requirements_b) missing from resolved.txt\"\nE   AssertionError: Package 'gunicorn' (only in requirements_b) missing from resolved.txt\nE   assert 'gunicorn' in {'celery': '==5.1.2', 'django': '==3.2.0', 'flask': '==2.0.1', 'numpy': '==1.21.0', ...}\n________________________ test_conflicts_flask_detected _________________________\ntasks/real-tools/tool-002/verifier/test_output.py:148: in test_conflicts_flask_detected\n    assert len(flask_conflicts) == 1, \"Should detect exactly one conflict for flask\"\nE   AssertionError: Should detect exactly one conflict for flask\nE   assert 0 == 1\nE    +  where 0 = len([])\n_______________________ test_conflicts_requests_detected _______________________\ntasks/real-tools/tool-002/verifier/test_output.py:159: in test_conflicts_requests_detected\n    assert \"2.28\" in c[\"version_a\"]\nE   AssertionError: assert '2.28' in '>=2.25.0'\n=========================== short test summary info ============================\nFAILED tasks/real-tools/tool-002/verifier/test_output.py::test_resolved_has_all_packages\nFAILED tasks/real-tools/tool-002/verifier/test_output.py::test_conflicts_detect_known_conflicts\nFAILED tasks/real-tools/tool-002/verifier/test_output.py::test_resolved_has_packages_only_in_a\nFAILED tasks/real-tools/tool-002/verifier/test_output.py::test_resolved_has_packages_only_in_b\nFAILED tasks/real-tools/tool-002/verifier/test_output.py::test_conflicts_flask_detected\nFAILED tasks/real-tools/tool-002/verifier/test_output.py::test_conflicts_requests_detected\n6 failed, 11 passed in 0.04s\n"
+    }
+  ],
+  "agent_profile": {
+    "model": "claude-sonnet-4-6",
+    "framework": "openclaw",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {},
+    "profile_id": "3938573d4d4060c7250549488e47260ea13fcef0629bb472502c93fb15fe7fe5",
+    "display_name": "openclaw / claude-sonnet-4-6"
+  },
+  "statistics": {
+    "total_tasks": 12,
+    "total_runs": 12,
+    "overall_pass_rate": 0.5,
+    "overall_mean_score": 0.708333,
+    "overall_std_dev": 0.320048,
+    "confidence_interval_95": [
+      0.527249,
+      0.889417
+    ],
+    "per_domain": {
+      "code-assistance": 0.5,
+      "communication": 1.0,
+      "database": 0.5,
+      "debugging": 1.0,
+      "document-editing": 0.5,
+      "education": 0.0,
+      "email": 1.0,
+      "financial-analysis": 1.0,
+      "math-reasoning": 1.0,
+      "planning": 1.0,
+      "real-tools": 0.5,
+      "web-browsing": 0.5
+    },
+    "per_level": {
+      "L2": 0.708333
+    },
+    "per_capability": {
+      "collaboration": 1.0,
+      "reasoning": 0.708333,
+      "tool-use": 0.681818
+    }
+  }
+}

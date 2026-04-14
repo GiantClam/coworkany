@@ -1,17 +1,23 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type RuntimeSearchProvider = 'serper' | 'searxng' | 'tavily' | 'brave';
+export type RuntimeSearchProvider = 'serper' | 'exa' | 'tavily' | 'brave';
 
 export interface RuntimeSearchConfig {
     provider?: RuntimeSearchProvider;
     serperApiKey?: string;
-    searxngUrl?: string;
+    exaApiKey?: string;
     tavilyApiKey?: string;
     braveApiKey?: string;
 }
 
 export interface RuntimeLlmConfig {
+    provider?: string;
+    activeProfileId?: string;
+    profiles?: unknown[];
+    anthropic?: Record<string, unknown> | null;
+    openai?: Record<string, unknown> | null;
+    custom?: Record<string, unknown> | null;
     search?: Partial<RuntimeSearchConfig>;
 }
 
@@ -25,7 +31,7 @@ export interface RuntimeSearchConfigResolution {
     settings: {
         provider: RuntimeSearchProvider;
         serperApiKey?: string;
-        searxngUrl?: string;
+        exaApiKey?: string;
         tavilyApiKey?: string;
         braveApiKey?: string;
     };
@@ -34,7 +40,7 @@ export interface RuntimeSearchConfigResolution {
     sources: {
         provider: string;
         serperApiKey: string;
-        searxngUrl: string;
+        exaApiKey: string;
         tavilyApiKey: string;
         braveApiKey: string;
     };
@@ -52,11 +58,19 @@ export interface RuntimeConfigDoctorSummary {
         };
         credentials: {
             serperApiKeyConfigured: boolean;
-            searxngUrlConfigured: boolean;
+            exaApiKeyConfigured: boolean;
             tavilyApiKeyConfigured: boolean;
             braveApiKeyConfigured: boolean;
         };
     };
+}
+
+export interface RuntimeLlmEnvSeedResult {
+    loadedFromPath: string | null;
+    candidatePaths: string[];
+    seededKeys: string[];
+    provider: string | null;
+    modelId: string | null;
 }
 
 interface RuntimeConfigLoadInput {
@@ -77,11 +91,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
+function toRecord(value: unknown): Record<string, unknown> | null {
+    if (!isRecord(value) || Array.isArray(value)) {
+        return null;
+    }
+    return value;
+}
+
+function normalizeOpenAiBaseUrl(value: string | null): string | null {
+    if (!value) {
+        return null;
+    }
+    if (value.endsWith('/chat/completions')) {
+        return value.slice(0, -'/chat/completions'.length);
+    }
+    return value.replace(/\/+$/u, '');
+}
+
+function withModelPrefix(provider: string, model: string | null): string | null {
+    if (!model) {
+        return null;
+    }
+    if (model.includes('/')) {
+        return model;
+    }
+    return `${provider}/${model}`;
+}
+
+const OPENAI_COMPATIBLE_LLM_PROVIDERS = new Set([
+    'openai',
+    'aiberm',
+    'nvidia',
+    'siliconflow',
+    'gemini',
+    'qwen',
+    'minimax',
+    'kimi',
+]);
+
 function normalizeSearchProvider(value: unknown): RuntimeSearchProvider {
-    if (value === 'serper' || value === 'searxng' || value === 'tavily' || value === 'brave') {
+    if (value === 'serper' || value === 'exa' || value === 'tavily' || value === 'brave') {
         return value;
     }
-    return 'serper';
+    return 'exa';
 }
 
 function pickConfigString(value: unknown): string | undefined {
@@ -106,7 +158,8 @@ function pickFromEnv(
 }
 
 export function resolveRuntimeAppDataRoot(input: RuntimeConfigLoadInput = {}): string {
-    const appDataDir = toNonEmpty(input.appDataDir) ?? toNonEmpty(process.env.COWORKANY_APP_DATA_DIR);
+    const env = input.env ?? process.env;
+    const appDataDir = toNonEmpty(input.appDataDir) ?? toNonEmpty(env.COWORKANY_APP_DATA_DIR);
     if (appDataDir) {
         return appDataDir;
     }
@@ -116,13 +169,20 @@ export function resolveRuntimeAppDataRoot(input: RuntimeConfigLoadInput = {}): s
 }
 
 export function resolveRuntimeConfigCandidatePaths(input: RuntimeConfigLoadInput = {}): string[] {
+    const env = input.env ?? process.env;
     const appDataDir = resolveRuntimeAppDataRoot(input);
     const cwd = toNonEmpty(input.cwd) ?? process.cwd();
+    const hasExplicitAppDataDir = Boolean(
+        toNonEmpty(input.appDataDir)
+        ?? toNonEmpty(env.COWORKANY_APP_DATA_DIR),
+    );
 
-    const candidates = [
-        path.join(appDataDir, 'llm-config.json'),
-        path.join(cwd, 'llm-config.json'),
-    ].filter((entry): entry is string => Boolean(entry));
+    const candidates = hasExplicitAppDataDir
+        ? [path.join(appDataDir, 'llm-config.json')]
+        : [
+            path.join(appDataDir, 'llm-config.json'),
+            path.join(cwd, 'llm-config.json'),
+        ];
 
     const seen = new Set<string>();
     const unique: string[] = [];
@@ -166,6 +226,224 @@ export function loadRuntimeLlmConfigSnapshot(input: RuntimeConfigLoadInput = {})
     };
 }
 
+function loadRuntimeLlmConfigCandidates(input: RuntimeConfigLoadInput = {}): Array<{
+    path: string;
+    config: RuntimeLlmConfig;
+}> {
+    const candidatePaths = resolveRuntimeConfigCandidatePaths(input);
+    const loaded: Array<{
+        path: string;
+        config: RuntimeLlmConfig;
+    }> = [];
+    for (const configPath of candidatePaths) {
+        try {
+            if (!fs.existsSync(configPath)) {
+                continue;
+            }
+            const raw = fs.readFileSync(configPath, 'utf-8');
+            const parsed = JSON.parse(raw) as unknown;
+            if (!isRecord(parsed)) {
+                continue;
+            }
+            loaded.push({
+                path: configPath,
+                config: parsed as RuntimeLlmConfig,
+            });
+        } catch {
+            // ignore malformed candidates and keep trying fallback paths
+        }
+    }
+    return loaded;
+}
+
+function resolveActiveLlmProfile(config: RuntimeLlmConfig): Record<string, unknown> | null {
+    const profiles = Array.isArray(config.profiles)
+        ? config.profiles
+            .map((entry) => toRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry !== null)
+        : [];
+    if (profiles.length === 0) {
+        return null;
+    }
+    const activeProfileId = toNonEmpty(config.activeProfileId);
+    if (activeProfileId) {
+        const matched = profiles.find((profile) => toNonEmpty(profile.id) === activeProfileId);
+        if (matched) {
+            return matched;
+        }
+    }
+    const verified = profiles.find((profile) => profile.verified === true);
+    return verified ?? profiles[0] ?? null;
+}
+
+function pickLlmSection(
+    root: RuntimeLlmConfig,
+    profile: Record<string, unknown> | null,
+    key: 'anthropic' | 'openai' | 'custom',
+): Record<string, unknown> {
+    const fromProfile = toRecord(profile?.[key]);
+    if (fromProfile) {
+        return fromProfile;
+    }
+    return toRecord(root[key]) ?? {};
+}
+
+function resolveRuntimeLlmEnvValuesFromConfig(config: RuntimeLlmConfig): {
+    values: Record<string, string>;
+    provider: string | null;
+    modelId: string | null;
+} {
+    const activeProfile = resolveActiveLlmProfile(config);
+    const provider = (
+        toNonEmpty(activeProfile?.provider)
+        ?? toNonEmpty(config.provider)
+    )?.toLowerCase() ?? null;
+    if (!provider) {
+        return {
+            values: {},
+            provider: null,
+            modelId: null,
+        };
+    }
+
+    const values: Record<string, string> = {
+        COWORKANY_LLM_CONFIG_PROVIDER: provider,
+    };
+    let modelId: string | null = null;
+
+    if (provider === 'anthropic') {
+        const anthropic = pickLlmSection(config, activeProfile, 'anthropic');
+        const apiKey = toNonEmpty(anthropic.apiKey);
+        const model = toNonEmpty(anthropic.model);
+        if (apiKey) {
+            values.ANTHROPIC_API_KEY = apiKey;
+        }
+        modelId = withModelPrefix('anthropic', model);
+        if (modelId) {
+            values.COWORKANY_MODEL = modelId;
+        }
+        return {
+            values,
+            provider,
+            modelId,
+        };
+    }
+
+    if (provider === 'custom') {
+        const custom = pickLlmSection(config, activeProfile, 'custom');
+        const apiFormat = (toNonEmpty(custom.apiFormat)?.toLowerCase() ?? 'openai');
+        values.COWORKANY_LLM_CUSTOM_API_FORMAT = apiFormat;
+        const apiKey = toNonEmpty(custom.apiKey);
+        const model = toNonEmpty(custom.model);
+        if (apiFormat === 'anthropic') {
+            if (apiKey) {
+                values.ANTHROPIC_API_KEY = apiKey;
+            }
+            modelId = withModelPrefix('anthropic', model);
+            if (modelId) {
+                values.COWORKANY_MODEL = modelId;
+            }
+            return {
+                values,
+                provider,
+                modelId,
+            };
+        }
+        const baseUrl = normalizeOpenAiBaseUrl(toNonEmpty(custom.baseUrl));
+        if (apiKey) {
+            values.OPENAI_API_KEY = apiKey;
+        }
+        if (baseUrl) {
+            values.OPENAI_BASE_URL = baseUrl;
+        }
+        modelId = withModelPrefix('openai', model);
+        if (modelId) {
+            values.COWORKANY_MODEL = modelId;
+        }
+        return {
+            values,
+            provider,
+            modelId,
+        };
+    }
+
+    if (OPENAI_COMPATIBLE_LLM_PROVIDERS.has(provider)) {
+        const openai = pickLlmSection(config, activeProfile, 'openai');
+        const apiKey = toNonEmpty(openai.apiKey);
+        const baseUrl = normalizeOpenAiBaseUrl(toNonEmpty(openai.baseUrl));
+        const model = toNonEmpty(openai.model);
+        if (apiKey) {
+            values.OPENAI_API_KEY = apiKey;
+        }
+        if (baseUrl) {
+            values.OPENAI_BASE_URL = baseUrl;
+        }
+        modelId = withModelPrefix(provider === 'openai' ? 'openai' : provider, model);
+        if (modelId) {
+            values.COWORKANY_MODEL = modelId;
+        }
+        return {
+            values,
+            provider,
+            modelId,
+        };
+    }
+
+    return {
+        values,
+        provider,
+        modelId,
+    };
+}
+
+function assignEnvIfMissing(
+    env: NodeJS.ProcessEnv,
+    key: string,
+    value: string | undefined,
+): boolean {
+    const normalized = toNonEmpty(value);
+    if (!normalized) {
+        return false;
+    }
+    if (toNonEmpty(env[key])) {
+        return false;
+    }
+    env[key] = normalized;
+    return true;
+}
+
+export function seedRuntimeLlmEnvFromConfig(input: RuntimeConfigLoadInput = {}): RuntimeLlmEnvSeedResult {
+    const candidatePaths = resolveRuntimeConfigCandidatePaths(input);
+    const env = input.env ?? process.env;
+    const candidates = loadRuntimeLlmConfigCandidates(input);
+    for (const candidate of candidates) {
+        const resolved = resolveRuntimeLlmEnvValuesFromConfig(candidate.config);
+        if (!resolved.provider) {
+            continue;
+        }
+        const seededKeys: string[] = [];
+        for (const [key, value] of Object.entries(resolved.values)) {
+            if (assignEnvIfMissing(env, key, value)) {
+                seededKeys.push(key);
+            }
+        }
+        return {
+            loadedFromPath: candidate.path,
+            candidatePaths,
+            seededKeys,
+            provider: resolved.provider,
+            modelId: resolved.modelId,
+        };
+    }
+    return {
+        loadedFromPath: null,
+        candidatePaths,
+        seededKeys: [],
+        provider: null,
+        modelId: null,
+    };
+}
+
 export function loadRuntimeSearchConfigSnapshot(input: RuntimeConfigLoadInput = {}): {
     search: Partial<RuntimeSearchConfig>;
     loadedFromPath: string | null;
@@ -202,16 +480,19 @@ export function resolveRuntimeSearchConfig(input: RuntimeConfigLoadInput = {}): 
     const provider = normalizeSearchProvider(
         providerFromEnv.value
         ?? providerFromConfig
-        ?? 'serper'
+        ?? 'exa'
     );
 
     const serperFromEnv = pickFromEnv(env, ['SERPER_API_KEY']);
+    const exaFromEnv = pickFromEnv(env, ['EXA_API_KEY']);
     const tavilyFromEnv = pickFromEnv(env, ['TAVILY_API_KEY']);
     const braveFromEnv = pickFromEnv(env, ['BRAVE_API_KEY']);
-    const searxngFromEnv = pickFromEnv(env, ['SEARXNG_URL']);
 
     if (serperFromEnv.value && pickConfigString(config.serperApiKey) && serperFromEnv.value !== pickConfigString(config.serperApiKey)) {
         conflicts.push('search.serperApiKey env(SERPER_API_KEY) overrides config');
+    }
+    if (exaFromEnv.value && pickConfigString(config.exaApiKey) && exaFromEnv.value !== pickConfigString(config.exaApiKey)) {
+        conflicts.push('search.exaApiKey env(EXA_API_KEY) overrides config');
     }
     if (tavilyFromEnv.value && pickConfigString(config.tavilyApiKey) && tavilyFromEnv.value !== pickConfigString(config.tavilyApiKey)) {
         conflicts.push('search.tavilyApiKey env(TAVILY_API_KEY) overrides config');
@@ -219,24 +500,20 @@ export function resolveRuntimeSearchConfig(input: RuntimeConfigLoadInput = {}): 
     if (braveFromEnv.value && pickConfigString(config.braveApiKey) && braveFromEnv.value !== pickConfigString(config.braveApiKey)) {
         conflicts.push('search.braveApiKey env(BRAVE_API_KEY) overrides config');
     }
-    if (searxngFromEnv.value && pickConfigString(config.searxngUrl) && searxngFromEnv.value !== pickConfigString(config.searxngUrl)) {
-        conflicts.push('search.searxngUrl env(SEARXNG_URL) overrides config');
-    }
-
     return {
         settings: {
             provider,
             serperApiKey: serperFromEnv.value ?? pickConfigString(config.serperApiKey),
-            searxngUrl: searxngFromEnv.value ?? pickConfigString(config.searxngUrl),
+            exaApiKey: exaFromEnv.value ?? pickConfigString(config.exaApiKey),
             tavilyApiKey: tavilyFromEnv.value ?? pickConfigString(config.tavilyApiKey),
             braveApiKey: braveFromEnv.value ?? pickConfigString(config.braveApiKey),
         },
         loadedFromPath: snapshot.loadedFromPath,
         candidatePaths: snapshot.candidatePaths,
         sources: {
-            provider: providerFromEnv.source ?? (providerFromConfig ? configSource : 'default:serper'),
+            provider: providerFromEnv.source ?? (providerFromConfig ? configSource : 'default:exa'),
             serperApiKey: serperFromEnv.source ?? (pickConfigString(config.serperApiKey) ? configSource : 'unset'),
-            searxngUrl: searxngFromEnv.source ?? (pickConfigString(config.searxngUrl) ? configSource : 'unset'),
+            exaApiKey: exaFromEnv.source ?? (pickConfigString(config.exaApiKey) ? configSource : 'unset'),
             tavilyApiKey: tavilyFromEnv.source ?? (pickConfigString(config.tavilyApiKey) ? configSource : 'unset'),
             braveApiKey: braveFromEnv.source ?? (pickConfigString(config.braveApiKey) ? configSource : 'unset'),
         },
@@ -257,7 +534,7 @@ export function buildRuntimeConfigDoctorSummary(input: RuntimeConfigLoadInput = 
             },
             credentials: {
                 serperApiKeyConfigured: Boolean(resolved.settings.serperApiKey),
-                searxngUrlConfigured: Boolean(resolved.settings.searxngUrl),
+                exaApiKeyConfigured: Boolean(resolved.settings.exaApiKey),
                 tavilyApiKeyConfigured: Boolean(resolved.settings.tavilyApiKey),
                 braveApiKeyConfigured: Boolean(resolved.settings.braveApiKey),
             },

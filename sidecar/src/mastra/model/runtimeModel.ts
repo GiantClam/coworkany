@@ -1,3 +1,5 @@
+import { seedRuntimeLlmEnvFromConfig } from '../../config/runtimeConfig';
+
 export type RuntimeModelId = `${string}/${string}`;
 
 type OpenAICompatibleModelConfig = {
@@ -20,6 +22,28 @@ const OPENAI_COMPATIBLE_PROFILE_PROVIDERS = new Set([
     'minimax',
     'kimi',
 ]);
+let runtimeLlmEnvSeeded = false;
+
+function ensureRuntimeLlmEnvSeeded(): void {
+    if (runtimeLlmEnvSeeded) {
+        return;
+    }
+    const runningInTest = process.env.NODE_ENV === 'test';
+    const allowSeedInTest = process.env.COWORKANY_ALLOW_RUNTIME_LLM_ENV_SEED_IN_TEST === '1';
+    if (runningInTest && !allowSeedInTest) {
+        runtimeLlmEnvSeeded = true;
+        return;
+    }
+    runtimeLlmEnvSeeded = true;
+    try {
+        seedRuntimeLlmEnvFromConfig({
+            cwd: process.cwd(),
+            env: process.env,
+        });
+    } catch {
+        // Ignore config-seed failures here and fall back to existing env values.
+    }
+}
 
 function normalize(value: string | undefined): string | null {
     if (typeof value !== 'string') {
@@ -38,6 +62,16 @@ function toRuntimeModelId(
         return fallback;
     }
     return normalized as RuntimeModelId;
+}
+
+export function resolveRuntimeModelId(
+    preferredModelId?: string | null,
+    fallbackModelId: string = DEFAULT_MODEL_ID,
+): RuntimeModelId {
+    ensureRuntimeLlmEnvSeeded();
+    const fallbackRuntimeModelId = toRuntimeModelId(fallbackModelId, DEFAULT_MODEL_ID);
+    const envModelId = toRuntimeModelId(process.env.COWORKANY_MODEL, fallbackRuntimeModelId);
+    return toRuntimeModelId(preferredModelId, envModelId);
 }
 
 export function shouldUseOpenAICompatibleChatModel(input: {
@@ -72,8 +106,20 @@ export function shouldUseOpenAICompatibleChatModel(input: {
 export function resolveRuntimeModelConfig(
     fallbackModelId: string = DEFAULT_MODEL_ID,
 ): RuntimeModelConfig {
-    const fallbackRuntimeModelId = toRuntimeModelId(fallbackModelId, DEFAULT_MODEL_ID);
-    const modelId = toRuntimeModelId(process.env.COWORKANY_MODEL, fallbackRuntimeModelId);
+    return resolveRuntimeModelConfigWithPreferredModel({
+        fallbackModelId,
+    });
+}
+
+export function resolveRuntimeModelConfigWithPreferredModel(input: {
+    fallbackModelId?: string;
+    preferredModelId?: string | null;
+} = {}): RuntimeModelConfig {
+    ensureRuntimeLlmEnvSeeded();
+    const modelId = resolveRuntimeModelId(
+        input.preferredModelId,
+        input.fallbackModelId ?? DEFAULT_MODEL_ID,
+    );
     const openAiBaseUrl = normalize(process.env.OPENAI_BASE_URL);
     const llmConfigProvider = normalize(process.env.COWORKANY_LLM_CONFIG_PROVIDER);
     const llmCustomApiFormat = normalize(process.env.COWORKANY_LLM_CUSTOM_API_FORMAT);

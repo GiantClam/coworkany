@@ -1,0 +1,307 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/claude-sonnet-4-6",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 50,
+    "overall_raw": 50,
+    "overall_effective": 100,
+    "tasks_total": 12,
+    "tasks_passed": 6,
+    "tasks_failed": 6,
+    "tasks_errored": 6,
+    "tasks_invalid": 6,
+    "tasks_effective_total": 6,
+    "tasks_effective_passed": 6,
+    "tasks_effective_failed": 0,
+    "pass_rate": 50,
+    "pass_rate_effective": 100
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 6,
+    "other_error": 0,
+    "total_errors": 6
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "comm-004",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "debug-002",
+        "invalidReasons": [
+          "setup_missing_required_data"
+        ]
+      },
+      {
+        "taskId": "code-001",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "eml-004",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "db-002",
+        "invalidReasons": [
+          "setup_missing_required_data"
+        ]
+      },
+      {
+        "taskId": "fin-008",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "doc-004",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "edu-001",
+        "invalidReasons": [
+          "verifier_ignores_workspace_flag"
+        ]
+      },
+      {
+        "taskId": "web-004",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "math-002",
+        "invalidReasons": [
+          "setup_missing_required_data"
+        ]
+      },
+      {
+        "taskId": "plan-002",
+        "invalidReasons": [
+          "setup_missing_required_data"
+        ]
+      },
+      {
+        "taskId": "tool-002",
+        "invalidReasons": [
+          "setup_missing_required_data"
+        ]
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "comm-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 32.02,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".................                                                        [100%]\n17 passed in 0.02s"
+    },
+    {
+      "task_id": "debug-002",
+      "status": "skipped_invalid",
+      "passed": false,
+      "invalid": true,
+      "invalid_reasons": [
+        "setup_missing_required_data"
+      ],
+      "score": 0,
+      "duration_s": 0.02,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "invalid_task:setup_missing_required_data",
+      "error_type": "invalid_task",
+      "skills_mode": "vanilla",
+      "details": "invalid: setup_missing_required_data"
+    },
+    {
+      "task_id": "code-001",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 47.1,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..........                                                               [100%]\n10 passed in 0.23s"
+    },
+    {
+      "task_id": "eml-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 27.21,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..............                                                           [100%]\n14 passed in 0.02s"
+    },
+    {
+      "task_id": "db-002",
+      "status": "skipped_invalid",
+      "passed": false,
+      "invalid": true,
+      "invalid_reasons": [
+        "setup_missing_required_data"
+      ],
+      "score": 0,
+      "duration_s": 0.02,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "invalid_task:setup_missing_required_data",
+      "error_type": "invalid_task",
+      "skills_mode": "vanilla",
+      "details": "invalid: setup_missing_required_data"
+    },
+    {
+      "task_id": "fin-008",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 30.12,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "......                                                                   [100%]\n6 passed in 0.40s"
+    },
+    {
+      "task_id": "doc-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 33.37,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..................                                                       [100%]\n18 passed in 0.02s"
+    },
+    {
+      "task_id": "edu-001",
+      "status": "skipped_invalid",
+      "passed": false,
+      "invalid": true,
+      "invalid_reasons": [
+        "verifier_ignores_workspace_flag"
+      ],
+      "score": 0,
+      "duration_s": 0.01,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "invalid_task:verifier_ignores_workspace_flag",
+      "error_type": "invalid_task",
+      "skills_mode": "vanilla",
+      "details": "invalid: verifier_ignores_workspace_flag"
+    },
+    {
+      "task_id": "web-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 49.29,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...................                                                      [100%]\n19 passed in 0.02s"
+    },
+    {
+      "task_id": "math-002",
+      "status": "skipped_invalid",
+      "passed": false,
+      "invalid": true,
+      "invalid_reasons": [
+        "setup_missing_required_data"
+      ],
+      "score": 0,
+      "duration_s": 0.01,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "invalid_task:setup_missing_required_data",
+      "error_type": "invalid_task",
+      "skills_mode": "vanilla",
+      "details": "invalid: setup_missing_required_data"
+    },
+    {
+      "task_id": "plan-002",
+      "status": "skipped_invalid",
+      "passed": false,
+      "invalid": true,
+      "invalid_reasons": [
+        "setup_missing_required_data"
+      ],
+      "score": 0,
+      "duration_s": 0.01,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "invalid_task:setup_missing_required_data",
+      "error_type": "invalid_task",
+      "skills_mode": "vanilla",
+      "details": "invalid: setup_missing_required_data"
+    },
+    {
+      "task_id": "tool-002",
+      "status": "skipped_invalid",
+      "passed": false,
+      "invalid": true,
+      "invalid_reasons": [
+        "setup_missing_required_data"
+      ],
+      "score": 0,
+      "duration_s": 0.01,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "invalid_task:setup_missing_required_data",
+      "error_type": "invalid_task",
+      "skills_mode": "vanilla",
+      "details": "invalid: setup_missing_required_data"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/claude-sonnet-4-6",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

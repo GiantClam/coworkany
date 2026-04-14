@@ -118,4 +118,20 @@ describe('Command Sandbox Integration', () => {
         );
         expect(content).toContain('COMMAND BLOCKED');
     });
+
+    test('run_command enforces PYTHONDONTWRITEBYTECODE by default', () => {
+        const content = fs.readFileSync(
+            path.resolve(__dirname, '../src/tools/standard.ts'),
+            'utf-8'
+        );
+        expect(content).toContain('PYTHONDONTWRITEBYTECODE');
+    });
+
+    test('mastra bash tool enforces PYTHONDONTWRITEBYTECODE by default', () => {
+        const content = fs.readFileSync(
+            path.resolve(__dirname, '../src/mastra/tools/bash.ts'),
+            'utf-8'
+        );
+        expect(content).toContain('PYTHONDONTWRITEBYTECODE');
+    });
 });

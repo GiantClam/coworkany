@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.2.0",
+  "framework": "openclaw",
+  "model": "claude-sonnet-4-6",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": null,
+  "scores": {
+    "overall": 100.0,
+    "tasks_total": 1,
+    "tasks_passed": 1,
+    "tasks_failed": 0,
+    "tasks_errored": 0,
+    "tasks_tested": 1,
+    "pass_rate": 100.0,
+    "pass_rate_tested": 100.0
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "other_error": 0,
+    "total_errors": 0
+  },
+  "task_results": [
+    {
+      "task_id": "code-001",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 33.1,
+      "tokens_input": 128,
+      "tokens_output": 1656,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..........                                                               [100%]\n10 passed in 0.21s\n"
+    }
+  ],
+  "agent_profile": {
+    "model": "claude-sonnet-4-6",
+    "framework": "openclaw",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {},
+    "profile_id": "3938573d4d4060c7250549488e47260ea13fcef0629bb472502c93fb15fe7fe5",
+    "display_name": "openclaw / claude-sonnet-4-6"
+  },
+  "statistics": {
+    "total_tasks": 1,
+    "total_runs": 1,
+    "overall_pass_rate": 1.0,
+    "overall_mean_score": 1.0,
+    "overall_std_dev": 0.0,
+    "confidence_interval_95": [
+      1.0,
+      1.0
+    ],
+    "per_domain": {
+      "code-assistance": 1.0
+    },
+    "per_level": {
+      "L2": 1.0
+    },
+    "per_capability": {
+      "reasoning": 1.0,
+      "tool-use": 1.0
+    }
+  }
+}

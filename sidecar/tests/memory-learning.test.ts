@@ -196,19 +196,19 @@ describe('MEM-04: 自学习触发', () => {
 
 describe('MEM-05: 技能验证', () => {
     test('自学习工具结构存在', () => {
-        // Verify self-learning tool definitions exist in the codebase
-        const builtinPath = path.join(process.cwd(), 'src', 'tools', 'builtin.ts');
-        expect(fs.existsSync(builtinPath)).toBe(true);
+        // Validate current capability handlers are wired.
+        const capabilityPath = path.join(process.cwd(), 'src', 'handlers', 'capabilities.ts');
+        expect(fs.existsSync(capabilityPath)).toBe(true);
 
-        const content = fs.readFileSync(builtinPath, 'utf-8');
+        const content = fs.readFileSync(capabilityPath, 'utf-8');
         const hasValidateSkill = content.includes('validate_skill');
-        const hasTriggerLearning = content.includes('trigger_learning');
+        const hasValidateMcp = content.includes('validate_mcp');
 
         console.log(`[Test] validate_skill defined: ${hasValidateSkill}`);
-        console.log(`[Test] trigger_learning defined: ${hasTriggerLearning}`);
+        console.log(`[Test] validate_mcp defined: ${hasValidateMcp}`);
 
         expect(hasValidateSkill).toBe(true);
-        expect(hasTriggerLearning).toBe(true);
+        expect(hasValidateMcp).toBe(true);
     });
 });
 
@@ -217,18 +217,18 @@ describe('MEM-05: 技能验证', () => {
 // ============================================================================
 
 describe('MEM-06: 能力查找', () => {
-    test('find_learned_capability 工具已定义', () => {
-        const builtinPath = path.join(process.cwd(), 'src', 'tools', 'builtin.ts');
-        expect(fs.existsSync(builtinPath)).toBe(true);
+    test('能力发现命令已定义', () => {
+        const capabilityPath = path.join(process.cwd(), 'src', 'handlers', 'capabilities.ts');
+        expect(fs.existsSync(capabilityPath)).toBe(true);
 
-        const content = fs.readFileSync(builtinPath, 'utf-8');
-        const hasFind = content.includes('find_learned_capability');
-        const hasRecord = content.includes('record_capability_usage');
+        const content = fs.readFileSync(capabilityPath, 'utf-8');
+        const hasScanSkills = content.includes('scan_skills');
+        const hasValidateGithub = content.includes('validate_github_url');
 
-        console.log(`[Test] find_learned_capability defined: ${hasFind}`);
-        console.log(`[Test] record_capability_usage defined: ${hasRecord}`);
+        console.log(`[Test] scan_skills defined: ${hasScanSkills}`);
+        console.log(`[Test] validate_github_url defined: ${hasValidateGithub}`);
 
-        expect(hasFind).toBe(true);
-        expect(hasRecord).toBe(true);
+        expect(hasScanSkills).toBe(true);
+        expect(hasValidateGithub).toBe(true);
     });
 });

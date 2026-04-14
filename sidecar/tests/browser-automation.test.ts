@@ -229,17 +229,19 @@ describe('BR-05: AI 浏览器模式', () => {
 
 describe('BR-06: 自适应重试', () => {
     test('浏览器增强工具支持自适应重试策略', () => {
-        // This is a structural test: verify the enhanced browser tools exist
-        // and have retry configuration. We check the code structure.
-        const enhancedPath = path.join(process.cwd(), 'src', 'tools', 'browserEnhanced.ts');
+        // The legacy browserEnhanced module was removed; retry logic now lives
+        // in the Playwright bridge implementation.
+        const enhancedPath = path.join(process.cwd(), 'src', 'runtime', 'browser', 'playwright-bridge.cjs');
         const exists = fs.existsSync(enhancedPath);
 
-        console.log(`[Test] browserEnhanced.ts exists: ${exists}`);
+        console.log(`[Test] playwright-bridge.cjs exists: ${exists}`);
         expect(exists).toBe(true);
 
         if (exists) {
             const content = fs.readFileSync(enhancedPath, 'utf-8');
-            const hasRetry = content.includes('retry') || content.includes('Retry') || content.includes('adaptive');
+            const hasRetry = content.includes('attempting one reload')
+                || content.includes('transient')
+                || content.includes('retry');
             console.log(`[Test] Has retry logic: ${hasRetry}`);
             expect(hasRetry).toBe(true);
         }

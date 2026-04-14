@@ -551,6 +551,67 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
+    test('toolset builder prioritizes explicitly enabled toolpacks when present', () => {
+        const rawToolsets = {
+            finance_pack: {
+                finance_quote: {
+                    id: 'finance_quote',
+                    description: 'fetch market quote',
+                    toolpackId: 'investoday-finance-data',
+                },
+            },
+            web_pack: {
+                search_web: {
+                    id: 'search_web',
+                    description: 'search web',
+                    toolpackId: 'builtin-websearch',
+                },
+            },
+        } as unknown as Awaited<ReturnType<typeof buildToolsetsForMessageAttempt>>;
+
+        const filtered = buildToolsetsForMessageAttempt(
+            rawToolsets,
+            '今天 minimax 的港股股价是什么表现？这周涨势怎么样？',
+            0,
+            {
+                enabledToolpacks: ['investoday-finance-data'],
+                requiredCompletionCapabilities: ['web_research'],
+                isTaskRoute: true,
+            },
+        ) as Record<string, Record<string, unknown>>;
+
+        expect(Object.keys(filtered)).toEqual(['finance_pack']);
+        expect(Object.prototype.hasOwnProperty.call(filtered.finance_pack, 'finance_quote')).toBe(true);
+    });
+
+    test('toolset builder falls back to original set when enabled toolpacks do not resolve', () => {
+        const rawToolsets = {
+            finance_pack: {
+                finance_quote: {
+                    id: 'finance_quote',
+                    description: 'fetch market quote',
+                },
+            },
+            web_pack: {
+                search_web: {
+                    id: 'search_web',
+                    description: 'search web',
+                },
+            },
+        } as unknown as Awaited<ReturnType<typeof buildToolsetsForMessageAttempt>>;
+
+        const filtered = buildToolsetsForMessageAttempt(
+            rawToolsets,
+            '请给我总结今天的项目进展',
+            0,
+            {
+                enabledToolpacks: ['non-existent-pack'],
+            },
+        ) as Record<string, Record<string, unknown>>;
+
+        expect(Object.keys(filtered).sort()).toEqual(['finance_pack', 'web_pack']);
+    });
+
     test('weather query detection and weather-tool availability checks work for routing decisions', () => {
         expect(isWeatherInformationQuery('今天天气怎么样')).toBe(true);
         expect(isWeatherInformationQuery('what is the weather today in shanghai')).toBe(true);

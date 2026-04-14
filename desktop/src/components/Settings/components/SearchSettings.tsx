@@ -49,30 +49,18 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                     <Field label={t('settings.searchProvider')}>
                         <select
                             className={styles.inputField}
-                            value={settings.provider ?? 'searxng'}
+                            value={settings.provider ?? 'exa'}
                             onChange={(event) => {
                                 const provider = event.target.value as SearchSettingsType['provider'];
                                 handleSave({ ...settings, provider });
                             }}
                         >
                             <option value="serper">{t('settings.serperOption')}</option>
+                            <option value="exa">{t('settings.exaOption')}</option>
                             <option value="tavily">{t('settings.tavilyOption')}</option>
                             <option value="brave">{t('settings.braveOption')}</option>
-                            <option value="searxng">{t('settings.searxngOption')}</option>
                         </select>
                     </Field>
-
-                    {settings.provider === 'searxng' && (
-                        <Field label={t('settings.searxngUrl')}>
-                            <input
-                                className={styles.inputField}
-                                type="text"
-                                value={settings.searxngUrl ?? ''}
-                                onChange={(event) => handleSave({ ...settings, searxngUrl: event.target.value || undefined })}
-                                placeholder={t('settings.searxngPlaceholder')}
-                            />
-                        </Field>
-                    )}
                 </div>
 
                 <div className={styles.searchFieldGroup}>
@@ -86,6 +74,19 @@ export function SearchSettings({ settings, onSave, saved }: SearchSettingsProps)
                         />
                         <a href="https://serper.dev" target="_blank" rel="noopener noreferrer" className={styles.link}>
                             {t('settings.getSerperKey')}
+                        </a>
+                    </Field>
+
+                    <Field label={t('settings.exaApiKey')}>
+                        <input
+                            className={styles.inputField}
+                            type="password"
+                            value={settings.exaApiKey ?? ''}
+                            onChange={(event) => handleSave({ ...settings, exaApiKey: event.target.value || undefined })}
+                            placeholder={t('settings.exaPlaceholder')}
+                        />
+                        <a href="https://dashboard.exa.ai" target="_blank" rel="noopener noreferrer" className={styles.link}>
+                            {t('settings.getExaKey')}
                         </a>
                     </Field>
 

@@ -1,0 +1,135 @@
+{
+  "report_date": "2026-04-13T11:08:21.690606",
+  "source_data": {
+    "report_date": "2025-04",
+    "data_sources": 20,
+    "recency_days": 30,
+    "technology_trends": [
+      {
+        "name": "智能代理 (Agentic AI)",
+        "priority": 1,
+        "maturity": "emerging",
+        "growth_rate": "high",
+        "mentions": 8,
+        "key_players": [
+          "OpenAI",
+          "Anthropic",
+          "各大科技公司"
+        ],
+        "applications": [
+          "自主编码",
+          "任务规划",
+          "工具集成"
+        ]
+      },
+      {
+        "name": "多模态AI (Multimodal AI)",
+        "priority": 2,
+        "maturity": "growing",
+        "growth_rate": "high",
+        "mentions": 6,
+        "key_players": [
+          "OpenAI",
+          "Google",
+          "Meta"
+        ],
+        "applications": [
+          "文本图像处理",
+          "语音识别",
+          "视频分析"
+        ]
+      },
+      {
+        "name": "推理模型 (Reasoning Models)",
+        "priority": 3,
+        "maturity": "emerging",
+        "growth_rate": "medium",
+        "mentions": 5,
+        "key_players": [
+          "DeepSeek",
+          "OpenAI",
+          "研究机构"
+        ],
+        "applications": [
+          "复杂问题解决",
+          "逻辑推理",
+          "决策支持"
+        ]
+      },
+      {
+        "name": "大语言模型 (LLM)",
+        "priority": 4,
+        "maturity": "mature",
+        "growth_rate": "medium",
+        "mentions": 10,
+        "key_players": [
+          "OpenAI",
+          "Anthropic",
+          "Google",
+          "Meta"
+        ],
+        "applications": [
+          "内容生成",
+          "对话系统",
+          "代码辅助"
+        ]
+      },
+      {
+        "name": "AI基础设施",
+        "priority": 5,
+        "maturity": "growing",
+        "growth_rate": "very_high",
+        "mentions": 7,
+        "key_players": [
+          "Nvidia",
+          "TSMC",
+          "云服务商"
+        ],
+        "applications": [
+          "数据中心",
+          "AI芯片",
+          "云计算"
+        ]
+      }
+    ],
+    "market_data": {
+      "infrastructure_investment_billion": 630,
+      "tsmc_revenue_growth_percent": 35,
+      "ai_stocks_outperform_years": 3,
+      "data_center_power_demand": "快速增长"
+    },
+    "challenges": [
+      {
+        "name": "需求不确定性",
+        "severity": "high",
+        "impact": "投资回报"
+      },
+      {
+        "name": "能源消耗",
+        "severity": "high",
+        "impact": "环境可持续性"
+      },
+      {
+        "name": "领域特定推理",
+        "severity": "medium",
+        "impact": "技术能力"
+      },
+      {
+        "name": "成本控制",
+        "severity": "medium",
+        "impact": "商业化"
+      }
+    ],
+    "timeline": {
+      "2024": "推理型AI主导",
+      "2025": "自主代理崛起",
+      "2026": "新一代AI能力预测"
+    }
+  },
+  "statistics": {
+    "total_trends": 5,
+    "total_mentions": 36,
+    "avg_mentions": 7.2,
+    "high_growth_count": 3
+  }
+}

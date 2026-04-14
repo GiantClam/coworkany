@@ -1,5 +1,5 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { analyzeWorkRequest } from './steps/analyze-intent';
 import { buildExecutionProfile } from './steps/assess-risk';
 import { runResearchLoop } from './steps/research-loop';

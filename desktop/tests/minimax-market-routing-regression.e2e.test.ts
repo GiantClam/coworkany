@@ -223,15 +223,26 @@ test.describe('Desktop minimax market routing regression', () => {
             'assistant narrative should never surface seeded placeholder text',
         ).toBe(false);
 
+        const taskFinishedEventCount = events.filter((event) => event.type === 'TASK_FINISHED').length;
+        expect(taskFinishedEventCount, `task should emit exactly one TASK_FINISHED event, got ${taskFinishedEventCount}`).toBe(1);
+
+        const normalizedAssistantChunks = assistantChunks
+            .map((chunk) => chunk.trim())
+            .filter((chunk) => chunk.length > 0);
+        const duplicateAssistantChunks = normalizedAssistantChunks.filter((chunk, index, all) =>
+            all.indexOf(chunk) !== index,
+        );
+        expect(
+            duplicateAssistantChunks.length,
+            `assistant output should not emit duplicated text chunks, duplicates=${duplicateAssistantChunks.length}`,
+        ).toBe(0);
+
         const capabilityMissing = finishReason === 'capability_missing'
             || /required_capabilities=.*missing_capabilities=/i.test(taskText);
-        if (capabilityMissing) {
-            expect(
-                /required_capabilities=.*missing_capabilities=/i.test(taskText),
-                'capability gate should explain required/missing capabilities when tool runtime is unavailable',
-            ).toBe(true);
-            return;
-        }
+        expect(
+            capabilityMissing,
+            `market routing regression requires runtime tool execution, but capability gate blocked the turn.\nfinishReason=${finishReason}\ntext=${taskText}`,
+        ).toBe(false);
 
         const hasMarketToolCall = Array.from(toolCallNames).some((name) =>
             /search|finance|crawl|researcher/i.test(name),

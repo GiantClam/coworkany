@@ -189,4 +189,62 @@ describe('mastra bridge mapping', () => {
             resumeSchema: '{"type":"object"}',
         });
     });
+
+    test('maps tool input available chunks as tool_call events', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-input-available',
+            payload: {
+                name: 'search_web',
+                input: { query: 'coworkany' },
+                id: 'tool-call-1',
+            },
+        }, 'run-8');
+
+        expect(event).toEqual({
+            type: 'tool_call',
+            runId: 'run-8',
+            toolName: 'search_web',
+            args: { query: 'coworkany' },
+        });
+    });
+
+    test('maps tool result aliases without explicit toolCallId', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-result',
+            payload: {
+                name: 'search_web',
+                output: { items: [{ title: 'result' }] },
+                success: true,
+            },
+        }, 'run-9');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-9',
+            toolCallId: 'unknown:search_web',
+            toolName: 'search_web',
+            result: { items: [{ title: 'result' }] },
+            isError: false,
+        });
+    });
+
+    test('maps tool-output-error chunks as failed tool_result events', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-output-error',
+            payload: {
+                toolName: 'voice_speak',
+                toolCallId: 'call-voice-1',
+                error: { message: 'tts unavailable' },
+            },
+        }, 'run-10');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-10',
+            toolCallId: 'call-voice-1',
+            toolName: 'voice_speak',
+            result: { message: 'tts unavailable' },
+            isError: true,
+        });
+    });
 });

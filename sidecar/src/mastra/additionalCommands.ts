@@ -20,9 +20,8 @@ import {
     upsertMcpServerDefinition,
 } from './mcp/clients';
 import { downloadMcpFromGitHub, downloadSkillFromGitHub } from '../utils/githubDownloader';
-import { globalToolRegistry } from '../tools/registry';
-import { STANDARD_TOOLS } from '../tools/standard';
 import { describeRuntimeToolpackState } from './runtimeToolCatalog';
+import { resolveRuntimeInternalTool } from './internalToolResolver';
 import {
     applyManagedSettingsFiles,
     ManagedSettingsSyncStore,
@@ -480,10 +479,7 @@ export function createMastraAdditionalCommandHandler(input?: {
     const workspaceStore = createWorkspaceStoreFacade(() => getResolvedAppDataRoot(appDataRoot));
     const directiveManager = new DirectiveManager(workspaceRoot);
     const managedSettingsSyncStore = new ManagedSettingsSyncStore(getResolvedAppDataRoot(appDataRoot));
-    const resolveInternalToolDefinition = (toolName: string) => (
-        globalToolRegistry.getTool(toolName)
-        ?? STANDARD_TOOLS.find((tool) => tool.name === toolName)
-    );
+    const resolveInternalToolDefinition = (toolName: string) => resolveRuntimeInternalTool(toolName);
     registerFilesystemSkills(runtime.skillStore, runtime.workspaceRoot);
     const handler: AdditionalCommandHandler = async (raw: unknown) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {

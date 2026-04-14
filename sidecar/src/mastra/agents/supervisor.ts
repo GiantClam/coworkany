@@ -7,6 +7,10 @@ import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrai
 import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
+import { voiceSpeakTool } from '../tools/voice';
+import { crawlUrlTool, extractContentTool, searchWebTool } from '../tools/research';
+import { rememberTool, recallTool } from '../tools/memory';
+import { listMcpToolsSafe } from '../mcp/clients';
 
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 const UNSAFE_DELEGATION_PATTERNS: RegExp[] = [
@@ -26,9 +30,16 @@ export const supervisor = new Agent({
     description: 'Routes tasks to specialized agents and keeps execution aligned.',
     instructions: [
         'You are the task supervisor of CoworkAny.',
+        'Never expose internal reasoning, policy text, or instruction analysis in user-facing output.',
         'Delegate research tasks to researcher, coding tasks to coder, and mixed tasks to coworker.',
+        'When a request asks for spoken output (voice/TTS/read-aloud), gather required information and call voice_speak in this turn; do not delegate away the voice output requirement.',
+        'For URL/page-access tasks, prefer direct crawl/extract tools first; do not delegate to researcher unless direct tools are unavailable.',
+        'For explicit cleanup/dedupe/remove operations in workspace paths, do not stop at inspection-only responses: execute bounded command tools and verify command output before completion.',
         'Maintain safety and ask for approvals on destructive or external side-effect actions.',
         'For host-control intents (shutdown/reboot/poweroff/halt/关机/重启), do not stop at explanation: invoke run_command via tool flow so approval can be handled in desktop UI.',
+        'For explicit memory intents (记住/记下来/remember/recall), call remember or recall tools instead of answering from transient context.',
+        'Tool argument hygiene: omit optional fields instead of passing literal strings like "null"/"undefined"/"none".',
+        'Workspace tools are contained: when writing files, use workspace-relative paths and avoid absolute paths outside the workspace root.',
     ].join('\n'),
     model: DEFAULT_MODEL,
     memory: memoryConfig,
@@ -36,6 +47,18 @@ export const supervisor = new Agent({
         coworker,
         researcher,
         coder,
+    },
+    tools: async () => {
+        const mcpTools = await listMcpToolsSafe();
+        return {
+            ...mcpTools,
+            search_web: searchWebTool,
+            crawl_url: crawlUrlTool,
+            extract_content: extractContentTool,
+            remember: rememberTool,
+            recall: recallTool,
+            voice_speak: voiceSpeakTool,
+        };
     },
     workspace: async ({ requestContext }) => {
         return await getWorkspaceForRequestContext(requestContext);

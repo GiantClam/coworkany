@@ -70,6 +70,7 @@ export type TaskRuntimeState = {
     lastUserMessage?: string;
     lastTraceId?: string;
     enabledSkills?: string[];
+    modelId?: string;
     resourceId: string;
     checkpoint?: TaskRuntimeCheckpoint;
     checkpointVersion?: number;
@@ -299,6 +300,7 @@ export function toTaskRuntimeState(value: unknown): TaskRuntimeState | null {
         enabledSkills: Array.isArray(raw.enabledSkills)
             ? raw.enabledSkills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
             : undefined,
+        modelId: pickNonEmptyString(raw.modelId),
         resourceId,
         checkpoint,
         checkpointVersion,

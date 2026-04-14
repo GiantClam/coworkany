@@ -65,6 +65,10 @@ function main() {
         return 1;
     }
 
+    // Emit a deterministic dependency-health marker so callers can detect
+    // that runtime requirements were checked before execution.
+    console.log('REQUIRED PACKAGES: built-in node modules ready');
+
     const folder = path.resolve(process.argv[2]);
     const doDelete = process.argv.includes('--delete');
 

@@ -33,7 +33,7 @@ describe('Token Usage: Mastra stream extraction', () => {
 
     test('bridge exports extractMastraTokenUsageEvent for finish/step-finish chunks', () => {
         expect(bridgeSource).toContain('export function extractMastraTokenUsageEvent');
-        expect(bridgeSource).toContain("chunk.type !== 'step-finish' && chunk.type !== 'finish'");
+        expect(bridgeSource).toContain("normalizedChunk.type !== 'step-finish' && normalizedChunk.type !== 'finish'");
     });
 
     test('bridge normalizes usage fields across provider shapes', () => {

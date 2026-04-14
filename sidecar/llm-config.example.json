@@ -23,9 +23,9 @@
     },
     "maxHistoryMessages": 20,
     "search": {
-        "provider": "serper",
+        "provider": "exa",
         "serperApiKey": "",
-        "searxngUrl": "",
+        "exaApiKey": "",
         "tavilyApiKey": "",
         "braveApiKey": ""
     },

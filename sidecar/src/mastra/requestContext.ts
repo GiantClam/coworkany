@@ -16,7 +16,10 @@ export type CoworkanyRequestContextValues = {
     runtime: 'desktop-sidecar';
     workspacePath?: string;
     enabledSkills?: string[];
+    enabledToolpacks?: string[];
     skillPrompt?: string;
+    modelId?: string;
+    requireToolApproval?: boolean;
 };
 
 export function createTaskRequestContext(input: {
@@ -25,7 +28,10 @@ export function createTaskRequestContext(input: {
     taskId?: string;
     workspacePath?: string;
     enabledSkills?: string[];
+    enabledToolpacks?: string[];
     skillPrompt?: string;
+    modelId?: string;
+    requireToolApproval?: boolean;
 }): RequestContext<CoworkanyRequestContextValues> {
     const requestContext = new RequestContext<CoworkanyRequestContextValues>();
     requestContext.set(MASTRA_RESOURCE_ID_KEY, input.resourceId);
@@ -39,8 +45,17 @@ export function createTaskRequestContext(input: {
     if (Array.isArray(input.enabledSkills) && input.enabledSkills.length > 0) {
         requestContext.set('enabledSkills', input.enabledSkills);
     }
+    if (Array.isArray(input.enabledToolpacks) && input.enabledToolpacks.length > 0) {
+        requestContext.set('enabledToolpacks', input.enabledToolpacks);
+    }
     if (typeof input.skillPrompt === 'string' && input.skillPrompt.trim().length > 0) {
         requestContext.set('skillPrompt', input.skillPrompt.trim());
+    }
+    if (typeof input.modelId === 'string' && input.modelId.trim().length > 0) {
+        requestContext.set('modelId', input.modelId.trim());
+    }
+    if (typeof input.requireToolApproval === 'boolean') {
+        requestContext.set('requireToolApproval', input.requireToolApproval);
     }
 
     return requestContext;

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { StoredToolpack } from '../src/storage/toolpackStore';
 import { buildInternalRuntimeToolsets, countToolsInToolsets } from '../src/mastra/runtimeToolCatalog';
 import type { ToolDefinition } from '../src/tools/standard';
+import { resolveRuntimeInternalTool } from '../src/mastra/internalToolResolver';
 
 const NOOP_TOOL: ToolDefinition = {
     name: 'list_dir',
@@ -49,6 +50,32 @@ describe('runtime tool catalog', () => {
         expect(Object.keys(toolsets)).toEqual(['internal:builtin-websearch']);
         expect(toolsets['internal:builtin-websearch']?.list_dir).toBeDefined();
         expect(toolsets['internal:builtin-websearch']?.search_web).toBeUndefined();
+        expect(countToolsInToolsets(toolsets)).toBe(1);
+    });
+
+    test('resolves builtin search_web via internal fallback metadata', () => {
+        const toolpacks: StoredToolpack[] = [
+            {
+                manifest: {
+                    id: 'builtin-websearch',
+                    name: 'websearch',
+                    version: '1.0.0',
+                    tools: ['search_web'],
+                    runtime: 'internal',
+                },
+                enabled: true,
+                workingDir: '',
+                installedAt: '2026-04-10T00:00:00.000Z',
+                isBuiltin: true,
+            },
+        ];
+
+        const toolsets = buildInternalRuntimeToolsets({
+            toolpacks,
+            resolveTool: resolveRuntimeInternalTool,
+        });
+
+        expect(toolsets['internal:builtin-websearch']?.search_web).toBeDefined();
         expect(countToolsInToolsets(toolsets)).toBe(1);
     });
 });

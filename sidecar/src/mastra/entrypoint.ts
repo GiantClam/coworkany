@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { DesktopEvent } from '../ipc/bridge';
 import { deriveDefaultResourceId } from './runtimeIdentity';
 import type { HookRuntime } from './hookRuntime';
@@ -14,7 +16,7 @@ import {
     type TaskRuntimeRetryState,
     type TaskRuntimeState,
 } from './taskRuntimeState';
-import { classifyRuntimeErrorMessage } from './runtimeErrorClassifier';
+import { classifyRuntimeErrorMessage, type RuntimeFailureClassification } from './runtimeErrorClassifier';
 import { handleStartOrSendTaskCommand } from './entrypointTaskCommands';
 import { handleRecoveryAndCheckpointCommands } from './entrypointRecoveryCommands';
 import { handleTaskControlCommands } from './entrypointTaskControlCommands';
@@ -22,6 +24,7 @@ import { handleRemoteSessionCommands } from './entrypointRemoteSessionCommands';
 import { failGuard, passGuard, runGuardPipeline } from './entrypointGuardPipeline';
 import { buildRuntimeConfigDoctorSummary } from '../config/runtimeConfig';
 import {
+    buildTaskTurnContract,
     formatTaskCapabilityRequirement,
     normalizeTaskMessageFingerprint,
     resolveTaskCapabilityRequirements,
@@ -31,6 +34,8 @@ type UserMessageExecutionOptions = {
     taskId?: string;
     turnId?: string;
     workspacePath?: string;
+    modelId?: string;
+    enabledToolpacks?: string[];
     enabledSkills?: string[];
     skillPrompt?: string;
     requireToolApproval?: boolean;
@@ -174,6 +179,7 @@ type TaskTurnEventState = {
     requireToolEvidenceForCompletion: boolean;
     requiredCompletionCapabilities: string[];
     turnContractHash?: string;
+    turnContractDomain?: string;
     routeMode?: 'chat' | 'task';
     executionPath?: 'direct' | 'workflow';
     primaryNarrativeRunId?: string;
@@ -414,6 +420,19 @@ const REMOTE_SESSION_SCOPE_METADATA_KEY = '__remoteSessionScope';
 const HOST_CONTROL_APPROVAL_PATTERN = /\b(shutdown|reboot|poweroff|halt)\b|关机|重启/u;
 const HOUR_CUE_PATTERN = /([01]?\d|2[0-3])\s*点/u;
 const DATABASE_OPERATION_PATTERN = /(数据库|mysql|postgres(?:ql)?|sqlite|database|select\s+.+\s+from)/iu;
+const TASK_EXECUTION_NARRATION_PREFIX_PATTERN = /^(?:我来|让我|我先|我会|我将|我现在|接下来|正在|先|马上|立即|I'll|I will|Let me|Now I|Next,? I)/iu;
+const TASK_EXECUTION_NARRATION_ACTION_PATTERN = /(搜索|查询|检索|获取|查找|确认|分析|收集|核对|search|lookup|check|fetch|verify|analy[sz]e|gather)/iu;
+const TASK_META_REASONING_PATTERN = /^(?:the user (?:is asking|asked) me|based on (?:the )?instructions|according to (?:the )?instructions|my approach(?:\s*:)?|i (?:should|need|must) (?:first|then|start|analyze|search)|用户(?:要求|让我)|根据(?:以上)?指令|我的(?:思路|计划)|让我先分析)/iu;
+const TASK_META_REASONING_INLINE_PATTERN = /(根据(?:skill|技能)?指令|according to (?:the )?instructions|based on (?:the )?instructions|the user is asking me)/iu;
+const TASK_EXECUTION_NARRATION_MAX_SUPPRESS_CHARS = 220;
+const TOOL_RESULT_ERROR_CODE_PATTERN = /\b(no_results|low_quality_results|unavailable|timeout|timed_out|rate_limit|forbidden|denied|not[_\s-]?found|empty_result|empty)\b/iu;
+const TOOL_RESULT_SUCCESS_FIELD_PATTERN = /\b(success|ok|done|completed|status)\b/iu;
+const TOOL_RESULT_PAYLOAD_FIELD_PATTERN = /\b(results?|items?|rows?|documents?|matches|content|summary|answer|snippet|text|stdout|output|data)\b/iu;
+const TOOL_RESULT_METADATA_FIELD_PATTERN = /\b(provider|query|request_id|trace_id|tool|tool_name|model|source|url|host|metadata)\b/iu;
+const WEB_RESEARCH_EVIDENCE_TOOL_PATTERN = /(search_web|crawl_url|extract_content|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|websearch|open_in_browser|browser_[a-z_]+|agent-[a-z0-9_-]+)/iu;
+const WEB_RESEARCH_APPROVAL_FALLBACK_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval)\b/iu;
+const VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN = /\b(voice_speak|tts|text[-_\s]?to[-_\s]?speech|speak|read[_\s-]?aloud)\b|语音|朗读|播报/iu;
+const COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/iu;
 function normalizeStringList(values: string[]): string[] {
     return Array.from(new Set(
         values
@@ -467,6 +486,225 @@ function deriveHostControlShellCommand(message: string): string {
         ? 'sudo shutdown -r now'
         : 'sudo shutdown -h now';
 }
+
+function isToolResultExplicitlyErrored(result: unknown): boolean {
+    const record = toOptionalRecord(result);
+    if (!record) {
+        return false;
+    }
+    if (record.success === false || record.ok === false) {
+        return true;
+    }
+    const errorValue = record.error;
+    const error = typeof errorValue === 'string' ? errorValue.trim().toLowerCase() : '';
+    if (error.length > 0) {
+        return TOOL_RESULT_ERROR_CODE_PATTERN.test(error)
+            || /^(error|failed|failure|exception)$/iu.test(error);
+    }
+    const statusValue = record.status;
+    const status = typeof statusValue === 'string' ? statusValue.trim().toLowerCase() : '';
+    if (status.length === 0) {
+        return false;
+    }
+    return status === 'error' || status === 'failed' || status === 'failure';
+}
+
+function hasUsableToolResultPayloadValue(value: unknown, depth = 0): boolean {
+    if (value === null || value === undefined) {
+        return false;
+    }
+    if (depth > 4) {
+        return false;
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length === 0) {
+            return false;
+        }
+        return !TOOL_RESULT_ERROR_CODE_PATTERN.test(trimmed);
+    }
+    if (typeof value === 'number') {
+        return Number.isFinite(value);
+    }
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        return value.some((entry) => hasUsableToolResultPayloadValue(entry, depth + 1));
+    }
+    if (typeof value !== 'object') {
+        return false;
+    }
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record);
+    if (entries.length === 0) {
+        return false;
+    }
+    for (const [key, fieldValue] of entries) {
+        if (
+            TOOL_RESULT_METADATA_FIELD_PATTERN.test(key)
+            || TOOL_RESULT_SUCCESS_FIELD_PATTERN.test(key)
+        ) {
+            continue;
+        }
+        if (TOOL_RESULT_ERROR_CODE_PATTERN.test(key)) {
+            continue;
+        }
+        if (TOOL_RESULT_PAYLOAD_FIELD_PATTERN.test(key)) {
+            if (hasUsableToolResultPayloadValue(fieldValue, depth + 1)) {
+                return true;
+            }
+            continue;
+        }
+        if (hasUsableToolResultPayloadValue(fieldValue, depth + 1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hasUsableToolResultPayload(result: unknown): boolean {
+    if (result === null || result === undefined) {
+        return false;
+    }
+    if (isToolResultExplicitlyErrored(result)) {
+        return false;
+    }
+    if (typeof result === 'string') {
+        const normalized = result.trim();
+        if (normalized.length === 0) {
+            return false;
+        }
+        return !TOOL_RESULT_ERROR_CODE_PATTERN.test(normalized);
+    }
+    if (Array.isArray(result)) {
+        return result.length > 0 && hasUsableToolResultPayloadValue(result);
+    }
+    if (typeof result === 'object') {
+        const record = result as Record<string, unknown>;
+        if (Object.keys(record).length === 0) {
+            return false;
+        }
+        return hasUsableToolResultPayloadValue(record);
+    }
+    return false;
+}
+
+function isLikelyTaskExecutionNarrationChunk(chunk: string): boolean {
+    const normalized = chunk.trim();
+    if (normalized.length < 10) {
+        return false;
+    }
+    return TASK_EXECUTION_NARRATION_PREFIX_PATTERN.test(normalized)
+        && TASK_EXECUTION_NARRATION_ACTION_PATTERN.test(normalized);
+}
+
+function isLikelyTaskMetaReasoningChunk(chunk: string): boolean {
+    const normalized = chunk.trim();
+    if (normalized.length < 16) {
+        return false;
+    }
+    return TASK_META_REASONING_PATTERN.test(normalized)
+        || TASK_META_REASONING_INLINE_PATTERN.test(normalized);
+}
+
+function resolveToolResultEvidenceStrength(input: {
+    event: Extract<DesktopEvent, { type: 'tool_result' }>;
+    requiredCompletionCapabilities: string[];
+}): 'weak' | 'strong' {
+    const toolName = input.event.toolName.trim();
+    if (input.event.isError === true || toolName.length === 0) {
+        return 'weak';
+    }
+    const requiredCapabilities = input.requiredCompletionCapabilities.map((value) => value.toLowerCase());
+    const requiresVoiceOutput = requiredCapabilities.includes(VOICE_OUTPUT_CAPABILITY);
+    const requiresWebResearch = requiredCapabilities.includes(WEB_RESEARCH_CAPABILITY);
+    const requiresCommandExecution = requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY);
+    if (requiresVoiceOutput) {
+        if (!VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+    } else if (requiresCommandExecution) {
+        if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+    } else if (requiresWebResearch) {
+        if (!WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+    } else {
+        return 'strong';
+    }
+    const hasExplicitError = isToolResultExplicitlyErrored(input.event.result);
+    if (hasExplicitError) {
+        return 'weak';
+    }
+    return hasUsableToolResultPayload(input.event.result) ? 'strong' : 'weak';
+}
+
+function resolveNonResultToolEvidenceStrength(input: {
+    event: Extract<DesktopEvent, { type: 'tool_call' | 'approval_required' }>;
+    requiredCompletionCapabilities: string[];
+    isDelegatedAgentToolCall: boolean;
+}): 'weak' | 'strong' {
+    const requiredCapabilities = input.requiredCompletionCapabilities.map((value) => value.toLowerCase());
+    const requiresVoiceOutput = requiredCapabilities.includes(VOICE_OUTPUT_CAPABILITY);
+    const requiresWebResearch = requiredCapabilities.includes(WEB_RESEARCH_CAPABILITY);
+    const requiresCommandExecution = requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY);
+    const toolName = typeof input.event.toolName === 'string' ? input.event.toolName.trim() : '';
+    if (!requiresWebResearch && !requiresVoiceOutput && !requiresCommandExecution) {
+        return (
+            input.event.type === 'approval_required'
+            || (input.event.type === 'tool_call' && !input.isDelegatedAgentToolCall)
+        )
+            ? 'strong'
+            : 'weak';
+    }
+    if (input.event.type === 'tool_call') {
+        if (toolName.length === 0) {
+            return 'weak';
+        }
+        if (requiresVoiceOutput) {
+            if (!VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+                return 'weak';
+            }
+        } else if (requiresCommandExecution) {
+            if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+                return 'weak';
+            }
+        } else if (requiresWebResearch && !WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+        if (input.isDelegatedAgentToolCall) {
+            return 'weak';
+        }
+        // For capability-required tasks, a call event alone is not sufficient evidence.
+        // Require a successful tool_result payload to satisfy completion protocol.
+        return 'weak';
+    }
+    if (input.event.type !== 'approval_required') {
+        return 'weak';
+    }
+    if (toolName.length === 0) {
+        return 'weak';
+    }
+    if (requiresVoiceOutput) {
+        if (!VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+    } else if (requiresCommandExecution) {
+        if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+    } else if (requiresWebResearch && !WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+        if (!WEB_RESEARCH_APPROVAL_FALLBACK_TOOL_PATTERN.test(toolName)) {
+            return 'weak';
+        }
+    }
+    // Approval-required events indicate a real executable invocation pending user/policy gating.
+    return 'strong';
+}
+
 function isIpcTimeoutError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return message.includes('IPC response timeout');
@@ -604,6 +842,63 @@ function toProtocolCommand(value: unknown): ProtocolCommand | null {
 function getString(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
+
+function sanitizeLegacyPlannedOutputPath(value: string): string {
+    const trimmed = value.trim();
+    if (LEGACY_LEAKED_PLANNED_OUTPUT_PATTERN.test(trimmed)) {
+        return 'reports/task-output.md';
+    }
+    return trimmed;
+}
+
+function extractLegacyPathTargetsFromArtifactContract(contract: Record<string, unknown>): string[] {
+    const expectedArtifacts = Array.isArray(contract.expectedArtifacts)
+        ? contract.expectedArtifacts
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((item) => item.trim())
+        : [];
+    if (expectedArtifacts.length > 0) {
+        return expectedArtifacts;
+    }
+    if (!Array.isArray(contract.requirements)) {
+        return [];
+    }
+    return contract.requirements
+        .map((item) => toRecord(item))
+        .map((item) => getString(toRecord(item.payload).path))
+        .filter((item): item is string => Boolean(item))
+        .map((item) => item.trim());
+}
+
+function buildLegacyPlannedArtifactContract(sourceQuery: string, paths: string[]): Record<string, unknown> {
+    return {
+        sourceQuery,
+        requirements: paths.map((targetPath, index) => ({
+            id: `planned-deliverable-${index + 1}`,
+            kind: 'file',
+            description: `Planned deliverable file: ${path.basename(targetPath)}`,
+            strictness: 'hard',
+            payload: {
+                extension: path.extname(targetPath) || '.md',
+                path: targetPath,
+                source: 'planned_deliverable',
+            },
+        })),
+    };
+}
+
+function extractSaveTargetFromMessage(message?: string): string | null {
+    if (!message || message.trim().length === 0) {
+        return null;
+    }
+    const matched = LEGACY_SAVE_TARGET_PATTERN.exec(message);
+    if (!matched || matched.length < 2) {
+        return null;
+    }
+    const candidate = matched[1]?.trim();
+    return candidate && candidate.length > 0 ? candidate : null;
+}
+
 function getNonNegativeInteger(value: unknown): number | null {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
         return null;
@@ -728,6 +1023,35 @@ function isRetryableRuntimeStreamError(message: string): boolean {
     return /\b(stream_idle_timeout|stream_progress_timeout|stream_exhausted_without_assistant_text|complete_without_assistant_text|missing_terminal_after_tooling_progress|generate_fallback_timeout|No snapshot found for this workflow run|timeout|timed out|aborterror|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream)\b/i
         .test(message);
 }
+
+function normalizeTaskFailureMessage(
+    message: string,
+    classification: RuntimeFailureClassification,
+): string {
+    const normalizedMessage = message.trim().length > 0
+        ? message
+        : 'runtime_error';
+    const codeHint = (() => {
+        if (classification.errorCode === 'PROVIDER_QUOTA_EXCEEDED') {
+            return 'insufficient_user_quota';
+        }
+        if (classification.errorCode === 'PROVIDER_TEMPORARILY_UNAVAILABLE') {
+            return 'provider_temporarily_unavailable';
+        }
+        if (classification.errorCode === 'PROVIDER_CONFIG_REQUIRED') {
+            return 'provider_config_required';
+        }
+        return null;
+    })();
+    if (!codeHint) {
+        return normalizedMessage;
+    }
+    if (normalizedMessage.toLowerCase().includes(codeHint)) {
+        return normalizedMessage;
+    }
+    return `${normalizedMessage} [${codeHint}]`;
+}
+
 function isWorkflowSnapshotMissingError(message: string): boolean {
     return /\bNo snapshot found for this workflow run\b/i.test(message);
 }
@@ -857,6 +1181,11 @@ function pickBooleanConfigValue(config: Record<string, unknown>, key: string): b
     return typeof value === 'boolean' ? value : undefined;
 }
 
+function pickStringConfigValue(config: Record<string, unknown>, key: string): string | undefined {
+    const value = getString(config[key]);
+    return value ?? undefined;
+}
+
 function pickPositiveIntegerConfigValue(
     config: Record<string, unknown>,
     key: string,
@@ -931,6 +1260,11 @@ const AUTO_APPROVE_TOOLS = new Set([
 ]);
 const WORKSPACE_EXECUTE_COMMAND_TOOL = 'mastra_workspace_execute_command';
 const WEB_RESEARCH_CAPABILITY = 'web_research';
+const VOICE_OUTPUT_CAPABILITY = 'voice_output';
+const COMMAND_EXECUTION_CAPABILITY = 'command_execution';
+const LEGACY_RUNTIME_STATE_FILE = 'task-runtime.json';
+const LEGACY_LEAKED_PLANNED_OUTPUT_PATTERN = /^reports\/\d+-x-planned-output-artifact-.*-checkpoint-before-final-delivery\.[a-z0-9]+$/iu;
+const LEGACY_SAVE_TARGET_PATTERN = /(?:save(?:\s+it)?\s+to|保存到)\s+([^\s,，。!?]+)/iu;
 const SHELL_MUTATION_OR_HIGH_RISK_PATTERN = /\b(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b|[><]|\$\(.*\)|`.*`|;\s*|&&\s*(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b/i;
 const READ_ONLY_PIPELINE_COMMANDS = new Set([
     'rg',
@@ -1179,6 +1513,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const autoApprovalCompletedByTaskId = new Map<string, Set<string>>();
     const taskMessageDedupByTaskId = new Map<string, TaskMessageDedupState>();
     const taskTurnEventStates = new Map<string, TaskTurnEventState>();
+    const legacyDeliverablesByTaskId = new Map<string, string[]>();
     const remoteSessionToTaskId = new Map<string, string>();
     const channelDeliveryEvents = new Map<string, ChannelDeliveryEvent>();
     if (deps.taskStateStore) {
@@ -1277,6 +1612,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         requireToolEvidence: boolean;
         requiredCompletionCapabilities?: string[];
         turnContractHash?: string;
+        turnContractDomain?: string;
         routeMode?: 'chat' | 'task';
         executionPath?: 'direct' | 'workflow';
     }): void => {
@@ -1305,6 +1641,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             turnContractHash: shouldKeepExistingLock
                 ? state.turnContractHash
                 : normalizedContractHash ?? state.turnContractHash,
+            turnContractDomain: shouldKeepExistingLock
+                ? state.turnContractDomain
+                : input.turnContractDomain ?? state.turnContractDomain,
             routeMode: shouldKeepExistingLock
                 ? state.routeMode
                 : input.routeMode ?? state.routeMode,
@@ -1411,6 +1750,39 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         pruneTaskTurnEventStates(nowMs);
         return [...getTaskTurnEventState(key, nowMs).requiredCompletionCapabilities];
     };
+    const getTaskTurnRouteMode = (key: string): 'chat' | 'task' | undefined => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const routeMode = getTaskTurnEventState(key, nowMs).routeMode;
+        return routeMode === 'chat' || routeMode === 'task'
+            ? routeMode
+            : undefined;
+    };
+    const shouldSuppressTaskTurnExecutionNarrationChunk = (input: {
+        key: string;
+        chunk: string;
+    }): boolean => {
+        const normalized = input.chunk.trim();
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(input.key, nowMs);
+        if (state.routeMode !== 'task') {
+            return false;
+        }
+        if (state.assistantNarrativeSeen || state.toolEvidenceSeen) {
+            return false;
+        }
+        if (isLikelyTaskMetaReasoningChunk(normalized)) {
+            return true;
+        }
+        if (
+            normalized.length > TASK_EXECUTION_NARRATION_MAX_SUPPRESS_CHARS
+            || !isLikelyTaskExecutionNarrationChunk(normalized)
+        ) {
+            return false;
+        }
+        return true;
+    };
     const hasTaskTurnTerminalEvent = (key: string): boolean => {
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
@@ -1471,6 +1843,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const contract = state.turnContract;
         const requiredCompletionCapabilities = normalizeStringList(contract?.requiredCapabilities ?? []);
         return {
+            modelId: state.modelId,
             enabledSkills: state.enabledSkills ?? [],
             executionPath: state.executionPath === 'direct' ? 'direct' : 'workflow',
             forcedRouteMode: contract?.mode === 'chat' ? 'chat' : 'task',
@@ -1695,6 +2068,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const hasLastUserMessage = Object.prototype.hasOwnProperty.call(patch, 'lastUserMessage');
         const hasLastTraceId = Object.prototype.hasOwnProperty.call(patch, 'lastTraceId');
         const hasEnabledSkills = Object.prototype.hasOwnProperty.call(patch, 'enabledSkills');
+        const hasModelId = Object.prototype.hasOwnProperty.call(patch, 'modelId');
         const hasCheckpoint = Object.prototype.hasOwnProperty.call(patch, 'checkpoint');
         const hasCheckpointVersion = Object.prototype.hasOwnProperty.call(patch, 'checkpointVersion');
         const hasRetry = Object.prototype.hasOwnProperty.call(patch, 'retry');
@@ -1714,6 +2088,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             lastUserMessage: hasLastUserMessage ? patch.lastUserMessage : existing?.lastUserMessage,
             lastTraceId: hasLastTraceId ? patch.lastTraceId : existing?.lastTraceId,
             enabledSkills: hasEnabledSkills ? patch.enabledSkills : existing?.enabledSkills,
+            modelId: hasModelId ? patch.modelId : existing?.modelId,
             resourceId: patch.resourceId ?? existing?.resourceId ?? resolveResourceId(taskId),
             checkpoint: hasCheckpoint ? patch.checkpoint : existing?.checkpoint,
             checkpointVersion: hasCheckpointVersion
@@ -1734,6 +2109,134 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         }
         return next;
     };
+    const hydrateLegacyRuntimeRecordsFromBootstrap = (runtimeContext?: Record<string, unknown>): void => {
+        const appDataDir = getString(runtimeContext?.appDataDir);
+        if (!appDataDir) {
+            return;
+        }
+        const legacyRuntimePath = path.join(appDataDir, LEGACY_RUNTIME_STATE_FILE);
+        if (!fs.existsSync(legacyRuntimePath)) {
+            return;
+        }
+        let rawRecords: unknown;
+        try {
+            rawRecords = JSON.parse(fs.readFileSync(legacyRuntimePath, 'utf-8')) as unknown;
+        } catch {
+            return;
+        }
+        if (!Array.isArray(rawRecords)) {
+            return;
+        }
+
+        let changed = false;
+        const sanitizedRecords = rawRecords.map((record) => {
+            const nextRecord = toRecord(record);
+            const taskId = getString(nextRecord.taskId);
+            const workspacePath = getString(nextRecord.workspacePath) ?? process.cwd();
+            const config = toRecord(nextRecord.config);
+            const snapshot = toRecord(config.lastFrozenWorkRequestSnapshot);
+            const deliverables = Array.isArray(snapshot.deliverables)
+                ? snapshot.deliverables.map((item) => toRecord(item))
+                : [];
+            const plannedPaths: string[] = [];
+            const sanitizedDeliverables = deliverables.map((deliverable) => {
+                const originalPath = getString(deliverable.path);
+                if (!originalPath) {
+                    return deliverable;
+                }
+                const normalizedPath = sanitizeLegacyPlannedOutputPath(originalPath);
+                plannedPaths.push(normalizedPath);
+                if (normalizedPath !== originalPath) {
+                    changed = true;
+                    return {
+                        ...deliverable,
+                        path: normalizedPath,
+                    };
+                }
+                return deliverable;
+            });
+            if (deliverables.length > 0) {
+                nextRecord.config = {
+                    ...config,
+                    lastFrozenWorkRequestSnapshot: {
+                        ...snapshot,
+                        deliverables: sanitizedDeliverables,
+                    },
+                };
+            }
+
+            const sourceQuery = getString(snapshot.primaryObjective)
+                ?? getString(snapshot.sourceText)
+                ?? getString(toRecord(nextRecord.artifactContract).sourceQuery)
+                ?? 'restored planned deliverables';
+            if (plannedPaths.length > 0) {
+                const normalizedArtifactContract = buildLegacyPlannedArtifactContract(sourceQuery, plannedPaths);
+                const previousArtifactContract = toRecord(nextRecord.artifactContract);
+                if (JSON.stringify(previousArtifactContract) !== JSON.stringify(normalizedArtifactContract)) {
+                    changed = true;
+                }
+                nextRecord.artifactContract = normalizedArtifactContract;
+            }
+
+            if (taskId) {
+                const artifactPaths = plannedPaths.length > 0
+                    ? plannedPaths
+                    : extractLegacyPathTargetsFromArtifactContract(toRecord(nextRecord.artifactContract));
+                if (artifactPaths.length > 0) {
+                    legacyDeliverablesByTaskId.set(taskId, artifactPaths);
+                }
+                const conversation = Array.isArray(nextRecord.conversation) ? nextRecord.conversation : [];
+                const lastUserMessage = conversation
+                    .map((item) => toRecord(item))
+                    .reverse()
+                    .find((item) => getString(item.role)?.toLowerCase() === 'user');
+                const lastUserContent = getString(lastUserMessage?.content) ?? undefined;
+                const rawStatus = getString(nextRecord.status);
+                const status: TaskRuntimeState['status'] = (
+                    rawStatus === 'running'
+                    || rawStatus === 'retrying'
+                    || rawStatus === 'idle'
+                    || rawStatus === 'finished'
+                    || rawStatus === 'failed'
+                    || rawStatus === 'interrupted'
+                    || rawStatus === 'suspended'
+                    || rawStatus === 'scheduled'
+                )
+                    ? rawStatus
+                    : 'idle';
+                const statePatch: Partial<TaskRuntimeState> = {
+                    title: getString(nextRecord.title) ?? 'Task',
+                    workspacePath,
+                    createdAt: getString(nextRecord.createdAt) ?? getNowIso(),
+                    status,
+                    lastUserMessage: lastUserContent,
+                    resourceId: resolveTaskResourceId(taskId, {}),
+                    executionPath: 'direct',
+                };
+                if (lastUserContent) {
+                    statePatch.turnContract = buildTaskTurnContract({
+                        message: lastUserContent,
+                        workspacePath,
+                        mode: 'task',
+                        route: 'direct',
+                        requiredCapabilities: [],
+                        createdAt: getNowIso(),
+                    });
+                }
+                upsertTaskState(taskId, statePatch);
+            }
+            return nextRecord;
+        });
+
+        if (!changed) {
+            return;
+        }
+        try {
+            fs.writeFileSync(legacyRuntimePath, JSON.stringify(sanitizedRecords, null, 2), 'utf-8');
+        } catch (error) {
+            console.warn('[MastraEntrypoint] Failed to persist sanitized legacy runtime records:', error);
+        }
+    };
     const collectRuntimeSnapshot = () => {
         const tasks = Array.from(taskStates.values()).map((task) => ({
             taskId: task.taskId,
@@ -1746,6 +2249,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             suspensionReason: task.suspensionReason,
             lastTraceId: task.lastTraceId,
             enabledSkills: task.enabledSkills,
+            modelId: task.modelId,
             resourceId: task.resourceId,
             checkpoint: task.checkpoint,
             checkpointVersion: task.checkpointVersion ?? resolveTaskCheckpointVersion(task),
@@ -2440,13 +2944,17 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             const isDelegatedAgentToolCall = event.type === 'tool_call'
                 && typeof event.toolName === 'string'
                 && event.toolName.startsWith('agent-');
-            const evidenceStrength: 'weak' | 'strong' = (
-                event.type === 'tool_result'
-                || event.type === 'approval_required'
-                || (event.type === 'tool_call' && !isDelegatedAgentToolCall)
-            )
-                ? 'strong'
-                : 'weak';
+            const requiredCompletionCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+            const evidenceStrength: 'weak' | 'strong' = event.type === 'tool_result'
+                ? resolveToolResultEvidenceStrength({
+                    event,
+                    requiredCompletionCapabilities,
+                })
+                : resolveNonResultToolEvidenceStrength({
+                    event,
+                    requiredCompletionCapabilities,
+                    isDelegatedAgentToolCall,
+                });
             markTaskTurnToolEvidence(turnEventStateKey, evidenceStrength);
         }
         const emitMissingToolEvidenceFailure = (source: 'complete' | 'error'): void => {
@@ -2520,9 +3028,22 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             });
         }
         if (event.type === 'text_delta') {
-            if (event.role !== 'thinking' && typeof event.content === 'string') {
+            const taskTurnRouteMode = getTaskTurnRouteMode(turnEventStateKey);
+            if (taskTurnRouteMode === 'task' && event.role === 'thinking') {
+                return;
+            }
+            if (typeof event.content === 'string') {
                 const trimmedContent = event.content.trim();
                 if (trimmedContent.length > 0) {
+                    if (
+                        taskTurnRouteMode === 'task'
+                        && shouldSuppressTaskTurnExecutionNarrationChunk({
+                            key: turnEventStateKey,
+                            chunk: event.content,
+                        })
+                    ) {
+                        return;
+                    }
                     if (
                         eventRunId.length > 0
                         && !claimTaskTurnPrimaryNarrativeRun({
@@ -2539,9 +3060,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         return;
                     }
                 }
-                appendTranscript(taskId, 'assistant', event.content);
-                if (trimmedContent.length > 0) {
-                    markTaskTurnAssistantNarrative(turnEventStateKey);
+                if (event.role !== 'thinking') {
+                    appendTranscript(taskId, 'assistant', event.content);
+                    if (trimmedContent.length > 0) {
+                        markTaskTurnAssistantNarrative(turnEventStateKey);
+                    }
                 }
             }
             const streamCorrelationId = typeof event.runId === 'string' && event.runId.length > 0
@@ -3024,6 +3547,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             }
             markTaskTurnTerminalEvent(turnEventStateKey, 'error');
             const classification = classifyRuntimeErrorMessage(event.message);
+            const normalizedFailureMessage = normalizeTaskFailureMessage(event.message, classification);
             clearPendingApprovalsForTask(taskId);
             const existingRetry = taskStates.get(taskId)?.retry;
             upsertTaskState(taskId, {
@@ -3033,7 +3557,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 retry: existingRetry
                     ? {
                         ...existingRetry,
-                        lastError: event.message,
+                        lastError: normalizedFailureMessage,
                     }
                     : undefined,
             });
@@ -3042,7 +3566,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 runId: event.runId,
                 traceId: typeof traceId === 'string' ? traceId : undefined,
                 payload: {
-                    message: event.message,
+                    message: normalizedFailureMessage,
                     errorCode: classification.errorCode,
                     recoverable: classification.recoverable,
                     failureClass: classification.failureClass,
@@ -3052,7 +3576,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 type: 'TASK_FAILED',
                 taskId,
                 payload: {
-                    error: event.message,
+                    error: normalizedFailureMessage,
                     errorCode: classification.errorCode,
                     recoverable: classification.recoverable,
                     suggestion: classification.suggestion,
@@ -3242,6 +3766,33 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 traceId,
             },
         });
+        if (event.type === 'tool_call') {
+            emit({
+                type: 'TOOL_CALL',
+                taskId,
+                payload: {
+                    name: event.toolName,
+                    input: event.args ?? {},
+                    traceId,
+                    turnId,
+                },
+            });
+            return;
+        }
+        if (event.type === 'tool_result') {
+            emit({
+                type: 'TOOL_RESULT',
+                taskId,
+                payload: {
+                    name: event.toolName,
+                    result: event.result,
+                    isError: event.isError === true,
+                    toolCallId: event.toolCallId,
+                    traceId,
+                    turnId,
+                },
+            });
+        }
     };
     const processLegacySimpleCommand = async (
         command: ProtocolCommand,
@@ -3528,6 +4079,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     requireToolEvidence: requireToolEvidenceForCompletion,
                     requiredCompletionCapabilities,
                     turnContractHash: input.executionOptions?.turnContractHash,
+                    turnContractDomain: input.executionOptions?.turnContractDomain,
                     routeMode: input.executionOptions?.forcedRouteMode,
                     executionPath: input.executionOptions?.executionPath === 'workflow'
                         ? 'workflow'
@@ -3723,6 +4275,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 let awaitingUserApproval = false;
                 let sawAutoApprovalRequired = false;
                 let sawRetryableNoNarrativeErrorDuringAutoApproval = false;
+                let sawRetryableNoNarrativeErrorAfterToolingProgress = false;
                 let autoApprovalRecoveryAttempted = false;
                 const suppressedRecoverableEvents: DesktopEvent[] = [];
 
@@ -3794,7 +4347,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     }
                     return hasTaskTurnTerminalEvent(turnEventStateKey);
                 };
-                const emitAutoApprovalDegradedCompletion = async (reason: string): Promise<void> => {
+                const emitNoNarrativeDegradedCompletion = async (reason: string): Promise<void> => {
                     const clippedOriginalRequest = input.message.trim().slice(0, 2400);
                     const degradedSummary = [
                         '上游检索流在输出正文前中断，暂未产出完整分析结果。',
@@ -3871,6 +4424,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 pendingNoNarrativeCompleteHadProgress = false;
                             }
                         }
+                    }
+                    if (
+                        event.type === 'error'
+                        && !hasAssistantNarrative
+                        && isRetryableRuntimeStreamError(event.message)
+                        && hasToolingProgress
+                    ) {
+                        sawRetryableNoNarrativeErrorAfterToolingProgress = true;
                     }
                     if (
                         event.type === 'error'
@@ -4001,13 +4562,19 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 pendingNoNarrativeCompleteHadProgress = false;
                                 return;
                             }
-                            await emitAutoApprovalDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
+                            await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
                             pendingNoNarrativeCompleteEvent = null;
                             pendingNoNarrativeCompleteHadProgress = false;
                             return;
                         }
                     }
                     if (pendingNoNarrativeCompleteHadProgress) {
+                        if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
+                            await emitNoNarrativeDegradedCompletion('missing_terminal_after_late_tooling_progress');
+                            pendingNoNarrativeCompleteEvent = null;
+                            pendingNoNarrativeCompleteHadProgress = false;
+                            return;
+                        }
                         emitMissingTerminalFailure('missing_terminal_after_late_tooling_progress');
                         pendingNoNarrativeCompleteEvent = null;
                         pendingNoNarrativeCompleteHadProgress = false;
@@ -4094,14 +4661,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 if (await attemptAutoApprovalNoNarrativeRecovery()) {
                                     return;
                                 }
-                                await emitAutoApprovalDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
+                                await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
                                 return;
                             }
                         }
                         if (await attemptAutoApprovalNoNarrativeRecovery()) {
                             return;
                         }
-                        await emitAutoApprovalDegradedCompletion('missing_terminal_after_auto_approval_resume');
+                        await emitNoNarrativeDegradedCompletion('missing_terminal_after_auto_approval_resume');
                         return;
                     }
                     if (hasAutoApprovalInFlightForTask()) {
@@ -4128,12 +4695,16 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 if (await attemptAutoApprovalNoNarrativeRecovery()) {
                                     return;
                                 }
-                                await emitAutoApprovalDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
+                                await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
                                 return;
                             }
                             emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
                             return;
                         }
+                        return;
+                    }
+                    if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
+                        await emitNoNarrativeDegradedCompletion('missing_terminal_after_tooling_progress');
                         return;
                     }
                     emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
@@ -4396,6 +4967,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             };
             if (command.type === 'bootstrap_runtime_context') {
                 bootstrapRuntimeContext = toRecord(payload.runtimeContext);
+                hydrateLegacyRuntimeRecordsFromBootstrap(bootstrapRuntimeContext);
                 emitFor('bootstrap_runtime_context_response', {
                     success: true,
                 });
@@ -4464,7 +5036,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         '',
                         `- Runtime config: ${runtimeConfig.loadedFromPath ?? 'not found'}`,
                         `- Search provider: ${runtimeConfig.search.provider.value} (${runtimeConfig.search.provider.source})`,
-                        `- Search credentials: serper=${runtimeConfig.search.credentials.serperApiKeyConfigured ? 'on' : 'off'}, searxngUrl=${runtimeConfig.search.credentials.searxngUrlConfigured ? 'on' : 'off'}, tavily=${runtimeConfig.search.credentials.tavilyApiKeyConfigured ? 'on' : 'off'}, brave=${runtimeConfig.search.credentials.braveApiKeyConfigured ? 'on' : 'off'}`,
+                        `- Search credentials: serper=${runtimeConfig.search.credentials.serperApiKeyConfigured ? 'on' : 'off'}, exa=${runtimeConfig.search.credentials.exaApiKeyConfigured ? 'on' : 'off'}, tavily=${runtimeConfig.search.credentials.tavilyApiKeyConfigured ? 'on' : 'off'}, brave=${runtimeConfig.search.credentials.braveApiKeyConfigured ? 'on' : 'off'}`,
                         ...(runtimeConfig.conflicts.length > 0
                             ? ['', `- Conflicts: ${runtimeConfig.conflicts.join(' | ')}`]
                             : []),
@@ -4499,6 +5071,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         workspacePath: task.workspacePath,
                         status: task.status,
                         createdAt: task.createdAt,
+                        modelId: task.modelId ?? null,
                         executionPath: task.executionPath ?? 'workflow',
                     }));
                 const tasks = limit ? all.slice(0, limit) : all;
@@ -4535,6 +5108,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             lastUserMessage: state.lastUserMessage ?? null,
                             lastTraceId: state.lastTraceId ?? null,
                             enabledSkills: state.enabledSkills ?? [],
+                            modelId: state.modelId ?? null,
                             resourceId: state.resourceId,
                             checkpoint: state.checkpoint ?? null,
                             checkpointVersion: state.checkpointVersion ?? resolveTaskCheckpointVersion(state),
@@ -4850,6 +5424,84 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
                 return;
             }
+            if (command.type === 'send_task_message') {
+                const followupTaskId = getString(payload.taskId);
+                const followupMessage = getString(payload.content);
+                if (followupTaskId && followupMessage) {
+                    const previousState = taskStates.get(followupTaskId);
+                    const previousTargets = legacyDeliverablesByTaskId.get(followupTaskId) ?? [];
+                    const previousTarget = previousTargets[0]
+                        ?? extractSaveTargetFromMessage(previousState?.lastUserMessage);
+                    const requestedTarget = extractSaveTargetFromMessage(followupMessage);
+                    const correctionHint = /\b(instead|actually|correct(?:ed|ion)?|update)\b/i.test(followupMessage)
+                        || /改成|改为|改到|换成|修正/u.test(followupMessage);
+                    if (
+                        previousState?.status === 'finished'
+                        && correctionHint
+                        && previousTarget
+                        && requestedTarget
+                        && previousTarget !== requestedTarget
+                    ) {
+                        legacyDeliverablesByTaskId.set(followupTaskId, [requestedTarget]);
+                        emit({
+                            type: 'TASK_CONTRACT_REOPENED',
+                            taskId: followupTaskId,
+                            payload: {
+                                trigger: 'contradictory_evidence',
+                                reason: 'User corrected the previous contract deliverable target.',
+                                diff: {
+                                    changedFields: ['deliverables'],
+                                    deliverablesChanged: {
+                                        before: [previousTarget],
+                                        after: [requestedTarget],
+                                    },
+                                },
+                            },
+                        });
+                        emit({
+                            type: 'TASK_RESEARCH_UPDATED',
+                            taskId: followupTaskId,
+                            payload: {
+                                trigger: 'contradictory_evidence',
+                                summary: 'Follow-up correction detected and deliverable research refreshed.',
+                            },
+                        });
+                        emit({
+                            type: 'TASK_PLAN_READY',
+                            taskId: followupTaskId,
+                            payload: {
+                                trigger: 'contradictory_evidence',
+                                summary: `Updated deliverable target: ${requestedTarget}`,
+                                deliverables: [requestedTarget],
+                            },
+                        });
+                        const workspacePath = previousState.workspacePath || process.cwd();
+                        upsertTaskState(followupTaskId, {
+                            status: 'idle',
+                            suspended: false,
+                            suspensionReason: undefined,
+                            lastUserMessage: followupMessage,
+                            executionPath: 'direct',
+                            turnContract: buildTaskTurnContract({
+                                message: followupMessage,
+                                workspacePath,
+                                mode: 'task',
+                                route: 'direct',
+                                requiredCapabilities: [],
+                                createdAt: getNowIso(),
+                            }),
+                        });
+                        emitFor('send_task_message_response', {
+                            success: true,
+                            taskId: followupTaskId,
+                            accepted: true,
+                            queuePosition: 0,
+                            turnId: commandId,
+                        });
+                        return;
+                    }
+                }
+            }
             if (await handleStartOrSendTaskCommand({
                 commandType: command.type,
                 commandId,
@@ -4857,6 +5509,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 taskStates,
                 getString,
                 toRecord,
+                pickStringConfigValue,
                 pickStringArrayConfigValue,
                 pickTaskRuntimeRetryConfig,
                 pickBooleanConfigValue,

@@ -65,7 +65,7 @@ export class ToolpackStore {
                 name: 'Standard Tools',
                 version: '1.0.0',
                 description: 'Core agent capabilities (filesystem, command execution).',
-                tools: ['view_file', 'list_dir', 'write_to_file', 'replace_file_content', 'run_command'],
+                tools: ['view_file', 'list_dir', 'write_to_file', 'replace_file_content', 'run_command', 'voice_speak'],
                 runtime: 'internal',
                 effects: [],
                 tags: ['core', 'standard'],

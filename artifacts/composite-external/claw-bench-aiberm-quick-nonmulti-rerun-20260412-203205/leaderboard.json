@@ -1,0 +1,151 @@
+{
+  "framework": "coworkany-sidecar",
+  "model": "openai/claude-sonnet-4-6",
+  "overall": 32.5,
+  "taskCompletion": 0,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 32.5,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
+  "metadata": {
+    "runs_per_task": 1,
+    "total_tasks": 12,
+    "overall_pass_rate": 0,
+    "overall_mean_score": 0.325
+  },
+  "taskDetails": [
+    {
+      "taskId": "comm-004",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.875,
+      "stdDev": 0,
+      "ci95": [
+        0.875,
+        0.875
+      ]
+    },
+    {
+      "taskId": "debug-002",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "code-001",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.6,
+      "stdDev": 0,
+      "ci95": [
+        0.6,
+        0.6
+      ]
+    },
+    {
+      "taskId": "eml-004",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.875,
+      "stdDev": 0,
+      "ci95": [
+        0.875,
+        0.875
+      ]
+    },
+    {
+      "taskId": "db-002",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "fin-008",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "doc-004",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.75,
+      "stdDev": 0,
+      "ci95": [
+        0.75,
+        0.75
+      ]
+    },
+    {
+      "taskId": "edu-001",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "web-004",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.8,
+      "stdDev": 0,
+      "ci95": [
+        0.8,
+        0.8
+      ]
+    },
+    {
+      "taskId": "math-002",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "plan-002",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "tool-002",
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    }
+  ]
+}

@@ -68,7 +68,7 @@ export function useSettings() {
     const [validationMsg, setValidationMsg] = useState<ValidationMessage | null>(null);
 
     // Search settings state
-    const [searchSettings, setSearchSettings] = useState<SearchSettings>({ provider: 'serper' });
+    const [searchSettings, setSearchSettings] = useState<SearchSettings>({ provider: 'exa' });
     const [searchSaved, setSearchSaved] = useState(false);
     const [proxySettings, setProxySettings] = useState<ProxySettings>({ enabled: false });
     const [proxySaved, setProxySaved] = useState(false);
@@ -92,7 +92,7 @@ export function useSettings() {
             setConfig(normalizedData);
 
             // Load search settings
-            setSearchSettings(normalizedData.search ?? { provider: 'serper' });
+            setSearchSettings(normalizedData.search ?? { provider: 'exa' });
             setProxySettings(normalizedData.proxy ?? { enabled: false });
 
             // Set defaults for editor from current selection or first profile

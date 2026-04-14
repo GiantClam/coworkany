@@ -55,6 +55,7 @@ export async function executeFrozenTask(input: {
         resourceId,
         taskId: input.task.frozen.id,
         workspacePath: input.workspacePath,
+        requireToolApproval: true,
     });
     const telemetry = createTelemetryRunContext({
         taskId: input.task.frozen.id,

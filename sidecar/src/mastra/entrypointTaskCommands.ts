@@ -11,6 +11,8 @@ import {
 } from './capabilityRegistry';
 
 type UserMessageExecutionOptions = {
+    modelId?: string;
+    enabledToolpacks?: string[];
     enabledSkills?: string[];
     skillPrompt?: string;
     requireToolApproval?: boolean;
@@ -79,6 +81,7 @@ type HandleStartOrSendTaskCommandInput = {
     taskStates: Map<string, TaskRuntimeState>;
     getString: (value: unknown) => string | null;
     toRecord: (value: unknown) => Record<string, unknown>;
+    pickStringConfigValue: (config: Record<string, unknown>, key: string) => string | undefined;
     pickStringArrayConfigValue: (config: Record<string, unknown>, key: string) => string[] | undefined;
     pickTaskRuntimeRetryConfig: (config: Record<string, unknown>) => TaskRuntimeRetryState | undefined;
     pickBooleanConfigValue: (config: Record<string, unknown>, key: string) => boolean | undefined;
@@ -223,8 +226,10 @@ const CAPABILITY_EXPLAIN_HINT_PATTERN = /说明|介绍|解释|用途|作用|怎�
 const CAPABILITY_REFERENCE_HINT_PATTERN = /\b(these|those|them)\b|这些|上述|以上|它们/u;
 const GENERAL_CAPABILITY_QUERY_PATTERN = /你(?:能|可)做什么|你会什么|能帮我做什么|可以帮我做什么|what\s+can\s+you\s+do|what\s+are\s+you\s+capable\s+of|your\s+capabilities/iu;
 const WEB_RESEARCH_AVAILABLE_TOOL_PATTERN = /\b(search_web|crawl_url|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|websearch|lookup|research)\b|股|行情|涨跌|天气|新闻|资讯|预报|查询|检索/iu;
-const BROWSER_AVAILABLE_TOOL_PATTERN = /\b(browser_[a-z_]+|playwright|browser|navigate|screenshot|click|fill)\b/iu;
+const BROWSER_AVAILABLE_TOOL_PATTERN = /\b(browser_[a-z_]+|playwright|browser|navigate|screenshot|click|fill|crawl_url|extract_content|open_in_browser)\b/iu;
+const VOICE_OUTPUT_AVAILABLE_TOOL_PATTERN = /\b(voice_speak|tts|text[-\s]?to[-\s]?speech|read[_\s-]?aloud|speak)\b|语音|朗读|播报/iu;
 const TOOL_PREVIEW_LIMIT = 12;
+const FILESYSTEM_TOOLS_PATH_HINT_PATTERN = /(?:^|[\\/])(?:src|lib|app|test|tests|tools?)(?:[\\/]|$)|(?:^|[\\/])[^\s\\/]+\.[a-z0-9]{1,8}(?:$|[\\/])|目录|文件|路径|\b(?:path|folder|directory)\b/iu;
 
 function hasToolBackedCapabilityRequirement(requirements: TaskCapabilityRequirement[]): boolean {
     return requirements.length > 0;
@@ -353,6 +358,15 @@ function isRequirementAvailable(
     if (requirement === 'browser_automation') {
         return hints.some((hint) => BROWSER_AVAILABLE_TOOL_PATTERN.test(hint));
     }
+    if (requirement === 'voice_output') {
+        return hints.some((hint) => VOICE_OUTPUT_AVAILABLE_TOOL_PATTERN.test(hint));
+    }
+    if (requirement === 'command_execution') {
+        // Command execution is a core built-in lane in direct task mode.
+        // Runtime toolset snapshots may not enumerate built-ins consistently.
+        void hints;
+        return true;
+    }
     return false;
 }
 
@@ -472,7 +486,7 @@ async function evaluateTaskCapabilityGate(input: {
         `运行时工具预览：${truncateCapabilityPreview(runtimeToolHints)}`,
         `运行时可调用工具包预览：${truncateCapabilityPreview(callableConfiguredToolHints)}`,
         `已启用工具包预览：${truncateCapabilityPreview(configuredToolHints)}`,
-        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*）。',
+        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*、run_command）。',
     ].join('\n');
 
     return {
@@ -498,6 +512,16 @@ function detectCapabilityQueryIntent(message: string): CapabilityQueryIntent | n
     const includeSkills = SKILL_QUERY_SUBJECT_PATTERN.test(normalized);
     const includeTools = TOOL_QUERY_SUBJECT_PATTERN.test(normalized);
     if (!includeSkills && !includeTools) {
+        return null;
+    }
+    // Avoid false positives on file-path oriented requests like "列出 src/tools/*.ts":
+    // these should execute filesystem tools instead of returning capability summaries.
+    if (
+        includeTools
+        && !includeSkills
+        && !CAPABILITY_QUERY_SHORT_PATTERN.test(normalized)
+        && FILESYSTEM_TOOLS_PATH_HINT_PATTERN.test(normalized)
+    ) {
         return null;
     }
     const shouldExplain = CAPABILITY_EXPLAIN_HINT_PATTERN.test(normalized);
@@ -684,6 +708,12 @@ function resolveStartTaskIntentRoute(input: {
             forcedRouteMode: 'chat',
         };
     }
+    if (mode === 'immediate_task') {
+        return {
+            executionPath: 'direct',
+            forcedRouteMode: 'task',
+        };
+    }
     return {
         executionPath: 'workflow',
         forcedRouteMode: 'task',
@@ -707,6 +737,7 @@ export async function handleStartOrSendTaskCommand(
         return true;
     }
     const previousState = input.taskStates.get(taskId);
+    const shouldEmitTaskLifecycleEvents = commandType === 'start_task' || !previousState;
     const routedMessage = parseRoutedInput(rawMessage);
     const message = routedMessage.cleanText.trim().length > 0
         ? routedMessage.cleanText
@@ -754,6 +785,12 @@ export async function handleStartOrSendTaskCommand(
     const commandConfig = input.toRecord(payload.config);
     const allowDuplicateTaskMessage = input.pickBooleanConfigValue(commandConfig, 'allowDuplicateTaskMessage') === true;
     const explicitEnabledSkills = input.pickStringArrayConfigValue(commandConfig, 'enabledSkills');
+    const explicitEnabledToolpacksRaw = input.pickStringArrayConfigValue(commandConfig, 'enabledToolpacks');
+    const explicitEnabledToolpacks = explicitEnabledToolpacksRaw && explicitEnabledToolpacksRaw.length > 0
+        ? explicitEnabledToolpacksRaw
+        : undefined;
+    const configuredModelId = input.pickStringConfigValue(commandConfig, 'modelId');
+    const resolvedModelId = configuredModelId ?? previousState?.modelId;
     const retryConfig = input.pickTaskRuntimeRetryConfig(commandConfig);
     const inheritedExecutionPath = input.toUserMessageExecutionPath(previousState?.executionPath);
     const configuredExecutionPath = input.pickTaskExecutionPath(commandConfig);
@@ -778,8 +815,21 @@ export async function handleStartOrSendTaskCommand(
     ) {
         resolvedForcedRouteMode = 'chat';
     }
+    const hasExplicitToolingRuntimeConfig = (
+        (explicitEnabledSkills?.length ?? 0) > 0
+        || (explicitEnabledToolpacks?.length ?? 0) > 0
+    );
+    if (
+        hasExplicitToolingRuntimeConfig
+        && routedMessage.forcedRouteMode == null
+        && configuredExecutionPath === undefined
+    ) {
+        resolvedExecutionPath = 'direct';
+        resolvedForcedRouteMode = 'task';
+    }
     const shouldApplyStartTaskIntentRouting = commandType === 'start_task'
         && routedMessage.forcedRouteMode == null
+        && !hasExplicitToolingRuntimeConfig
         && configuredExecutionPath === undefined;
     if (shouldApplyStartTaskIntentRouting) {
         const intentRoute = resolveStartTaskIntentRoute({
@@ -792,6 +842,7 @@ export async function handleStartOrSendTaskCommand(
     }
     const shouldDisableChatSkillsByDefault = resolvedExecutionPath === 'direct'
         && routedMessage.forcedRouteMode !== 'task'
+        && (!explicitEnabledSkills || explicitEnabledSkills.length === 0)
         && input.pickBooleanConfigValue(commandConfig, 'enableChatSkills') !== true;
     const resolvedSkillPrompt = shouldDisableChatSkillsByDefault
         ? {
@@ -811,6 +862,8 @@ export async function handleStartOrSendTaskCommand(
                 }
         );
     let executionOptions: UserMessageExecutionOptions = {
+        modelId: resolvedModelId,
+        enabledToolpacks: explicitEnabledToolpacks,
         enabledSkills: resolvedSkillPrompt.enabledSkillIds,
         skillPrompt: resolvedSkillPrompt.prompt,
         requireToolApproval: input.pickBooleanConfigValue(commandConfig, 'requireToolApproval'),
@@ -866,6 +919,7 @@ export async function handleStartOrSendTaskCommand(
             suspensionReason: undefined,
             lastUserMessage: message,
             enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+            modelId: resolvedModelId,
             resourceId,
             checkpoint: undefined,
             retry: nextRetryState,
@@ -906,12 +960,13 @@ export async function handleStartOrSendTaskCommand(
                     suspensionReason: undefined,
                     lastUserMessage: message,
                     enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+                    modelId: resolvedModelId,
                     resourceId,
                     checkpoint: undefined,
                     retry: nextRetryState,
                     executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
                 });
-                if (commandType === 'start_task') {
+                if (shouldEmitTaskLifecycleEvents) {
                     input.emitHookEvent('SessionStart', {
                         taskId,
                         payload: {
@@ -971,12 +1026,13 @@ export async function handleStartOrSendTaskCommand(
                 suspensionReason: undefined,
                 lastUserMessage: message,
                 enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+                modelId: resolvedModelId,
                 resourceId,
                 checkpoint: undefined,
                 retry: nextRetryState,
                 executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
             });
-            if (commandType === 'start_task') {
+            if (shouldEmitTaskLifecycleEvents) {
                 input.emitHookEvent('SessionStart', {
                     taskId,
                     payload: {
@@ -1092,13 +1148,14 @@ export async function handleStartOrSendTaskCommand(
                 suspensionReason: undefined,
                 lastUserMessage: message,
                 enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+                modelId: resolvedModelId,
                 resourceId,
                 checkpoint: undefined,
                 retry: nextRetryState,
                 executionPath: 'direct',
                 turnContract,
             });
-            if (commandType === 'start_task') {
+            if (shouldEmitTaskLifecycleEvents) {
                 input.emitHookEvent('SessionStart', {
                     taskId,
                     payload: {
@@ -1204,12 +1261,13 @@ export async function handleStartOrSendTaskCommand(
                 suspensionReason: undefined,
                 lastUserMessage: message,
                 enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+                modelId: resolvedModelId,
                 resourceId,
                 checkpoint: undefined,
                 retry: nextRetryState,
                 executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
             });
-            if (commandType === 'start_task') {
+            if (shouldEmitTaskLifecycleEvents) {
                 input.emitTaskStarted({
                     taskId,
                     title: input.getString(payload.title) ?? 'Task',
@@ -1287,13 +1345,14 @@ export async function handleStartOrSendTaskCommand(
         suspensionReason: undefined,
         lastUserMessage: message,
         enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+        modelId: resolvedModelId,
         resourceId,
         checkpoint: undefined,
         retry: nextRetryState,
         executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
         turnContract,
     });
-    if (commandType === 'start_task') {
+    if (shouldEmitTaskLifecycleEvents) {
         input.emitHookEvent('SessionStart', {
             taskId,
             payload: {

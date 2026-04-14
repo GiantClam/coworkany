@@ -31,10 +31,13 @@ const URL_PATTERN = /\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gi;
 const CHAT_PATTERN = /^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i;
 const CODE_PATTERN = /(修复|修改|重构|实现|patch|apply patch|edit|refactor|implement|bug|test|代码|code)/i;
 const FILE_WRITE_PATTERN = /(写入|保存|创建文件|生成文件|输出到|write to|save to|create (a )?file|readme|markdown|md\b)/i;
-const SHELL_PATTERN = /(运行命令|执行命令|terminal|shell|bash|zsh|command line|run command|npm\s+run|bun\s+run)/i;
+const FILE_READ_PATTERN = /(读取|读一下|查看文件|查看这个文件|列出(?:当前)?目录|列出.*文件|read (?:the )?file|open (?:the )?file|list (?:the )?(?:current )?(?:directory|dir|files?)|cat\s+\S+|view_file|list_dir)/i;
+const MEMORY_PATTERN = /(记住|记下来|记忆|remember|memorize|save (?:this )?preference|偏好)/i;
+const SHELL_PATTERN = /(运行命令|执行命令|terminal|shell|bash|zsh|command line|run command|npm\s+run|bun\s+run|\bnode\s+["']?.+\.m?(?:js|ts)\b|dedupe|duplicate|checksum|hash|bulk\s+(?:process|cleanup)|batch\s+(?:process|cleanup)|去重|重复|相似(?:文件|图片)|批量(?:处理|清理))/i;
 const HOST_CONTROL_PATTERN = /(关机|重启|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b)/i;
-const BROWSER_PATTERN = /(浏览器|网页|打开网站|click|navigate|browser|playwright|screenshot|页面)/i;
-const WEB_RESEARCH_PATTERN = /(搜索|调研|research|search|latest|最新|today|新闻|news|行情|市场|web)/i;
+const BROWSER_PATTERN = /(浏览器|网页|页面|网站|网址|click|navigate|browser|playwright|screenshot|open\s+(?:https?:\/\/|www\.|[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\b)|打开(?:\s*\S+)?\s*(?:网站|网页|网址|https?:\/\/))/i;
+const WEB_RESEARCH_PATTERN = /(搜索|调研|research|search|latest|最新|today|新闻|news|行情|市场|\bweb\s*(research|search|lookup|news|data)\b)/i;
+const VOICE_PATTERN = /(语音|朗读|读给我听|播报|tts|text-to-speech|voice\s*(read|speak|tts)?|speak\s+(?:it|this|that)\s+aloud|read\s+(?:it|this|that)\s+aloud)/i;
 const HIGH_RISK_ACTION_PATTERN = /(删除|移除|drop\s+table|rm\s+-rf|publish|发帖|发布到|send email|付款|payment)/i;
 const MANUAL_ACTION_PATTERN = /(登录|验证码|captcha|手动|人工|approve|approval|确认后再|先让我看)/i;
 const AUTH_PATTERN = /(登录|授权|auth|oauth|token|session|cookie|验证码|captcha)/i;
@@ -45,9 +48,12 @@ const WEB_URGENT_PATTERN = /latest|最新|today|新闻|news/i;
 type IntentSignals = {
     code: boolean;
     fileWrite: boolean;
+    fileRead: boolean;
+    memory: boolean;
     shell: boolean;
     browser: boolean;
     webResearch: boolean;
+    voice: boolean;
     highRisk: boolean;
     manualAction: boolean;
     auth: boolean;
@@ -63,16 +69,28 @@ function extractUrls(text: string): string[] {
     return dedupe((text.match(URL_PATTERN) ?? []).map((item) => item.trim()));
 }
 function extractOutputPath(text: string): string | undefined {
-    const cue = text.match(/(?:保存(?:到|为)?|输出到|write\s+to|save\s+to|output\s+to)\s+([^\s]+)/i);
-    return cue?.[1]?.replace(/[),.;，。；]+$/g, '').trim();
+    const cue = text.match(/(?:保存(?:到|为)?|输出到|write\s+to|save\s+to|save\s+as|output\s+to)\s+([^\s]+)/i);
+    const raw = cue?.[1];
+    if (!raw) {
+        return undefined;
+    }
+    return raw
+        .trim()
+        .replace(/^[`"'([{\uFF08\u3010]+/u, '')
+        .replace(/[`"')\]}\uFF09\u3011]+$/u, '')
+        .replace(/[),.;:，。；：]+$/u, '')
+        .trim();
 }
 function collectSignals(text: string): IntentSignals {
     return {
         code: CODE_PATTERN.test(text),
         fileWrite: FILE_WRITE_PATTERN.test(text),
+        fileRead: FILE_READ_PATTERN.test(text),
+        memory: MEMORY_PATTERN.test(text),
         shell: SHELL_PATTERN.test(text) || HOST_CONTROL_PATTERN.test(text),
         browser: BROWSER_PATTERN.test(text),
         webResearch: WEB_RESEARCH_PATTERN.test(text),
+        voice: VOICE_PATTERN.test(text),
         highRisk: HIGH_RISK_ACTION_PATTERN.test(text),
         manualAction: MANUAL_ACTION_PATTERN.test(text),
         auth: AUTH_PATTERN.test(text),
@@ -102,9 +120,12 @@ function inferPreferredTools(signals: IntentSignals, publishIntent?: PublishInte
     const tools: string[] = [];
     if (signals.code) tools.push('read_file', 'list_dir', 'apply_patch');
     if (signals.fileWrite) tools.push('write_to_file');
+    if (signals.fileRead) tools.push('view_file', 'read_file');
+    if (signals.memory) tools.push('remember', 'recall');
     if (signals.shell) tools.push('run_command');
     if (signals.browser) tools.push('browser_navigate');
     if (signals.webResearch) tools.push('search_web');
+    if (signals.voice) tools.push('voice_speak');
     if (publishIntent?.platform === 'xiaohongshu') tools.push('xiaohongshu_post');
     if (tools.length === 0) tools.push('list_dir');
     return dedupe(tools);
@@ -330,6 +351,19 @@ function resolveMode(input: {
         return forcedMode;
     }
     if (HOST_CONTROL_PATTERN.test(input.text)) {
+        return 'immediate_task';
+    }
+    const signals = collectSignals(input.text);
+    if (
+        signals.fileRead
+        || signals.fileWrite
+        || signals.memory
+        || signals.shell
+        || signals.code
+        || signals.browser
+        || signals.webResearch
+        || signals.voice
+    ) {
         return 'immediate_task';
     }
     if (!input.text || CHAT_PATTERN.test(input.text) || input.text.length <= 16) {

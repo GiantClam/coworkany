@@ -529,6 +529,7 @@ class DarwinBrowserHarness {
             env: {
                 ...process.env,
                 COWORKANY_APP_DATA_DIR: this.appDataDir,
+                COWORKANY_ENABLE_MCP: process.env.COWORKANY_ENABLE_MCP ?? '1',
                 COWORKANY_DISABLE_BROWSER_CDP: disableBrowserCdp,
                 ...llmEnv,
                 PATH: `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH || ''}`,

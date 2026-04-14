@@ -144,6 +144,8 @@ const STREAM_PROGRESS_EVENT_TYPES = new Set([
     'tool-call-approval',
     'tool-call-suspended',
     'tool-result',
+    'tool-output-available',
+    'tool-output-error',
     'tool-input-start',
     'tool-input-delta',
     'tool-input-available',
@@ -233,6 +235,113 @@ function resolveStreamTextDelta(chunk: MastraChunkLike, data: Record<string, unk
         ?? normalizeText(chunk.textDelta)
         ?? normalizeText(chunk.delta)
         ?? '';
+}
+
+function resolveToolName(data: Record<string, unknown>): string | null {
+    const direct = normalizeText(data.toolName)
+        ?? normalizeText(data.name)
+        ?? normalizeText(data.tool);
+    if (direct) {
+        return direct;
+    }
+    const toolRecord = toRecord(data.tool);
+    const nestedTool = toolRecord
+        ? (normalizeText(toolRecord.name) ?? normalizeText(toolRecord.id))
+        : null;
+    if (nestedTool) {
+        return nestedTool;
+    }
+    const toolCallRecord = toRecord(data.toolCall);
+    const nestedCallTool = toolCallRecord
+        ? (normalizeText(toolCallRecord.toolName) ?? normalizeText(toolCallRecord.name))
+        : null;
+    return nestedCallTool;
+}
+
+function resolveToolArgs(data: Record<string, unknown>): unknown {
+    if (Object.prototype.hasOwnProperty.call(data, 'args')) {
+        return data.args;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'input')) {
+        return data.input;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'arguments')) {
+        return data.arguments;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'params')) {
+        return data.params;
+    }
+    const toolCallRecord = toRecord(data.toolCall);
+    if (toolCallRecord) {
+        if (Object.prototype.hasOwnProperty.call(toolCallRecord, 'args')) {
+            return toolCallRecord.args;
+        }
+        if (Object.prototype.hasOwnProperty.call(toolCallRecord, 'input')) {
+            return toolCallRecord.input;
+        }
+        if (Object.prototype.hasOwnProperty.call(toolCallRecord, 'arguments')) {
+            return toolCallRecord.arguments;
+        }
+    }
+    return {};
+}
+
+function resolveToolCallId(data: Record<string, unknown>, fallbackToolName?: string): string | null {
+    const direct = normalizeText(data.toolCallId)
+        ?? normalizeText(data.callId)
+        ?? normalizeText(data.id);
+    if (direct) {
+        return direct;
+    }
+    const toolCallRecord = toRecord(data.toolCall);
+    const nested = toolCallRecord
+        ? (normalizeText(toolCallRecord.id) ?? normalizeText(toolCallRecord.toolCallId))
+        : null;
+    if (nested) {
+        return nested;
+    }
+    if (!fallbackToolName) {
+        return null;
+    }
+    return `unknown:${fallbackToolName}`;
+}
+
+function resolveToolResultValue(data: Record<string, unknown>): unknown {
+    if (Object.prototype.hasOwnProperty.call(data, 'result')) {
+        return data.result;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'output')) {
+        return data.output;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'value')) {
+        return data.value;
+    }
+    const toolCallRecord = toRecord(data.toolCall);
+    if (toolCallRecord) {
+        if (Object.prototype.hasOwnProperty.call(toolCallRecord, 'result')) {
+            return toolCallRecord.result;
+        }
+        if (Object.prototype.hasOwnProperty.call(toolCallRecord, 'output')) {
+            return toolCallRecord.output;
+        }
+    }
+    return data;
+}
+
+function resolveToolResultErrorFlag(data: Record<string, unknown>): boolean {
+    if (data.isError === true || data.error === true) {
+        return true;
+    }
+    const successValue = data.success;
+    if (typeof successValue === 'boolean') {
+        return !successValue;
+    }
+    const status = normalizeText(data.status)?.toLowerCase();
+    if (status) {
+        return status === 'error' || status === 'failed' || status === 'failure';
+    }
+    const errorMessage = extractErrorMessage(data.error);
+    return Boolean(errorMessage);
 }
 function appendUniqueText(target: string[], value: unknown): void {
     const normalized = normalizeText(value);
@@ -448,32 +557,49 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
             return { type: 'text_delta', content: text, runId, role: 'thinking' };
         }
         case 'tool-call': {
-            if (typeof data.toolName !== 'string') return null;
+            const toolName = resolveToolName(data);
+            if (!toolName) return null;
             return {
                 type: 'tool_call',
                 runId,
-                toolName: data.toolName,
-                args: data.args,
+                toolName,
+                args: resolveToolArgs(data),
+            };
+        }
+        case 'tool-input-available': {
+            const toolName = resolveToolName(data);
+            if (!toolName) return null;
+            return {
+                type: 'tool_call',
+                runId,
+                toolName,
+                args: resolveToolArgs(data),
             };
         }
         case 'tool-call-approval': {
-            if (typeof data.toolCallId !== 'string' || typeof data.toolName !== 'string') return null;
+            const toolName = resolveToolName(data);
+            if (!toolName) return null;
+            const toolCallId = resolveToolCallId(data, toolName);
+            if (!toolCallId) return null;
             return {
                 type: 'approval_required',
                 runId,
-                toolCallId: data.toolCallId,
-                toolName: data.toolName,
-                args: data.args,
+                toolCallId,
+                toolName,
+                args: resolveToolArgs(data),
                 resumeSchema: typeof data.resumeSchema === 'string' ? data.resumeSchema : '{}',
             };
         }
         case 'tool-call-suspended': {
-            if (typeof data.toolCallId !== 'string' || typeof data.toolName !== 'string') return null;
+            const toolName = resolveToolName(data);
+            if (!toolName) return null;
+            const toolCallId = resolveToolCallId(data, toolName);
+            if (!toolCallId) return null;
             return {
                 type: 'suspended',
                 runId,
-                toolCallId: data.toolCallId,
-                toolName: data.toolName,
+                toolCallId,
+                toolName,
                 payload: data.suspendPayload,
             };
         }
@@ -492,14 +618,39 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
             };
         }
         case 'tool-result': {
-            if (typeof data.toolCallId !== 'string' || typeof data.toolName !== 'string') return null;
+            const toolName = resolveToolName(data);
+            if (!toolName) return null;
+            const toolCallId = resolveToolCallId(data, toolName);
+            if (!toolCallId) return null;
             return {
                 type: 'tool_result',
                 runId,
-                toolCallId: data.toolCallId,
-                toolName: data.toolName,
-                result: data.result,
-                isError: data.isError === true,
+                toolCallId,
+                toolName,
+                result: resolveToolResultValue(data),
+                isError: resolveToolResultErrorFlag(data),
+            };
+        }
+        case 'tool-output-available':
+        case 'tool-output-error': {
+            const toolName = resolveToolName(data);
+            if (!toolName) return null;
+            const toolCallId = resolveToolCallId(data, toolName);
+            if (!toolCallId) return null;
+            const explicitErrorResult = Object.prototype.hasOwnProperty.call(data, 'error')
+                ? data.error
+                : undefined;
+            return {
+                type: 'tool_result',
+                runId,
+                toolCallId,
+                toolName,
+                result: normalizedChunk.type === 'tool-output-error' && explicitErrorResult !== undefined
+                    ? explicitErrorResult
+                    : resolveToolResultValue(data),
+                isError: normalizedChunk.type === 'tool-output-error'
+                    ? true
+                    : resolveToolResultErrorFlag(data),
             };
         }
         case 'finish':

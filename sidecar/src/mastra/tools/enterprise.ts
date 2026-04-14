@@ -1,5 +1,5 @@
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 export const createReminderTool = createTool({
     id: 'create_reminder',
     description: 'Create a lightweight reminder record.',

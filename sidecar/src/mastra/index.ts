@@ -6,6 +6,7 @@ import { supervisor } from './agents/supervisor';
 import { researcher } from './agents/researcher';
 import { coder } from './agents/coder';
 import { memoryConfig, memoryStorage } from './memory/config';
+import { runtimeScorerRegistry } from './scorers/runtime';
 import { controlPlaneWorkflow, scheduledTaskWorkflow } from './workflows';
 const logLevel = (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info';
 export const mastra = new Mastra({
@@ -24,6 +25,7 @@ export const mastra = new Mastra({
         controlPlane: controlPlaneWorkflow,
         scheduledTask: scheduledTaskWorkflow,
     },
+    scorers: runtimeScorerRegistry,
     memory: {
         default: memoryConfig,
     },

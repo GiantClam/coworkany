@@ -153,17 +153,17 @@
             "properties": {
                 "provider": {
                     "type": "string",
-                    "enum": ["serper", "searxng", "tavily", "brave"],
-                    "default": "serper",
-                    "description": "Active search provider. Serper.dev recommended (2500 free/month, Google results)"
+                    "enum": ["serper", "exa", "tavily", "brave"],
+                    "default": "exa",
+                    "description": "Active search provider. Exa recommended for high-signal web research."
                 },
                 "serperApiKey": {
                     "type": "string",
                     "description": "Serper.dev API key (2500 free searches/month, no credit card needed). Get at https://serper.dev"
                 },
-                "searxngUrl": {
+                "exaApiKey": {
                     "type": "string",
-                    "description": "Custom SearXNG instance URL (optional, uses public instances by default)"
+                    "description": "Exa API key for Exa search / MCP-backed search workflows. Get at https://dashboard.exa.ai"
                 },
                 "tavilyApiKey": {
                     "type": "string",

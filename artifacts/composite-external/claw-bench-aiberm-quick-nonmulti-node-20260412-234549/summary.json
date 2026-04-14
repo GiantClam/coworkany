@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/claude-sonnet-4-6",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 100,
+    "overall_raw": 100,
+    "overall_effective": 100,
+    "tasks_total": 3,
+    "tasks_passed": 3,
+    "tasks_failed": 0,
+    "tasks_errored": 2,
+    "tasks_invalid": 0,
+    "tasks_effective_total": 3,
+    "tasks_effective_passed": 3,
+    "tasks_effective_failed": 0,
+    "pass_rate": 100,
+    "pass_rate_effective": 100
+  },
+  "error_breakdown": {
+    "timeout": 1,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 0,
+    "other_error": 1,
+    "total_errors": 2
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "math-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/math-reasoning/math-002",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "plan-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/planning/plan-002",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "tool-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/real-tools/tool-002",
+        "invalidReasons": []
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "math-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 120.36,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "[Agent:Supervisor] - Failed tool execution {\n  name: 'mastra_workspace_read_file',\n  runId: '0cbd9606-e6fe-4cd7-93f2-0b5217847223',\n  threadId: 'thread-math-002',\n  resourceId: 'resource-math-002',\n  agentName: 'Supervisor',\n  agentId: 'supervisor',\n  tracing: { currentSpan: undefined },\n  loggerVNext: {\n    debug: [Function: debug],\n    info: [Function: info],\n    warn: [Function: warn],\n    error: [Function: error],\n    fatal: [Function: fatal]\n  },\n  metrics: {\n    emit: [Function: emit],\n    counter: [Function: counter],\n    gauge: [Function: gauge],\n    histogram: [Function: histogram]\n  },\n  requireApproval: false,\n  workspace: Workspace {\n    id: 'coworkany-ws-9536aa2c0731',\n    name: 'CoworkAny Workspace (claude-sonnet-4-6_run0)',\n    createdAt: 2026-04-12T15:40:17.022Z,\n    lastAccessedAt: 2026-04-12T15:40:17.022Z,\n    _status: 'ready',\n    _fs: LocalFilesystem {\n      component: 'WORKSPACE',\n      logger: [ConsoleLogger],\n      name: 'LocalFilesystem',\n      error: undefined,\n      _initPromise: undefined,\n      _destroyPromise: undefined,\n      _onInit: undefined,\n      _onDestroy: undefined,\n      id: 'local-fs-mnvxk0zh-rer94w',\n      provider: 'local',\n      readOnly: undefined,\n      status: 'ready',\n      _basePath: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/math-reasoning/math-002/workspace/claude-sonnet-4-6_run0',\n      _contained: true,\n      _allowedPaths: [],\n      _instructionsOverride: undefined,\n      resolvePath: [Function (anonymous)]\n    },\n    _sandbox: LocalSandbox {\n      component: 'WORKSPACE',\n      logger: [ConsoleLogger],\n      name: 'LocalSandbox',\n      processes: [LocalProcessManager],\n      mounts: [MountManager],\n      _startPromise: undefined,\n      _stopPromise: undefined,\n      _destroyPromise: undefined,\n      _onStart: undefined,\n      _onStop: undefined,\n      _onDestroy: undefined,\n      executeCommand: [AsyncFunction (anonymous)],\n      id: 'local-sandbox-mnvxk0zi-f9n7nd',\n      provider: 'local',\n      status: 'running',\n      workingDirectory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/math-reasoning/math-002/workspace/claude-sonnet-4-6_run0',\n      isolation: 'none',\n      env: {},\n      _nativeSandboxConfig: [Object],\n      _seatbeltProfile: undefined,\n      _seatbeltProfilePath: undefined,\n      _sandboxFolderPath: undefined,\n      _userProvidedProfilePath: false,\n      _createdAt: 2026-04-12T15:40:17.022Z,\n      _instructionsOverride: undefined,\n      _activeMountPaths: Set(0) {}\n    },\n    _config: {\n      id: 'coworkany-ws-9536aa2c0731',\n      name: 'CoworkAny Workspace (claude-sonnet-4-6_run0)',\n      filesystem: [LocalFilesystem],\n      sandbox: [LocalSandbox],\n      tools: [Object]\n    },\n    _searchEngine: undefined,\n    _skills: undefined,\n    _lsp: undefined\n  },\n  description: 'Read the contents of a file from the workspace filesystem. Use offset/limit parameters to read specific line ranges for large files.',\n  model: {\n    modelId: 'claude-sonnet-4-6',\n    provider: 'openai',\n    specificationVersion: 'v2'\n  },\n  error: MastraError: File not found: workspace/solution.json\n      at Object.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool-builder/builder.ts:582:29)\n      at async Object.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:13884:24)\n      at async engine.executeStepWithRetry.retries.retries (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:7319:22)\n      at async DefaultExecutionEngine.executeStepWithRetry (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:7795:24)\n      at async executeStep (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:7298:27)\n      at async <anonymous> (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:6188:32)\n      at async Promise.all (index 0)\n      at async executeForeach (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:6172:26)\n      at async executeEntry (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:6696:19)\n      at async DefaultExecutionEngine.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:8060:20) {\n    cause: FileNotFoundError: File not found: workspace/solution.json\n        at LocalFilesystem.readFile (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-ABA3KD3X.js:975:15)\n        at async execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-ABA3KD3X.js:8139:25)\n        at async Object.Tool.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool.ts:387:24)\n        at async Object.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-ABA3KD3X.js:8283:22)\n        at async execFunction (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool-builder/builder.ts:478:20)\n        at async Immediate.<anonymous> (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool-builder/builder.ts:574:30) {\n      code: 'ENOENT',\n      path: 'workspace/solution.json'\n    },\n    id: 'TOOL_EXECUTION_FAILED',\n    domain: 'TOOL',\n    category: 'USER',\n    details: {\n      errorMessage: 'FileNotFoundError: File not found: workspace/solution.json',\n      argsJson: '{\"path\":\"workspace/solution.json\",\"encoding\":\"utf-8\",\"showLineNumbers\":false,\"suspendedToolRunId\":null}',\n      model: 'claude-sonnet-4-6'\n    }\n  },\n  args: {\n    path: 'workspace/solution.json',\n    encoding: 'utf-8',\n    showLineNumbers: false,\n    suspendedToolRunId: null\n  }\n}\n[Agent:Supervisor] - Failed tool execution {\n  name: 'mastra_workspace_read_file',\n  runId: '67ba7726-b5a5-491b-9edf-339b9ff19677',\n  threadId: 'thread-math-002',\n  resourceId: 'resource-math-002',\n  agentName: 'Supervisor',\n  agentId: 'supervisor',\n  tracing: { currentSpan: undefined },\n  loggerVNext: {\n    debug: [Function: debug],\n    info: [Function: info],\n    warn: [Function: warn],\n    error: [Function: error],\n    fatal: [Function: fatal]\n  },\n  metrics: {\n    emit: [Function: emit],\n    counter: [Function: counter],\n    gauge: [Function: gauge],\n    histogram: [Function: histogram]\n  },\n  requireApproval: false,\n  workspace: Workspace {\n    id: 'coworkany-ws-9536aa2c0731',\n    name: 'CoworkAny Workspace (claude-sonnet-4-6_run0)',\n    createdAt: 2026-04-12T15:40:17.022Z,\n    lastAccessedAt: 2026-04-12T15:40:17.022Z,\n    _status: 'ready',\n    _fs: LocalFilesystem {\n      component: 'WORKSPACE',\n      logger: [ConsoleLogger],\n      name: 'LocalFilesystem',\n      error: undefined,\n      _initPromise: undefined,\n      _destroyPromise: undefined,\n      _onInit: undefined,\n      _onDestroy: undefined,\n      id: 'local-fs-mnvxk0zh-rer94w',\n      provider: 'local',\n      readOnly: undefined,\n      status: 'ready',\n      _basePath: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/math-reasoning/math-002/workspace/claude-sonnet-4-6_run0',\n      _contained: true,\n      _allowedPaths: [],\n      _instructionsOverride: undefined,\n      resolvePath: [Function (anonymous)]\n    },\n    _sandbox: LocalSandbox {\n      component: 'WORKSPACE',\n      logger: [ConsoleLogger],\n      name: 'LocalSandbox',\n      processes: [LocalProcessManager],\n      mounts: [MountManager],\n      _startPromise: undefined,\n      _stopPromise: undefined,\n      _destroyPromise: undefined,\n      _onStart: undefined,\n      _onStop: undefined,\n      _onDestroy: undefined,\n      executeCommand: [AsyncFunction (anonymous)],\n      id: 'local-sandbox-mnvxk0zi-f9n7nd',\n      provider: 'local',\n      status: 'running',\n      workingDirectory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/math-reasoning/math-002/workspace/claude-sonnet-4-6_run0',\n      isolation: 'none',\n      env: {},\n      _nativeSandboxConfig: [Object],\n      _seatbeltProfile: undefined,\n      _seatbeltProfilePath: undefined,\n      _sandboxFolderPath: undefined,\n      _userProvidedProfilePath: false,\n      _createdAt: 2026-04-12T15:40:17.022Z,\n      _instructionsOverride: undefined,\n      _activeMountPaths: Set(0) {}\n    },\n    _config: {\n      id: 'coworkany-ws-9536aa2c0731',\n      name: 'CoworkAny Workspace (claude-sonnet-4-6_run0)',\n      filesystem: [LocalFilesystem],\n      sandbox: [LocalSandbox],\n      tools: [Object]\n    },\n    _searchEngine: undefined,\n    _skills: undefined,\n    _lsp: undefined\n  },\n  description: 'Read the contents of a file from the workspace filesystem. Use offset/limit parameters to read specific line ranges for large files.',\n  model: {\n    modelId: 'claude-sonnet-4-6',\n    provider: 'openai',\n    specificationVersion: 'v2'\n  },\n  error: MastraError: File not found: workspace/solution.json\n      at Object.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool-builder/builder.ts:582:29)\n      at async Object.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:13884:24)\n      at async engine.executeStepWithRetry.retries.retries (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:7319:22)\n      at async DefaultExecutionEngine.executeStepWithRetry (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:7795:24)\n      at async executeStep (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:7298:27)\n      at async <anonymous> (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:6188:32)\n      at async Promise.all (index 0)\n      at async executeForeach (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:6172:26)\n      at async executeEntry (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:6696:19)\n      at async DefaultExecutionEngine.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-IYSW4VN7.js:8060:20) {\n    cause: FileNotFoundError: File not found: workspace/solution.json\n        at LocalFilesystem.readFile (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-ABA3KD3X.js:975:15)\n        at async execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-ABA3KD3X.js:8139:25)\n        at async Object.Tool.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool.ts:387:24)\n        at async Object.execute (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/dist/chunk-ABA3KD3X.js:8283:22)\n        at async execFunction (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool-builder/builder.ts:478:20)\n        at async Immediate.<anonymous> (/Users/beihuang/Documents/github/coworkany/sidecar/node_modules/@mastra/core/src/tools/tool-builder/builder.ts:574:30) {\n      code: 'ENOENT',\n      path: 'workspace/solution.json'\n    },\n    id: 'TOOL_EXECUTION_FAILED',\n    domain: 'TOOL',\n    category: 'USER',\n    details: {\n      errorMessage: 'FileNotFoundError: File not found: workspace/solution.json',\n      argsJson: '{\"path\":\"workspace/solution.json\",\"encoding\":\"utf-8\",\"showLineNumbers\":false,\"suspendedToolRunId\":null}',\n      model: 'claude-sonnet-4-6'\n    }\n  },\n  args: {\n    path: 'workspace/solution.json',\n    encoding: 'utf-8',\n    showLineNumbers: false,\n    suspendedToolRunId: null\n  }\n}",
+      "error_type": "other_error",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: items.json\n.................                                                        [100%]\n17 passed in 0.02s"
+    },
+    {
+      "task_id": "plan-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 120.39,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "[coworkany-mcp-toolset-resolution] {\"taskId\":\"plan-002\",\"routeMode\":\"task\",\"useChatLatencyProfile\":false,\"loadStatus\":\"disabled\",\"servedFromCache\":false,\"cacheAgeMs\":null,\"timeoutMs\":0,\"elapsedMs\":0,\"mcpToolCount\":0}\n[coworkany-task-route-agent] {\"taskId\":\"plan-002\",\"routeMode\":\"task\",\"selectedAgent\":\"supervisor\",\"requiredCompletionCapabilities\":[],\"turnContractDomain\":null,\"enabledToolpackCount\":0}\n[coworkany-metrics] {\"event\":\"llm_timing\",\"taskId\":\"plan-002\",\"threadId\":\"thread-plan-002\",\"turnId\":null,\"modelId\":\"openai/claude-sonnet-4-6\",\"provider\":\"openai\",\"phase\":\"stream\",\"outcome\":\"success\",\"attempt\":2,\"maxAttempts\":6,\"assistantChars\":746,\"finishReason\":\"tool-calls\",\"error\":null,\"timings\":{\"elapsedMs\":70016,\"dnsMs\":null,\"connectMs\":null,\"ttfbMs\":205,\"firstTokenMs\":8223,\"lastTokenMs\":48932},\"proxy\":{\"before\":{\"enabled\":false,\"source\":null,\"endpoint\":null,\"noProxy\":null},\"after\":{\"enabled\":false,\"source\":null,\"endpoint\":null,\"noProxy\":null}},\"timestamp\":\"2026-04-12T15:44:00.441Z\"}",
+      "error_type": "timeout",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: project_brief.md\n.................                                                        [100%]\n17 passed in 0.02s"
+    },
+    {
+      "task_id": "tool-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 93.25,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: requirements_a.txt, requirements_b.txt\n.................                                                        [100%]\n17 passed in 0.02s"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/claude-sonnet-4-6",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

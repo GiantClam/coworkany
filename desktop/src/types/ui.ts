@@ -52,11 +52,11 @@ export interface CustomProviderSettings {
 }
 
 export interface SearchSettings {
-    provider?: 'serper' | 'searxng' | 'tavily' | 'brave';
-    searxngUrl?: string;
+    provider?: 'serper' | 'exa' | 'tavily' | 'brave';
     tavilyApiKey?: string;
     braveApiKey?: string;
     serperApiKey?: string;
+    exaApiKey?: string;
 }
 
 export interface ProxySettings {

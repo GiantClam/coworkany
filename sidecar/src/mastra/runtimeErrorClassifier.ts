@@ -18,6 +18,11 @@ const CONFIG_REQUIRED_PATTERNS: RegExp[] = [
     /所有供应商暂时不可用|供应商.*暂时不可用/i,
 ];
 
+const QUOTA_EXCEEDED_PATTERNS: RegExp[] = [
+    /insufficient(?:_user)?[_\s-]?quota|insufficient credits/i,
+    /额度不足|余额不足|用户额度不足/u,
+];
+
 const TIMEOUT_PATTERNS: RegExp[] = [
     /chat_turn_timeout_budget_exhausted/i,
     /chat_startup_timeout_budget_exhausted/i,
@@ -38,7 +43,6 @@ const TIMEOUT_PATTERNS: RegExp[] = [
 const TEMPORARY_UNAVAILABLE_PATTERNS: RegExp[] = [
     /\b429\b/,
     /rate.?limit|too many requests/i,
-    /insufficient[_\s-]?quota|insufficient credits/i,
     /temporar(?:y|ily).*(unavailable|error)?/i,
     /econnreset|enotfound|network error/i,
     /No snapshot found for this workflow run/i,
@@ -46,6 +50,15 @@ const TEMPORARY_UNAVAILABLE_PATTERNS: RegExp[] = [
 
 export function classifyRuntimeErrorMessage(message: string): RuntimeFailureClassification {
     const normalized = String(message ?? '');
+
+    if (QUOTA_EXCEEDED_PATTERNS.some((pattern) => pattern.test(normalized))) {
+        return {
+            errorCode: 'PROVIDER_QUOTA_EXCEEDED',
+            recoverable: false,
+            suggestion: 'Provider quota is exhausted. Top up quota or switch provider/model in LLM Settings.',
+            failureClass: 'blocked',
+        };
+    }
 
     if (CONFIG_REQUIRED_PATTERNS.some((pattern) => pattern.test(normalized))) {
         return {

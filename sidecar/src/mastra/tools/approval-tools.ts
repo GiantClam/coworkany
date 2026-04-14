@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 export const deleteFilesTool = createTool({
     id: 'delete_files',
     description: 'Delete files or directories in batch. Always requires approval.',

@@ -391,7 +391,7 @@ pub struct LlmConfig {
     pub profiles: Option<Vec<LlmProfile>>,
     pub active_profile_id: Option<String>,
     pub max_history_messages: Option<u32>,
-    /// Web search provider settings (serper, tavily, brave, searxng)
+    /// Web search provider settings (serper, exa, tavily, brave)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<Value>,
     /// Outbound proxy settings for sidecar/provider requests

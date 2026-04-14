@@ -1,9 +1,9 @@
 import type { StoredToolpack } from '../storage/toolpackStore';
-import type { ToolDefinition } from '../tools/standard';
+import type { RuntimeResolvedTool } from './internalToolResolver';
 
 export type RuntimeToolsetMap = Record<string, Record<string, unknown>>;
 
-export type RuntimeToolResolver = (toolName: string) => ToolDefinition | undefined;
+export type RuntimeToolResolver = (toolName: string) => RuntimeResolvedTool | undefined;
 export type RuntimeToolpackState = {
     status: 'configured' | 'resolved' | 'callable' | 'blocked';
     blockedReason?: string;

@@ -28,7 +28,8 @@ import { createMastraPolicyEngineFromEnv } from './mastra/policyEngine';
 import { evaluateSkillPolicy } from './mastra/pluginPolicy';
 import { loadRemoteSessionGovernancePolicy } from './mastra/remoteSessionGovernance';
 import { createMastraTaskExecutionService } from './mastra/taskExecutionService';
-import { resolveRuntimeAppDataRoot } from './config/runtimeConfig';
+import { resolveRuntimeAppDataRoot, seedRuntimeLlmEnvFromConfig } from './config/runtimeConfig';
+import { resolveRuntimeInternalTool } from './mastra/internalToolResolver';
 import {
     buildInternalRuntimeToolsets,
     countToolsInToolsets,
@@ -36,6 +37,18 @@ import {
 } from './mastra/runtimeToolCatalog';
 const workspaceRoot = process.cwd();
 const appDataRoot = resolveRuntimeAppDataRoot({ cwd: workspaceRoot });
+const llmEnvSeedResult = seedRuntimeLlmEnvFromConfig({
+    cwd: workspaceRoot,
+    env: process.env,
+});
+if (llmEnvSeedResult.seededKeys.length > 0) {
+    console.info('[coworkany-runtime-config] seeded llm env from config', {
+        path: llmEnvSeedResult.loadedFromPath,
+        provider: llmEnvSeedResult.provider,
+        modelId: llmEnvSeedResult.modelId,
+        seededKeys: llmEnvSeedResult.seededKeys,
+    });
+}
 const additionalCommandRuntime = createMastraAdditionalCommandHandler({
     workspaceRoot,
     appDataRoot,
@@ -59,10 +72,12 @@ setHookRuntimeEventsEnabled(true);
 const policyEngine = createMastraPolicyEngineFromEnv();
 const remoteSessionGovernancePolicy = loadRemoteSessionGovernancePolicy(workspaceRoot);
 const taskExecutionService = createMastraTaskExecutionService();
+const schedulerDisabled = /^(1|true|yes|on)$/i.test(
+    (process.env.COWORKANY_DISABLE_SCHEDULER ?? '').trim(),
+);
 
 function resolveInternalToolDefinition(toolName: string) {
-    return globalToolRegistry.getTool(toolName)
-        ?? STANDARD_TOOLS.find((tool) => tool.name === toolName);
+    return resolveRuntimeInternalTool(toolName);
 }
 
 function writeEvent(event: Record<string, unknown>): void {
@@ -340,15 +355,17 @@ async function run(): Promise<void> {
         executeTaskMessage: taskExecutionService.executeTaskMessage,
         warmupChatRuntime,
     });
-    schedulerRuntime = createMastraSchedulerRuntime({
-        appDataRoot,
-        deps: {
-            handleUserMessage,
-            resolveResourceIdForTask: (taskId) => processor.resolveResourceIdForTask(taskId),
-            emitDesktopEventForTask: (taskId, event) => processor.emitDesktopEventForTask(taskId, event, writeEvent),
-        },
-    });
-    schedulerRuntime.start();
+    if (!schedulerDisabled) {
+        schedulerRuntime = createMastraSchedulerRuntime({
+            appDataRoot,
+            deps: {
+                handleUserMessage,
+                resolveResourceIdForTask: (taskId) => processor.resolveResourceIdForTask(taskId),
+                emitDesktopEventForTask: (taskId, event) => processor.emitDesktopEventForTask(taskId, event, writeEvent),
+            },
+        });
+        schedulerRuntime.start();
+    }
     const inFlight = new Set<Promise<void>>();
     try {
         for await (const line of rl) {
@@ -376,7 +393,7 @@ async function run(): Promise<void> {
         }
     } finally {
         processor.close('stdin_closed');
-        schedulerRuntime.stop();
+        schedulerRuntime?.stop();
         await destroyWorkspaceRuntime();
         await disconnectMcpSafe();
     }

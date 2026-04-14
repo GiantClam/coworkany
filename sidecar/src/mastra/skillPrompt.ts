@@ -13,6 +13,7 @@ type SkillPromptOutput = {
     prompt?: string;
     enabledSkillIds: string[];
 };
+const EXPLICIT_SKILL_CONTENT_MAX_CHARS = 2_000;
 
 function normalizeSkillIds(value: unknown): string[] {
     if (!Array.isArray(value)) {
@@ -22,6 +23,23 @@ function normalizeSkillIds(value: unknown): string[] {
         .filter((item): item is string => typeof item === 'string')
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
+}
+
+function readSkillInstructionContent(skill: {
+    manifest: Record<string, unknown>;
+}): string | undefined {
+    const raw = skill.manifest.content;
+    if (typeof raw !== 'string') {
+        return undefined;
+    }
+    const normalized = raw.trim();
+    if (normalized.length === 0) {
+        return undefined;
+    }
+    if (normalized.length <= EXPLICIT_SKILL_CONTENT_MAX_CHARS) {
+        return normalized;
+    }
+    return `${normalized.slice(0, EXPLICIT_SKILL_CONTENT_MAX_CHARS)}\n...[truncated]`;
 }
 
 type SkillPromptDomain = ReturnType<typeof detectTaskIntentDomain>;
@@ -184,6 +202,21 @@ export function buildSkillPromptFromStore(
         'When relevant, follow these skill constraints and execution preferences:',
         ...resolved.map((skill) => `- ${skill.manifest.name}: ${skill.manifest.description}`),
     ];
+    const explicitSet = new Set(explicit);
+    const explicitInstructionBlocks = resolved
+        .filter((skill) => explicitSet.has(skill.manifest.name))
+        .map((skill) => ({
+            name: skill.manifest.name,
+            content: readSkillInstructionContent(skill as unknown as { manifest: Record<string, unknown> }),
+        }))
+        .filter((entry): entry is { name: string; content: string } => Boolean(entry.content));
+    if (explicitInstructionBlocks.length > 0) {
+        lines.push('', '[Explicit Skill Instructions]');
+        for (const block of explicitInstructionBlocks) {
+            lines.push(`Skill: ${block.name}`);
+            lines.push(block.content);
+        }
+    }
 
     return {
         prompt: lines.join('\n'),

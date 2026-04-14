@@ -25,6 +25,7 @@ type UserMessageCall = {
     options?: {
         taskId?: string;
         workspacePath?: string;
+        enabledToolpacks?: string[];
         enabledSkills?: string[];
         skillPrompt?: string;
         requireToolApproval?: boolean;
@@ -574,6 +575,29 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
+    test('start_task forwards enabledToolpacks into per-turn execution options', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-enabled-toolkpacks-forward',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-enabled-toolkpacks-forward',
+                title: 'toolpacks forward',
+                userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                context: { workspacePath: '/tmp/workspace' },
+                config: {
+                    enabledToolpacks: ['investoday-finance-data', 'builtin-websearch'],
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.enabledToolpacks).toEqual([
+            'investoday-finance-data',
+            'builtin-websearch',
+        ]);
+    });
+
     test('start_task auto-routes chat intent to direct chat path', async () => {
         const harness = createHarness();
         await harness.process({
@@ -592,6 +616,24 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBe(true);
         expect(harness.userMessageCalls[0]?.options?.enabledSkills).toEqual([]);
         expect(harness.userMessageCalls[0]?.options?.skillPrompt).toBeUndefined();
+    });
+
+    test('start_task routes short filesystem operation intent to direct task path', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-filesystem-intent-auto-route',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-filesystem-intent-auto-route',
+                title: 'filesystem intent',
+                userQuery: '列出当前目录的文件',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
     });
 
     test('start_task routes market-data query to direct task path for tool-first execution', async () => {
@@ -956,6 +998,263 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+    });
+
+    test('send_task_message treats explicit low-quality search results as insufficient evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-low-quality-search',
+                    role: 'assistant',
+                    content: '我来帮你查询 MiniMax 的港股股价和趋势信息。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-low-quality-search',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'MiniMax 港股 股价 今天',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-low-quality-search',
+                    toolCallId: 'tool-low-quality-search',
+                    toolName: 'search_web',
+                    result: {
+                        provider: 'exa',
+                        error: 'low_quality_results',
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-low-quality-search',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-low-quality-search' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-low-quality-search',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-low-quality-search',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+    });
+
+    test('send_task_message treats empty search payload as insufficient evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-empty-search-payload',
+                    role: 'assistant',
+                    content: '我来帮你查询 MiniMax 的港股股价和趋势信息。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-empty-search-payload',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'MiniMax 00100 HK stock price today',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-empty-search-payload',
+                    toolCallId: 'tool-empty-search-payload',
+                    toolName: 'search_web',
+                    result: {
+                        query: 'MiniMax 00100 HK stock price today',
+                        provider: 'serper',
+                        results: [],
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-empty-search-payload',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-empty-search-payload' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-empty-search-payload',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-empty-search-payload',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+    });
+
+    test('send_task_message accepts non-fatal provider code when tool result has usable payload', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-provider-code-with-payload',
+                    role: 'assistant',
+                    content: '我来帮你查询 MiniMax 的港股股价和趋势信息。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-provider-code-with-payload',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'MiniMax 00100 HK stock price today',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-provider-code-with-payload',
+                    toolCallId: 'tool-provider-code-with-payload',
+                    toolName: 'search_web',
+                    result: {
+                        query: 'MiniMax 00100 HK stock price today',
+                        provider: 'serper',
+                        error: 'http_400',
+                        snippet: 'cached market summary is available for the same ticker query.',
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-provider-code-with-payload',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-provider-code-with-payload' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-provider-code-with-payload',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-provider-code-with-payload',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message accepts usable web evidence when search payload has no url host', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-weather-no-host',
+                    role: 'assistant',
+                    content: '我来查询北京天气并给出结果。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-weather-no-host',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'Beijing weather today',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-weather-no-host',
+                    toolCallId: 'tool-weather-no-host',
+                    toolName: 'search_web',
+                    result: {
+                        query: 'Beijing weather today',
+                        provider: 'exa',
+                        results: [
+                            {
+                                title: 'Beijing weather today overview',
+                                snippet: 'Temperature range and wind forecast for Beijing today.',
+                            },
+                        ],
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-weather-no-host',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-weather-no-host' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-weather-no-host',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-weather-no-host',
+                content: '搜索北京天气然后告诉我结果',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message suppresses task execution narration before strong tool evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-task-narration',
+                    role: 'assistant',
+                    content: '我来帮你查询 MiniMax 的港股股价和趋势信息。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-task-narration',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-task-narration' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-task-narration',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-task-narration',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        const textDeltas = harness.outgoing.filter((message) => message.type === 'TEXT_DELTA');
+        expect(textDeltas).toHaveLength(0);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
     });
 
@@ -3309,6 +3608,50 @@ describe('mastra entrypoint processor', () => {
 
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message degrades to synthetic completion when retryable no-narrative error follows tooling progress', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-tooling-progress-main',
+                    toolName: 'agent-researcher',
+                    args: { prompt: 'research this' },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-tooling-progress-main',
+                    toolCallId: 'tool-tooling-progress-main',
+                    toolName: 'agent-researcher',
+                    result: 'tool result payload',
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-tooling-progress-stale',
+                    message: 'Error: stream_idle_timeout:30000',
+                });
+                return { runId: 'run-tooling-progress-main' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-tooling-progress-degraded',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-tooling-progress-degraded',
+                content: '请帮我调研今天的市场信息',
+            },
+        });
+
+        const assistantText = harness.outgoing
+            .filter((message) => message.type === 'TEXT_DELTA')
+            .map((message) => String((message.payload as Record<string, unknown>)?.delta ?? ''))
+            .join('\n');
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        expect(assistantText).toContain('上游检索流在输出正文前中断');
     });
 
     test('send_task_message tolerates complete-before-approval race and still resumes auto-approved agent tool', async () => {

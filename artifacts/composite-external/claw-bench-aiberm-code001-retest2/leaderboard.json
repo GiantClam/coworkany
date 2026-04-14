@@ -1,0 +1,56 @@
+{
+  "framework": "openclaw",
+  "model": "claude-sonnet-4-6",
+  "overall": 99.93,
+  "taskCompletion": 100.0,
+  "efficiency": 99.64,
+  "security": 100.0,
+  "skills": 100.0,
+  "ux": 100.0,
+  "testTier": null,
+  "agentProfile": {
+    "profileId": "3938573d4d4060c7250549488e47260ea13fcef0629bb472502c93fb15fe7fe5",
+    "displayName": "openclaw / claude-sonnet-4-6",
+    "model": "claude-sonnet-4-6",
+    "framework": "openclaw",
+    "skillsMode": "vanilla",
+    "skills": [],
+    "mcpServers": [],
+    "memoryModules": [],
+    "modelTier": null,
+    "tags": {}
+  },
+  "metadata": {
+    "skills_mode": "vanilla",
+    "runs_per_task": 1,
+    "total_tasks": 1,
+    "total_runs": 1,
+    "overall_pass_rate": 1.0,
+    "overall_mean_score": 1.0,
+    "overall_std_dev": 0.0,
+    "confidence_interval_95": [
+      1.0,
+      1.0
+    ]
+  },
+  "domainBreakdown": {
+    "code-assistance": 100.0
+  },
+  "levelBreakdown": {
+    "L2": 100.0
+  },
+  "moltbook": null,
+  "taskDetails": [
+    {
+      "taskId": "code-001",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    }
+  ]
+}

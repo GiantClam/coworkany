@@ -1,0 +1,309 @@
+{
+  "framework": "openclaw",
+  "model": "claude-sonnet-4-6",
+  "overall": 62.89,
+  "taskCompletion": 40.91,
+  "efficiency": 91.18,
+  "security": 100.0,
+  "skills": 61.36,
+  "ux": 40.91,
+  "testTier": "quick",
+  "agentProfile": {
+    "profileId": "3938573d4d4060c7250549488e47260ea13fcef0629bb472502c93fb15fe7fe5",
+    "displayName": "openclaw / claude-sonnet-4-6",
+    "model": "claude-sonnet-4-6",
+    "framework": "openclaw",
+    "skillsMode": "vanilla",
+    "skills": [],
+    "mcpServers": [],
+    "memoryModules": [],
+    "modelTier": null,
+    "tags": {}
+  },
+  "metadata": {
+    "skills_mode": "vanilla",
+    "runs_per_task": 1,
+    "total_tasks": 22,
+    "total_runs": 22,
+    "overall_pass_rate": 0.409091,
+    "overall_mean_score": 0.613636,
+    "overall_std_dev": 0.36717,
+    "confidence_interval_95": [
+      0.460206,
+      0.767067
+    ]
+  },
+  "domainBreakdown": {
+    "calendar": 100.0,
+    "code-assistance": 50.0,
+    "communication": 50.0,
+    "cross-domain": 100.0,
+    "data-analysis": 100.0,
+    "database": 50.0,
+    "debugging": 50.0,
+    "document-editing": 50.0,
+    "education": 0.0,
+    "email": 50.0,
+    "file-operations": 100.0,
+    "financial-analysis": 0.0,
+    "math-reasoning": 50.0,
+    "memory": 100.0,
+    "multi-agent": 50.0,
+    "multimodal": 100.0,
+    "planning": 0.0,
+    "real-tools": 0.0,
+    "security": 100.0,
+    "system-admin": 100.0,
+    "web-browsing": 50.0,
+    "workflow-automation": 100.0
+  },
+  "levelBreakdown": {
+    "L2": 59.52,
+    "L3": 100.0
+  },
+  "moltbook": null,
+  "taskDetails": [
+    {
+      "taskId": "cal-006",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "code-001",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "comm-004",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "data-004",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "db-002",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "debug-002",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "doc-004",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "edu-001",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.0,
+      "stdDev": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "taskId": "eml-004",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "file-005",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "fin-008",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.0,
+      "stdDev": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "taskId": "mag-001",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "math-002",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "mem-002",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "mm-002",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "plan-002",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.0,
+      "stdDev": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "taskId": "sec-004",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "sys-004",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "tool-002",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.0,
+      "stdDev": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "taskId": "web-004",
+      "numRuns": 1,
+      "passRate": 0.0,
+      "meanScore": 0.5,
+      "stdDev": 0.0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "wfl-003",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "taskId": "xdom-001",
+      "numRuns": 1,
+      "passRate": 1.0,
+      "meanScore": 1.0,
+      "stdDev": 0.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    }
+  ]
+}

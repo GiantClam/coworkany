@@ -1,0 +1,8 @@
+{
+  "provider": "aiberm",
+  "aiberm": {
+    "apiKey": "sk-bctlxtpS1qsLzsmW5DI3KNj575bhPS8AxOZbZuCpuowlZ4vL",
+    "baseUrl": "https://aiberm.com/v1",
+    "model": "claude-sonnet-4-6"
+  }
+}

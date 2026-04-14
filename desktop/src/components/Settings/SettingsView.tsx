@@ -108,16 +108,16 @@ export function SettingsView() {
     const hasProfiles = Boolean(config.profiles?.length);
     const hasSearchCredential = Boolean(
         searchSettings.serperApiKey
+        || searchSettings.exaApiKey
         || searchSettings.tavilyApiKey
         || searchSettings.braveApiKey
-        || searchSettings.searxngUrl
     );
     const searchProviderLabel = {
         serper: 'Serper',
+        exa: 'Exa',
         tavily: 'Tavily',
         brave: 'Brave',
-        searxng: 'SearXNG',
-    }[searchSettings.provider ?? 'searxng'];
+    }[searchSettings.provider ?? 'exa'];
     const themeLabelKey = {
         light: 'settings.light',
         dark: 'settings.dark',

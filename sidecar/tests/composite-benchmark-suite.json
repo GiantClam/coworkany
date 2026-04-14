@@ -1,0 +1,259 @@
+{
+  "id": "coworkany-composite-benchmark-v1",
+  "name": "CoworkAny 组合测试集（功能+稳定性）",
+  "version": "1.0.0",
+  "defaultProfile": "smoke",
+  "description": "聚合 claw-bench/openclaw 风格验证与现有 sidecar 任务链路，支持分层执行。",
+  "profiles": [
+    {
+      "id": "smoke",
+      "name": "P0 冒烟门禁",
+      "objective": "快速覆盖最稳定的结构化回归",
+      "steps": [
+        {
+          "name": "稳定基线",
+          "kind": "bun-test",
+          "files": [
+            "tests/token-usage.test.ts",
+            "tests/command-sandbox.test.ts",
+            "tests/scheduler-heartbeat.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "OpenClaw 快速对齐",
+          "kind": "bun-test",
+          "files": [
+            "tests/openclaw-quick.test.ts"
+          ],
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "agent-core",
+      "name": "P1 Agent 基础能力",
+      "objective": "覆盖核心意图、任务执行、工具调用链路",
+      "steps": [
+        {
+          "name": "文件与记忆核心",
+          "kind": "bun-test",
+          "files": [
+            "tests/llm-core.test.ts",
+            "tests/file-operations.test.ts",
+            "tests/memory-learning.test.ts",
+            "tests/gui-simulation.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "控制面/执行链条",
+          "kind": "bun-test",
+          "files": [
+            "tests/capability-registry.test.ts",
+            "tests/mastra-plugin-policy.test.ts",
+            "tests/mastra-policy-engine.test.ts",
+            "tests/mastra-mcp-connection-manager.test.ts"
+          ],
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "agent-robustness",
+      "name": "P2 关键故障恢复",
+      "objective": "重点压测路由、审批、恢复、快照与失败处理（你前面提到的问题覆盖区间）",
+      "steps": [
+        {
+          "name": "任务运行链条",
+          "kind": "bun-test",
+          "files": [
+            "tests/scheduled-full-chain.e2e.test.ts",
+            "tests/additional-commands-full-chain.e2e.test.ts",
+            "tests/task-runtime-recovery.test.ts",
+            "tests/task-runtime-store.test.ts",
+            "tests/restart-followup-reopen.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "MAStra/控制面回归",
+          "kind": "bun-test",
+          "files": [
+            "tests/phase1-mastra-infra.test.ts",
+            "tests/phase2-tools.test.ts",
+            "tests/phase3-agent-loop.test.ts",
+            "tests/phase4-control-plane.test.ts",
+            "tests/phase5-memory.test.ts",
+            "tests/phase6-final-validation.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "用户操作与中断恢复",
+          "kind": "bun-test",
+          "files": [
+            "tests/task-execution-service.test.ts",
+            "tests/task-event-bus.test.ts",
+            "tests/protocol-runtime-context.test.ts",
+            "tests/protocol-canonical-stream.test.ts"
+          ],
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "agent-e2e",
+      "name": "P3 端到端能力复合场景",
+      "objective": "验证多工具协作、长链路、多步执行质量",
+      "steps": [
+        {
+          "name": "E2E 复合场景",
+          "kind": "bun-test",
+          "files": [
+            "tests/e2e-composite.test.ts",
+            "tests/openclaw-simulation.test.ts",
+            "tests/openclaw-extended.test.ts",
+            "tests/openclow-comparison.test.ts",
+            "tests/user-scenarios.test.ts"
+          ],
+          "critical": false
+        },
+        {
+          "name": "搜索/研究/文档生成",
+          "kind": "bun-test",
+          "files": [
+            "tests/stock-research.test.ts",
+            "tests/ppt-smart-city.test.ts",
+            "tests/tts-speak.test.ts"
+          ],
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "name": "P4 发布前全量检查",
+      "objective": "发布分支建议运行，覆盖当前脚本映射中的全量验收链路",
+      "steps": [
+        {
+          "name": "浏览器依赖场景",
+          "kind": "bun-test",
+          "files": [
+            "tests/browser-automation.test.ts",
+            "tests/xiaohongshu-posting.test.ts",
+            "tests/x-following-ai-learning-e2e.test.ts"
+          ],
+          "critical": false
+        },
+        {
+          "name": "桌面级冒烟",
+          "kind": "bun-test",
+          "files": [
+            "tests/desktop-full.test.ts"
+          ],
+          "critical": false
+        },
+        {
+          "name": "语音与第三方服务回归",
+          "kind": "bun-test",
+          "files": [
+            "tests/voice-interface-normalization.test.ts",
+            "tests/speech-providers.test.ts",
+            "tests/research-tool.test.ts"
+          ],
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "external",
+      "name": "P5 外部基准接入（规划/接线层）",
+      "objective": "与社区基准打通：Claw-Bench / OSWorld / BrowserGym / Gaia2 / TheAgentCompany",
+      "steps": [
+        {
+          "id": "claw-bench",
+          "name": "Claw-Bench（基础回归）",
+          "kind": "external",
+          "runner": "scripts/external/run-external-benchmark-step.mjs",
+          "command": "claw-bench run --agent-url \"${COWORKANY_AGENT_URL}\" --agent-name \"${COWORKANY_AGENT_NAME}\" -t quick -n 3",
+          "requiredEnv": [
+            "COWORKANY_AGENT_URL",
+            "COWORKANY_AGENT_NAME"
+          ],
+          "bootstrap": [
+            "python -m pip install -r requirements.txt",
+            "python -m pip install -e ."
+          ],
+          "repoDirEnv": "CLAW_BENCH_REPO_DIR",
+          "workingDirMode": "env-first",
+          "critical": false,
+          "artifactsDir": "artifacts/composite-external/claw-bench"
+        },
+        {
+          "id": "osworld-verified",
+          "name": "OSWorld-Verified（桌面主基准）",
+          "kind": "external",
+          "runner": "scripts/external/run-external-benchmark-step.mjs",
+          "command": "cd \"$OSWORLD_REPO_DIR\" && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && python eval.py --agent coworkany --tasks osworld_verified",
+          "requiredEnv": [
+            "OSWORLD_REPO_DIR"
+          ],
+          "workingDirMode": "osworld-repo",
+          "critical": false,
+          "artifactsDir": "artifacts/composite-external/osworld"
+        },
+        {
+          "id": "browsergym-workarena",
+          "name": "BrowserGym（WorkArena++ + AssistantBench）",
+          "kind": "external",
+          "runner": "scripts/external/run-external-benchmark-step.mjs",
+          "command": "cd \"$BROWSERGYM_REPO_DIR\" && python -m pip install -r requirements.txt && python benchmark_runner.py --agent coworkany --suite workarena",
+          "requiredEnv": [
+            "BROWSERGYM_REPO_DIR"
+          ],
+          "workingDirMode": "browsergym-repo",
+          "critical": false,
+          "artifactsDir": "artifacts/composite-external/browsergym"
+        },
+        {
+          "id": "gaia2",
+          "name": "Gaia2（歧义与异步鲁棒性）",
+          "kind": "external",
+          "runner": "scripts/external/run-external-benchmark-step.mjs",
+          "command": "cd \"$GAIA2_REPO_DIR\" && bash scripts/run_benchmark.sh --agent coworkany --subset gaia2",
+          "requiredEnv": [
+            "GAIA2_REPO_DIR"
+          ],
+          "workingDirMode": "gaia2-repo",
+          "critical": false,
+          "artifactsDir": "artifacts/composite-external/gaia2"
+        },
+        {
+          "id": "the-agent-company",
+          "name": "TheAgentCompany（长流程端到端）",
+          "kind": "external",
+          "runner": "scripts/external/run-external-benchmark-step.mjs",
+          "command": "cd \"$THEAGENTCOMPANY_REPO_DIR\" && python -m pip install -r requirements.txt && python run.py --agent coworkany --suite long_horizon",
+          "requiredEnv": [
+            "THEAGENTCOMPANY_REPO_DIR"
+          ],
+          "workingDirMode": "the-agent-company-repo",
+          "critical": false,
+          "artifactsDir": "artifacts/composite-external/the-agent-company"
+        },
+        {
+          "id": "external-prereq",
+          "name": "外部基准运行前提检查",
+          "kind": "checklist",
+          "items": [
+            "COWORKANY_AGENT_URL 可用且指向可被外部基准调用的 agent 入口",
+            "外部基准环境已安装并通过 smoke 验证",
+            "必要凭据（SERPER/BRAVE/EXA/邮箱/API）已就绪",
+            "桌面端环境具备权限与会话恢复能力"
+          ]
+        }
+      ]
+    }
+  ]
+}

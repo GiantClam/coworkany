@@ -1,0 +1,328 @@
+{
+  "schema_version": "1.2.0",
+  "framework": "openclaw",
+  "model": "claude-sonnet-4-6",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick",
+  "scores": {
+    "overall": 61.4,
+    "tasks_total": 22,
+    "tasks_passed": 9,
+    "tasks_failed": 13,
+    "tasks_errored": 0,
+    "tasks_tested": 22,
+    "pass_rate": 40.9,
+    "pass_rate_tested": 40.9
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "other_error": 0,
+    "total_errors": 0
+  },
+  "task_results": [
+    {
+      "task_id": "comm-004",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 16.39,
+      "tokens_input": 36,
+      "tokens_output": 1243,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "cal-006",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 18.63,
+      "tokens_input": 52,
+      "tokens_output": 929,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "xdom-001",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 28.71,
+      "tokens_input": 146,
+      "tokens_output": 1704,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "code-001",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 29.14,
+      "tokens_input": 77,
+      "tokens_output": 1359,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "data-004",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 26.21,
+      "tokens_input": 15,
+      "tokens_output": 1241,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "doc-004",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 31.27,
+      "tokens_input": 79,
+      "tokens_output": 1553,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "debug-002",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 38.32,
+      "tokens_input": 79,
+      "tokens_output": 1902,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "db-002",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 65.05,
+      "tokens_input": 194,
+      "tokens_output": 2521,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "eml-004",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 26.51,
+      "tokens_input": 53,
+      "tokens_output": 1377,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "edu-001",
+      "passed": false,
+      "score": 0.0,
+      "duration_s": 49.34,
+      "tokens_input": 66,
+      "tokens_output": 1573,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "file-005",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 31.17,
+      "tokens_input": 38,
+      "tokens_output": 1331,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "math-002",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 59.57,
+      "tokens_input": 123,
+      "tokens_output": 2256,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "mem-002",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 63.34,
+      "tokens_input": 129,
+      "tokens_output": 2599,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "fin-008",
+      "passed": false,
+      "score": 0.0,
+      "duration_s": 96.61,
+      "tokens_input": 166,
+      "tokens_output": 1960,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "mm-002",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 38.86,
+      "tokens_input": 48,
+      "tokens_output": 1554,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "plan-002",
+      "passed": false,
+      "score": 0.0,
+      "duration_s": 55.89,
+      "tokens_input": 143,
+      "tokens_output": 1621,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "sec-004",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 40.44,
+      "tokens_input": 16,
+      "tokens_output": 1987,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "mag-001",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 128.99,
+      "tokens_input": 224,
+      "tokens_output": 6183,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "tool-002",
+      "passed": false,
+      "score": 0.0,
+      "duration_s": 58.29,
+      "tokens_input": 78,
+      "tokens_output": 1794,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "sys-004",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 31.53,
+      "tokens_input": 82,
+      "tokens_output": 1639,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "web-004",
+      "passed": false,
+      "score": 0.5,
+      "duration_s": 25.89,
+      "tokens_input": 83,
+      "tokens_output": 1209,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    },
+    {
+      "task_id": "wfl-003",
+      "passed": true,
+      "score": 1.0,
+      "duration_s": 54.02,
+      "tokens_input": 127,
+      "tokens_output": 2535,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla"
+    }
+  ],
+  "agent_profile": {
+    "model": "claude-sonnet-4-6",
+    "framework": "openclaw",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {},
+    "profile_id": "3938573d4d4060c7250549488e47260ea13fcef0629bb472502c93fb15fe7fe5",
+    "display_name": "openclaw / claude-sonnet-4-6"
+  },
+  "statistics": {
+    "total_tasks": 22,
+    "total_runs": 22,
+    "overall_pass_rate": 0.409091,
+    "overall_mean_score": 0.613636,
+    "overall_std_dev": 0.36717,
+    "confidence_interval_95": [
+      0.460206,
+      0.767067
+    ],
+    "per_domain": {
+      "calendar": 1.0,
+      "code-assistance": 0.5,
+      "communication": 0.5,
+      "cross-domain": 1.0,
+      "data-analysis": 1.0,
+      "database": 0.5,
+      "debugging": 0.5,
+      "document-editing": 0.5,
+      "education": 0.0,
+      "email": 0.5,
+      "file-operations": 1.0,
+      "financial-analysis": 0.0,
+      "math-reasoning": 0.5,
+      "memory": 1.0,
+      "multi-agent": 0.5,
+      "multimodal": 1.0,
+      "planning": 0.0,
+      "real-tools": 0.0,
+      "security": 1.0,
+      "system-admin": 1.0,
+      "web-browsing": 0.5,
+      "workflow-automation": 1.0
+    },
+    "per_level": {
+      "L2": 0.595238,
+      "L3": 1.0
+    },
+    "per_capability": {
+      "collaboration": 0.5,
+      "memory": 1.0,
+      "multimodal": 1.0,
+      "reasoning": 0.595238,
+      "tool-use": 0.578947
+    }
+  }
+}

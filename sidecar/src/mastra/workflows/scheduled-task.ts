@@ -1,5 +1,5 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 const SCHEDULED_RETRY_ATTEMPTS = 2;
 const SCHEDULED_RETRY_DELAY_MS = 250;

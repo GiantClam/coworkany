@@ -11,6 +11,18 @@ function read(filePath: string): string {
     return fs.readFileSync(filePath, 'utf-8');
 }
 
+function hasTrackedPathEntry(targetPath: string): boolean {
+    const relativePath = path.relative(SIDECAR_ROOT, targetPath).split(path.sep).join('/');
+    if (relativePath.startsWith('..')) {
+        return fs.existsSync(targetPath);
+    }
+    const result = execSync(`git ls-files -- "${relativePath}"`, {
+        cwd: SIDECAR_ROOT,
+        encoding: 'utf-8',
+    }).trim();
+    return result.length > 0;
+}
+
 describe('Phase 6 Final Validation (implemented milestones)', () => {
     test('main.ts is a thin runtime bootstrap', () => {
         const mainPath = path.join(SRC_ROOT, 'main.ts');
@@ -116,7 +128,7 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         }
     });
 
-    test('legacy runtime module directories are removed from sidecar source tree', () => {
+    test('legacy runtime module directories are removed from tracked sidecar source tree', () => {
         const removedDirs = [
             path.join(SRC_ROOT, 'agent'),
             path.join(SRC_ROOT, 'execution'),
@@ -125,7 +137,7 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
             path.join(SRC_ROOT, 'services'),
         ];
         for (const directoryPath of removedDirs) {
-            expect(fs.existsSync(directoryPath)).toBe(false);
+            expect(hasTrackedPathEntry(directoryPath)).toBe(false);
         }
     });
 

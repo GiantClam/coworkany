@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 export const DANGEROUS_PATTERNS: RegExp[] = [
     /\brm\s+-rf\s+\/?\s*$/i,
     /\brm\s+-rf\s+~\//i,
@@ -44,6 +44,7 @@ async function executeShellCommand(input: {
             env: {
                 ...process.env,
                 LANG: 'en_US.UTF-8',
+                PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE ?? '1',
             },
             shell: true,
             stdio: ['ignore', 'pipe', 'pipe'],

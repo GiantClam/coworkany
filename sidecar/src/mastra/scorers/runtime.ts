@@ -146,6 +146,15 @@ export const runtimeScorers: MastraScorers = {
     },
 };
 
+export const runtimeScorerRegistry = {
+    coworkanyRuntimeCompletion: completionScore,
+    coworkanyRuntimeSafety: safetyScore,
+    coworkanyRuntimeRelevance: relevanceScore,
+    coworkanyLoopHasAnswer: completionScorerForLoop,
+    coworkanyLoopToolsSettled: completionToolSettledForLoop,
+    coworkanyLoopIterationGuard: completionIterationGuardForLoop,
+};
+
 export const supervisorIsTaskCompleteScorers = [
     completionScorerForLoop,
     completionToolSettledForLoop,

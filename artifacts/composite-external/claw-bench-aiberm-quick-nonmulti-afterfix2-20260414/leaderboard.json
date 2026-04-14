@@ -1,0 +1,181 @@
+{
+  "framework": "coworkany-sidecar",
+  "model": "aiberm/claude-sonnet-4-6",
+  "overall": 99.54,
+  "effectiveOverall": 99.54,
+  "taskCompletion": 91.67,
+  "effectiveTaskCompletion": 91.67,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 99.54,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
+  "metadata": {
+    "runs_per_task": 1,
+    "total_tasks": 12,
+    "invalid_tasks": 0,
+    "effective_tasks": 12,
+    "overall_pass_rate_raw": 0.9167,
+    "overall_pass_rate_effective": 0.9167,
+    "overall_mean_score_raw": 0.9954,
+    "overall_mean_score_effective": 0.9954
+  },
+  "taskDetails": [
+    {
+      "taskId": "comm-004",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "debug-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "code-001",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "eml-004",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "db-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "fin-008",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "doc-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.9444,
+      "stdDev": 0,
+      "ci95": [
+        0.9444,
+        0.9444
+      ]
+    },
+    {
+      "taskId": "edu-001",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "web-004",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "math-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "plan-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "tool-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    }
+  ]
+}

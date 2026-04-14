@@ -1,0 +1,51 @@
+{
+  "framework": "coworkany-sidecar",
+  "model": "aiberm/claude-sonnet-4-6",
+  "overall": 97.22,
+  "effectiveOverall": 97.22,
+  "taskCompletion": 50,
+  "effectiveTaskCompletion": 50,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 97.22,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
+  "metadata": {
+    "runs_per_task": 1,
+    "total_tasks": 2,
+    "invalid_tasks": 0,
+    "effective_tasks": 2,
+    "overall_pass_rate_raw": 0.5,
+    "overall_pass_rate_effective": 0.5,
+    "overall_mean_score_raw": 0.9722,
+    "overall_mean_score_effective": 0.9722
+  },
+  "taskDetails": [
+    {
+      "taskId": "doc-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.9444,
+      "stdDev": 0,
+      "ci95": [
+        0.9444,
+        0.9444
+      ]
+    },
+    {
+      "taskId": "edu-001",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    }
+  ]
+}

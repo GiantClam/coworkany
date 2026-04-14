@@ -81,8 +81,7 @@ describe('start_task config initialization order (e2e)', () => {
                     const afterStart = stderr.slice(startIdx);
                     const loadIdx = afterStart.indexOf(`[LlmConfig] Loaded config from ${configPath}`);
                     const serperIdx = afterStart.indexOf('[WebSearch] Trying Serper.dev search...');
-                    const searxIdx = afterStart.indexOf('[WebSearch] Fetching SearXNG instances from searx.space...');
-                    const searchIdxCandidates = [serperIdx, searxIdx].filter((idx) => idx >= 0);
+                    const searchIdxCandidates = [serperIdx].filter((idx) => idx >= 0);
                     if (loadIdx < 0 || searchIdxCandidates.length === 0) return false;
 
                     const firstSearchIdx = Math.min(...searchIdxCandidates);
@@ -97,8 +96,7 @@ describe('start_task config initialization order (e2e)', () => {
 
             const loadIdx = afterStart.indexOf(`[LlmConfig] Loaded config from ${configPath}`);
             const serperIdx = afterStart.indexOf('[WebSearch] Trying Serper.dev search...');
-            const searxIdx = afterStart.indexOf('[WebSearch] Fetching SearXNG instances from searx.space...');
-            const searchIdxCandidates = [serperIdx, searxIdx].filter((idx) => idx >= 0);
+            const searchIdxCandidates = [serperIdx].filter((idx) => idx >= 0);
             const firstSearchIdx = searchIdxCandidates.length > 0 ? Math.min(...searchIdxCandidates) : -1;
 
             expect(loadIdx).toBeGreaterThanOrEqual(0);
@@ -111,4 +109,3 @@ describe('start_task config initialization order (e2e)', () => {
         }
     }, 120_000);
 });
-

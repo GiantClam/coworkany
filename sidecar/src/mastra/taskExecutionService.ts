@@ -9,6 +9,7 @@ import { createTelemetryRunContext } from './telemetry';
 import { TaskContextCompressionStore } from './contextCompression';
 import { resolveMissingApiKeyForModel } from '../ipc/streaming';
 import { classifyRuntimeErrorMessage } from './runtimeErrorClassifier';
+import { resolveRuntimeModelId } from './model/runtimeModel';
 
 type TaskExecutionMode = 'direct' | 'workflow';
 const contextCompressionStore = new TaskContextCompressionStore();
@@ -274,7 +275,10 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
             recalledMemoryFiles,
         });
     }
-    const modelId = process.env.COWORKANY_MODEL || DEFAULT_MODEL_ID;
+    const modelId = resolveRuntimeModelId(
+        input.executionOptions?.modelId,
+        DEFAULT_MODEL_ID,
+    );
     const missingApiKey = resolveMissingApiKeyForModel(modelId);
     if (missingApiKey) {
         const failureMessage = `missing_api_key:${missingApiKey}`;

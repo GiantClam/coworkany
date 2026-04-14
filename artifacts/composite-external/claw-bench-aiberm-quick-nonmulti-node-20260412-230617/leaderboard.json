@@ -1,0 +1,64 @@
+{
+  "framework": "coworkany-sidecar",
+  "model": "openai/claude-sonnet-4-6",
+  "overall": 66.67,
+  "effectiveOverall": 100,
+  "taskCompletion": 66.67,
+  "effectiveTaskCompletion": 100,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 66.67,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
+  "metadata": {
+    "runs_per_task": 1,
+    "total_tasks": 3,
+    "invalid_tasks": 1,
+    "effective_tasks": 2,
+    "overall_pass_rate_raw": 0.6667,
+    "overall_pass_rate_effective": 1,
+    "overall_mean_score_raw": 0.6667,
+    "overall_mean_score_effective": 1
+  },
+  "taskDetails": [
+    {
+      "taskId": "comm-004",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "doc-004",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "edu-001",
+      "status": "skipped_invalid",
+      "invalid": true,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    }
+  ]
+}

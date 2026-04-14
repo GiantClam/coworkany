@@ -36,4 +36,18 @@ describe('runtimeErrorClassifier', () => {
         expect(classified.recoverable).toBe(true);
         expect(classified.failureClass).toBe('retryable');
     });
+
+    test('classifies insufficient quota as blocked quota exceeded', () => {
+        const classified = classifyRuntimeErrorMessage('insufficient_user_quota');
+        expect(classified.errorCode).toBe('PROVIDER_QUOTA_EXCEEDED');
+        expect(classified.recoverable).toBe(false);
+        expect(classified.failureClass).toBe('blocked');
+    });
+
+    test('classifies Chinese quota exceeded message as blocked quota exceeded', () => {
+        const classified = classifyRuntimeErrorMessage('用户额度不足, 剩余额度: ＄-0.001');
+        expect(classified.errorCode).toBe('PROVIDER_QUOTA_EXCEEDED');
+        expect(classified.recoverable).toBe(false);
+        expect(classified.failureClass).toBe('blocked');
+    });
 });

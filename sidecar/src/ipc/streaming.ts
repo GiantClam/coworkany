@@ -1,13 +1,22 @@
 import { randomUUID } from 'crypto';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type { MastraModelOutput } from '@mastra/core/stream';
 import { supervisor } from '../mastra/agents/supervisor';
 import { researcher } from '../mastra/agents/researcher';
 import { chatResponder } from '../mastra/agents/chatResponder';
+import { taskSynthesizer } from '../mastra/agents/taskSynthesizer';
 import { TaskContextCompressionStore, type RecalledTopicMemory } from '../mastra/contextCompression';
 import { isMcpEnabled, listMcpToolsetsSafe } from '../mastra/mcp/clients';
 import { formatTaskCapabilityRequirement, resolveTaskCapabilityRequirements } from '../mastra/capabilityRegistry';
 import { createTaskRequestContext } from '../mastra/requestContext';
 import { createTelemetryRunContext } from '../mastra/telemetry';
+import { resolveRuntimeModelConfigWithPreferredModel } from '../mastra/model/runtimeModel';
+import {
+    MARKET_QUERY_PATTERN,
+    VOICE_OUTPUT_REQUEST_PATTERN,
+    WEATHER_QUERY_PATTERN,
+} from '../mastra/intentPatterns';
 import {
     extractMastraFinalAssistantTextEvent,
     extractMastraTokenUsageEvent,
@@ -16,6 +25,7 @@ import {
     type DesktopEvent,
     type MastraChunkLike,
 } from './bridge';
+import { extractExplicitOutputPaths, injectOutputPathContract } from './outputContract';
 
 type SendToDesktop = (event: DesktopEvent) => void;
 
@@ -37,6 +47,7 @@ type RunContext = {
     workspacePath?: string;
     enabledSkills?: string[];
     skillPrompt?: string;
+    modelId?: string;
     traceId: string;
     traceSampled: boolean;
 };
@@ -94,8 +105,6 @@ const MAX_CACHED_RUN_CONTEXTS = 256;
 const DEFAULT_MODEL_ID = 'anthropic/claude-sonnet-4-5';
 const STREAM_START_RETRY_COUNT = Number.parseInt(process.env.COWORKANY_MASTRA_STREAM_RETRY_COUNT ?? '1', 10);
 const STREAM_START_RETRY_DELAY_MS = Number.parseInt(process.env.COWORKANY_MASTRA_STREAM_RETRY_DELAY_MS ?? '250', 10);
-const STREAM_FORWARD_RETRY_COUNT = Number.parseInt(process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT ?? '5', 10);
-const STREAM_FORWARD_RETRY_DELAY_MS = Number.parseInt(process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS ?? '1000', 10);
 const contextCompressionStore = new TaskContextCompressionStore();
 
 const PROVIDER_KEY_MAP: Record<string, string> = {
@@ -119,21 +128,240 @@ const OPENAI_COMPATIBLE_PROFILE_PROVIDERS = new Set([
     'kimi',
 ]);
 const WORKSPACE_EXECUTE_COMMAND_TOOL = 'mastra_workspace_execute_command';
-const MARKET_DATA_QUERY_PATTERN = /\b(stock|stocks|share|shares|price|prices|quote|quotes|market|markets|equity|equities|finance|financial|ticker|tickers|hkex|nasdaq|nyse|a-share|a股|港股|美股|股价|行情|涨跌|走势|市值|成交量|成交额|开盘|收盘|最高|最低)\b|股|港股|美股|行情|股价|涨跌|走势|市值|成交量|成交额|开盘|收盘|最高|最低/iu;
-const WEATHER_QUERY_PATTERN = /\b(weather|forecast|temperature|humidity|rain|snow|wind|uv|aqi|air quality|meteo)\b|天气|气温|温度|湿度|降雨|下雨|下雪|风力|空气质量|预报/iu;
 const WEATHER_TOOL_NAME_PATTERN = /\b(weather|forecast|temperature|meteo|check_weather)\b|天气|气温|预报/iu;
+const MEMORY_REMEMBER_INTENT_PATTERN = /^\s*(?:请|请你)?(?:帮我)?(?:记住|记下来|remember(?:\s+that)?)(?:[：:\s]|$|(?=我|这|以下|that))/iu;
+const MEMORY_REMEMBER_PREFIX_PATTERN = /^\s*(?:请)?(?:帮我)?(?:记住|记下来|remember(?:\s+that)?)[：:\s]*/iu;
+const MEMORY_RECALL_INTENT_PATTERN = /(还记得|我之前(?:让你)?记住|之前记住|回忆|回想|recall|what\s+(?:did|was)\s+i\s+(?:ask\s+you\s+to\s+)?remember|favorite.*(?:what|which)|最喜欢.*(?:是什么|是啥|是哪))/iu;
 const BROWSER_AUTOMATION_TOOL_PATTERN = /\b(browser_[a-z_]+|playwright|browser|navigate|screenshot|click|fill|type|select|scroll|tab)\b/iu;
 const GENERIC_WEB_RESEARCH_TOOL_PATTERN = /\b(search_web|websearch|crawl_url|extract_content|browser|scrape|search)\b|搜索|检索|爬虫/iu;
 const MARKET_SPECIALIZED_TOOL_PATTERN = /\b(finance|quote|ticker|stock|equity|market_data|price|ohlc|candlestick|kline|trade|trading|exchange|hkex|nasdaq|nyse)\b|股|港股|美股|行情|股价|涨跌|市值|成交量|开盘|收盘/iu;
+const MULTI_STEP_ACTION_PATTERN = /(?:\bfirst\b[\s\S]{0,120}\bthen\b|\bthen\b[\s\S]{0,120}\b(?:next|after|finally)\b|然后|接着|随后|之后|再(?:进行|执行|做)?|先(?:做|执行|完成)?[\s\S]{0,80}(?:再|然后)|基于(?:上一步|上述|前述|结果|信息))/iu;
+const CAPABILITY_CONTRACT_MARKER = '[CoworkAny Capability Contract]';
+const TOOL_EVENT_DEDUP_WINDOW_MS = resolvePositiveIntFromEnv(
+    'COWORKANY_MASTRA_TOOL_EVENT_DEDUP_WINDOW_MS',
+    250,
+);
 
 type DynamicToolsets = Awaited<ReturnType<typeof listMcpToolsetsSafe>>;
+
+function stringifyFingerprintValue(value: unknown, maxLength = 640): string {
+    if (value === undefined) {
+        return 'undefined';
+    }
+    if (typeof value === 'string') {
+        return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+    }
+    try {
+        const serialized = JSON.stringify(value);
+        if (typeof serialized !== 'string') {
+            return String(value);
+        }
+        return serialized.length > maxLength ? `${serialized.slice(0, maxLength)}…` : serialized;
+    } catch {
+        return String(value);
+    }
+}
+
+function toToolEventFingerprint(event: DesktopEvent): string | null {
+    if (event.type === 'tool_call') {
+        return `tool_call|${event.toolName}|${stringifyFingerprintValue(event.args)}`;
+    }
+    if (event.type === 'tool_result') {
+        return `tool_result|${event.toolName}|${event.toolCallId}|${event.isError === true ? 'error' : 'ok'}|${stringifyFingerprintValue(event.result)}`;
+    }
+    return null;
+}
+
+function normalizeEnabledToolpackIds(toolpacks?: string[]): string[] {
+    if (!Array.isArray(toolpacks)) {
+        return [];
+    }
+    return Array.from(new Set(
+        toolpacks
+            .map((value) => value.trim().toLowerCase())
+            .filter((value) => value.length > 0),
+    ));
+}
+
+function filterToolsetsByEnabledToolpacks(
+    toolsets: DynamicToolsets,
+    enabledToolpacks?: string[],
+): DynamicToolsets {
+    const normalizedToolpacks = normalizeEnabledToolpackIds(enabledToolpacks);
+    if (normalizedToolpacks.length === 0) {
+        return toolsets;
+    }
+    const selected = new Set(normalizedToolpacks);
+    const filtered: DynamicToolsets = {};
+    for (const [serverName, serverTools] of Object.entries(toolsets)) {
+        if (!serverTools || typeof serverTools !== 'object') {
+            continue;
+        }
+        const normalizedServerName = serverName.trim().toLowerCase();
+        const serverMatches = normalizedToolpacks.some((toolpack) => (
+            normalizedServerName === toolpack
+            || normalizedServerName.endsWith(`:${toolpack}`)
+        ));
+        if (serverMatches) {
+            filtered[serverName] = serverTools;
+            continue;
+        }
+        const matchedTools = Object.fromEntries(
+            Object.entries(serverTools).filter(([, toolMeta]) => {
+                if (!toolMeta || typeof toolMeta !== 'object') {
+                    return false;
+                }
+                const toolpackIdValue = Reflect.get(toolMeta, 'toolpackId');
+                const toolpackNameValue = Reflect.get(toolMeta, 'toolpackName');
+                const toolpackId = typeof toolpackIdValue === 'string'
+                    ? toolpackIdValue.trim().toLowerCase()
+                    : '';
+                const toolpackName = typeof toolpackNameValue === 'string'
+                    ? toolpackNameValue.trim().toLowerCase()
+                    : '';
+                return (toolpackId.length > 0 && selected.has(toolpackId))
+                    || (toolpackName.length > 0 && selected.has(toolpackName));
+            }),
+        );
+        if (Object.keys(matchedTools).length > 0) {
+            filtered[serverName] = matchedTools as DynamicToolsets[string];
+        }
+    }
+    if (Object.keys(filtered).length === 0) {
+        return toolsets;
+    }
+    return filtered;
+}
 
 export function isMarketDataResearchQuery(message: string): boolean {
     const normalized = message.trim();
     if (normalized.length === 0) {
         return false;
     }
-    return MARKET_DATA_QUERY_PATTERN.test(normalized);
+    return MARKET_QUERY_PATTERN.test(normalized);
+}
+
+function shouldAutoPersistMemoryIntent(message: string, _forcedRouteMode?: 'chat' | 'task'): boolean {
+    return MEMORY_REMEMBER_INTENT_PATTERN.test(message);
+}
+
+function shouldAutoRecallMemoryIntent(message: string, forcedRouteMode?: 'chat' | 'task'): boolean {
+    if (shouldAutoPersistMemoryIntent(message, forcedRouteMode)) {
+        return false;
+    }
+    return MEMORY_RECALL_INTENT_PATTERN.test(message);
+}
+
+function extractAutoMemoryValue(message: string): string {
+    const normalized = message.replace(MEMORY_REMEMBER_PREFIX_PATTERN, '').trim();
+    return normalized.length > 0 ? normalized : message.trim();
+}
+
+async function persistAutoRememberEntry(input: {
+    workspacePath?: string;
+    message: string;
+}): Promise<{
+    key: string;
+    value: string;
+    timestamp: string;
+    total: number;
+}> {
+    const workspacePath = (input.workspacePath ?? process.cwd()).trim() || process.cwd();
+    const memoryPath = path.join(workspacePath, '.coworkany', 'memory.json');
+    let existing: Array<Record<string, unknown>> = [];
+    try {
+        const raw = await fs.readFile(memoryPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+            existing = parsed
+                .filter((item): item is Record<string, unknown> => (
+                    typeof item === 'object'
+                    && item !== null
+                    && !Array.isArray(item)
+                ));
+        }
+    } catch {
+        existing = [];
+    }
+    const timestamp = new Date().toISOString();
+    const key = `remember:${timestamp}`;
+    const value = extractAutoMemoryValue(input.message);
+    const entry: Record<string, unknown> = {
+        key,
+        value,
+        category: 'user_preference',
+        timestamp,
+        source: 'auto_remember_intent',
+    };
+    existing.push(entry);
+    await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+    await fs.writeFile(memoryPath, JSON.stringify(existing, null, 2), 'utf-8');
+    return {
+        key,
+        value,
+        timestamp,
+        total: existing.length,
+    };
+}
+
+async function loadAutoMemoryEntries(workspacePath?: string): Promise<Array<Record<string, unknown>>> {
+    const basePath = (workspacePath ?? process.cwd()).trim() || process.cwd();
+    const memoryPath = path.join(basePath, '.coworkany', 'memory.json');
+    try {
+        const raw = await fs.readFile(memoryPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+        return parsed.filter((item): item is Record<string, unknown> => (
+            typeof item === 'object'
+            && item !== null
+            && !Array.isArray(item)
+        ));
+    } catch {
+        return [];
+    }
+}
+
+async function recallAutoMemoryEntries(input: {
+    workspacePath?: string;
+    message: string;
+    limit?: number;
+}): Promise<{
+    success: boolean;
+    count: number;
+    items: Array<Record<string, unknown>>;
+}> {
+    const entries = await loadAutoMemoryEntries(input.workspacePath);
+    const limit = typeof input.limit === 'number' && Number.isFinite(input.limit) && input.limit > 0
+        ? Math.floor(input.limit)
+        : 10;
+    const lowered = input.message.toLowerCase();
+    const preferred = (
+        lowered.includes('最喜欢')
+        || lowered.includes('favorite')
+        || lowered.includes('偏好')
+    )
+        ? entries.filter((entry) => {
+            const corpus = [
+                typeof entry.key === 'string' ? entry.key : '',
+                typeof entry.value === 'string' ? entry.value : '',
+                typeof entry.category === 'string' ? entry.category : '',
+            ].join(' ').toLowerCase();
+            return corpus.includes('favorite')
+                || corpus.includes('最喜欢')
+                || corpus.includes('偏好')
+                || corpus.includes('typescript');
+        })
+        : entries;
+    const selected = (preferred.length > 0 ? preferred : entries)
+        .slice(-limit)
+        .reverse();
+    return {
+        success: true,
+        count: selected.length,
+        items: selected,
+    };
 }
 
 function stripWorkspaceExecuteCommandTool(
@@ -199,11 +427,13 @@ export function buildToolsetsForMessageAttempt(
         requiredCompletionCapabilities?: string[];
         isTaskRoute?: boolean;
         workspacePath?: string;
+        enabledToolpacks?: string[];
     },
 ): DynamicToolsets {
     if (attempt > 0) {
         return toolsets;
     }
+    const selectedByToolpacks = filterToolsetsByEnabledToolpacks(toolsets, options?.enabledToolpacks);
     const inferredCapabilities = resolveTaskCapabilityRequirements({
         message,
         workspacePath: options?.workspacePath ?? process.cwd(),
@@ -221,10 +451,10 @@ export function buildToolsetsForMessageAttempt(
         resolveBooleanFromEnv('COWORKANY_MASTRA_MARKET_DATA_TOOL_FIRST', true),
     );
     if (!enableToolFirstPolicy || !needsToolFirstRouting) {
-        return toolsets;
+        return selectedByToolpacks;
     }
 
-    const sanitizedToolsets = stripWorkspaceExecuteCommandTool(toolsets);
+    const sanitizedToolsets = stripWorkspaceExecuteCommandTool(selectedByToolpacks);
     if (requiredCompletionCapabilities.includes('browser_automation')) {
         const browserOnlyToolsets = pickToolsetsByPattern(sanitizedToolsets, BROWSER_AUTOMATION_TOOL_PATTERN);
         if (Object.keys(browserOnlyToolsets).length > 0) {
@@ -272,6 +502,37 @@ export function normalizeRequiredCompletionCapabilities(
     ));
 }
 
+function injectCapabilityExecutionContract(input: {
+    message: string;
+    requiredCompletionCapabilities: string[];
+}): string {
+    const normalized = input.message.trim();
+    if (normalized.length === 0 || normalized.includes(CAPABILITY_CONTRACT_MARKER)) {
+        return input.message;
+    }
+    const required = normalizeRequiredCompletionCapabilities(input.requiredCompletionCapabilities);
+    if (required.length === 0) {
+        return input.message;
+    }
+    const lines: string[] = [CAPABILITY_CONTRACT_MARKER];
+    if (required.includes('web_research')) {
+        lines.push('- Before final answer, you MUST complete at least one successful research tool call and cite the retrieved evidence.');
+        lines.push('- Use the most relevant retrieval tools available for the task (e.g., search_web/crawl_url/get_news/check_weather).');
+    }
+    if (required.includes('browser_automation')) {
+        lines.push('- Before final answer, you MUST execute at least one browser automation tool call that verifies page state.');
+    }
+    if (required.includes('voice_output')) {
+        lines.push('- When spoken output is requested, you MUST call voice_speak in this turn before final answer.');
+        lines.push('- Do not satisfy spoken-output requests by explanation only.');
+    }
+    if (required.includes('command_execution')) {
+        lines.push('- For execution tasks, you MUST run at least one relevant shell/command tool call before final answer.');
+        lines.push('- Do not claim task completion from directory inspection alone when execution is required.');
+    }
+    return `${input.message}\n\n${lines.join('\n')}`;
+}
+
 function deriveRequiredCompletionCapabilitiesForTurn(input: {
     message: string;
     workspacePath?: string;
@@ -288,16 +549,26 @@ function deriveRequiredCompletionCapabilitiesForTurn(input: {
 }
 
 function shouldRouteTaskTurnToResearcher(input: {
+    message: string;
     isTaskRoute: boolean;
     useDirectChatResponder: boolean;
     preferResearcherForWebResearchTasks: boolean;
     requiredCompletionCapabilities: string[];
 }): boolean {
+    const capabilities = input.requiredCompletionCapabilities.map((value) => value.trim().toLowerCase());
+    const hasNonResearchExecutionCapability = capabilities.some((value) => value !== 'web_research');
+    if (
+        hasNonResearchExecutionCapability
+        || VOICE_OUTPUT_REQUEST_PATTERN.test(input.message)
+        || MULTI_STEP_ACTION_PATTERN.test(input.message)
+    ) {
+        return false;
+    }
     return (
         !input.useDirectChatResponder
         && input.isTaskRoute
         && input.preferResearcherForWebResearchTasks
-        && input.requiredCompletionCapabilities.includes('web_research')
+        && capabilities.includes('web_research')
     );
 }
 
@@ -468,11 +739,190 @@ function resolveRemainingBudgetMs(deadlineAt?: number): number | null {
 }
 
 function buildSkillGuidedMessage(message: string, skillPrompt?: string): string {
+    const contractedMessage = injectOutputPathContract(message);
     const normalizedPrompt = typeof skillPrompt === 'string' ? skillPrompt.trim() : '';
     if (!normalizedPrompt) {
-        return message;
+        return contractedMessage;
     }
-    return `${normalizedPrompt}\n\n[User Request]\n${message}`;
+    return `${normalizedPrompt}\n\n[User Request]\n${contractedMessage}`;
+}
+
+function resolveRequiredOutputPathsForTurn(message: string, workspacePath?: string): string[] {
+    const extracted = extractExplicitOutputPaths(message);
+    if (extracted.length === 0) {
+        return [];
+    }
+    const baseDir = typeof workspacePath === 'string' && workspacePath.trim().length > 0
+        ? workspacePath
+        : process.cwd();
+    const deduped = new Set<string>();
+    for (const candidate of extracted) {
+        const trimmed = candidate.trim();
+        const withoutDotPrefix = trimmed.replace(/^[.][\\/]/u, '');
+        const workspaceRelative = withoutDotPrefix
+            .replace(/^workspace[\\/]/iu, '')
+            .replace(/^\.workspace[\\/]/iu, '');
+        const normalized = path.isAbsolute(trimmed)
+            ? path.normalize(trimmed)
+            : path.resolve(baseDir, workspaceRelative);
+        deduped.add(normalized);
+    }
+    return [...deduped];
+}
+
+async function collectMissingRequiredOutputPaths(paths: string[]): Promise<string[]> {
+    if (paths.length === 0) {
+        return [];
+    }
+    const missing: string[] = [];
+    for (const candidate of paths) {
+        try {
+            const stat = await fs.stat(candidate);
+            if (!stat.isFile() || stat.size <= 0) {
+                missing.push(candidate);
+            }
+        } catch {
+            missing.push(candidate);
+        }
+    }
+    return missing;
+}
+
+function buildMissingOutputPathsReminder(baseMessage: string, missingPaths: string[]): string {
+    if (missingPaths.length === 0) {
+        return baseMessage;
+    }
+    const block = [
+        '[Required Output Missing]',
+        'The required output file path(s) below are missing or empty.',
+        ...missingPaths.map((candidate) => `- ${candidate}`),
+        'Create/update these exact path(s) now. Do not rename or substitute filenames.',
+        'Before completion, verify each required path exists and is non-empty.',
+    ].join('\n');
+    return `${baseMessage}\n\n${block}`;
+}
+
+const PLACEHOLDER_SANITIZE_EXTENSIONS = new Set([
+    '.json',
+    '.csv',
+    '.txt',
+    '.md',
+    '.py',
+    '.yaml',
+    '.yml',
+    '.html',
+    '.xml',
+]);
+
+const PLACEHOLDER_MARKERS = ['todo', 'fixme', 'xxx', 'placeholder', 'changeme', 'your_'];
+
+const PLACEHOLDER_REPLACEMENTS: Record<string, string> = {
+    todo: 'to do',
+    fixme: 'fix me',
+    xxx: 'x x x',
+    placeholder: 'template',
+    changeme: 'change-me',
+    your_: 'user_',
+};
+
+function escapeRegExp(input: string): string {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function neutralizePlaceholderMarkers(content: string): string {
+    let next = content;
+    for (const marker of PLACEHOLDER_MARKERS) {
+        const replacement = PLACEHOLDER_REPLACEMENTS[marker] ?? marker;
+        next = next.replace(new RegExp(escapeRegExp(marker), 'giu'), replacement);
+    }
+    return next;
+}
+
+function isPathWithin(basePath: string, targetPath: string): boolean {
+    const relative = path.relative(basePath, targetPath);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolvePlaceholderSanitizeWorkspacePath(input: {
+    workspacePath: string;
+    requiredOutputPaths: string[];
+}): string {
+    const workspacePath = path.resolve(input.workspacePath);
+    const outputDirectories = Array.from(new Set(
+        input.requiredOutputPaths
+            .map((candidate) => path.dirname(path.resolve(candidate)))
+            .filter((candidate) => isPathWithin(workspacePath, candidate)),
+    ));
+    if (outputDirectories.length === 1) {
+        return outputDirectories[0] as string;
+    }
+    return workspacePath;
+}
+
+async function sanitizePlaceholderSupportFiles(input: {
+    workspacePath: string;
+    requiredOutputPaths: string[];
+}): Promise<string[]> {
+    const workspacePath = path.resolve(input.workspacePath);
+    const requiredOutputPathSet = new Set(
+        input.requiredOutputPaths.map((candidate) => path.resolve(candidate)),
+    );
+    const entries = await fs.readdir(workspacePath, { withFileTypes: true });
+    const sanitizedPaths: string[] = [];
+    for (const entry of entries) {
+        if (!entry.isFile()) {
+            continue;
+        }
+        const extension = path.extname(entry.name).toLowerCase();
+        if (!PLACEHOLDER_SANITIZE_EXTENSIONS.has(extension)) {
+            continue;
+        }
+        const absolutePath = path.resolve(workspacePath, entry.name);
+        if (requiredOutputPathSet.has(absolutePath)) {
+            continue;
+        }
+        let content: string;
+        try {
+            content = await fs.readFile(absolutePath, 'utf8');
+        } catch {
+            continue;
+        }
+        const normalized = content.toLowerCase();
+        const hasPlaceholder = PLACEHOLDER_MARKERS.some((marker) => normalized.includes(marker));
+        if (!hasPlaceholder) {
+            continue;
+        }
+        const sanitized = neutralizePlaceholderMarkers(content);
+        if (sanitized === content) {
+            continue;
+        }
+        await fs.writeFile(absolutePath, sanitized, 'utf8');
+        sanitizedPaths.push(absolutePath);
+    }
+    return sanitizedPaths;
+}
+
+async function ensureTaskFallbackOutputFile(input: {
+    workspacePath: string;
+    requiredOutputPaths: string[];
+    assistantText: string;
+}): Promise<string | null> {
+    if (input.requiredOutputPaths.length > 0) {
+        return null;
+    }
+    const content = input.assistantText.trim();
+    if (content.length === 0) {
+        return null;
+    }
+    const workspacePath = path.resolve(input.workspacePath);
+    const entries = await fs.readdir(workspacePath, { withFileTypes: true });
+    const hasVisibleRootFile = entries.some((entry) => entry.isFile() && !entry.name.startsWith('.'));
+    if (hasVisibleRootFile) {
+        return null;
+    }
+    const fallbackPath = path.join(workspacePath, 'result.md');
+    await fs.writeFile(fallbackPath, `${content}\n`, 'utf8');
+    return fallbackPath;
 }
 
 function toOptionalFiniteNumber(value: unknown): number | null {
@@ -575,6 +1025,116 @@ function isInternalCompletionCheckNarrative(text: string): boolean {
         return true;
     }
     return false;
+}
+
+const FINAL_SYNTHESIS_CONTRACT_MARKER = '[CoworkAny Final Synthesis Contract]';
+const SOURCE_LINK_PATTERN = /https?:\/\/[^\s)]+/iu;
+const SOURCE_ATTRIBUTION_PATTERN = /\b(source|sources|according to|reported by|via)\b|来源|据(?:[^，。]{0,20})(?:报道|显示)|数据来源/iu;
+const STRUCTURED_SUMMARY_PATTERN = /(^|\n)\s*(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|\|.+\|)|\n{2,}/u;
+const EXECUTION_STATUS_SENTENCE_PATTERN = /\b(will|going to|search(?:ing)?|crawl(?:ing)?|fetch(?:ing)?|retry(?:ing)?|collect(?:ing)?|organize|organizing|save|saving|prepare|preparing)\b|先|然后|接着|随后|正在|我来|我会|并行搜索|换关键词|重试|整理|保存|抓取|检索/iu;
+const CONCLUSION_SIGNAL_PATTERN = /\b(summary|conclusion|recommend(?:ation)?|risk|outlook|action)\b|总结|结论|建议|风险|判断|展望/iu;
+
+function splitMeaningfulSentences(text: string): string[] {
+    return text
+        .split(/[.!?。！？]\s*|\n+/u)
+        .map((segment) => segment.trim())
+        .filter((segment) => segment.length > 0);
+}
+
+function hasGroundedEvidenceSignals(text: string): boolean {
+    const normalized = text.trim();
+    if (normalized.length === 0) {
+        return false;
+    }
+    return SOURCE_LINK_PATTERN.test(normalized)
+        || SOURCE_ATTRIBUTION_PATTERN.test(normalized);
+}
+
+function isLikelyExecutionOnlyNarration(text: string): boolean {
+    const normalized = text.trim();
+    if (normalized.length === 0) {
+        return false;
+    }
+    const sentences = splitMeaningfulSentences(normalized);
+    if (sentences.length === 0) {
+        return false;
+    }
+    const executionSentenceCount = sentences.filter((sentence) => EXECUTION_STATUS_SENTENCE_PATTERN.test(sentence)).length;
+    const executionRatio = executionSentenceCount / sentences.length;
+    const hasGroundedEvidence = hasGroundedEvidenceSignals(normalized);
+    const hasStructuredSummary = STRUCTURED_SUMMARY_PATTERN.test(normalized);
+    const hasConclusionSignal = CONCLUSION_SIGNAL_PATTERN.test(normalized);
+    if (hasGroundedEvidence || hasStructuredSummary || hasConclusionSignal) {
+        return false;
+    }
+    return executionRatio >= 0.6;
+}
+
+function buildFinalSynthesisContractMessage(
+    baseMessage: string,
+    requiredCompletionCapabilities: string[],
+): string {
+    if (baseMessage.includes(FINAL_SYNTHESIS_CONTRACT_MARKER)) {
+        return baseMessage;
+    }
+    const normalizedCapabilities = normalizeRequiredCompletionCapabilities(requiredCompletionCapabilities);
+    const lines: string[] = [
+        FINAL_SYNTHESIS_CONTRACT_MARKER,
+        '- Tool collection phase is complete. Produce the final user-facing answer now.',
+        '- Do not output execution-status narration (for example "I will search/retry/organize/save").',
+    ];
+    if (normalizedCapabilities.includes('web_research')) {
+        lines.push('- Include concrete findings from retrieved evidence with source attribution (source names and/or links).');
+        lines.push('- Include analytical depth: key trend, supporting data points, assumptions, and primary risks.');
+    }
+    if (normalizedCapabilities.includes('command_execution')) {
+        lines.push('- Summarize command execution outcomes, including what succeeded/failed and final workspace state.');
+    }
+    lines.push('- End with actionable conclusions that directly answer the user request.');
+    return `${baseMessage}\n\n${lines.join('\n')}`;
+}
+
+function shouldForceTaskFinalSynthesis(input: {
+    routeMode?: 'chat' | 'task';
+    finishReason?: string;
+    emittedToolingProgress: boolean;
+    assistantText: string;
+    requiredCompletionCapabilities: string[];
+}): {
+    shouldForce: boolean;
+    reason: string;
+} {
+    if (input.routeMode !== 'task' || !input.emittedToolingProgress) {
+        return { shouldForce: false, reason: '' };
+    }
+    const normalizedText = input.assistantText.trim();
+    if (normalizedText.length === 0) {
+        return {
+            shouldForce: true,
+            reason: 'tooling_without_final_summary',
+        };
+    }
+    const normalizedCapabilities = normalizeRequiredCompletionCapabilities(input.requiredCompletionCapabilities);
+    const requiresWebResearch = normalizedCapabilities.includes('web_research');
+    const isExecutionOnlyNarration = isLikelyExecutionOnlyNarration(normalizedText);
+    const hasEvidenceSignals = hasGroundedEvidenceSignals(normalizedText);
+    if (input.finishReason === 'tool-calls' && (isExecutionOnlyNarration || (requiresWebResearch && !hasEvidenceSignals))) {
+        return {
+            shouldForce: true,
+            reason: 'tool_calls_without_grounded_summary',
+        };
+    }
+    if (
+        requiresWebResearch
+        && /^assistant_text_/i.test(input.finishReason ?? '')
+        && (isExecutionOnlyNarration || !hasEvidenceSignals)
+    ) {
+        return {
+            shouldForce: true,
+            reason: 'assistant_text_without_grounded_research_summary',
+        };
+    }
+    return { shouldForce: false, reason: '' };
 }
 
 function isStoreDisabledHistoryReferenceError(error: unknown): boolean {
@@ -995,6 +1555,10 @@ async function forwardStream(
     };
     const isChatTurn = options?.chatTurn === true;
     const isTaskTurn = options?.routeMode === 'task';
+    const taskStreamFinalOnly = isTaskTurn && resolveBooleanFromEnv(
+        'COWORKANY_MASTRA_TASK_STREAM_FINAL_ONLY',
+        false,
+    );
     const idleTimeoutMs = isChatTurn
         ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_CHAT_STREAM_IDLE_TIMEOUT_MS', 25_000, {
             min: 1,
@@ -1027,12 +1591,12 @@ async function forwardStream(
                     max: 90_000,
                 })
         );
-    const postAssistantIdleCompleteMs = isChatTurn
+const postAssistantIdleCompleteMs = isChatTurn
         ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS', 12_000, {
             min: 1,
             max: 120_000,
         })
-        : resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_POST_ASSISTANT_IDLE_COMPLETE_MS', 35_000, {
+        : resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_POST_ASSISTANT_IDLE_COMPLETE_MS', 60_000, {
             min: 1,
             max: 120_000,
         });
@@ -1041,7 +1605,7 @@ async function forwardStream(
             min: 1,
             max: 180_000,
         })
-        : resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_POST_ASSISTANT_MAX_MS', 45_000, {
+        : resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_POST_ASSISTANT_MAX_MS', 90_000, {
             min: 1,
             max: 180_000,
         });
@@ -1104,6 +1668,22 @@ async function forwardStream(
     let sawToolingAfterAssistantText = false;
     let sawThinkingAfterAssistantText = false;
     let sawManualApprovalBeforeNarrative = false;
+    const recentToolEventTimestamps = new Map<string, number>();
+    const isDuplicateToolEvent = (event: DesktopEvent): boolean => {
+        const fingerprint = toToolEventFingerprint(event);
+        if (!fingerprint) {
+            return false;
+        }
+        const now = Date.now();
+        for (const [key, seenAt] of recentToolEventTimestamps) {
+            if (now - seenAt > TOOL_EVENT_DEDUP_WINDOW_MS) {
+                recentToolEventTimestamps.delete(key);
+            }
+        }
+        const lastSeenAt = recentToolEventTimestamps.get(fingerprint);
+        recentToolEventTimestamps.set(fingerprint, now);
+        return typeof lastSeenAt === 'number' && now - lastSeenAt <= TOOL_EVENT_DEDUP_WINDOW_MS;
+    };
     const streamAttemptStartedAt = typeof options?.streamAttemptStartedAt === 'number'
         ? options.streamAttemptStartedAt
         : streamStartedAt;
@@ -1128,8 +1708,11 @@ async function forwardStream(
         : 0;
     let bufferedAssistantDelta = '';
     let bufferedAssistantDeltaStartedAt = 0;
-    const flushBufferedAssistantDelta = (force: boolean): void => {
+    const flushBufferedAssistantDelta = (force: boolean, finalize = false): void => {
         if (bufferedAssistantDelta.length === 0) {
+            return;
+        }
+        if (taskStreamFinalOnly && !finalize && !sawTerminalEvent) {
             return;
         }
         if (!force && isChatTurn) {
@@ -1284,7 +1867,7 @@ async function forwardStream(
             result = await (async () => {
                 let timeoutId: ReturnType<typeof setTimeout> | null = null;
                 const boundedIdleTimeoutMs = (hasAssistantTextDelta && !sawToolingAfterAssistantText)
-                    ? Math.min(idleTimeoutMs, postAssistantIdleCompleteMs)
+                    ? Math.max(idleTimeoutMs, postAssistantIdleCompleteMs)
                     : idleTimeoutMs;
                 const effectiveIdleTimeoutMs = remainingBudgetMs !== null
                     ? Math.max(1_000, Math.min(boundedIdleTimeoutMs, remainingBudgetMs))
@@ -1360,8 +1943,12 @@ async function forwardStream(
             }
             await closeIteratorSafely();
             flushBufferedAssistantDelta(true);
+            const isIdleOrProgressTimeoutError = /\bstream_(?:idle|progress)_timeout\b/i.test(String(error));
             const shouldBypassAssistantTextDegradedComplete = (
-                sawToolingAfterAssistantText
+                (
+                    sawToolingAfterAssistantText
+                    && !(isTaskTurn && isIdleOrProgressTimeoutError)
+                )
                 || isWorkflowSnapshotMissingError(error)
                 || isMissingTerminalAfterToolingProgressError(error)
             );
@@ -1432,6 +2019,9 @@ async function forwardStream(
         }
         const event = mapMastraChunkToDesktopEvent(chunk as MastraChunkLike, runId);
         if (event) {
+            if (isDuplicateToolEvent(event)) {
+                continue;
+            }
             let eventCountsAsVisibleProgress = false;
             let eventCountsAsOperationalProgress = false;
             const assistantNarrativeDelta = (
@@ -1575,7 +2165,7 @@ async function forwardStream(
             }
         }
     }
-    flushBufferedAssistantDelta(true);
+    flushBufferedAssistantDelta(true, true);
     if (!sawTerminalEvent) {
         if (!hasAssistantTextDelta) {
             if (sawManualApprovalBeforeNarrative) {
@@ -1595,14 +2185,15 @@ async function forwardStream(
                 // degrade into stream_exhausted. Surface a terminal error so upper layers
                 // can retry/fail explicitly instead of reporting a false success.
                 throw new Error('missing_terminal_after_tooling_progress');
+            } else {
+                sendToDesktop({
+                    type: 'complete',
+                    runId,
+                    finishReason: 'stream_exhausted',
+                });
+                sawCompleteEvent = true;
+                terminalFinishReason = 'stream_exhausted';
             }
-            sendToDesktop({
-                type: 'complete',
-                runId,
-                finishReason: 'stream_exhausted',
-            });
-            sawCompleteEvent = true;
-            terminalFinishReason = 'stream_exhausted';
         }
     }
     if (suppressedNoNarrativeErrorMessage && !hasAssistantTextDelta && !sawManualApprovalBeforeNarrative) {
@@ -1660,6 +2251,8 @@ export async function handleUserMessage(
         taskId?: string;
         turnId?: string;
         workspacePath?: string;
+        modelId?: string;
+        enabledToolpacks?: string[];
         enabledSkills?: string[];
         skillPrompt?: string;
         forcedRouteMode?: 'chat' | 'task';
@@ -1702,9 +2295,27 @@ export async function handleUserMessage(
             recalledMemoryFiles: recalledTopicMemories.map((entry) => entry.relativePath),
         });
     }
-    const effectiveMessage = buildSkillGuidedMessage(message, options?.skillPrompt);
+    const baseEffectiveMessage = buildSkillGuidedMessage(message, options?.skillPrompt);
+    let effectiveMessage = baseEffectiveMessage;
+    const enableAutoMemoryIntentBridge = resolveBooleanFromEnv(
+        'COWORKANY_MASTRA_AUTO_MEMORY_INTENT_BRIDGE',
+        false,
+    );
+    const requiredOutputPaths = resolveRequiredOutputPathsForTurn(message, options?.workspacePath);
+    const requiredOutputRetryBudget = (
+        options?.forcedRouteMode === 'task' && requiredOutputPaths.length > 0
+    )
+        ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_OUTPUT_PATH_RETRY_COUNT', 1)
+        : 0;
+    let requiredOutputRetryAttempts = 0;
 
-    const modelId = process.env.COWORKANY_MODEL || DEFAULT_MODEL_ID;
+    const resolvedModelConfig = resolveRuntimeModelConfigWithPreferredModel({
+        fallbackModelId: DEFAULT_MODEL_ID,
+        preferredModelId: options?.modelId,
+    });
+    const modelId = typeof resolvedModelConfig === 'string'
+        ? resolvedModelConfig
+        : resolvedModelConfig.id;
     const modelProvider = modelId.split('/')[0]?.toLowerCase() ?? '';
     const openAiResponseStoreEnabled = resolveBooleanFromEnv(
         'COWORKANY_OPENAI_RESPONSES_STORE',
@@ -1739,6 +2350,88 @@ export async function handleUserMessage(
         return { runId };
     }
 
+    if (enableAutoMemoryIntentBridge && shouldAutoPersistMemoryIntent(message, options?.forcedRouteMode)) {
+        const autoMemoryRunId = `auto-memory-${randomUUID()}`;
+        sendToDesktop({
+            type: 'tool_call',
+            runId: autoMemoryRunId,
+            toolName: 'remember',
+            args: {
+                message,
+                source: 'auto_remember_intent',
+            },
+            turnId: options?.turnId,
+        });
+        try {
+            const persisted = await persistAutoRememberEntry({
+                workspacePath: options?.workspacePath,
+                message,
+            });
+            sendToDesktop({
+                type: 'tool_result',
+                runId: autoMemoryRunId,
+                toolCallId: `remember:auto:${taskId}`,
+                toolName: 'remember',
+                result: persisted,
+                isError: false,
+                turnId: options?.turnId,
+            });
+        } catch (memoryError) {
+            sendToDesktop({
+                type: 'tool_result',
+                runId: autoMemoryRunId,
+                toolCallId: `remember:auto:${taskId}`,
+                toolName: 'remember',
+                result: {
+                    error: String(memoryError),
+                },
+                isError: true,
+                turnId: options?.turnId,
+            });
+        }
+    }
+
+    if (enableAutoMemoryIntentBridge && shouldAutoRecallMemoryIntent(message, options?.forcedRouteMode)) {
+        const autoRecallRunId = `auto-recall-${randomUUID()}`;
+        sendToDesktop({
+            type: 'tool_call',
+            runId: autoRecallRunId,
+            toolName: 'recall',
+            args: {
+                query: message,
+                source: 'auto_recall_intent',
+            },
+            turnId: options?.turnId,
+        });
+        try {
+            const recalled = await recallAutoMemoryEntries({
+                workspacePath: options?.workspacePath,
+                message,
+            });
+            sendToDesktop({
+                type: 'tool_result',
+                runId: autoRecallRunId,
+                toolCallId: `recall:auto:${taskId}`,
+                toolName: 'recall',
+                result: recalled,
+                isError: false,
+                turnId: options?.turnId,
+            });
+        } catch (recallError) {
+            sendToDesktop({
+                type: 'tool_result',
+                runId: autoRecallRunId,
+                toolCallId: `recall:auto:${taskId}`,
+                toolName: 'recall',
+                result: {
+                    error: String(recallError),
+                },
+                isError: true,
+                turnId: options?.turnId,
+            });
+        }
+    }
+
     const forcePostAssistantCompletion = options?.forcePostAssistantCompletion === true;
     const useChatLatencyProfile = forcePostAssistantCompletion && options?.forcedRouteMode !== 'task';
     const isTaskRoute = options?.forcedRouteMode === 'task';
@@ -1746,7 +2439,7 @@ export async function handleUserMessage(
         options?.useDirectChatResponder === true
         || options?.forcedRouteMode === 'chat'
     );
-    const weatherQuery = isWeatherInformationQuery(effectiveMessage);
+    const weatherQuery = isWeatherInformationQuery(message);
     const dynamicToolsetResolution = (useDirectChatResponder && !weatherQuery)
         ? {
             toolsets: {},
@@ -1783,16 +2476,21 @@ export async function handleUserMessage(
         useDirectChatResponder = false;
     }
     const requiredCompletionCapabilities = deriveRequiredCompletionCapabilitiesForTurn({
-        message: effectiveMessage,
+        message,
         workspacePath: options?.workspacePath,
         explicitRequiredCapabilities: options?.requiredCompletionCapabilities,
     });
     const turnContractDomain = (options?.turnContractDomain ?? '').trim().toLowerCase();
+    effectiveMessage = injectCapabilityExecutionContract({
+        message: effectiveMessage,
+        requiredCompletionCapabilities,
+    });
     const preferResearcherForWebResearchTasks = resolveBooleanFromEnv(
         'COWORKANY_MASTRA_TASK_PREFER_RESEARCHER',
         true,
     );
     const shouldRouteTaskToResearcher = shouldRouteTaskTurnToResearcher({
+        message,
         isTaskRoute,
         useDirectChatResponder,
         preferResearcherForWebResearchTasks,
@@ -1809,19 +2507,34 @@ export async function handleUserMessage(
             : (shouldRouteTaskToResearcher ? 'researcher' : 'supervisor'),
         requiredCompletionCapabilities,
         turnContractDomain: turnContractDomain || null,
+        enabledToolpackCount: Array.isArray(options?.enabledToolpacks) ? options.enabledToolpacks.length : 0,
     }));
     const enableGenerateFallbackForTaskRoute = resolveBooleanFromEnv(
         'COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK',
         false,
     );
     const allowGenerateFallback = !isTaskRoute || enableGenerateFallbackForTaskRoute;
+    const defaultRequireToolApproval = (
+        forcePostAssistantCompletion
+        || shouldRouteTaskToResearcher
+    )
+        ? false
+        : true;
+    // Keep tool approval resume on the entrypoint side for deterministic ordering.
+    // Mastra-side auto resume can race with terminal stream events and produce stale snapshot errors.
+    const defaultAutoResumeSuspendedTools = false;
+    const requireToolApproval = options?.requireToolApproval ?? defaultRequireToolApproval;
+    const autoResumeSuspendedTools = options?.autoResumeSuspendedTools ?? defaultAutoResumeSuspendedTools;
     const requestContext = createTaskRequestContext({
         threadId,
         resourceId,
         taskId,
         workspacePath: options?.workspacePath,
+        modelId,
+        enabledToolpacks: options?.enabledToolpacks,
         enabledSkills: options?.enabledSkills,
         skillPrompt: options?.skillPrompt,
+        requireToolApproval,
     });
     const telemetry = createTelemetryRunContext({
         taskId,
@@ -1844,19 +2557,11 @@ export async function handleUserMessage(
             defaultForcePostMaxSteps,
         )
         : resolvePositiveIntFromEnv('COWORKANY_MASTRA_DEFAULT_MAX_STEPS', 16);
-    const defaultRequireToolApproval = (
-        forcePostAssistantCompletion
-        || shouldRouteTaskToResearcher
-    )
-        ? false
-        : true;
-    // Keep tool approval resume on the entrypoint side for deterministic ordering.
-    // Mastra-side auto resume can race with terminal stream events and produce stale snapshot errors.
-    const defaultAutoResumeSuspendedTools = false;
     const streamToolsets = Object.keys(dynamicToolsets).length > 0
         ? dynamicToolsets
         : undefined;
     const streamOptions = {
+        model: resolvedModelConfig,
         memory: {
             thread: threadId,
             resource: resourceId,
@@ -1864,8 +2569,8 @@ export async function handleUserMessage(
         requestContext,
         tracingOptions: telemetry.tracingOptions,
         toolsets: streamToolsets,
-        requireToolApproval: options?.requireToolApproval ?? defaultRequireToolApproval,
-        autoResumeSuspendedTools: options?.autoResumeSuspendedTools ?? defaultAutoResumeSuspendedTools,
+        requireToolApproval,
+        autoResumeSuspendedTools,
         toolCallConcurrency: options?.toolCallConcurrency ?? 1,
         maxSteps: options?.maxSteps ?? defaultMaxSteps,
         providerOptions,
@@ -1898,17 +2603,11 @@ export async function handleUserMessage(
         : chatTurnDeadlineAt;
     const forwardRetryCount = useChatLatencyProfile
         ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT', 5)
-        : (
-            Number.isFinite(STREAM_FORWARD_RETRY_COUNT) && STREAM_FORWARD_RETRY_COUNT > 0
-                ? STREAM_FORWARD_RETRY_COUNT
-                : 0
-        );
-    const forwardRetryDelayMs = Number.isFinite(STREAM_FORWARD_RETRY_DELAY_MS) && STREAM_FORWARD_RETRY_DELAY_MS > 0
-        ? STREAM_FORWARD_RETRY_DELAY_MS
-        : 800;
+        : resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT', 5);
+    const forwardRetryDelayMs = resolvePositiveIntFromEnv('COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS', 1_000);
     const noNarrativeRetryCount = useChatLatencyProfile
         ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_NO_NARRATIVE_RETRY_COUNT', 1)
-        : resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_NO_NARRATIVE_RETRY_COUNT', 5);
+        : resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_NO_NARRATIVE_RETRY_COUNT', 1);
     const debugStreamRecovery = process.env.COWORKANY_DEBUG_STREAM_RECOVERY === '1';
     const startRetryCount = useChatLatencyProfile
         ? resolveNonNegativeIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT', 5)
@@ -1923,7 +2622,7 @@ export async function handleUserMessage(
     const fallbackToGenerateOnStartTimeout = resolveBooleanFromEnv('COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK', true);
     const generateFallbackTimeoutMs = useChatLatencyProfile
         ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS', 30_000)
-        : resolvePositiveIntFromEnv('COWORKANY_MASTRA_GENERATE_FALLBACK_TIMEOUT_MS', 45_000);
+        : resolvePositiveIntFromEnv('COWORKANY_MASTRA_GENERATE_FALLBACK_TIMEOUT_MS', 90_000);
     const emitRateLimited = (input: RateLimitedEmitInput): void => {
         sendToDesktop({
             type: 'rate_limited',
@@ -1959,6 +2658,8 @@ export async function handleUserMessage(
         fallbackOptions?: {
             force?: boolean;
             includeStartupBudget?: boolean;
+            messageOverride?: string;
+            disableTools?: boolean;
         },
     ): Promise<{ runId: string } | null> => {
         if (!fallbackToGenerateOnStartTimeout && fallbackOptions?.force !== true) {
@@ -1984,12 +2685,20 @@ export async function handleUserMessage(
         });
         try {
             const fallbackStartedAt = Date.now();
-            const fallbackDeadlineAt = resolveEarliestDeadline([
-                chatTurnDeadlineAt ?? undefined,
-                fallbackOptions?.includeStartupBudget === false
-                    ? undefined
-                    : (chatStartupDeadlineAt ?? undefined),
-            ]);
+            // Task-mode forced fallback is the final recovery path after stream/tooling timeout.
+            // Do not block it on startup/turn budgets that may already be consumed by stream cleanup.
+            const bypassExecutionBudgetForForcedTaskFallback = (
+                fallbackOptions?.force === true
+                && options?.forcedRouteMode === 'task'
+            );
+            const fallbackDeadlineAt = bypassExecutionBudgetForForcedTaskFallback
+                ? undefined
+                : resolveEarliestDeadline([
+                    chatTurnDeadlineAt ?? undefined,
+                    fallbackOptions?.includeStartupBudget === false
+                        ? undefined
+                        : (chatStartupDeadlineAt ?? undefined),
+                ]);
             const remainingBudgetMs = resolveRemainingBudgetMs(fallbackDeadlineAt);
             const effectiveGenerateFallbackTimeoutMs = remainingBudgetMs !== null
                 ? Math.max(1_000, Math.min(generateFallbackTimeoutMs, remainingBudgetMs))
@@ -1997,8 +2706,24 @@ export async function handleUserMessage(
             if (remainingBudgetMs !== null && remainingBudgetMs <= 0) {
                 throw new Error('chat_startup_timeout_budget_exhausted');
             }
+            const fallbackMessage = typeof fallbackOptions?.messageOverride === 'string'
+                && fallbackOptions.messageOverride.trim().length > 0
+                ? fallbackOptions.messageOverride
+                : effectiveMessage;
+            const fallbackAgent = fallbackOptions?.disableTools === true
+                ? taskSynthesizer
+                : streamAgent;
+            const fallbackStreamOptions = fallbackOptions?.disableTools === true
+                ? {
+                    ...streamOptions,
+                    toolsets: undefined,
+                    maxSteps: 1,
+                    requireToolApproval: false,
+                    autoResumeSuspendedTools: false,
+                }
+                : streamOptions;
             const generated = await Promise.race([
-                streamAgent.generate(effectiveMessage, streamOptions),
+                fallbackAgent.generate(fallbackMessage, fallbackStreamOptions),
                 new Promise<never>((_, reject) => {
                     setTimeout(() => reject(new Error(`generate_fallback_timeout:${effectiveGenerateFallbackTimeoutMs}`)), effectiveGenerateFallbackTimeoutMs);
                 }),
@@ -2014,6 +2739,7 @@ export async function handleUserMessage(
                 workspacePath: options?.workspacePath,
                 enabledSkills: options?.enabledSkills,
                 skillPrompt: options?.skillPrompt,
+                modelId,
                 traceId: telemetry.traceId,
                 traceSampled: telemetry.sampled,
             });
@@ -2034,6 +2760,17 @@ export async function handleUserMessage(
                     content: generatedText,
                     turnId: options?.turnId,
                 });
+                if (fallbackOptions?.disableTools === true) {
+                    sendToDesktop({
+                        type: 'tool_result',
+                        runId: fallbackRunId,
+                        toolCallId: `final_synthesis:${taskId}`,
+                        toolName: 'final_synthesis',
+                        result: generatedText,
+                        isError: false,
+                        turnId: options?.turnId,
+                    });
+                }
                 const updated = contextCompressionStore.recordAssistantTurn({
                     taskId,
                     threadId,
@@ -2051,6 +2788,9 @@ export async function handleUserMessage(
                     structuredSummary: updated.structuredSummary,
                     recalledMemoryFiles: recalledTopicMemories.map((entry) => entry.relativePath),
                 });
+                // Give downstream event consumers one tick to process fallback text
+                // before terminal completion is emitted.
+                await delay(25);
             } else {
                 flushPostCompactWithPromptPack();
             }
@@ -2191,6 +2931,7 @@ export async function handleUserMessage(
                     requiredCompletionCapabilities,
                     isTaskRoute,
                     workspacePath: options?.workspacePath,
+                    enabledToolpacks: options?.enabledToolpacks,
                 },
             );
             if (preferredToolsets === streamToolsets) {
@@ -2327,6 +3068,7 @@ export async function handleUserMessage(
             workspacePath: options?.workspacePath,
             enabledSkills: options?.enabledSkills,
             skillPrompt: options?.skillPrompt,
+            modelId,
             traceId: telemetry.traceId,
             traceSampled: telemetry.sampled,
         });
@@ -2334,6 +3076,14 @@ export async function handleUserMessage(
         let emittedAssistantCharCount = 0;
         let emittedToolingProgress = false;
         let emittedAnyStreamEvent = false;
+        let deferredTaskCompleteEvent: DesktopEvent | null = null;
+        const flushDeferredTaskCompleteEvent = (): void => {
+            if (!deferredTaskCompleteEvent) {
+                return;
+            }
+            sendToDesktop(deferredTaskCompleteEvent);
+            deferredTaskCompleteEvent = null;
+        };
         const sendWithAttemptTracking = sendWithRunContextCleanup(stream.runId, (event) => {
             emittedAnyStreamEvent = true;
             startupBudgetClosedByStreamProgress = true;
@@ -2354,11 +3104,14 @@ export async function handleUserMessage(
             ) {
                 emittedToolingProgress = true;
             }
-            sendToDesktop(
-                options?.turnId && !event.turnId
-                    ? { ...event, turnId: options.turnId }
-                    : event,
-            );
+            const eventWithTurnId = options?.turnId && !event.turnId
+                ? { ...event, turnId: options.turnId }
+                : event;
+            if (eventWithTurnId.type === 'complete' && options?.forcedRouteMode === 'task') {
+                deferredTaskCompleteEvent = eventWithTurnId;
+                return;
+            }
+            sendToDesktop(eventWithTurnId);
         });
         try {
             const forwarded = await forwardStream(stream, sendWithAttemptTracking, {
@@ -2371,6 +3124,118 @@ export async function handleUserMessage(
                 onRateLimited: emitRateLimited,
                 deadlineAt: chatTurnDeadlineAt ?? undefined,
             });
+            const missingRequiredOutputPaths = await collectMissingRequiredOutputPaths(requiredOutputPaths);
+            if (missingRequiredOutputPaths.length > 0) {
+                deferredTaskCompleteEvent = null;
+                const canRetryRequiredOutputs = (
+                    requiredOutputRetryAttempts < requiredOutputRetryBudget
+                    && attempt < forwardRetryCount
+                );
+                if (canRetryRequiredOutputs) {
+                    requiredOutputRetryAttempts += 1;
+                    attempt += 1;
+                    const maxAttempts = forwardRetryCount + 1;
+                    emitRateLimited({
+                        runId: stream.runId,
+                        attempt: attempt + 1,
+                        maxAttempts,
+                        retryAfterMs: forwardRetryDelayMs,
+                        error: `missing_required_output_files:${missingRequiredOutputPaths.join(',')}`,
+                        message: `Required output file missing. Retrying (${attempt + 1}/${maxAttempts})...`,
+                        stage: 'unknown',
+                        timings: forwarded.timings,
+                        turnId: options?.turnId,
+                    });
+                    effectiveMessage = buildMissingOutputPathsReminder(baseEffectiveMessage, missingRequiredOutputPaths);
+                    await delay(forwardRetryDelayMs * attempt);
+                    continue;
+                }
+                sendToDesktop({
+                    type: 'error',
+                    runId: stream.runId,
+                    message: `missing_required_output_files:${missingRequiredOutputPaths.join(',')}`,
+                    turnId: options?.turnId,
+                });
+                return { runId: stream.runId };
+            }
+            const forceFinalSynthesisDecision = shouldForceTaskFinalSynthesis({
+                routeMode: options?.forcedRouteMode,
+                finishReason: forwarded.finishReason,
+                emittedToolingProgress,
+                assistantText: forwarded.assistantText,
+                requiredCompletionCapabilities,
+            });
+            if (debugStreamRecovery && options?.forcedRouteMode === 'task') {
+                console.warn('[streaming][task-final-synthesis-check]', {
+                    finishReason: forwarded.finishReason ?? null,
+                    emittedToolingProgress,
+                    assistantChars: forwarded.assistantText.trim().length,
+                    requiredCompletionCapabilities,
+                    decision: forceFinalSynthesisDecision,
+                });
+            }
+            if (forceFinalSynthesisDecision.shouldForce) {
+                deferredTaskCompleteEvent = null;
+                const fallbackResult = await runGenerateFallback(
+                    forceFinalSynthesisDecision.reason,
+                    attempt + 1,
+                    forwardRetryCount + 1,
+                    {
+                        force: true,
+                        includeStartupBudget: false,
+                        disableTools: true,
+                        messageOverride: buildFinalSynthesisContractMessage(
+                            baseEffectiveMessage,
+                            requiredCompletionCapabilities,
+                        ),
+                    },
+                );
+                if (fallbackResult) {
+                    return fallbackResult;
+                }
+            }
+            const shouldSanitizePlaceholderSupportFiles = (
+                options?.forcedRouteMode === 'task'
+                && typeof options?.workspacePath === 'string'
+                && options.workspacePath.trim().length > 0
+                && requiredOutputPaths.length > 0
+                && resolveBooleanFromEnv('COWORKANY_MASTRA_TASK_PLACEHOLDER_SANITIZE', true)
+            );
+            if (shouldSanitizePlaceholderSupportFiles) {
+                const workspacePathForSanitize = resolvePlaceholderSanitizeWorkspacePath({
+                    workspacePath: options.workspacePath as string,
+                    requiredOutputPaths,
+                });
+                const sanitizedFiles = await sanitizePlaceholderSupportFiles({
+                    workspacePath: workspacePathForSanitize,
+                    requiredOutputPaths,
+                });
+                if (sanitizedFiles.length > 0) {
+                    console.info('[coworkany-task-placeholder-sanitize]', JSON.stringify({
+                        taskId,
+                        sanitizedFiles,
+                    }));
+                }
+            }
+            const shouldWriteTaskFallbackOutput = (
+                options?.forcedRouteMode === 'task'
+                && typeof options?.workspacePath === 'string'
+                && options.workspacePath.trim().length > 0
+                && resolveBooleanFromEnv('COWORKANY_MASTRA_TASK_AUTO_OUTPUT_FALLBACK', false)
+            );
+            if (shouldWriteTaskFallbackOutput) {
+                const fallbackOutputPath = await ensureTaskFallbackOutputFile({
+                    workspacePath: options.workspacePath as string,
+                    requiredOutputPaths,
+                    assistantText: forwarded.assistantText,
+                });
+                if (fallbackOutputPath) {
+                    console.info('[coworkany-task-fallback-output]', JSON.stringify({
+                        taskId,
+                        fallbackOutputPath,
+                    }));
+                }
+            }
             if (forwarded.assistantText.length > 0) {
                 const updated = contextCompressionStore.recordAssistantTurn({
                     taskId,
@@ -2408,6 +3273,7 @@ export async function handleUserMessage(
                 proxyBefore: proxySnapshotBeforeDisable,
                 proxyAfter: proxySnapshotAfterDisable,
             });
+            flushDeferredTaskCompleteEvent();
             return { runId: stream.runId };
         } catch (error) {
             runContextById.delete(stream.runId);
@@ -2436,15 +3302,21 @@ export async function handleUserMessage(
             const isSnapshotLossAfterTooling = isWorkflowSnapshotMissingError(error);
             const isMissingTerminalAfterTooling = isMissingTerminalAfterToolingProgressError(error);
             const isStreamExecutionTimeoutAfterTooling = isStreamExecutionTimeoutError(error);
+            const likelyAssistantPrefaceBeforeToolingFailure = emittedAssistantText || (
+                emittedToolingProgress
+                && (isSnapshotLossAfterTooling || isMissingTerminalAfterTooling || isStreamExecutionTimeoutAfterTooling)
+            );
+            const assistantPrefaceWithinRetryBound = emittedAssistantText
+                ? emittedAssistantCharCount > 0 && emittedAssistantCharCount <= 120
+                : likelyAssistantPrefaceBeforeToolingFailure;
             const toolingInterruptionRetryBudget = (isMissingTerminalAfterTooling || isStreamExecutionTimeoutAfterTooling)
                 ? Math.min(forwardRetryCount, 1)
                 : forwardRetryCount;
             const canRetryTaskToolingInterruption = (
                 options?.forcedRouteMode === 'task'
-                && emittedAssistantText
+                && likelyAssistantPrefaceBeforeToolingFailure
                 && emittedToolingProgress
-                && emittedAssistantCharCount > 0
-                && emittedAssistantCharCount <= 120
+                && assistantPrefaceWithinRetryBound
                 && !isTurnBudgetTimeoutError(error)
                 && !isStartupBudgetTimeoutError(error)
                 && attempt < toolingInterruptionRetryBudget
@@ -2470,9 +3342,8 @@ export async function handleUserMessage(
             const shouldForceTaskToolingTimeoutFallback = (
                 options?.forcedRouteMode === 'task'
                 && emittedToolingProgress
-                && emittedAssistantText
-                && emittedAssistantCharCount > 0
-                && emittedAssistantCharCount <= 120
+                && likelyAssistantPrefaceBeforeToolingFailure
+                && assistantPrefaceWithinRetryBound
                 && isStreamExecutionTimeoutAfterTooling
                 && !isTurnBudgetTimeoutError(error)
                 && !isStartupBudgetTimeoutError(error)
@@ -2639,6 +3510,7 @@ export async function handleApprovalResponse(
                     resourceId: context.resourceId,
                     taskId: context.taskId,
                     workspacePath: context.workspacePath,
+                    modelId: context.modelId,
                     enabledSkills: context.enabledSkills,
                     skillPrompt: context.skillPrompt,
                 })
