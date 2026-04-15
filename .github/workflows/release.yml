@@ -164,7 +164,7 @@ jobs:
             desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/CoworkAny.app
 
       - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
