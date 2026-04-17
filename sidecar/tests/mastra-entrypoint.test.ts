@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createMastraEntrypointProcessor } from '../src/mastra/entrypoint';
+import { createMastraEntrypointProcessor, deriveHostControlShellCommand } from '../src/mastra/entrypoint';
 import type { DesktopEvent } from '../src/ipc/bridge';
 import { MastraRemoteSessionStore } from '../src/mastra/remoteSessionStore';
 import type { TaskRuntimeState } from '../src/mastra/taskRuntimeState';
@@ -656,6 +656,232 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('web_research');
     });
 
+    test('start_task routes platform trending lookup query to direct task path for tool-first execution', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-platform-trending-tool-first',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-platform-trending-tool-first',
+                title: 'platform trending intent',
+                userQuery: '今天 blibli 上有什么热门视频',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('web_research');
+    });
+
+    test('start_task routes recycle-bin cleanup intent to direct task path with command execution requirement', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-recycle-bin-cleanup',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-recycle-bin-cleanup',
+                title: 'recycle bin cleanup',
+                userQuery: '帮我清空回收站',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+    });
+
+    test('start_task routes folder-move intent to direct task path with command execution requirement', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-folder-move',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-folder-move',
+                title: 'folder move',
+                userQuery: '把 /Users/demo/Downloads/tmp 移动到 /Users/demo/Documents/archive',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+    });
+
+    test('start_task routes current-date query to direct task path with command execution requirement', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-current-date',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-current-date',
+                title: 'current date',
+                userQuery: '今天是几号',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+    });
+
+    test('start_task routes english current-date query with command execution only', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-current-date-en',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-current-date-en',
+                title: 'current date english',
+                userQuery: "What's the current date today?",
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).not.toContain('web_research');
+    });
+
+    test('start_task derives artifact_write capability when user requests saving output to file path', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-artifact-write-capability',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-artifact-write-capability',
+                title: 'artifact write capability',
+                userQuery: '请搜索 MiniMax 本周新闻并写入 /tmp/minimax-weekly-report.md',
+            },
+        });
+
+        expect(harness.userMessageCalls.length).toBe(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('web_research');
+        const taskState = harness.persistedTaskStates()
+            .find((item) => item.taskId === 'task-start-artifact-write-capability');
+        expect(taskState?.turnContract?.requiredCapabilities).toContain('artifact_write');
+    });
+
+    test('start_task seeds simple default retry budget for tool-required tasks', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-no-tool-default-retry',
+                    role: 'assistant',
+                    content: '我先给你一个口头结论。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-no-tool-default-retry',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-no-tool-default-retry' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-default-retry-budget',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-default-retry-budget',
+                title: 'default retry budget',
+                userQuery: '帮我清空回收站',
+            },
+        });
+
+        const taskState = harness.persistedTaskStates()
+            .find((item) => item.taskId === 'task-start-default-retry-budget');
+        expect(taskState?.retry?.maxAttempts).toBe(1);
+    });
+
+    test('start_task seeds moderate default retry budget for long single-step tool-required tasks', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-long-tool-default-retry',
+                    role: 'assistant',
+                    content: '我先给你一个口头结论。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-long-tool-default-retry',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-long-tool-default-retry' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-default-retry-budget-moderate',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-default-retry-budget-moderate',
+                title: 'default retry budget moderate',
+                userQuery: '请帮我查询今天 minimax 的港股股价并给出简要风险提示'.repeat(6),
+            },
+        });
+
+        const taskState = harness.persistedTaskStates()
+            .find((item) => item.taskId === 'task-start-default-retry-budget-moderate');
+        expect(taskState?.retry?.maxAttempts).toBe(2);
+    });
+
+    test('start_task seeds complex default retry budget for parallel or multi-capability tool-required tasks', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-complex-tool-default-retry',
+                    role: 'assistant',
+                    content: '我先给你一个口头结论。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-complex-tool-default-retry',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-complex-tool-default-retry' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-default-retry-budget-complex',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-default-retry-budget-complex',
+                title: 'default retry budget complex',
+                userQuery: '并行查询今天 minimax 的港股股价，并告诉我今天是几号',
+            },
+        });
+
+        const taskState = harness.persistedTaskStates()
+            .find((item) => item.taskId === 'task-start-default-retry-budget-complex');
+        expect(taskState?.retry?.maxAttempts).toBe(3);
+    });
+
+    test('deriveHostControlShellCommand maps recycle-bin cleanup intent to platform command', () => {
+        const command = deriveHostControlShellCommand('请帮我清空回收站');
+        if (process.platform === 'darwin') {
+            expect(command).toContain('tell application "Finder" to empty the trash');
+            return;
+        }
+        if (process.platform === 'win32') {
+            expect(command).toContain('Clear-RecycleBin -Force');
+            return;
+        }
+        expect(command).toContain('trash');
+    });
+
     test('start_task returns capability_missing when market query has no runtime research tools', async () => {
         const harness = createHarness({
             onListRuntimeCapabilities: () => ({
@@ -924,7 +1150,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
     });
 
-    test('send_task_message fails completion when task turn has no required tool evidence', async () => {
+    test('send_task_message auto-retries when task turn has no required tool evidence', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -948,16 +1174,22 @@ describe('mastra entrypoint processor', () => {
             payload: {
                 taskId: 'task-no-tool-evidence',
                 content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
             },
         });
 
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
-        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
-        expect(failed).toBeDefined();
-        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+        const retrying = harness.outgoing.find((message) => (
+            message.type === 'RATE_LIMITED'
+            && (message.payload as Record<string, unknown>)?.error === 'complete_without_required_tool_evidence'
+        ));
+        expect(retrying).toBeDefined();
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
-    test('send_task_message treats delegated agent tool_call without follow-up as missing required tool evidence', async () => {
+    test('send_task_message auto-retries delegated agent tool_call without follow-up as missing required tool evidence', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -996,9 +1228,12 @@ describe('mastra entrypoint processor', () => {
         });
 
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
-        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
-        expect(failed).toBeDefined();
-        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+        const retrying = harness.outgoing.find((message) => (
+            message.type === 'RATE_LIMITED'
+            && (message.payload as Record<string, unknown>)?.error === 'complete_without_required_tool_evidence'
+        ));
+        expect(retrying).toBeDefined();
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
     test('send_task_message treats explicit low-quality search results as insufficient evidence', async () => {
@@ -1053,6 +1288,145 @@ describe('mastra entrypoint processor', () => {
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect(failed).toBeDefined();
         expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+    });
+
+    test('send_task_message treats missing artifact_write evidence as incomplete when save target is requested', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-missing-artifact-write',
+                    role: 'assistant',
+                    content: '我先搜索并整理 MiniMax 周报信息。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-missing-artifact-write',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'MiniMax weekly news',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-missing-artifact-write',
+                    toolCallId: 'tool-missing-artifact-write-search',
+                    toolName: 'search_web',
+                    result: {
+                        provider: 'exa',
+                        results: [
+                            {
+                                title: 'MiniMax weekly brief',
+                                snippet: 'This week MiniMax announced several product updates.',
+                            },
+                        ],
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-missing-artifact-write',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-missing-artifact-write' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-missing-artifact-write',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-missing-artifact-write',
+                content: '请搜索 MiniMax 本周新闻并写入 /tmp/minimax-weekly-report.md',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        const payload = toRecord(failed?.payload);
+        expect(toString(payload.errorCode)).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+        const missingCapabilities = Array.isArray(payload.missingCapabilities) ? payload.missingCapabilities : [];
+        expect(missingCapabilities).toContain('artifact_write');
+    });
+
+    test('send_task_message accepts completion when artifact_write evidence is present', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-with-artifact-write',
+                    role: 'assistant',
+                    content: '我先搜索并整理 MiniMax 周报信息。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-with-artifact-write',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'MiniMax weekly news',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-with-artifact-write',
+                    toolCallId: 'tool-with-artifact-write-search',
+                    toolName: 'search_web',
+                    result: {
+                        provider: 'exa',
+                        results: [
+                            {
+                                title: 'MiniMax weekly brief',
+                                snippet: 'This week MiniMax announced several product updates.',
+                            },
+                        ],
+                    },
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-with-artifact-write',
+                    toolName: 'write_to_file',
+                    args: {
+                        path: '/tmp/minimax-weekly-report.md',
+                        content: '# MiniMax Weekly Report',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-with-artifact-write',
+                    toolCallId: 'tool-with-artifact-write-file',
+                    toolName: 'write_to_file',
+                    result: {
+                        success: true,
+                        path: '/tmp/minimax-weekly-report.md',
+                        size: 24,
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-with-artifact-write',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-with-artifact-write' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-with-artifact-write',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-with-artifact-write',
+                content: '请搜索 MiniMax 本周新闻并写入 /tmp/minimax-weekly-report.md',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
     test('send_task_message treats empty search payload as insufficient evidence', async () => {
@@ -1164,6 +1538,116 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
+    test('send_task_message emits supplemental summary when task narrative is too short after required tool evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-short-summary-supplement',
+                    role: 'assistant',
+                    content: '结果已出。',
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-short-summary-supplement',
+                    toolName: 'search_web',
+                    args: {
+                        query: 'MiniMax today stock and trend',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-short-summary-supplement',
+                    toolCallId: 'tool-short-summary-supplement-search',
+                    toolName: 'search_web',
+                    result: {
+                        provider: 'exa',
+                        results: [
+                            {
+                                title: 'MiniMax market overview',
+                                snippet: 'Price moved up during early trading session.',
+                            },
+                        ],
+                    },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-short-summary-supplement',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-short-summary-supplement' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-short-summary-supplement',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-short-summary-supplement',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        const supplementalDelta = harness.outgoing.find((message) =>
+            message.type === 'TEXT_DELTA'
+            && toString(toRecord(message.payload).delta).includes('已完成必要工具调用并汇总结果'),
+        );
+        expect(supplementalDelta).toBeDefined();
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message emits rich terminal-recovery summary when terminal event is missing after tool evidence', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-missing-terminal-tool-evidence',
+                    toolName: 'run_command',
+                    args: {
+                        command: 'echo "CoworkAny Test Success"',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-missing-terminal-tool-evidence',
+                    toolCallId: 'tool-missing-terminal-tool-evidence',
+                    toolName: 'run_command',
+                    result: {
+                        exitCode: 0,
+                        stdout: 'CoworkAny Test Success\n',
+                    },
+                });
+                return { runId: 'run-missing-terminal-tool-evidence' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-missing-terminal-tool-evidence',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-missing-terminal-tool-evidence',
+                content: '请使用 run_command 执行 echo "CoworkAny Test Success"，并告诉我输出结果',
+                config: {
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        const degradedDelta = harness.outgoing.find((message) =>
+            message.type === 'TEXT_DELTA'
+            && toString(toRecord(message.payload).delta).includes('系统已自动触发终端恢复'),
+        );
+        expect(degradedDelta).toBeDefined();
+        expect(toString(toRecord(degradedDelta?.payload).delta).length).toBeGreaterThanOrEqual(100);
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(finished).toBeDefined();
+        expect(toString(toRecord(finished?.payload).summary).length).toBeGreaterThanOrEqual(100);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
     test('send_task_message accepts usable web evidence when search payload has no url host', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -1258,9 +1742,9 @@ describe('mastra entrypoint processor', () => {
         expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
     });
 
-    test('send_task_message auto-retries missing tool evidence when retry budget is configured', async () => {
+    test('send_task_message adaptively extends missing-tool-evidence retry budget within safe cap', async () => {
         const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
-        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '100';
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '60';
         try {
             const harness = createHarness({
                 onHandleUserMessage: async (_input, emit) => {
@@ -1291,7 +1775,7 @@ describe('mastra entrypoint processor', () => {
                 },
             });
             await new Promise((resolve) => {
-                setTimeout(resolve, 350);
+                setTimeout(resolve, 500);
             });
 
             const rateLimited = harness.outgoing.find((message) => message.type === 'RATE_LIMITED');
@@ -1299,7 +1783,115 @@ describe('mastra entrypoint processor', () => {
             const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
             expect(failed).toBeDefined();
             expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
-            expect(harness.userMessageCalls.length).toBe(2);
+            expect(harness.userMessageCalls.length).toBe(3);
+            const taskState = harness.persistedTaskStates()
+                .find((item) => item.taskId === 'task-no-tool-evidence-auto-retry');
+            expect(taskState?.retry?.maxAttempts).toBe(2);
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('send_task_message injects command recovery contract on missing tool evidence retry', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '60';
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    emit({
+                        type: 'text_delta',
+                        runId: `run-no-command-tool-${Date.now()}`,
+                        role: 'assistant',
+                        content: '我可以给你步骤，但暂时不执行命令。',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: `run-no-command-tool-complete-${Date.now()}`,
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-no-command-tool' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-no-command-tool-auto-retry',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-no-command-tool-auto-retry',
+                    content: '请把 /Users/demo/Downloads/tmp 移动到 /Users/demo/Documents/archive',
+                    config: {
+                        maxRetries: 1,
+                    },
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 500);
+            });
+
+            expect(harness.userMessageCalls.length).toBeGreaterThanOrEqual(2);
+            expect(harness.userMessageCalls[1]?.message).toContain('[CoworkAny Retry Execution Contract]');
+            expect(harness.userMessageCalls[1]?.message).toContain('command -v/which/where/Get-Command');
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('send_task_message injects concrete fallback command when previous run_command reports command-not-found', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '60';
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    emit({
+                        type: 'tool_call',
+                        runId: 'run-command-not-found',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: {
+                            command: 'python /tmp/bubble_sort.py',
+                        },
+                    });
+                    emit({
+                        type: 'tool_result',
+                        runId: 'run-command-not-found',
+                        toolCallId: 'tool-command-not-found',
+                        toolName: 'mastra_workspace_execute_command',
+                        result: '/bin/sh: python: command not found\n\nExit code: 127',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-command-not-found',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-command-not-found' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-command-not-found-retry-contract',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-command-not-found-retry-contract',
+                    content: '请运行 /tmp/bubble_sort.py 并告诉我结果',
+                    config: {
+                        maxRetries: 1,
+                    },
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 500);
+            });
+
+            expect(harness.userMessageCalls.length).toBeGreaterThanOrEqual(2);
+            expect(harness.userMessageCalls[1]?.message).toContain('Last failed command: python /tmp/bubble_sort.py');
+            expect(harness.userMessageCalls[1]?.message).toContain('Retry this fallback command first: python3 /tmp/bubble_sort.py');
         } finally {
             if (typeof previousRetryDelay === 'string') {
                 process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
@@ -1474,6 +2066,96 @@ describe('mastra entrypoint processor', () => {
         expect((sendResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(0);
         const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
         expect((textDelta?.payload as Record<string, unknown>)?.turnId).toBe('cmd-followup');
+    });
+
+    test('send_subagent_message routes follow-up to targeted subagent lane', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-subagent-followup',
+                    conversationThreadId: 'thread-subagent-followup',
+                    title: 'subagent followup',
+                    workspacePath: '/tmp/ws-subagent',
+                    createdAt: '2026-03-30T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-subagent-followup',
+                    executionPath: 'direct',
+                    agentTasks: [
+                        {
+                            taskId: 'agent-subtask-1',
+                            status: 'completed',
+                            summary: 'Completed first pass',
+                            updatedAt: '2026-03-30T00:00:00.000Z',
+                            completedAt: '2026-03-30T00:00:00.000Z',
+                        },
+                    ],
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-subagent-followup',
+            type: 'send_subagent_message',
+            payload: {
+                taskId: 'task-subagent-followup',
+                subagentTaskId: 'agent-subtask-1',
+                content: '继续补齐最近三天的数据并更新结论',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.threadId).toBe('thread-subagent-followup');
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.message).toContain('[CoworkAny Subagent Followup Contract]');
+        expect(harness.userMessageCalls[0]?.message).toContain('target_subagent_task_id=agent-subtask-1');
+        expect(harness.userMessageCalls[0]?.message).toContain('继续补齐最近三天的数据并更新结论');
+
+        const response = harness.outgoing.find((message) => message.type === 'send_subagent_message_response');
+        expect(response).toBeDefined();
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+    });
+
+    test('send_subagent_message rejects unknown subagent target with candidates', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-subagent-missing',
+                    conversationThreadId: 'thread-subagent-missing',
+                    title: 'subagent missing',
+                    workspacePath: '/tmp/ws-subagent',
+                    createdAt: '2026-03-30T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-subagent-missing',
+                    executionPath: 'direct',
+                    agentTasks: [
+                        {
+                            taskId: 'agent-existing',
+                            status: 'running',
+                            summary: 'Running',
+                            updatedAt: '2026-03-30T00:00:00.000Z',
+                        },
+                    ],
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-subagent-missing',
+            type: 'send_subagent_message',
+            payload: {
+                taskId: 'task-subagent-missing',
+                subagentTaskId: 'agent-unknown',
+                content: '继续执行',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const response = harness.outgoing.find((message) => message.type === 'send_subagent_message_response');
+        expect(response).toBeDefined();
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(false);
+        expect((response?.payload as Record<string, unknown>)?.error).toBe('subagent_not_found');
+        expect((response?.payload as Record<string, unknown>)?.availableSubagentTaskIds).toEqual(['agent-existing']);
     });
 
     test('send_task_message disables heavy skill prompt for default direct chat turns', async () => {
@@ -4156,6 +4838,77 @@ describe('mastra entrypoint processor', () => {
         expect(tasks[0]?.workspacePath).toBe('/tmp/ws-snapshot');
     });
 
+    test('get_runtime_snapshot includes delegated agent task lifecycle records', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-snapshot-agent-task',
+                    toolName: 'agent_task_notification',
+                    args: {
+                        taskId: 'subtask-snapshot-1',
+                        status: 'running',
+                        summary: 'Subtask started',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-snapshot-agent-task',
+                    toolName: 'agent_task_notification',
+                    toolCallId: 'agent-task:subtask-snapshot-1',
+                    result: {
+                        taskId: 'subtask-snapshot-1',
+                        status: 'completed',
+                        summary: 'Subtask completed',
+                    },
+                    isError: false,
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-snapshot-agent-task',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-snapshot-agent-task' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-snapshot-agent-task',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-snapshot-agent-task',
+                userQuery: 'run delegated task',
+            },
+        });
+        await harness.process({
+            id: 'cmd-get-snapshot-agent-task',
+            type: 'get_runtime_snapshot',
+            payload: {},
+        });
+
+        const snapshotResponse = harness.outgoing.find((message) =>
+            message.type === 'get_runtime_snapshot_response'
+            && message.commandId === 'cmd-get-snapshot-agent-task',
+        );
+        const snapshotPayload = toRecord(snapshotResponse?.payload);
+        expect(snapshotPayload.success).toBe(true);
+        const snapshot = toRecord(snapshotPayload.snapshot);
+        const tasks = Array.isArray(snapshot.tasks)
+            ? snapshot.tasks.map((item) => toRecord(item))
+            : [];
+        const task = tasks.find((item) => toString(item.taskId) === 'task-snapshot-agent-task');
+        const agentTasks = Array.isArray(task?.agentTasks)
+            ? task.agentTasks.map((item) => toRecord(item))
+            : [];
+        expect(agentTasks).toHaveLength(1);
+        expect(toString(agentTasks[0]?.taskId)).toBe('subtask-snapshot-1');
+        expect(toString(agentTasks[0]?.status)).toBe('completed');
+        const agentTaskProgress = toRecord(task?.agentTaskProgress);
+        expect(agentTaskProgress.total).toBe(1);
+        expect(agentTaskProgress.completed).toBe(1);
+        expect(agentTaskProgress.running).toBe(0);
+    });
+
     test('warmup_chat_runtime preloads runtime and returns MCP preload metrics', async () => {
         const harness = createHarness({
             onWarmupChatRuntime: async () => ({
@@ -4268,6 +5021,90 @@ describe('mastra entrypoint processor', () => {
         const resumedState = toRecord((resumedStateResponse?.payload as Record<string, unknown>)?.state);
         expect(resumedState.status).toBe('finished');
         expect(resumedState.checkpoint).toBeNull();
+    });
+
+    test('captures delegated agent task notifications into runtime state', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-agent-state-1',
+                    toolName: 'agent_task_notification',
+                    args: {
+                        taskId: 'agent-subtask-1',
+                        status: 'running',
+                        summary: 'Sub-agent started',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-agent-state-1',
+                    toolName: 'agent_task_notification',
+                    toolCallId: 'agent-task:agent-subtask-1',
+                    result: {
+                        taskId: 'agent-subtask-1',
+                        status: 'completed',
+                        summary: 'Sub-agent completed',
+                        result: 'Generated /tmp/sub-output.md',
+                        usage: {
+                            totalTokens: 88,
+                            toolUses: 2,
+                            durationMs: 420,
+                        },
+                    },
+                    isError: false,
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-agent-state-1',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-agent-state-1' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-start-agent-task-state',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-agent-task-state',
+                userQuery: 'run with subagent',
+                context: { workspacePath: '/tmp/ws-agent-task-state' },
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-get-runtime-state-agent-task',
+            type: 'get_task_runtime_state',
+            payload: {
+                taskId: 'task-agent-task-state',
+            },
+        });
+
+        const stateResponse = harness.outgoing.find((message) =>
+            message.type === 'get_task_runtime_state_response'
+            && message.commandId === 'cmd-get-runtime-state-agent-task',
+        );
+        const state = toRecord(toRecord(stateResponse?.payload).state);
+        const agentTasks = Array.isArray(state.agentTasks)
+            ? state.agentTasks.map((item) => toRecord(item))
+            : [];
+        expect(agentTasks).toHaveLength(1);
+        expect(toString(agentTasks[0]?.taskId)).toBe('agent-subtask-1');
+        expect(toString(agentTasks[0]?.status)).toBe('completed');
+        expect(toString(agentTasks[0]?.summary)).toBe('Sub-agent completed');
+        expect(toString(agentTasks[0]?.completedAt)).not.toBe('');
+        const agentTaskProgress = toRecord(state.agentTaskProgress);
+        expect(agentTaskProgress.total).toBe(1);
+        expect(agentTaskProgress.completed).toBe(1);
+        expect(Array.isArray(agentTaskProgress.recentActivity)).toBe(true);
+
+        const persisted = harness.persistedTaskStates()
+            .find((item) => item.taskId === 'task-agent-task-state');
+        expect(persisted).toBeDefined();
+        expect(Array.isArray(persisted?.agentTasks)).toBe(true);
+        expect(persisted?.agentTasks?.[0]?.status).toBe('completed');
+        expect(persisted?.agentTaskProgress?.completed).toBe(1);
     });
 
     test('set_task_checkpoint enforces checkpoint version and deduplicates by operationId', async () => {

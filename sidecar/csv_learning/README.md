@@ -1,39 +1,49 @@
 # Python CSV 读取学习指南
 
-## 学习目标
-掌握使用 Python 读取 CSV 文件的两种主要方法
+## 📁 文件说明
 
-## 文件说明
 - `sample_data.csv` - 示例数据文件
-- `example1_csv_module.py` - 使用标准库 csv 模块
-- `example2_pandas.py` - 使用 pandas 库
+- `method1_csv_module.py` - 使用标准库 csv 模块
+- `method2_pandas.py` - 使用 pandas 库
 
-## 运行步骤
+## 🚀 快速开始
 
-### 1. 运行标准库示例
+### 方法一：csv 模块（无需安装额外库）
+
 ```bash
-cd csv_learning
-python example1_csv_module.py
+python method1_csv_module.py
 ```
 
-### 2. 运行 pandas 示例（需要先安装 pandas）
+### 方法二：pandas（需要先安装）
+
 ```bash
 pip install pandas
-python example2_pandas.py
+python method2_pandas.py
 ```
 
-## 两种方法对比
+## 📚 学习要点
 
-| 特性 | csv 模块 | pandas |
-|------|---------|--------|
-| 安装 | 无需安装 | 需要安装 |
-| 学习曲线 | 简单 | 中等 |
-| 功能 | 基础读写 | 强大的数据分析 |
-| 适用场景 | 简单数据处理 | 复杂数据分析 |
-| 性能 | 较快 | 大文件更优 |
+### csv 模块
+- ✅ 标准库，无需安装
+- ✅ 适合简单的 CSV 读写
+- ✅ 内存占用小
+- ❌ 功能相对有限
 
-## 练习建议
-1. 先运行两个示例，观察输出
-2. 修改 sample_data.csv，添加更多数据
-3. 尝试读取自己的 CSV 文件
-4. 练习数据筛选和统计操作
+### pandas
+- ✅ 功能强大，适合数据分析
+- ✅ 支持复杂的数据操作
+- ✅ 可以轻松筛选、排序、统计
+- ❌ 需要额外安装
+
+## 💡 实践建议
+
+1. 先运行 `method1_csv_module.py` 了解基础用法
+2. 如果需要数据分析，再学习 pandas
+3. 尝试修改代码，添加自己的筛选条件
+4. 创建自己的 CSV 文件进行练习
+
+## 🔧 常见问题
+
+**编码问题**：如果遇到乱码，尝试使用 `encoding='gbk'` 或 `encoding='utf-8-sig'`
+
+**路径问题**：确保 Python 脚本和 CSV 文件在同一目录下

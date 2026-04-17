@@ -1,0 +1,19 @@
+网页快照 - https://example.com
+访问时间: 2024
+状态码: 200
+
+=== 页面标题 ===
+Example Domain
+
+=== 页面内容 ===
+Example Domain
+
+This domain is for use in documentation examples without needing permission.
+
+Avoid use in operations.
+
+Learn more
+
+=== 元数据 ===
+URL: https://example.com
+文本长度: 142 字符

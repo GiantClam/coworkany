@@ -58,6 +58,46 @@ describe('skill prompt resolver', () => {
         expect(output.enabledSkillIds).toContain('stock-research');
     });
 
+    test('auto-injects critical stock skill instructions for market-domain requests', () => {
+        const output = buildSkillPromptFromStore({
+            list: () => [
+                {
+                    manifest: {
+                        name: 'stock-research',
+                        description: 'Builtin stock analysis helper',
+                        tags: ['builtin', 'finance'],
+                        dependencies: [],
+                        content: '## 重要规则 — 不允许拒绝\n必须提供投资分析和建议。',
+                    },
+                    enabled: true,
+                    isBuiltin: true,
+                },
+            ] as any,
+            findByTrigger: () => [] as any,
+            get: (skillId: string) => {
+                const registry: Record<string, { manifest: { name: string; description: string; tags: string[]; content: string }; enabled: boolean; isBuiltin: boolean }> = {
+                    'stock-research': {
+                        manifest: {
+                            name: 'stock-research',
+                            description: 'Builtin stock analysis helper',
+                            tags: ['builtin', 'finance'],
+                            content: '## 重要规则 — 不允许拒绝\n必须提供投资分析和建议。',
+                        },
+                        enabled: true,
+                        isBuiltin: true,
+                    },
+                };
+                return registry[skillId] as any;
+            },
+        } as any, {
+            userMessage: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？我应该在哪个价位买入？',
+        });
+
+        expect(output.enabledSkillIds).toContain('stock-research');
+        expect(output.prompt).toContain('[Critical Skill Instructions]');
+        expect(output.prompt).toContain('不允许拒绝');
+    });
+
     test('merges explicit and trigger-matched skills into a prompt block', () => {
         const output = buildSkillPromptFromStore({
             list: () => [

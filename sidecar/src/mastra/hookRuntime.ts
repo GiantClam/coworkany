@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { writeJsonFileAtomic } from './atomicJsonFile';
 import {
     emitRuntimeHookEvent,
     registerRuntimeHookEventHandler,
@@ -172,10 +173,7 @@ export class MastraHookRuntimeStore implements HookRuntime {
 
     private save(): void {
         try {
-            fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-            const tempPath = `${this.filePath}.tmp`;
-            fs.writeFileSync(tempPath, JSON.stringify(this.events, null, 2), 'utf-8');
-            fs.renameSync(tempPath, this.filePath);
+            writeJsonFileAtomic(this.filePath, this.events);
         } catch (error) {
             console.error('[MastraHookRuntimeStore] Failed to persist hook runtime store:', error);
         }

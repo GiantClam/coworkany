@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { writeJsonFileAtomic } from './atomicJsonFile';
 import { createHash } from 'crypto';
 
 type CompressionTurn = {
@@ -422,11 +423,8 @@ export class TaskContextCompressionStore {
 
     private save(): void {
         try {
-            fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
             const records = Array.from(this.snapshots.values());
-            const tempFile = `${this.filePath}.tmp`;
-            fs.writeFileSync(tempFile, JSON.stringify(records, null, 2), 'utf-8');
-            fs.renameSync(tempFile, this.filePath);
+            writeJsonFileAtomic(this.filePath, records);
         } catch (error) {
             console.error('[TaskContextCompressionStore] Failed to persist context store:', error);
         }

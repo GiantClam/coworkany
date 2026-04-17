@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { writeJsonFileAtomic } from './atomicJsonFile';
 
 export type PolicyDecisionLogEntry = {
     id: string;
@@ -125,10 +126,7 @@ export class MastraPolicyDecisionLogStore implements PolicyDecisionLogStore {
 
     private save(): void {
         try {
-            fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-            const tempPath = `${this.filePath}.tmp`;
-            fs.writeFileSync(tempPath, JSON.stringify(this.entries, null, 2), 'utf-8');
-            fs.renameSync(tempPath, this.filePath);
+            writeJsonFileAtomic(this.filePath, this.entries);
         } catch (error) {
             console.error('[MastraPolicyDecisionLogStore] Failed to persist policy decision log:', error);
         }

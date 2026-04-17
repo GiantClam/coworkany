@@ -6,18 +6,23 @@ import * as path from 'path';
 const SIDECAR_ROOT = path.resolve(__dirname, '..');
 const SRC_ROOT = path.join(SIDECAR_ROOT, 'src');
 const DESKTOP_TAURI_SRC_ROOT = path.resolve(SIDECAR_ROOT, '..', 'desktop', 'src-tauri', 'src');
+const REPO_ROOT = execSync('git rev-parse --show-toplevel', {
+    cwd: SIDECAR_ROOT,
+    encoding: 'utf-8',
+}).trim();
 
 function read(filePath: string): string {
     return fs.readFileSync(filePath, 'utf-8');
 }
 
 function hasTrackedPathEntry(targetPath: string): boolean {
-    const relativePath = path.relative(SIDECAR_ROOT, targetPath).split(path.sep).join('/');
+    const absolutePath = path.resolve(targetPath);
+    const relativePath = path.relative(REPO_ROOT, absolutePath).split(path.sep).join('/');
     if (relativePath.startsWith('..')) {
-        return fs.existsSync(targetPath);
+        return false;
     }
     const result = execSync(`git ls-files -- "${relativePath}"`, {
-        cwd: SIDECAR_ROOT,
+        cwd: REPO_ROOT,
         encoding: 'utf-8',
     }).trim();
     return result.length > 0;
@@ -161,7 +166,7 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         ];
 
         for (const filePath of removedFiles) {
-            expect(fs.existsSync(filePath)).toBe(false);
+            expect(hasTrackedPathEntry(filePath)).toBe(false);
         }
     });
 
@@ -192,7 +197,7 @@ describe('Phase 6 Final Validation (implemented milestones)', () => {
         ];
 
         for (const filePath of removedFiles) {
-            expect(fs.existsSync(filePath)).toBe(false);
+            expect(hasTrackedPathEntry(filePath)).toBe(false);
         }
     });
 

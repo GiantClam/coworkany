@@ -1,0 +1,85 @@
+{
+  "generatedAt": "2026-04-14T04:06:12.381Z",
+  "repositoryRoot": "/Users/beihuang/Documents/github/coworkany",
+  "mode": "pr",
+  "subset": "sidecar",
+  "options": {
+    "changed": [],
+    "dryRun": false,
+    "retryFailures": 1
+  },
+  "summary": {
+    "totalStages": 5,
+    "passedStages": 5,
+    "failedStages": 0,
+    "skippedStages": 0,
+    "durationMs": 100676
+  },
+  "stages": [
+    {
+      "id": "sidecar-typecheck",
+      "label": "Sidecar Typecheck",
+      "command": "npm run typecheck",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 2632,
+      "optional": false,
+      "attempts": 1
+    },
+    {
+      "id": "sidecar-ci",
+      "label": "Sidecar CI Stable Tests",
+      "command": "npm run test:ci",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 314,
+      "optional": false,
+      "attempts": 1
+    },
+    {
+      "id": "sidecar-assistant-ui-contracts",
+      "label": "Sidecar Assistant UI Stream Contracts",
+      "command": "npm run test:assistant-ui-contracts",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 32358,
+      "optional": false,
+      "attempts": 1
+    },
+    {
+      "id": "sidecar-composite-regression-hard",
+      "label": "Sidecar Composite Regression Hard Gate",
+      "command": "npm run test:composite",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 32951,
+      "optional": false,
+      "attempts": 1
+    },
+    {
+      "id": "sidecar-control-plane-eval",
+      "label": "Sidecar Control-Plane Eval",
+      "command": "npm run eval:control-plane -- --out /Users/beihuang/Documents/github/coworkany/artifacts/codex-test/control-plane-eval-summary.json",
+      "cwd": "/Users/beihuang/Documents/github/coworkany/sidecar",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 32419,
+      "optional": false,
+      "attempts": 1
+    }
+  ],
+  "findings": [],
+  "flake": {
+    "retriesEnabled": true,
+    "retriedStages": []
+  },
+  "exitDecision": {
+    "status": "pass",
+    "hardFailCount": 0,
+    "qualityRegressionCount": 0
+  }
+}

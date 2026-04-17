@@ -8,6 +8,7 @@ import {
     ensureWorkspaceCommandPathAliases,
     getWorkspacePolicySnapshot,
     normalizeWorkspaceToolPath,
+    resolveWorkspaceSandboxEnv,
 } from '../src/mastra/workspace/runtime';
 
 describe('workspace path alias compatibility', () => {
@@ -87,5 +88,35 @@ describe('workspace path alias compatibility', () => {
         expect(overriddenPolicy.tools[WORKSPACE_TOOLS.FILESYSTEM.WRITE_FILE]?.requireApproval).toBe(false);
         expect(overriddenPolicy.tools[WORKSPACE_TOOLS.FILESYSTEM.WRITE_FILE]?.requireReadBeforeWrite).toBe(false);
         expect(overriddenPolicy.tools[WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]?.requireApproval).toBe(false);
+    });
+
+    test('workspace sandbox env disables python bytecode by default', () => {
+        const previous = process.env.PYTHONDONTWRITEBYTECODE;
+        delete process.env.PYTHONDONTWRITEBYTECODE;
+        try {
+            const env = resolveWorkspaceSandboxEnv();
+            expect(env.PYTHONDONTWRITEBYTECODE).toBe('1');
+        } finally {
+            if (previous === undefined) {
+                delete process.env.PYTHONDONTWRITEBYTECODE;
+            } else {
+                process.env.PYTHONDONTWRITEBYTECODE = previous;
+            }
+        }
+    });
+
+    test('workspace sandbox env respects explicit python bytecode setting', () => {
+        const previous = process.env.PYTHONDONTWRITEBYTECODE;
+        process.env.PYTHONDONTWRITEBYTECODE = '0';
+        try {
+            const env = resolveWorkspaceSandboxEnv();
+            expect(env.PYTHONDONTWRITEBYTECODE).toBe('0');
+        } finally {
+            if (previous === undefined) {
+                delete process.env.PYTHONDONTWRITEBYTECODE;
+            } else {
+                process.env.PYTHONDONTWRITEBYTECODE = previous;
+            }
+        }
     });
 });

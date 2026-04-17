@@ -1,0 +1,15 @@
+# 执行降级交付（超时保护）
+
+上游模型在最终综合阶段超时。为避免任务挂起，系统基于已完成工具执行给出最佳努力交付，请在关键决策前复核原始数据。
+
+原始请求：帮我制作一个关于"2026年AI在智慧城市中的发展"的PPT演示文稿，需要包含：1. 智慧城市的定义和发展背景 2. AI在智慧城市中的主要应用场景 3. 2026年最新技术和趋势 4. 成功案例分析 5. 未来展望 请先搜索相关信息，然后创建一个专业的PPT文件。 [CoworkAny Retry Execution Contract] - Previous attempt ended with "complete" but lacked required tool evidence. You MUST execute required tools before final completion. - Do not repeat refusal/disclaimer-only output in this retry. - This request requires writing deliverable files before completion. - You MUST call workspace file-write tools (write_to_file / replace_file_content) to persist artifacts.
+
+已完成工具进度：tool_call 5 次，tool_result 5 次。
+- 已执行网络检索并收集外部证据，请复核来源时效与口径一致性。
+- 已按任务要求准备交付文件。
+
+交付路径：
+- /Users/beihuang/Documents/github/coworkany/sidecar/refusal/disclaimer-
+
+降级原因：Error: stream_idle_timeout:10000
+建议：可直接重试本任务，或把请求拆分为“检索 -> 分析 -> 写入文件”三步以提升稳定性。

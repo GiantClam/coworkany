@@ -106,6 +106,16 @@ pub struct SendTaskMessageInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SendSubagentMessageInput {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "subagentTaskId")]
+    pub subagent_task_id: String,
+    pub content: String,
+    pub config: Option<StartTaskConfigInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ResumeInterruptedTaskInput {
     #[serde(rename = "taskId")]
     pub task_id: String,
@@ -295,6 +305,29 @@ pub struct SendTaskMessageResult {
     pub deduplicated: Option<bool>,
     #[serde(rename = "dedupReason", skip_serializing_if = "Option::is_none")]
     pub dedup_reason: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SendSubagentMessageResult {
+    pub success: bool,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "turnId", skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(rename = "queuePosition", skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deduplicated: Option<bool>,
+    #[serde(rename = "dedupReason", skip_serializing_if = "Option::is_none")]
+    pub dedup_reason: Option<String>,
+    #[serde(
+        rename = "availableSubagentTaskIds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub available_subagent_task_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
     pub error: Option<String>,
 }
 
@@ -2120,6 +2153,139 @@ pub async fn send_task_message(
         queue_position,
         deduplicated,
         dedup_reason,
+        error,
+    })
+}
+
+/// Send a follow-up message to a specific subagent task within an existing task
+#[tauri::command]
+pub async fn send_subagent_message(
+    input: SendSubagentMessageInput,
+    state: State<'_, SidecarState>,
+    app_handle: AppHandle,
+) -> Result<SendSubagentMessageResult, String> {
+    info!(
+        "send_subagent_message command received: task_id={}, subagent_task_id={}, content={}",
+        input.task_id,
+        input.subagent_task_id,
+        summarize_attachment_content_for_log(&input.content)
+    );
+
+    ensure_sidecar_running(&state, &app_handle).await?;
+
+    let config = input.config.map(|cfg| TaskConfig {
+        model_id: cfg.model_id,
+        execution_path: cfg.execution_path,
+        max_tokens: cfg.max_tokens,
+        max_history_messages: cfg.max_history_messages,
+        enabled_claude_skills: cfg.enabled_claude_skills,
+        enabled_toolpacks: cfg.enabled_toolpacks,
+        enabled_skills: cfg.enabled_skills,
+        voice_provider_mode: cfg.voice_provider_mode,
+    });
+
+    let task_id = input.task_id.clone();
+    let command = serde_json::to_value(IpcCommand::send_subagent_message(
+        task_id.clone(),
+        input.subagent_task_id,
+        input.content,
+        Some(build_platform_runtime_context(&app_handle, None)),
+        config,
+    ))
+    .map_err(|e| e.to_string())?;
+
+    let response = match send_command_and_wait_with_timeout_policy(&state, command, 30000, false)
+        .await
+    {
+        Ok(value) => value,
+        Err(error_message) => {
+            if error_message.starts_with("response timeout:") {
+                warn!(
+                    "send_subagent_message ack timed out; keeping transport healthy and treating as queued: task_id={}, detail={}",
+                    task_id,
+                    error_message
+                );
+                return Ok(SendSubagentMessageResult {
+                    success: true,
+                    task_id,
+                    turn_id: None,
+                    queue_position: None,
+                    deduplicated: None,
+                    dedup_reason: None,
+                    available_subagent_task_ids: None,
+                    details: None,
+                    error: None,
+                });
+            }
+            error!(
+                "Failed to send send_subagent_message command: {}",
+                error_message
+            );
+            return Ok(SendSubagentMessageResult {
+                success: false,
+                task_id,
+                turn_id: None,
+                queue_position: None,
+                deduplicated: None,
+                dedup_reason: None,
+                available_subagent_task_ids: None,
+                details: None,
+                error: Some(error_message),
+            });
+        }
+    };
+
+    let payload = response
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let success = payload
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let task_id = payload
+        .get("taskId")
+        .and_then(Value::as_str)
+        .unwrap_or(task_id.as_str())
+        .to_string();
+    let error = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| (!success).then(|| "send_subagent_message_failed".to_string()));
+    let turn_id = payload
+        .get("turnId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let queue_position = payload
+        .get("queuePosition")
+        .and_then(Value::as_u64)
+        .map(|value| value as u32);
+    let deduplicated = payload.get("deduplicated").and_then(Value::as_bool);
+    let dedup_reason = payload
+        .get("dedupReason")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let available_subagent_task_ids = payload.get("availableSubagentTaskIds").and_then(|value| {
+        value.as_array().map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+    });
+    let details = payload.get("details").cloned();
+
+    Ok(SendSubagentMessageResult {
+        success,
+        task_id,
+        turn_id,
+        queue_position,
+        deduplicated,
+        dedup_reason,
+        available_subagent_task_ids,
+        details,
         error,
     })
 }

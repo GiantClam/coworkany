@@ -19,6 +19,28 @@ function cloneTaskRuntimeState(state: TaskRuntimeState): TaskRuntimeState {
                 ...state.retry,
             }
             : undefined,
+        agentTasks: Array.isArray(state.agentTasks)
+            ? state.agentTasks.map((entry) => ({
+                ...entry,
+                usage: entry.usage
+                    ? { ...entry.usage }
+                    : undefined,
+            }))
+            : undefined,
+        agentTaskProgress: state.agentTaskProgress
+            ? {
+                ...state.agentTaskProgress,
+                usageTotals: state.agentTaskProgress.usageTotals
+                    ? { ...state.agentTaskProgress.usageTotals }
+                    : undefined,
+                lastEvent: state.agentTaskProgress.lastEvent
+                    ? { ...state.agentTaskProgress.lastEvent }
+                    : undefined,
+                recentActivity: Array.isArray(state.agentTaskProgress.recentActivity)
+                    ? state.agentTaskProgress.recentActivity.map((entry) => ({ ...entry }))
+                    : [],
+            }
+            : undefined,
         operationLog: Array.isArray(state.operationLog)
             ? state.operationLog.map((entry) => ({ ...entry }))
             : undefined,

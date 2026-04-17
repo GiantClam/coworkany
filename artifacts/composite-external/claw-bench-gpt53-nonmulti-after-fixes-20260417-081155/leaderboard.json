@@ -1,0 +1,181 @@
+{
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "overall": 35.49,
+  "effectiveOverall": 35.49,
+  "taskCompletion": 16.67,
+  "effectiveTaskCompletion": 16.67,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 35.49,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
+  "metadata": {
+    "runs_per_task": 1,
+    "total_tasks": 12,
+    "invalid_tasks": 0,
+    "effective_tasks": 12,
+    "overall_pass_rate_raw": 0.1667,
+    "overall_pass_rate_effective": 0.1667,
+    "overall_mean_score_raw": 0.3549,
+    "overall_mean_score_effective": 0.3549
+  },
+  "taskDetails": [
+    {
+      "taskId": "comm-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.4118,
+      "stdDev": 0,
+      "ci95": [
+        0.4118,
+        0.4118
+      ]
+    },
+    {
+      "taskId": "debug-002",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.0526,
+      "stdDev": 0,
+      "ci95": [
+        0.0526,
+        0.0526
+      ]
+    },
+    {
+      "taskId": "code-001",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.6,
+      "stdDev": 0,
+      "ci95": [
+        0.6,
+        0.6
+      ]
+    },
+    {
+      "taskId": "eml-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.5,
+      "stdDev": 0,
+      "ci95": [
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "taskId": "db-002",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.15,
+      "stdDev": 0,
+      "ci95": [
+        0.15,
+        0.15
+      ]
+    },
+    {
+      "taskId": "fin-008",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "doc-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.3333,
+      "stdDev": 0,
+      "ci95": [
+        0.3333,
+        0.3333
+      ]
+    },
+    {
+      "taskId": "edu-001",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "web-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.2105,
+      "stdDev": 0,
+      "ci95": [
+        0.2105,
+        0.2105
+      ]
+    },
+    {
+      "taskId": "math-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "plan-002",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    },
+    {
+      "taskId": "tool-002",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
+      "ci95": [
+        0,
+        0
+      ]
+    }
+  ]
+}

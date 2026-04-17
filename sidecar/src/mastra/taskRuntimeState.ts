@@ -25,6 +25,51 @@ export type TaskRuntimeRetryState = {
     lastError?: string;
 };
 
+export type TaskRuntimeAgentTaskStatus = 'running' | 'completed' | 'failed' | 'killed';
+
+export type TaskRuntimeAgentTaskUsage = {
+    totalTokens?: number;
+    toolUses?: number;
+    durationMs?: number;
+};
+
+export type TaskRuntimeAgentTask = {
+    taskId: string;
+    status: TaskRuntimeAgentTaskStatus;
+    summary: string;
+    result?: string;
+    usage?: TaskRuntimeAgentTaskUsage;
+    startedAt?: string;
+    updatedAt: string;
+    completedAt?: string;
+    runId?: string;
+    traceId?: string;
+    turnId?: string;
+};
+
+export type TaskRuntimeAgentTaskProgressEvent = {
+    taskId: string;
+    status: TaskRuntimeAgentTaskStatus;
+    summary: string;
+    at: string;
+    runId?: string;
+    traceId?: string;
+    turnId?: string;
+};
+
+export type TaskRuntimeAgentTaskProgress = {
+    total: number;
+    running: number;
+    completed: number;
+    failed: number;
+    killed: number;
+    terminal: number;
+    usageTotals?: TaskRuntimeAgentTaskUsage;
+    lastUpdatedAt: string;
+    lastEvent?: TaskRuntimeAgentTaskProgressEvent;
+    recentActivity: TaskRuntimeAgentTaskProgressEvent[];
+};
+
 export type TaskTurnContractMode = 'chat' | 'task';
 
 export type TaskTurnContractDomain = 'market' | 'weather' | 'news' | 'browser' | 'general';
@@ -75,6 +120,8 @@ export type TaskRuntimeState = {
     checkpoint?: TaskRuntimeCheckpoint;
     checkpointVersion?: number;
     retry?: TaskRuntimeRetryState;
+    agentTasks?: TaskRuntimeAgentTask[];
+    agentTaskProgress?: TaskRuntimeAgentTaskProgress;
     operationLog?: TaskRuntimeOperationRecord[];
     executionPath?: TaskRuntimeExecutionPath;
     turnContract?: TaskTurnContract;
@@ -110,6 +157,13 @@ const VALID_EXECUTION_PATHS = new Set<TaskRuntimeExecutionPath>([
     'direct',
     'workflow',
     'workflow_fallback',
+]);
+
+const VALID_AGENT_TASK_STATUSES = new Set<TaskRuntimeAgentTaskStatus>([
+    'running',
+    'completed',
+    'failed',
+    'killed',
 ]);
 
 function pickNonEmptyString(value: unknown): string | undefined {
@@ -169,6 +223,140 @@ function normalizeRetry(value: unknown): TaskRuntimeRetryState | undefined {
         maxAttempts,
         lastRetryAt: pickNonEmptyString(raw.lastRetryAt),
         lastError: pickNonEmptyString(raw.lastError),
+    };
+}
+
+function normalizeFiniteNumber(value: unknown): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return undefined;
+    }
+    return value;
+}
+
+function normalizeAgentTaskUsage(value: unknown): TaskRuntimeAgentTaskUsage | undefined {
+    const raw = pickRecord(value);
+    if (!raw) {
+        return undefined;
+    }
+    const totalTokens = normalizeFiniteNumber(raw.totalTokens);
+    const toolUses = normalizeFiniteNumber(raw.toolUses);
+    const durationMs = normalizeFiniteNumber(raw.durationMs);
+    if (totalTokens === undefined && toolUses === undefined && durationMs === undefined) {
+        return undefined;
+    }
+    return {
+        totalTokens,
+        toolUses,
+        durationMs,
+    };
+}
+
+function normalizeAgentTask(value: unknown): TaskRuntimeAgentTask | undefined {
+    const raw = pickRecord(value);
+    if (!raw) {
+        return undefined;
+    }
+    const taskId = pickNonEmptyString(raw.taskId);
+    const statusRaw = pickNonEmptyString(raw.status);
+    const summary = pickNonEmptyString(raw.summary);
+    const updatedAt = pickNonEmptyString(raw.updatedAt);
+    if (!taskId || !statusRaw || !summary || !updatedAt) {
+        return undefined;
+    }
+    if (!VALID_AGENT_TASK_STATUSES.has(statusRaw as TaskRuntimeAgentTaskStatus)) {
+        return undefined;
+    }
+    return {
+        taskId,
+        status: statusRaw as TaskRuntimeAgentTaskStatus,
+        summary,
+        result: pickNonEmptyString(raw.result),
+        usage: normalizeAgentTaskUsage(raw.usage),
+        startedAt: pickNonEmptyString(raw.startedAt),
+        updatedAt,
+        completedAt: pickNonEmptyString(raw.completedAt),
+        runId: pickNonEmptyString(raw.runId),
+        traceId: pickNonEmptyString(raw.traceId),
+        turnId: pickNonEmptyString(raw.turnId),
+    };
+}
+
+function normalizeAgentTasks(value: unknown): TaskRuntimeAgentTask[] | undefined {
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+    const records = value
+        .map((item) => normalizeAgentTask(item))
+        .filter((item): item is TaskRuntimeAgentTask => Boolean(item));
+    return records.length > 0 ? records : undefined;
+}
+
+function normalizeAgentTaskProgressEvent(value: unknown): TaskRuntimeAgentTaskProgressEvent | undefined {
+    const raw = pickRecord(value);
+    if (!raw) {
+        return undefined;
+    }
+    const taskId = pickNonEmptyString(raw.taskId);
+    const statusRaw = pickNonEmptyString(raw.status);
+    const summary = pickNonEmptyString(raw.summary);
+    const at = pickNonEmptyString(raw.at);
+    if (!taskId || !statusRaw || !summary || !at) {
+        return undefined;
+    }
+    if (!VALID_AGENT_TASK_STATUSES.has(statusRaw as TaskRuntimeAgentTaskStatus)) {
+        return undefined;
+    }
+    return {
+        taskId,
+        status: statusRaw as TaskRuntimeAgentTaskStatus,
+        summary,
+        at,
+        runId: pickNonEmptyString(raw.runId),
+        traceId: pickNonEmptyString(raw.traceId),
+        turnId: pickNonEmptyString(raw.turnId),
+    };
+}
+
+function normalizeAgentTaskProgress(value: unknown): TaskRuntimeAgentTaskProgress | undefined {
+    const raw = pickRecord(value);
+    if (!raw) {
+        return undefined;
+    }
+    const total = normalizeNonNegativeInteger(raw.total);
+    const running = normalizeNonNegativeInteger(raw.running);
+    const completed = normalizeNonNegativeInteger(raw.completed);
+    const failed = normalizeNonNegativeInteger(raw.failed);
+    const killed = normalizeNonNegativeInteger(raw.killed);
+    const terminal = normalizeNonNegativeInteger(raw.terminal);
+    const lastUpdatedAt = pickNonEmptyString(raw.lastUpdatedAt);
+    if (
+        total === undefined
+        || running === undefined
+        || completed === undefined
+        || failed === undefined
+        || killed === undefined
+        || terminal === undefined
+        || !lastUpdatedAt
+    ) {
+        return undefined;
+    }
+    const lastEvent = normalizeAgentTaskProgressEvent(raw.lastEvent);
+    const recentActivity = Array.isArray(raw.recentActivity)
+        ? raw.recentActivity
+            .map((item) => normalizeAgentTaskProgressEvent(item))
+            .filter((item): item is TaskRuntimeAgentTaskProgressEvent => Boolean(item))
+        : [];
+    return {
+        total,
+        running,
+        completed,
+        failed,
+        killed,
+        terminal,
+        usageTotals: normalizeAgentTaskUsage(raw.usageTotals),
+        lastUpdatedAt,
+        lastEvent,
+        recentActivity,
     };
 }
 
@@ -305,6 +493,8 @@ export function toTaskRuntimeState(value: unknown): TaskRuntimeState | null {
         checkpoint,
         checkpointVersion,
         retry: normalizeRetry(raw.retry),
+        agentTasks: normalizeAgentTasks(raw.agentTasks),
+        agentTaskProgress: normalizeAgentTaskProgress(raw.agentTaskProgress),
         operationLog: normalizeOperationLog(raw.operationLog),
         executionPath: VALID_EXECUTION_PATHS.has(raw.executionPath as TaskRuntimeExecutionPath)
             ? raw.executionPath as TaskRuntimeExecutionPath

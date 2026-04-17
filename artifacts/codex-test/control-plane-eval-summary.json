@@ -1,0 +1,26 @@
+{
+  "totals": {
+    "totalCases": 164,
+    "passedCases": 164,
+    "failedCases": 0
+  },
+  "metrics": {
+    "clarificationRate": 0,
+    "unnecessaryClarificationRate": 0,
+    "contractFreezeExpectationPassRate": 1,
+    "artifactExpectationPassRate": 1,
+    "artifactSatisfactionRate": 1,
+    "runtimeReplayPassRate": 1
+  },
+  "coverage": {
+    "productionReplaySources": {
+      "canary": {
+        "totalCases": 1,
+        "passedCases": 1,
+        "failedCases": 0,
+        "runtimeReplayCases": 1,
+        "runtimeReplayPassedCases": 1
+      }
+    }
+  }
+}

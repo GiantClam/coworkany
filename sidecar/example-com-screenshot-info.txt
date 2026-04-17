@@ -1,0 +1,13 @@
+Screenshot Capture Report
+========================
+
+URL: https://example.com
+Timestamp: 2026-04-15T14:26:32.934Z
+Screenshot File: example-com-screenshot.png
+File Size: 16,578 bytes (16K)
+Image Format: PNG image data, 1280 x 720, 8-bit/color RGB, non-interlaced
+
+Page Title: Example Domain
+Page Content: This domain is for use in documentation examples without needing permission.
+
+Status: Successfully captured and saved

@@ -2,6 +2,62 @@ import { describe, expect, test } from 'bun:test';
 import { STANDARD_TOOLS } from '../src/tools/standard';
 
 describe('run_command cancellation', () => {
+    test('automatically retries command-not-found once with a safe alternative', async () => {
+        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        if (!runCommand) {
+            throw new Error('run_command tool not found');
+        }
+
+        const result = await runCommand.handler(
+            {
+                command: `python99 -c "print('auto-retry-ok')"`,
+                timeout_ms: 5000,
+            },
+            {
+                workspacePath: process.cwd(),
+                taskId: 'task-command-auto-retry',
+            }
+        ) as Record<string, unknown>;
+
+        expect(result.retry_attempted).toBe(true);
+        expect(typeof result.retry_command).toBe('string');
+        expect((result.retry_command as string).startsWith('python3 ')).toBe(true);
+        expect(result.resolved_by_retry).toBe(true);
+        expect(result.exit_code).toBe(0);
+
+        const attempts = Array.isArray(result.attempts) ? result.attempts : [];
+        expect(attempts.length).toBe(2);
+    });
+
+    test('returns directly executable fallback commands for command-not-found errors', async () => {
+        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        if (!runCommand) {
+            throw new Error('run_command tool not found');
+        }
+
+        const result = await runCommand.handler(
+            {
+                command: 'python ./.coworkany/test-workspace/s2-calculator.py',
+                timeout_ms: 5000,
+            },
+            {
+                workspacePath: process.cwd(),
+                taskId: 'task-command-recovery-shape',
+            }
+        ) as Record<string, unknown>;
+
+        if (result.exit_code === 0) {
+            // Environment already provides `python`; recovery hints are unnecessary in this case.
+            return;
+        }
+
+        expect(result.error_type).toBe('not_found');
+        const alternatives = Array.isArray(result.alternative_commands)
+            ? result.alternative_commands as string[]
+            : [];
+        expect(alternatives.some((candidate) => candidate.startsWith('python3 '))).toBe(true);
+    });
+
     test('kills the running command when task cancellation is requested', async () => {
         const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
         if (!runCommand) {

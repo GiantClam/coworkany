@@ -45,6 +45,10 @@ const TEMPORARY_UNAVAILABLE_PATTERNS: RegExp[] = [
     /rate.?limit|too many requests/i,
     /temporar(?:y|ily).*(unavailable|error)?/i,
     /econnreset|enotfound|network error/i,
+    /unable to get issuer certificate/i,
+    /unable to verify (?:the first|leaf) certificate/i,
+    /self[-\s]?signed certificate/i,
+    /UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+/i,
     /No snapshot found for this workflow run/i,
 ];
 

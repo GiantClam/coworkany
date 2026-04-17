@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2026年AI在智慧城市中的发展</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Microsoft YaHei', 'PingFang SC', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+        .slide-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .slide {
+            display: none;
+            width: 90%;
+            max-width: 1200px;
+            height: 85vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 60px;
+            overflow-y: auto;
+        }
+        .slide.active {
+            display: block;
+            animation: slideIn 0.5s ease;
+        }
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        h1 {
+            color: #667eea;
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        h2 {
+            color: #764ba2;
+            font-size: 36px;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+        h3 {
+            color: #667eea;
+            font-size: 28px;
+            margin: 25px 0 15px 0;
+        }
+        p, li {
+            font-size: 20px;
+            line-height: 1.8;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        ul {
+            margin-left: 30px;
+        }
+        .subtitle {
+            text-align: center;
+            font-size: 24px;
+            color: #666;
+            margin-top: 20px;
+        }
+        .highlight {
+            background: linear-gradient(120deg, #84fab0 0%, #8fd3f4 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .case-study {
+            background: #f8f9fa;
+            padding: 20px;
+            border-left: 5px solid #667eea;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .navigation {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            z-index: 1000;
+        }
+        button {
+            background: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 18px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            transition: all 0.3s;
+        }
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+        }
+        .slide-number {
+            position: fixed;
+            top: 30px;
+            right: 30px;
+            background: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 16px;
+            color: #667eea;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .grid-item {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="slide-number" id="slideNumber">1 / 7</div>
+    
+    <div class="slide-container">
+        <!-- 幻灯片 1: 封面 -->
+        <div class="slide active">
+            <h1>2026年AI在智慧城市中的发展</h1>
+            <p class="subtitle">从愿景到现实：人工智能重塑城市未来</p>
+            <div style="text-align: center; margin-top: 100px;">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'%3E%3Crect fill='%23667eea' width='400' height='300' rx='20'/%3E%3Ctext x='200' y='150' font-size='80' fill='white' text-anchor='middle' font-family='Arial'%3E🏙️🤖%3C/text%3E%3C/svg%3E" alt="AI Smart City">
+            </div>
+            <p class="subtitle" style="margin-top: 80px; font-size: 20px;">演示文稿 | 2026年</p>
+        </div>
+
+        <!-- 幻灯片 2: 智慧城市的定义和发展背景 -->
+        <div class="slide">
+            <h2>智慧城市的定义和发展背景</h2>
+            
+            <h3>📋 什么是智慧城市？</h3>
+            <p>智慧城市不仅仅是技术或传感器的应用，而是通过收集城市环境信息并利用这些信息做出决策的能力。人工智能是实现这一目标的关键技术。</p>
+            
+            <div class="highlight">
+                <h3>🌍 发展背景</h3>
+                <ul>
+                    <li><strong>城市化加速</strong>：全球超过55%的人口居住在城市，预计2050年将达到68%</li>
+                    <li><strong>资源压力</strong>：交通拥堵、能源消耗、环境污染等城市问题日益严峻</li>
+                    <li><strong>技术成熟</strong>：AI、物联网、5G、大数据等技术的成熟为智慧城市提供了基础</li>
+                    <li><strong>政策推动</strong>：各国政府积极推动智慧城市建设，投资规模持续增长</li>
+                </ul>
+            </div>
+
+            <h3>🎯 核心目标</h3>
+            <p>提高城市运营效率、改善居民生活质量、促进可持续发展</p>
+        </div>
+
+        <!-- 幻灯片 3: AI在智慧城市中的主要应用场景 -->
+        <div class="slide">
+            <h2>AI在智慧城市中的主要应用场景</h2>
+            
+            <div class="grid">
+                <div class="grid-item">
+                    <h3>🚦 智能交通管理</h3>
+                    <ul>
+                        <li>AI控制的交通信号灯实时优化</li>
+                        <li>智能交通流量预测与疏导</li>
+                        <li>自动驾驶车辆协调</li>
+                        <li>停车位智能分配</li>
+                    </ul>
+                </div>
+                
+                <div class="grid-item">
+                    <h3>⚡ 智能能源管理</h3>
+                    <ul>
+                        <li>电网负载预测与优化</li>
+                        <li>可再生能源智能调度</li>
+                        <li>建筑能耗智能控制</li>
+                        <li>长时储能系统部署</li>
+                    </ul>
+                </div>
+                
+                <div class="grid-item">
+                    <h3>🏥 智慧公共服务</h3>
+                    <ul>
+                        <li>医疗资源智能分配</li>
+                        <li>应急响应系统优化</li>
+                        <li>公共安全监控与预警</li>
+                        <li>数字化政务流程</li>
+                    </ul>
+                </div>
+                
+                <div class="grid-item">
+                    <h3>🌱 环境监测与治理</h3>
+                    <ul>
+                        <li>空气质量实时监测</li>
+                        <li>水资源智能管理</li>
+                        <li>垃圾分类与回收优化</li>
+                        <li>城市绿化智能维护</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- 幻灯片 4: 2026年最新技术和趋势 -->
+        <div class="slide">
+            <h2>2026年最新技术和趋势</h2>
+            
+            <div class="highlight">
+                <h3>🚀 技术突破</h3>
+                <ul>
+                    <li><strong>基础模型AI</strong>：从模块化系统转向统一的基础AI模型，提升自动驾驶等应用的智能水平</li>
+                    <li><strong>实时AI决策</strong>：AI系统能够实时处理城市数据并做出即时决策</li>
+                    <li><strong>跨系统协调</strong>：AI能够协调复杂的城市系统，实现跨部门、跨领域的智能化管理</li>
+                    <li><strong>边缘AI计算</strong>：在设备端进行AI计算，降低延迟，提高响应速度</li>
+                </ul>
+            </div>
+
+            <h3>📊 发展趋势</h3>
+            <ul>
+                <li><strong>务实的AI应用</strong>：从概念验证转向实际部署，注重可衡量的成果</li>
+                <li><strong>数据集成与共享</strong>：GIS和数据集成技术广泛应用，实现城市数据的统一管理</li>
+                <li><strong>开源AI主导</strong>：中国等国家的开源AI模型在数据收集和应用方面取得领先</li>
+                <li><strong>能源需求激增</strong>：AI数据中心的能源需求推动长时储能技术的发展</li>
+                <li><strong>规模化部署</strong>：从试点项目转向大规模基础设施部署</li>
+            </ul>
+        </div>
+
+        <!-- 幻灯片 5: 成功案例分析（1） -->
+        <div class="slide">
+            <h2>成功案例分析（一）</h2>
+            
+            <div class="case-study">
+                <h3>🇨🇦 多伦多：AI交通信号灯系统</h3>
+                <p><strong>实施时间</strong>：2026年4月</p>
+                <p><strong>应用场景</strong>：央街（Yonge Street）等主要道路的交通拥堵治理</p>
+                <p><strong>技术方案</strong>：</p>
+                <ul>
+                    <li>部署AI控制的智能交通信号灯</li>
+                    <li>实时检测交通流量并动态调整信号时长</li>
+                    <li>预测交通模式并提前优化路网</li>
+                </ul>
+                <p><strong>成果</strong>：显著减少交通拥堵，提高道路通行效率</p>
+            </div>
+
+            <div class="case-study">
+                <h3>🇨🇳 深圳：下一代自动驾驶系统</h3>
+                <p><strong>实施时间</strong>：2026年3月</p>
+                <p><strong>技术亮点</strong>：</p>
+                <ul>
+                    <li>采用基础AI模型替代传统模块化系统</li>
+                    <li>整合车载摄像头、激光雷达等多源数据</li>
+                    <li>实现城市街道的高级别自动驾驶</li>
+                </ul>
+                <p><strong>意义</strong>：展示了AI在复杂城市环境中的应用潜力</p>
+            </div>
+        </div>
+
+        <!-- 幻灯片 6: 成功案例分析（2）和挑战 -->
+        <div class="slide">
+            <h2>成功案例分析（二）与面临挑战</h2>
+            
+            <div class="case-study">
+                <h3>🌏 台北：智慧城市峰会展示的规模化AI部署</h3>
+                <p><strong>时间</strong>：2026年智慧城市峰会</p>
+                <p><strong>核心发现</strong>：</p>
+                <ul>
+                    <li>智慧城市成功的关键不再是部署新技术，而是协调跨利益相关者的复杂系统</li>
+                    <li>AI在城市基础设施中的规模化应用需要标准化和互操作性</li>
+                    <li>数字采购和工作流自动化成为城市高效运营的基础</li>
+                </ul>
+            </div>
+
+            <h3>⚠️ 面临的挑战</h3>
+            <ul>
+                <li><strong>能源供应</strong>：AI数据中心的巨大能源需求对电网造成压力</li>
+                <li><strong>数据隐私</strong>：大规模数据收集引发的隐私保护问题</li>
+                <li><strong>技术标准</strong>：缺乏统一的技术标准和互操作性规范</li>
+                <li><strong>投资回报</strong>：高额投资与实际效益之间的平衡</li>
+                <li><strong>人才短缺</strong>：AI和智慧城市专业人才供不应求</li>
+            </ul>
+        </div>
+
+        <!-- 幻灯片 7: 未来展望 -->
+        <div class="slide">
+            <h2>未来展望</h2>
+            
+            <h3>🔮 2027-2030年发展方向</h3>
+            
+            <div class="highlight">
+                <h3>技术演进</h3>
+                <ul>
+                    <li><strong>通用AI城市大脑</strong>：统一的AI平台管理整个城市的各个系统</li>
+                    <li><strong>数字孪生城市</strong>：完整的城市虚拟副本用于模拟和优化</li>
+                    <li><strong>量子计算应用</strong>：解决超大规模城市优化问题</li>
+                    <li><strong>6G网络支持</strong>：超低延迟的万物互联</li>
+                </ul>
+            </div>
+
+            <h3>🎯 战略重点</h3>
+            <ul>
+                <li><strong>以人为本</strong>：技术服务于提升居民生活质量和幸福感</li>
+                <li><strong>可持续发展</strong>：碳中和目标驱动的绿色智慧城市</li>
+                <li><strong>韧性城市</strong>：增强城市应对突发事件的能力</li>
+                <li><strong>包容性增长</strong>：确保所有居民都能享受智慧城市的红利</li>
+                <li><strong>国际合作</strong>：跨国界的经验分享和标准制定</li>
+            </ul>
+
+            <div style="text-align: center; margin-top: 40px; padding: 20px; background: linear-gradient(120deg, #84fab0 0%, #8fd3f4 100%); border-radius: 10px;">
+                <p style="font-size: 24px; font-weight: bold; color: #333;">AI正在重新定义城市的未来<br>让我们共同创造更智能、更宜居的城市！</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="navigation">
+        <button onclick="previousSlide()">← 上一页</button>
+        <button onclick="nextSlide()">下一页 →</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+
+        function showSlide(n) {
+            slides[currentSlide].classList.remove('active');
+            currentSlide = (n + totalSlides) % totalSlides;
+            slides[currentSlide].classList.add('active');
+            document.getElementById('slideNumber').textContent = `${currentSlide + 1} / ${totalSlides}`;
+        }
+
+        function nextSlide() {
+            showSlide(currentSlide + 1);
+        }
+
+        function previousSlide() {
+            showSlide(currentSlide - 1);
+        }
+
+        // 键盘导航
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                previousSlide();
+            }
+        });
+
+        // 触摸滑动支持
+        let touchStartX = 0;
+        let touchEndX = 0;
+
+        document.addEventListener('touchstart', e => {
+            touchStartX = e.changedTouches[0].screenX;
+        });
+
+        document.addEventListener('touchend', e => {
+            touchEndX = e.changedTouches[0].screenX;
+            if (touchStartX - touchEndX > 50) {
+                nextSlide();
+            } else if (touchEndX - touchStartX > 50) {
+                previousSlide();
+            }
+        });
+    </script>
+</body>
+</html>

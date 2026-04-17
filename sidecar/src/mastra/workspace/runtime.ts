@@ -282,6 +282,12 @@ function createWorkspaceFilesystem(workspacePath: string): LocalFilesystem {
     return filesystem;
 }
 
+export function resolveWorkspaceSandboxEnv(): NodeJS.ProcessEnv {
+    return {
+        PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE ?? '1',
+    };
+}
+
 function createWorkspaceEntry(input: {
     workspacePath: string;
     workspaceCacheKey: string;
@@ -299,6 +305,7 @@ function createWorkspaceEntry(input: {
             ? new LocalSandbox({
                 workingDirectory: workspacePath,
                 timeout,
+                env: resolveWorkspaceSandboxEnv(),
             })
             : undefined,
         tools: toolsPolicy,

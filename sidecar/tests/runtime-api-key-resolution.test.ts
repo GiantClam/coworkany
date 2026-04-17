@@ -62,4 +62,14 @@ describe('resolveMissingApiKeyForModel', () => {
         delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
         expect(resolveMissingApiKeyForModel('google/gemini-2.5-flash')).toBe('GOOGLE_GENERATIVE_AI_API_KEY');
     });
+
+    test('prefers anthropic key for explicit anthropic model even when openai-compatible profile provider is configured', () => {
+        process.env.COWORKANY_LLM_CONFIG_PROVIDER = 'aiberm';
+        process.env.OPENAI_API_KEY = 'sk-aiberm';
+        delete process.env.ANTHROPIC_API_KEY;
+        expect(resolveMissingApiKeyForModel('anthropic/claude-sonnet-4-5')).toBe('ANTHROPIC_API_KEY');
+
+        process.env.ANTHROPIC_API_KEY = 'sk-ant';
+        expect(resolveMissingApiKeyForModel('anthropic/claude-sonnet-4-5')).toBeNull();
+    });
 });

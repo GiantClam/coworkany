@@ -14,6 +14,7 @@ type SkillPromptOutput = {
     enabledSkillIds: string[];
 };
 const EXPLICIT_SKILL_CONTENT_MAX_CHARS = 2_000;
+const AUTO_CRITICAL_SKILL_CONTENT_MAX_CHARS = 2_400;
 
 function normalizeSkillIds(value: unknown): string[] {
     if (!Array.isArray(value)) {
@@ -27,7 +28,7 @@ function normalizeSkillIds(value: unknown): string[] {
 
 function readSkillInstructionContent(skill: {
     manifest: Record<string, unknown>;
-}): string | undefined {
+}, maxChars = EXPLICIT_SKILL_CONTENT_MAX_CHARS): string | undefined {
     const raw = skill.manifest.content;
     if (typeof raw !== 'string') {
         return undefined;
@@ -36,13 +37,17 @@ function readSkillInstructionContent(skill: {
     if (normalized.length === 0) {
         return undefined;
     }
-    if (normalized.length <= EXPLICIT_SKILL_CONTENT_MAX_CHARS) {
+    if (normalized.length <= maxChars) {
         return normalized;
     }
-    return `${normalized.slice(0, EXPLICIT_SKILL_CONTENT_MAX_CHARS)}\n...[truncated]`;
+    return `${normalized.slice(0, maxChars)}\n...[truncated]`;
 }
 
 type SkillPromptDomain = ReturnType<typeof detectTaskIntentDomain>;
+
+const AUTO_CRITICAL_SKILL_IDS_BY_DOMAIN: Partial<Record<SkillPromptDomain, string[]>> = {
+    market: ['stock-research'],
+};
 
 const DOMAIN_SKILL_KEYWORDS: Record<SkillPromptDomain, string[]> = {
     market: ['stock', 'stocks', 'market', 'finance', 'financial', 'invest', 'investment', 'equity', 'ticker', 'quote', '股', '股票', '港股', '美股', '行情', '股价', '投资', '财经'],
@@ -213,6 +218,30 @@ export function buildSkillPromptFromStore(
     if (explicitInstructionBlocks.length > 0) {
         lines.push('', '[Explicit Skill Instructions]');
         for (const block of explicitInstructionBlocks) {
+            lines.push(`Skill: ${block.name}`);
+            lines.push(block.content);
+        }
+    }
+    const criticalSkillIds = new Set(
+        (AUTO_CRITICAL_SKILL_IDS_BY_DOMAIN[domain] ?? [])
+            .map((skillId) => skillId.trim().toLowerCase())
+            .filter((skillId) => skillId.length > 0),
+    );
+    const autoCriticalInstructionBlocks = resolved
+        .filter((skill) => criticalSkillIds.has(skill.manifest.name.trim().toLowerCase()))
+        .filter((skill) => !explicitSet.has(skill.manifest.name))
+        .map((skill) => ({
+            name: skill.manifest.name,
+            content: readSkillInstructionContent(
+                skill as unknown as { manifest: Record<string, unknown> },
+                AUTO_CRITICAL_SKILL_CONTENT_MAX_CHARS,
+            ),
+        }))
+        .filter((entry): entry is { name: string; content: string } => Boolean(entry.content));
+    if (autoCriticalInstructionBlocks.length > 0) {
+        lines.push('', '[Critical Skill Instructions]');
+        lines.push('These mandatory domain rules must be followed for this request:');
+        for (const block of autoCriticalInstructionBlocks) {
             lines.push(`Skill: ${block.name}`);
             lines.push(block.content);
         }

@@ -1,0 +1,114 @@
+{
+  "generated_at": "2026-04-15T08:47:25.889454",
+  "investment_analysis": {
+    "total_investment_billion": 752,
+    "total_valuation_billion": 852,
+    "average_investment_billion": 376.0,
+    "number_of_investments": 3,
+    "largest_investment": {
+      "company": "Big Tech",
+      "amount": 630,
+      "unit": "billion_usd",
+      "valuation": null
+    }
+  },
+  "tech_areas_analysis": {
+    "total_tech_areas": 5,
+    "maturity_distribution": {
+      "emerging": 1,
+      "growing": 1,
+      "mature": 3
+    },
+    "top_companies": [
+      [
+        "OpenAI",
+        2
+      ],
+      [
+        "Baidu",
+        1
+      ],
+      [
+        "China OSS",
+        1
+      ],
+      [
+        "Meta",
+        1
+      ],
+      [
+        "Alibaba",
+        1
+      ]
+    ],
+    "emerging_technologies": [
+      "AI Agents"
+    ]
+  },
+  "regional_analysis": {
+    "total_market_coverage": 100,
+    "regional_breakdown": {
+      "China": {
+        "focus_areas": [
+          "Open Source",
+          "Manufacturing",
+          "Robotics"
+        ],
+        "market_share_percent": 35
+      },
+      "USA": {
+        "focus_areas": [
+          "Closed Models",
+          "Enterprise",
+          "Cloud"
+        ],
+        "market_share_percent": 45
+      },
+      "Europe": {
+        "focus_areas": [
+          "Regulation",
+          "Ethics",
+          "Research"
+        ],
+        "market_share_percent": 15
+      },
+      "Others": {
+        "focus_areas": [
+          "Adoption",
+          "Integration"
+        ],
+        "market_share_percent": 5
+      }
+    },
+    "dominant_region": "USA",
+    "dominant_region_share": 45
+  },
+  "growth_trends_analysis": {
+    "average_growth_rate": 102.5,
+    "fastest_growing_trend": "AI Agents",
+    "fastest_growth_rate": 150,
+    "trends_by_adoption_year": {
+      "2024": [
+        "AI Agents"
+      ],
+      "2023": [
+        "Open Source Models"
+      ],
+      "2022": [
+        "AI Chips"
+      ],
+      "2021": [
+        "Enterprise AI"
+      ]
+    },
+    "total_trends_tracked": 4
+  },
+  "key_insights": [
+    "AI行业总投资达752亿美元",
+    "OpenAI单轮融资630亿美元，创历史记录",
+    "当前追踪5个主要技术领域",
+    "新兴技术: AI Agents",
+    "USA占据45%市场份额",
+    "AI Agents增长最快，增长率150%"
+  ]
+}

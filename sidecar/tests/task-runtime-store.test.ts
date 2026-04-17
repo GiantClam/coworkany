@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { TaskRuntimeStore } from '../src/execution/taskRuntimeStore';
+import { TaskRuntimeStore } from '../src/mastra/taskRuntime/taskRuntimeStore';
 
 describe('TaskRuntimeStore', () => {
     test('persists and reloads suspended runtime records', () => {

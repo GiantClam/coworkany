@@ -1,7 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
-import { getAlternativeCommands } from '../utils/commandAlternatives';
+import {
+    buildCommandRecoveryHints,
+    getAlternativeCommands,
+    type CommandRecoveryHints,
+} from '../utils/commandAlternatives';
 import { checkCommand } from './commandSandbox';
 import { voiceSpeakTool } from './core/voice';
 export type ToolEffect =
@@ -33,6 +37,8 @@ interface CommandErrorAnalysis {
     type: CommandErrorType;
     suggestion: string;
     alternatives?: string[];
+    probeCommands?: string[];
+    recoveryHints?: CommandRecoveryHints;
 }
 type MemoryEntry = {
     key: string;
@@ -163,29 +169,104 @@ async function movePath(sourcePath: string, destinationPath: string): Promise<vo
         await fs.promises.unlink(sourcePath);
     }
 }
+
+function buildAlternativeRetryCommands(input: {
+    command?: string;
+    alternatives: string[];
+}): string[] {
+    const rawCommand = typeof input.command === 'string' ? input.command.trim() : '';
+    if (rawCommand.length === 0) {
+        return input.alternatives;
+    }
+    // Keep rewrites conservative for plain commands only.
+    if (/[|&;<>`\n]/.test(rawCommand)) {
+        return input.alternatives;
+    }
+    const firstSpace = rawCommand.search(/\s/u);
+    const base = firstSpace >= 0 ? rawCommand.slice(0, firstSpace).trim() : rawCommand;
+    const rest = firstSpace >= 0 ? rawCommand.slice(firstSpace + 1).trim() : '';
+    if (base.length === 0) {
+        return input.alternatives;
+    }
+    const candidates = input.alternatives
+        .map((alternative) => alternative.trim())
+        .filter((alternative) => alternative.length > 0)
+        .map((alternative) => (rest.length > 0 ? `${alternative} ${rest}` : alternative));
+    const deduped = Array.from(new Set(candidates));
+    return deduped.length > 0 ? deduped : input.alternatives;
+}
+
+function pickAutomaticRetryCommand(input: {
+    originalCommand?: string;
+    alternatives?: string[];
+}): string | null {
+    const original = typeof input.originalCommand === 'string' ? input.originalCommand.trim() : '';
+    const candidates = Array.isArray(input.alternatives) ? input.alternatives : [];
+    for (const rawCandidate of candidates) {
+        const candidate = typeof rawCandidate === 'string' ? rawCandidate.trim() : '';
+        if (candidate.length === 0 || candidate === original) {
+            continue;
+        }
+        const safety = checkCommand(candidate);
+        if (!safety.allowed || safety.needsInteraction) {
+            continue;
+        }
+        return candidate;
+    }
+    return null;
+}
+
 function analyzeCommandError(stderr: string, exitCode?: number, command?: string): CommandErrorAnalysis | null {
     const lowerStderr = stderr.toLowerCase();
     const alternatives = command ? getAlternativeCommands(command) : [];
     if (exitCode === 9009) {
         const baseCmd = command?.trim().split(/\s+/)[0] || 'command';
+        const recoveryHints = buildCommandRecoveryHints({
+            command: command ?? baseCmd,
+            stderr,
+            exitCode,
+        });
+        const resolvedAlternatives = recoveryHints?.alternativeCommands ?? alternatives;
+        const resolvedRetryCommands = buildAlternativeRetryCommands({
+            command,
+            alternatives: resolvedAlternatives,
+        });
         return {
             type: 'not_found',
-            suggestion: alternatives.length > 0
-                ? `Command '${baseCmd}' not found (Windows error 9009). Try alternatives: ${alternatives.join(', ')}`
-                : `Command '${baseCmd}' not found (Windows error 9009). Install it or check system PATH.`,
-            alternatives
+            suggestion: recoveryHints?.suggestion ?? (
+                resolvedRetryCommands.length > 0
+                    ? `Command '${baseCmd}' not found (Windows error 9009). Try alternatives: ${resolvedRetryCommands.join(', ')}`
+                    : `Command '${baseCmd}' not found (Windows error 9009). Install it or check system PATH.`
+            ),
+            alternatives: resolvedRetryCommands,
+            probeCommands: recoveryHints?.probeCommands,
+            recoveryHints: recoveryHints ?? undefined,
         };
     }
     if (lowerStderr.includes('command not found') || lowerStderr.includes('is not recognized')) {
         const cmdMatch = stderr.match(/['"]?(\S+)['"]?:?\s*(?:command not found|is not recognized)/i);
         const failedCmd = cmdMatch?.[1] || command?.trim().split(/\s+/)[0];
         const cmdAlts = failedCmd ? getAlternativeCommands(failedCmd) : alternatives;
+        const recoveryHints = buildCommandRecoveryHints({
+            command: command ?? (failedCmd ? `${failedCmd}` : 'command'),
+            stderr,
+            exitCode,
+        });
+        const resolvedAlternatives = recoveryHints?.alternativeCommands ?? cmdAlts;
+        const resolvedRetryCommands = buildAlternativeRetryCommands({
+            command,
+            alternatives: resolvedAlternatives,
+        });
         return {
             type: 'not_found',
-            suggestion: cmdAlts.length > 0
-                ? `Command '${failedCmd}' not found. Try alternatives: ${cmdAlts.join(', ')}`
-                : `Command '${failedCmd || 'unknown'}' not found. Install it or check if it's in PATH.`,
-            alternatives: cmdAlts
+            suggestion: recoveryHints?.suggestion ?? (
+                resolvedRetryCommands.length > 0
+                    ? `Command '${failedCmd}' not found. Try alternatives: ${resolvedRetryCommands.join(', ')}`
+                    : `Command '${failedCmd || 'unknown'}' not found. Install it or check if it's in PATH.`
+            ),
+            alternatives: resolvedRetryCommands,
+            probeCommands: recoveryHints?.probeCommands,
+            recoveryHints: recoveryHints ?? undefined,
         };
     }
     if (lowerStderr.includes('permission denied') || lowerStderr.includes('access denied')) {
@@ -511,19 +592,12 @@ const runCommand: ToolDefinition = {
         const timeout = args.timeout_ms || 30000;
         const startTime = Date.now();
         return new Promise((resolve) => {
-            const child = spawn(args.command, {
-                shell: true,
-                cwd,
-                env: {
-                    ...process.env,
-                    PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE ?? '1',
-                },
-                stdio: ['ignore', 'pipe', 'pipe'],
-                detached: process.platform !== 'win32',
-            });
             let stdout = '';
             let stderr = '';
             let settled = false;
+            let activeChild: ChildProcess | null = null;
+            let retryCommand: string | undefined;
+            const attemptRecords: Array<Record<string, unknown>> = [];
             const finalize = (result: Record<string, unknown>) => {
                 if (settled) {
                     return;
@@ -534,7 +608,9 @@ const runCommand: ToolDefinition = {
                 resolve(result);
             };
             const disposeCancellation = context.onCancel?.((reason) => {
-                terminateChildProcessTree(child);
+                if (activeChild) {
+                    terminateChildProcessTree(activeChild);
+                }
                 finalize({
                     command: args.command,
                     error: reason || 'Task cancelled by user',
@@ -544,11 +620,15 @@ const runCommand: ToolDefinition = {
                     execution_time_ms: Date.now() - startTime,
                     error_type: 'cancelled' as const,
                     cancelled: true,
+                    retry_command: retryCommand,
+                    attempts: attemptRecords,
                     safety_warning: safetyWarning || undefined,
                 });
             });
             const timer = setTimeout(() => {
-                terminateChildProcessTree(child);
+                if (activeChild) {
+                    terminateChildProcessTree(activeChild);
+                }
                 finalize({
                     command: args.command,
                     error: 'Command timed out',
@@ -558,52 +638,125 @@ const runCommand: ToolDefinition = {
                     execution_time_ms: Date.now() - startTime,
                     error_type: 'timeout' as const,
                     suggested_fix: `Increase timeout (current: ${timeout}ms) or optimize the command`,
+                    retry_command: retryCommand,
+                    attempts: attemptRecords,
                     safety_warning: safetyWarning || undefined,
                 });
             }, timeout);
-            child.stdout.on('data', (data) => { stdout += data.toString(); });
-            child.stderr.on('data', (data) => { stderr += data.toString(); });
-            child.on('close', (code, signal) => {
-                if (settled) return;
-                const executionTime = Date.now() - startTime;
-                const result: Record<string, unknown> = {
-                    command: args.command,
-                    exit_code: code,
-                    stdout: stdout.trim(),
-                    stderr: stderr.trim(),
-                    execution_time_ms: executionTime,
-                };
-                if (signal) {
-                    result.signal = signal;
+
+            const runAttempt = (attemptCommand: string, isAutoRetry: boolean): void => {
+                if (settled) {
+                    return;
                 }
-                if (code !== 0) {
-                    const errorAnalysis = analyzeCommandError(stderr, code ?? undefined, args.command);
-                    if (errorAnalysis) {
-                        result.error_type = errorAnalysis.type;
-                        result.suggested_fix = errorAnalysis.suggestion;
-                        if (errorAnalysis.alternatives?.length) {
-                            result.alternative_commands = errorAnalysis.alternatives;
+                const child = spawn(attemptCommand, {
+                    shell: true,
+                    cwd,
+                    env: {
+                        ...process.env,
+                        PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE ?? '1',
+                    },
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                    detached: process.platform !== 'win32',
+                });
+                activeChild = child;
+                let attemptStdout = '';
+                let attemptStderr = '';
+                child.stdout.on('data', (data) => {
+                    const chunk = data.toString();
+                    stdout += chunk;
+                    attemptStdout += chunk;
+                });
+                child.stderr.on('data', (data) => {
+                    const chunk = data.toString();
+                    stderr += chunk;
+                    attemptStderr += chunk;
+                });
+                child.on('close', (code, signal) => {
+                    if (settled) return;
+                    attemptRecords.push({
+                        command: attemptCommand,
+                        exit_code: code,
+                        stdout: attemptStdout.trim(),
+                        stderr: attemptStderr.trim(),
+                        signal: signal ?? undefined,
+                    });
+                    const executionTime = Date.now() - startTime;
+                    const attemptErrorAnalysis = code !== 0
+                        ? analyzeCommandError(attemptStderr, code ?? undefined, attemptCommand)
+                        : null;
+                    if (!isAutoRetry && code !== 0 && attemptErrorAnalysis?.type === 'not_found') {
+                        const fallback = pickAutomaticRetryCommand({
+                            originalCommand: attemptCommand,
+                            alternatives: attemptErrorAnalysis.alternatives,
+                        });
+                        if (fallback) {
+                            retryCommand = fallback;
+                            runAttempt(fallback, true);
+                            return;
                         }
                     }
-                }
-                if (safetyWarning) {
-                    result.safety_warning = safetyWarning;
-                }
-                finalize(result);
-            });
-            child.on('error', (err) => {
-                const errorAnalysis = analyzeCommandError(err.message, -1, args.command);
-                finalize({
-                    command: args.command,
-                    error: err.message,
-                    exit_code: -1,
-                    execution_time_ms: Date.now() - startTime,
-                    error_type: errorAnalysis?.type || 'unknown',
-                    alternative_commands: errorAnalysis?.alternatives,
-                    suggested_fix: errorAnalysis?.suggestion || 'Check the command syntax and permissions',
-                    safety_warning: safetyWarning || undefined,
+
+                    const result: Record<string, unknown> = {
+                        command: args.command,
+                        exit_code: code,
+                        stdout: stdout.trim(),
+                        stderr: stderr.trim(),
+                        execution_time_ms: executionTime,
+                        retry_command: retryCommand,
+                        attempts: attemptRecords,
+                    };
+                    if (signal) {
+                        result.signal = signal;
+                    }
+                    if (isAutoRetry) {
+                        result.retry_attempted = true;
+                        result.resolved_by_retry = code === 0;
+                    }
+                    if (code !== 0 && attemptErrorAnalysis) {
+                        result.error_type = attemptErrorAnalysis.type;
+                        result.suggested_fix = attemptErrorAnalysis.suggestion;
+                        if (attemptErrorAnalysis.alternatives?.length) {
+                            result.alternative_commands = attemptErrorAnalysis.alternatives;
+                        }
+                        if (attemptErrorAnalysis.probeCommands?.length) {
+                            result.probe_commands = attemptErrorAnalysis.probeCommands;
+                        }
+                        if (attemptErrorAnalysis.recoveryHints) {
+                            result.command_recovery = attemptErrorAnalysis.recoveryHints;
+                        }
+                    }
+                    if (safetyWarning) {
+                        result.safety_warning = safetyWarning;
+                    }
+                    finalize(result);
                 });
-            });
+                child.on('error', (err) => {
+                    const attemptErrorAnalysis = analyzeCommandError(err.message, -1, attemptCommand);
+                    attemptRecords.push({
+                        command: attemptCommand,
+                        exit_code: -1,
+                        stdout: attemptStdout.trim(),
+                        stderr: attemptStderr.trim(),
+                        error: err.message,
+                    });
+                    finalize({
+                        command: args.command,
+                        error: err.message,
+                        exit_code: -1,
+                        execution_time_ms: Date.now() - startTime,
+                        error_type: attemptErrorAnalysis?.type || 'unknown',
+                        alternative_commands: attemptErrorAnalysis?.alternatives,
+                        probe_commands: attemptErrorAnalysis?.probeCommands,
+                        command_recovery: attemptErrorAnalysis?.recoveryHints,
+                        suggested_fix: attemptErrorAnalysis?.suggestion || 'Check the command syntax and permissions',
+                        retry_command: retryCommand,
+                        attempts: attemptRecords,
+                        safety_warning: safetyWarning || undefined,
+                    });
+                });
+            };
+
+            runAttempt(args.command, false);
         });
     },
 };
@@ -673,6 +826,8 @@ const recall: ToolDefinition = {
         context,
     ) => {
         const key = typeof args.key === 'string' ? args.key.trim() : '';
+        const normalizedKey = normalizeMemorySearchText(key);
+        const keyTokens = tokenizeMemorySearchText(key);
         const query = typeof args.query === 'string' ? args.query.trim() : '';
         const normalizedQuery = normalizeMemorySearchText(query);
         const queryTokens = tokenizeMemorySearchText(query);
@@ -681,32 +836,53 @@ const recall: ToolDefinition = {
             : 10;
         const entries = await loadMemoryEntries(context.workspacePath);
         const scored = entries.map((entry) => {
-            if (key.length > 0) {
-                return {
-                    entry,
-                    score: entry.key === key ? 100 : 0,
-                };
-            }
-            if (normalizedQuery.length === 0) {
-                return {
-                    entry,
-                    score: 1,
-                };
-            }
             const corpusRaw = `${entry.key} ${entry.value} ${entry.category ?? ''}`;
+            let score = 0;
+
+            if (key.length > 0) {
+                if (entry.key === key) {
+                    score = Math.max(score, 120);
+                } else if (normalizedKey.length > 0) {
+                    const normalizedEntryKey = normalizeMemorySearchText(entry.key);
+                    if (normalizedEntryKey === normalizedKey) {
+                        score = Math.max(score, 100);
+                    } else if (
+                        normalizedEntryKey.includes(normalizedKey)
+                        || normalizedKey.includes(normalizedEntryKey)
+                    ) {
+                        score = Math.max(score, 80);
+                    } else if (keyTokens.length > 0) {
+                        const entryKeyTokens = tokenizeMemorySearchText(entry.key);
+                        let keyOverlap = 0;
+                        for (const keyToken of keyTokens) {
+                            if (entryKeyTokens.some((entryToken) => memoryTokensLooselyMatch(keyToken, entryToken))) {
+                                keyOverlap += 1;
+                            }
+                        }
+                        if (keyOverlap > 0) {
+                            score = Math.max(score, 40 + keyOverlap);
+                        }
+                    }
+                }
+            }
+
+            if (normalizedQuery.length === 0) {
+                if (key.length === 0) {
+                    score = Math.max(score, 1);
+                }
+                return { entry, score };
+            }
+
             const normalizedCorpus = normalizeMemorySearchText(corpusRaw);
             if (normalizedCorpus.includes(normalizedQuery)) {
-                return {
-                    entry,
-                    score: 80,
-                };
+                score = Math.max(score, 80);
+                return { entry, score };
             }
+
             if (queryTokens.length === 0) {
-                return {
-                    entry,
-                    score: 0,
-                };
+                return { entry, score };
             }
+
             const corpusTokens = tokenizeMemorySearchText(corpusRaw);
             let overlap = 0;
             for (const queryToken of queryTokens) {
@@ -714,10 +890,8 @@ const recall: ToolDefinition = {
                     overlap += 1;
                 }
             }
-            return {
-                entry,
-                score: overlap,
-            };
+            score = Math.max(score, overlap);
+            return { entry, score };
         });
 
         let matched = scored
@@ -727,7 +901,7 @@ const recall: ToolDefinition = {
             .slice(-limit)
             .reverse();
 
-        if (key.length === 0 && normalizedQuery.length > 0 && matched.length === 0) {
+        if ((key.length > 0 || normalizedQuery.length > 0) && matched.length === 0) {
             matched = entries.slice(-limit).reverse();
         }
         return {

@@ -7,6 +7,9 @@ import type { HookRuntime } from './hookRuntime';
 import type { PolicyEngine, PolicyDecisionAction } from './policyEngine';
 import type { PolicyDecisionLogStore } from './policyDecisionLog';
 import type { RemoteSessionConflictStrategy, RemoteSessionGovernancePolicy } from './remoteSessionGovernance';
+import { coerceAgentTaskNotification } from './agentTaskNotification';
+import { buildAgentTaskProgressSnapshot } from './agentProgressTracker';
+import { isDelegatedAgentToolName, upsertAgentTaskFromNotification } from './agentTaskStore';
 import {
     recoverTaskRuntimeStateAfterRestart,
     type TaskRuntimeCheckpoint,
@@ -29,6 +32,8 @@ import {
     normalizeTaskMessageFingerprint,
     resolveTaskCapabilityRequirements,
 } from './capabilityRegistry';
+import { resolveSubagentFollowupMessage } from './subagentMessageRouter';
+import { buildCommandRecoveryHints } from '../utils/commandAlternatives';
 type OutgoingMessage = Record<string, unknown>;
 type UserMessageExecutionOptions = {
     taskId?: string;
@@ -171,11 +176,23 @@ type TaskMessageDedupToken = {
 type TaskMessageDedupState = {
     inFlightFingerprints: Set<string>;
 };
+type TaskTurnCommandRecoveryHint = {
+    failedCommand: string;
+    retryCommands: string[];
+    probeCommands: string[];
+    suggestedFix?: string;
+    stderrSnippet?: string;
+    toolName?: string;
+};
 type TaskTurnTerminalType = 'complete' | 'error' | 'tripwire';
 type TaskTurnEventState = {
     assistantNarrativeSeen: boolean;
+    assistantNarrativeChars: number;
     toolEvidenceSeen: boolean;
     strongToolEvidenceSeen: boolean;
+    satisfiedCompletionCapabilities: string[];
+    resultAttemptedCompletionCapabilities: string[];
+    observedToolNames: string[];
     requireToolEvidenceForCompletion: boolean;
     requiredCompletionCapabilities: string[];
     turnContractHash?: string;
@@ -184,6 +201,8 @@ type TaskTurnEventState = {
     executionPath?: 'direct' | 'workflow';
     primaryNarrativeRunId?: string;
     lastAssistantChunkFingerprint?: string;
+    lastCommandInvocation?: string;
+    latestCommandRecoveryHint?: TaskTurnCommandRecoveryHint;
     terminal?: TaskTurnTerminalType;
     updatedAtMs: number;
 };
@@ -306,6 +325,7 @@ type ProcessorDeps = {
         agents: string[];
         workflows: string[];
         storageConfigured: boolean;
+        mastraPackages?: Record<string, string | null>;
     };
     stopVoicePlayback?: (reason?: string) => Promise<boolean>;
     getVoicePlaybackState?: () => unknown;
@@ -408,16 +428,27 @@ const DEFAULT_LATE_APPROVAL_GRACE_MS = 2_000;
 const DEFAULT_AUTO_APPROVAL_RESUME_TIMEOUT_MS = 20_000;
 const DEFAULT_CHAT_TURN_TIMEOUT_MS = 45_000;
 const DEFAULT_CHAT_STARTUP_BUDGET_MS = 90_000;
+// Task routes can include multi-step research + synthesis + artifact writing.
+// Keep a wider default deadline to avoid premature turn-budget exhaustion.
 const DEFAULT_TASK_TURN_TIMEOUT_MS = 240_000;
 const DEFAULT_TASK_STARTUP_BUDGET_MS = 90_000;
+const DEFAULT_COMMAND_ONLY_TASK_TURN_TIMEOUT_MS = 90_000;
 const DEFAULT_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_MAX_ATTEMPTS = 0;
 const DEFAULT_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = 1_000;
+const ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MAX_ATTEMPTS_CAP = 5;
+const ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MIN_ATTEMPTS = 1;
+const LOW_RISK_MISSING_TOOL_EVIDENCE_RETRY_CAPABILITIES = new Set([
+    'web_research',
+    'voice_output',
+    'browser_automation',
+    'filesystem_read',
+]);
 const LATE_APPROVAL_POLL_INTERVAL_MS = 50;
 const MAX_TASK_OPERATION_LOG = 64;
 const TASK_TURN_EVENT_STATE_TTL_MS = 15 * 60 * 1000;
 const MAX_TASK_TURN_EVENT_STATES = 1024;
 const REMOTE_SESSION_SCOPE_METADATA_KEY = '__remoteSessionScope';
-const HOST_CONTROL_APPROVAL_PATTERN = /\b(shutdown|reboot|poweroff|halt)\b|关机|重启/u;
+const HOST_CONTROL_APPROVAL_PATTERN = /\b(shutdown|reboot|poweroff|halt|empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin))\b|关机|重启|清空(?:回收站|垃圾桶)/iu;
 const HOUR_CUE_PATTERN = /([01]?\d|2[0-3])\s*点/u;
 const DATABASE_OPERATION_PATTERN = /(数据库|mysql|postgres(?:ql)?|sqlite|database|select\s+.+\s+from)/iu;
 const TASK_EXECUTION_NARRATION_PREFIX_PATTERN = /^(?:我来|让我|我先|我会|我将|我现在|接下来|正在|先|马上|立即|I'll|I will|Let me|Now I|Next,? I)/iu;
@@ -432,7 +463,11 @@ const TOOL_RESULT_METADATA_FIELD_PATTERN = /\b(provider|query|request_id|trace_i
 const WEB_RESEARCH_EVIDENCE_TOOL_PATTERN = /(search_web|crawl_url|extract_content|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|websearch|open_in_browser|browser_[a-z_]+|agent-[a-z0-9_-]+)/iu;
 const WEB_RESEARCH_APPROVAL_FALLBACK_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval)\b/iu;
 const VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN = /\b(voice_speak|tts|text[-_\s]?to[-_\s]?speech|speak|read[_\s-]?aloud)\b|语音|朗读|播报/iu;
+const FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN = /\b(list_dir|view_file|read_file|mastra_workspace_list_files|mastra_workspace_read_file|mastra_workspace_file_stat)\b/iu;
 const COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/iu;
+const COMMAND_NOT_FOUND_RESULT_PATTERN = /\b(command not found|not recognized as an internal or external command|is not recognized)\b/iu;
+const ARTIFACT_WRITE_EVIDENCE_TOOL_PATTERN = /\b(write_to_file|replace_file_content|append_to_file|move_file|copy_file|create_file|apply_patch|patch_file|mastra_workspace_apply_patch|mastra_workspace_write_file|mastra_workspace_replace_file_content)\b/iu;
+const RETRY_EXECUTION_CONTRACT_MARKER = '[CoworkAny Retry Execution Contract]';
 function normalizeStringList(values: string[]): string[] {
     return Array.from(new Set(
         values
@@ -457,8 +492,14 @@ function resolveRequiredCompletionCapabilities(input: {
     executionOptions?: UserMessageExecutionOptions;
 }): string[] {
     const explicit = normalizeStringList(input.executionOptions?.requiredCompletionCapabilities ?? []);
+    const saveTargetRequested = Boolean(extractSaveTargetFromMessage(input.message));
+    const maybeWithArtifactWrite = (capabilities: string[]): string[] => (
+        saveTargetRequested
+            ? normalizeStringList([...capabilities, ARTIFACT_WRITE_CAPABILITY])
+            : capabilities
+    );
     if (explicit.length > 0) {
-        return explicit;
+        return maybeWithArtifactWrite(explicit);
     }
     if (input.executionOptions?.requireToolEvidenceForCompletion === false) {
         return [];
@@ -466,14 +507,215 @@ function resolveRequiredCompletionCapabilities(input: {
     if (input.executionOptions?.forcedRouteMode === 'chat') {
         return [];
     }
-    return deriveCompletionCapabilitiesFromMessage({
+    const derived = deriveCompletionCapabilitiesFromMessage({
         message: input.message,
         workspacePath: input.workspacePath,
     });
+    return maybeWithArtifactWrite(derived);
 }
 
-function deriveHostControlShellCommand(message: string): string {
+function buildMissingToolEvidenceRetryMessage(input: {
+    message: string;
+    requiredCapabilities: string[];
+    source: 'complete' | 'error';
+    commandRecoveryHint?: TaskTurnCommandRecoveryHint;
+}): string {
+    const normalizedMessage = input.message.trim();
+    if (normalizedMessage.length === 0 || normalizedMessage.includes(RETRY_EXECUTION_CONTRACT_MARKER)) {
+        return input.message;
+    }
+    const required = normalizeStringList(input.requiredCapabilities)
+        .map((value) => value.trim().toLowerCase());
+    if (required.length === 0) {
+        return input.message;
+    }
+    const lines: string[] = [
+        RETRY_EXECUTION_CONTRACT_MARKER,
+        `- Previous attempt ended with "${input.source}" but lacked required tool evidence. You MUST execute required tools before final completion.`,
+        '- Do not return refusal-only or disclaimer-only text in this retry.',
+    ];
+    if (required.includes(COMMAND_EXECUTION_CAPABILITY)) {
+        lines.push('- You MUST execute at least one local command tool call relevant to the user request.');
+        lines.push('- If first command fails, run a recovery loop: inspect tool error -> choose alternative command -> retry execution -> report final result.');
+        lines.push('- For command-not-found/unsupported errors, prefer this order: alternative_commands/suggested_fix/command_recovery from tool result -> probe_commands (or command -v/which/where/Get-Command) -> --help/man -> retry.');
+        lines.push('- Do not conclude "cannot execute" without at least one concrete recovery retry.');
+        if (input.commandRecoveryHint) {
+            lines.push(`- Last failed command: ${input.commandRecoveryHint.failedCommand}`);
+            if (input.commandRecoveryHint.retryCommands.length > 0) {
+                lines.push(`- Retry this fallback command first: ${input.commandRecoveryHint.retryCommands[0]}`);
+                if (input.commandRecoveryHint.retryCommands.length > 1) {
+                    lines.push(`- Additional fallback commands: ${input.commandRecoveryHint.retryCommands.slice(1).join(' ; ')}`);
+                }
+            }
+            if (input.commandRecoveryHint.probeCommands.length > 0) {
+                lines.push(`- If fallback still fails, run probe commands: ${input.commandRecoveryHint.probeCommands.join(' ; ')}`);
+            }
+            if (input.commandRecoveryHint.suggestedFix) {
+                lines.push(`- Tool suggested fix: ${input.commandRecoveryHint.suggestedFix}`);
+            }
+            if (input.commandRecoveryHint.stderrSnippet) {
+                lines.push(`- Last stderr snippet: ${input.commandRecoveryHint.stderrSnippet}`);
+            }
+        }
+    }
+    if (required.includes(WEB_RESEARCH_CAPABILITY)) {
+        lines.push('- You MUST complete at least one successful research tool call and ground conclusions in retrieved evidence.');
+    }
+    if (required.includes(FILESYSTEM_READ_CAPABILITY)) {
+        lines.push('- This request requires real workspace inspection evidence before completion.');
+        lines.push('- You MUST call filesystem read tools (list_dir / view_file / read_file) and summarize actual observed results.');
+    }
+    if (required.includes(VOICE_OUTPUT_CAPABILITY)) {
+        lines.push('- Spoken-output requests require a successful voice_speak tool call before completion.');
+        if (required.includes(WEB_RESEARCH_CAPABILITY)) {
+            lines.push('- For web-research + spoken-output retries, execute "search -> concise synthesis -> voice_speak" in one retry turn.');
+            lines.push('- Do not loop research-only calls: after up to 3 retrieval calls, you MUST call voice_speak with a best-effort summary.');
+        }
+    }
+    if (required.includes(ARTIFACT_WRITE_CAPABILITY)) {
+        lines.push('- This request requires writing deliverable files before completion.');
+        lines.push('- You MUST call workspace file-write tools (write_to_file / replace_file_content) to persist artifacts.');
+        const saveTarget = extractSaveTargetFromMessage(input.message);
+        if (saveTarget) {
+            lines.push(`- Required output target hint: ${saveTarget}`);
+        }
+    }
+    return `${input.message}\n\n${lines.join('\n')}`;
+}
+
+function buildAlternativeRetryCommandsForMessage(input: {
+    command: string;
+    alternatives: string[];
+}): string[] {
+    const rawCommand = input.command.trim();
+    if (rawCommand.length === 0) {
+        return input.alternatives;
+    }
+    if (/[|&;<>`\n]/.test(rawCommand)) {
+        return input.alternatives;
+    }
+    const firstSpace = rawCommand.search(/\s/u);
+    const base = firstSpace >= 0 ? rawCommand.slice(0, firstSpace).trim() : rawCommand;
+    const rest = firstSpace >= 0 ? rawCommand.slice(firstSpace + 1).trim() : '';
+    if (base.length === 0) {
+        return input.alternatives;
+    }
+    const candidates = input.alternatives
+        .map((alternative) => alternative.trim())
+        .filter((alternative) => alternative.length > 0)
+        .map((alternative) => (rest.length > 0 ? `${alternative} ${rest}` : alternative));
+    const deduped = Array.from(new Set(candidates));
+    return deduped.length > 0 ? deduped : input.alternatives;
+}
+
+function toStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+}
+
+function extractCommandFromToolArgs(args: unknown): string | null {
+    const direct = getString(toRecord(args).command);
+    if (direct) {
+        return direct.trim();
+    }
+    const nestedInput = getString(toRecord(toRecord(args).input).command);
+    if (nestedInput) {
+        return nestedInput.trim();
+    }
+    const nestedPayload = getString(toRecord(toRecord(args).payload).command);
+    if (nestedPayload) {
+        return nestedPayload.trim();
+    }
+    return null;
+}
+
+function resolveCommandRecoveryHintFromToolResult(input: {
+    toolName: string;
+    result: unknown;
+    fallbackCommand?: string;
+}): TaskTurnCommandRecoveryHint | null {
+    const normalizedToolName = input.toolName.trim().toLowerCase();
+    if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(normalizedToolName)) {
+        return null;
+    }
+    const resultRecord = toOptionalRecord(input.result);
+    const explicitCommand = getString(resultRecord?.command);
+    const command = explicitCommand?.trim() || input.fallbackCommand?.trim() || '';
+    if (command.length === 0) {
+        return null;
+    }
+    const stderrFromRecord = getString(resultRecord?.stderr) ?? '';
+    const stderrFromStringResult = typeof input.result === 'string' ? input.result : '';
+    const stderr = stderrFromRecord.trim().length > 0 ? stderrFromRecord : stderrFromStringResult;
+    const errorType = getString(resultRecord?.error_type)?.toLowerCase() ?? '';
+    const exitCode = (
+        typeof resultRecord?.exitCode === 'number'
+            ? resultRecord.exitCode
+            : (typeof resultRecord?.exit_code === 'number' ? resultRecord.exit_code : undefined)
+    );
+    const hasNotFoundSignal = (
+        errorType === 'not_found'
+        || COMMAND_NOT_FOUND_RESULT_PATTERN.test(stderr)
+        || exitCode === 127
+        || exitCode === 9009
+    );
+    if (!hasNotFoundSignal) {
+        return null;
+    }
+    const explicitAlternatives = toStringArray(
+        resultRecord?.alternative_commands
+            ?? toOptionalRecord(resultRecord?.command_recovery)?.alternativeCommands,
+    );
+    const explicitProbeCommands = toStringArray(
+        resultRecord?.probe_commands
+            ?? toOptionalRecord(resultRecord?.command_recovery)?.probeCommands,
+    );
+    const explicitSuggestedFix = getString(resultRecord?.suggested_fix)
+        ?? getString(toOptionalRecord(resultRecord?.command_recovery)?.suggestion)
+        ?? undefined;
+    const derivedRecovery = buildCommandRecoveryHints({
+        command,
+        stderr,
+        exitCode,
+    });
+    const derivedAlternatives = derivedRecovery?.alternativeCommands ?? [];
+    const retryCommands = buildAlternativeRetryCommandsForMessage({
+        command,
+        alternatives: explicitAlternatives.length > 0 ? explicitAlternatives : derivedAlternatives,
+    });
+    const probeCommands = explicitProbeCommands.length > 0
+        ? explicitProbeCommands
+        : (derivedRecovery?.probeCommands ?? []);
+    if (retryCommands.length === 0 && probeCommands.length === 0 && !explicitSuggestedFix) {
+        return null;
+    }
+    return {
+        failedCommand: command,
+        retryCommands,
+        probeCommands,
+        suggestedFix: explicitSuggestedFix ?? derivedRecovery?.suggestion,
+        stderrSnippet: stderr.trim().slice(0, 240),
+        toolName: normalizedToolName,
+    };
+}
+
+export function deriveHostControlShellCommand(message: string): string {
     const normalized = message.trim();
+    const isTrashCleanup = /\b(empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin))\b|清空(?:回收站|垃圾桶)/iu.test(normalized);
+    if (isTrashCleanup) {
+        if (process.platform === 'darwin') {
+            return `osascript -e 'tell application "Finder" to empty the trash'`;
+        }
+        if (process.platform === 'win32') {
+            return 'PowerShell -NoProfile -Command "Clear-RecycleBin -Force"';
+        }
+        return 'if command -v gio >/dev/null 2>&1; then gio trash --empty; elif command -v trash-empty >/dev/null 2>&1; then trash-empty; else echo "no_supported_trash_cli"; exit 127; fi';
+    }
     const isReboot = /\b(reboot)\b|重启/u.test(normalized);
     const hourMatch = normalized.match(HOUR_CUE_PATTERN);
     if (hourMatch?.[1]) {
@@ -507,6 +749,55 @@ function isToolResultExplicitlyErrored(result: unknown): boolean {
         return false;
     }
     return status === 'error' || status === 'failed' || status === 'failure';
+}
+
+function isToolResultExplicitlySuccessful(result: unknown): boolean {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        return false;
+    }
+    const record = result as Record<string, unknown>;
+    if (record.success === true || record.ok === true) {
+        return true;
+    }
+    const statusValue = record.status;
+    const status = typeof statusValue === 'string' ? statusValue.trim().toLowerCase() : '';
+    if (status.length === 0) {
+        return false;
+    }
+    return status === 'ok' || status === 'success' || status === 'completed' || status === 'done';
+}
+
+function normalizeToolResultNarrativeText(result: unknown): string {
+    if (typeof result === 'string') {
+        return result.trim();
+    }
+    if (!result || typeof result !== 'object') {
+        return '';
+    }
+    const record = result as Record<string, unknown>;
+    const candidate = [
+        record.text,
+        record.content,
+        record.summary,
+        record.output,
+        record.answer,
+        record.message,
+    ].find((value) => typeof value === 'string' && value.trim().length > 0);
+    return typeof candidate === 'string' ? candidate.trim() : '';
+}
+
+function extractFinalSynthesisTextFromToolResult(input: {
+    toolName: string;
+    isError: boolean;
+    result: unknown;
+}): string {
+    if (input.isError) {
+        return '';
+    }
+    if (input.toolName.trim().toLowerCase() !== 'final_synthesis') {
+        return '';
+    }
+    return normalizeToolResultNarrativeText(input.result);
 }
 
 function hasUsableToolResultPayloadValue(value: unknown, depth = 0): boolean {
@@ -619,27 +910,39 @@ function resolveToolResultEvidenceStrength(input: {
     const requiredCapabilities = input.requiredCompletionCapabilities.map((value) => value.toLowerCase());
     const requiresVoiceOutput = requiredCapabilities.includes(VOICE_OUTPUT_CAPABILITY);
     const requiresWebResearch = requiredCapabilities.includes(WEB_RESEARCH_CAPABILITY);
+    const requiresFilesystemRead = requiredCapabilities.includes(FILESYSTEM_READ_CAPABILITY);
     const requiresCommandExecution = requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY);
-    if (requiresVoiceOutput) {
-        if (!VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-            return 'weak';
-        }
-    } else if (requiresCommandExecution) {
-        if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-            return 'weak';
-        }
-    } else if (requiresWebResearch) {
-        if (!WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-            return 'weak';
-        }
-    } else {
+    const requiresArtifactWrite = requiredCapabilities.includes(ARTIFACT_WRITE_CAPABILITY);
+    const requiresCapability = requiresVoiceOutput || requiresWebResearch || requiresFilesystemRead || requiresCommandExecution || requiresArtifactWrite;
+    if (!requiresCapability) {
         return 'strong';
+    }
+    const matchesRequiredCapability = (
+        (requiresVoiceOutput && VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName))
+        || (requiresCommandExecution && COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName))
+        || (requiresWebResearch && WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName))
+        || (requiresFilesystemRead && FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN.test(toolName))
+        || (requiresArtifactWrite && ARTIFACT_WRITE_EVIDENCE_TOOL_PATTERN.test(toolName))
+    );
+    if (!matchesRequiredCapability) {
+        return 'weak';
     }
     const hasExplicitError = isToolResultExplicitlyErrored(input.event.result);
     if (hasExplicitError) {
         return 'weak';
     }
-    return hasUsableToolResultPayload(input.event.result) ? 'strong' : 'weak';
+    if (hasUsableToolResultPayload(input.event.result)) {
+        return 'strong';
+    }
+    // Some tools can complete successfully with sparse payloads (for example file writes).
+    // Keep web_research strict: empty/low-quality results should trigger retry/repair.
+    if (
+        isToolResultExplicitlySuccessful(input.event.result)
+        && (requiresVoiceOutput || requiresFilesystemRead || requiresCommandExecution || requiresArtifactWrite)
+    ) {
+        return 'strong';
+    }
+    return 'weak';
 }
 
 function resolveNonResultToolEvidenceStrength(input: {
@@ -650,9 +953,11 @@ function resolveNonResultToolEvidenceStrength(input: {
     const requiredCapabilities = input.requiredCompletionCapabilities.map((value) => value.toLowerCase());
     const requiresVoiceOutput = requiredCapabilities.includes(VOICE_OUTPUT_CAPABILITY);
     const requiresWebResearch = requiredCapabilities.includes(WEB_RESEARCH_CAPABILITY);
+    const requiresFilesystemRead = requiredCapabilities.includes(FILESYSTEM_READ_CAPABILITY);
     const requiresCommandExecution = requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY);
+    const requiresArtifactWrite = requiredCapabilities.includes(ARTIFACT_WRITE_CAPABILITY);
     const toolName = typeof input.event.toolName === 'string' ? input.event.toolName.trim() : '';
-    if (!requiresWebResearch && !requiresVoiceOutput && !requiresCommandExecution) {
+    if (!requiresWebResearch && !requiresVoiceOutput && !requiresFilesystemRead && !requiresCommandExecution && !requiresArtifactWrite) {
         return (
             input.event.type === 'approval_required'
             || (input.event.type === 'tool_call' && !input.isDelegatedAgentToolCall)
@@ -664,15 +969,14 @@ function resolveNonResultToolEvidenceStrength(input: {
         if (toolName.length === 0) {
             return 'weak';
         }
-        if (requiresVoiceOutput) {
-            if (!VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-                return 'weak';
-            }
-        } else if (requiresCommandExecution) {
-            if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-                return 'weak';
-            }
-        } else if (requiresWebResearch && !WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+        const matchesRequiredCapability = (
+            (requiresVoiceOutput && VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName))
+            || (requiresCommandExecution && COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName))
+            || (requiresWebResearch && WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName))
+            || (requiresFilesystemRead && FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN.test(toolName))
+            || (requiresArtifactWrite && ARTIFACT_WRITE_EVIDENCE_TOOL_PATTERN.test(toolName))
+        );
+        if (!matchesRequiredCapability) {
             return 'weak';
         }
         if (input.isDelegatedAgentToolCall) {
@@ -688,21 +992,90 @@ function resolveNonResultToolEvidenceStrength(input: {
     if (toolName.length === 0) {
         return 'weak';
     }
-    if (requiresVoiceOutput) {
-        if (!VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-            return 'weak';
-        }
-    } else if (requiresCommandExecution) {
-        if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-            return 'weak';
-        }
-    } else if (requiresWebResearch && !WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
-        if (!WEB_RESEARCH_APPROVAL_FALLBACK_TOOL_PATTERN.test(toolName)) {
-            return 'weak';
-        }
+    const matchesVoice = requiresVoiceOutput && VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName);
+    const matchesCommand = requiresCommandExecution && COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName);
+    const matchesWeb = requiresWebResearch
+        && (WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName) || WEB_RESEARCH_APPROVAL_FALLBACK_TOOL_PATTERN.test(toolName));
+    const matchesFilesystemRead = requiresFilesystemRead && FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN.test(toolName);
+    const matchesArtifactWrite = requiresArtifactWrite && ARTIFACT_WRITE_EVIDENCE_TOOL_PATTERN.test(toolName);
+    if (!matchesVoice && !matchesCommand && !matchesWeb && !matchesFilesystemRead && !matchesArtifactWrite) {
+        return 'weak';
+    }
+    // Artifact writing requires a successful tool_result before completion.
+    if (matchesArtifactWrite && !matchesVoice && !matchesCommand && !matchesWeb) {
+        return 'weak';
     }
     // Approval-required events indicate a real executable invocation pending user/policy gating.
     return 'strong';
+}
+
+function resolveSatisfiedCompletionCapabilitiesFromToolEvidence(input: {
+    event: Extract<DesktopEvent, { type: 'tool_result' | 'tool_call' | 'approval_required' }>;
+    requiredCompletionCapabilities: string[];
+    isDelegatedAgentToolCall: boolean;
+}): string[] {
+    const requiredCompletionCapabilities = normalizeStringList(
+        input.requiredCompletionCapabilities.map((value) => value.toLowerCase()),
+    );
+    if (requiredCompletionCapabilities.length === 0) {
+        return [];
+    }
+    const satisfied: string[] = [];
+    for (const capability of requiredCompletionCapabilities) {
+        const evidenceStrength = input.event.type === 'tool_result'
+            ? resolveToolResultEvidenceStrength({
+                event: input.event,
+                requiredCompletionCapabilities: [capability],
+            })
+            : resolveNonResultToolEvidenceStrength({
+                event: input.event,
+                requiredCompletionCapabilities: [capability],
+                isDelegatedAgentToolCall: input.isDelegatedAgentToolCall,
+            });
+        if (evidenceStrength === 'strong') {
+            satisfied.push(capability);
+        }
+    }
+    return normalizeStringList(satisfied);
+}
+
+function resolveToolResultAttemptedCompletionCapabilities(input: {
+    event: Extract<DesktopEvent, { type: 'tool_result' }>;
+    requiredCompletionCapabilities: string[];
+}): string[] {
+    const requiredCompletionCapabilities = normalizeStringList(
+        input.requiredCompletionCapabilities.map((value) => value.toLowerCase()),
+    );
+    if (requiredCompletionCapabilities.length === 0) {
+        return [];
+    }
+    const toolName = typeof input.event.toolName === 'string' ? input.event.toolName.trim() : '';
+    if (toolName.length === 0) {
+        return [];
+    }
+    const attempted: string[] = [];
+    for (const capability of requiredCompletionCapabilities) {
+        if (capability === VOICE_OUTPUT_CAPABILITY && VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            attempted.push(capability);
+            continue;
+        }
+        if (capability === COMMAND_EXECUTION_CAPABILITY && COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            attempted.push(capability);
+            continue;
+        }
+        if (capability === WEB_RESEARCH_CAPABILITY && WEB_RESEARCH_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            attempted.push(capability);
+            continue;
+        }
+        if (capability === FILESYSTEM_READ_CAPABILITY && FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            attempted.push(capability);
+            continue;
+        }
+        if (capability === ARTIFACT_WRITE_CAPABILITY && ARTIFACT_WRITE_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+            attempted.push(capability);
+        }
+    }
+    return normalizeStringList(attempted);
 }
 
 function isIpcTimeoutError(error: unknown): boolean {
@@ -781,6 +1154,18 @@ function resolveTaskTurnTimeoutMs(
     );
 }
 
+function resolveCommandOnlyTaskTurnTimeoutMs(
+    env: Record<string, string | undefined> = process.env,
+): number {
+    return resolveBoundedEnvInt(
+        'COWORKANY_MASTRA_COMMAND_ONLY_TASK_TURN_TIMEOUT_MS',
+        DEFAULT_COMMAND_ONLY_TASK_TURN_TIMEOUT_MS,
+        30_000,
+        180_000,
+        env,
+    );
+}
+
 function resolveTaskStartupBudgetMs(
     env: Record<string, string | undefined> = process.env,
 ): number {
@@ -816,6 +1201,85 @@ function resolveMissingToolEvidenceAutoRetryDelayMs(
         env,
     );
 }
+
+function resolveAdaptiveMissingToolEvidenceRetryCeiling(input: {
+    configuredMaxAttempts: number;
+    requiredCapabilityCount: number;
+}): number {
+    if (input.requiredCapabilityCount >= 2) {
+        return ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MAX_ATTEMPTS_CAP;
+    }
+    return Math.max(2, Math.min(3, input.configuredMaxAttempts));
+}
+
+function resolveAdaptiveMissingToolEvidenceRetryMaxAttempts(input: {
+    configuredMaxAttempts: number;
+    currentAttempts: number;
+    lastError?: string;
+    requiredCapabilities: string[];
+}): number {
+    const boundedConfiguredMaxAttempts = Number.isFinite(input.configuredMaxAttempts)
+        ? Math.max(0, Math.floor(input.configuredMaxAttempts))
+        : 0;
+    if (boundedConfiguredMaxAttempts <= 0) {
+        return 0;
+    }
+    const boundedCurrentAttempts = Number.isFinite(input.currentAttempts)
+        ? Math.max(0, Math.floor(input.currentAttempts))
+        : 0;
+    const normalizedLastError = String(input.lastError ?? '').trim().toLowerCase();
+    const isMissingToolEvidenceFailure = normalizedLastError.includes('complete_without_required_tool_evidence');
+    const classification = (
+        !isMissingToolEvidenceFailure && normalizedLastError.length > 0
+    )
+        ? classifyRuntimeErrorMessage(normalizedLastError)
+        : undefined;
+
+    if (classification) {
+        if (classification.failureClass === 'blocked' || classification.failureClass === 'configuration_required') {
+            return Math.max(
+                ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MIN_ATTEMPTS,
+                Math.min(boundedConfiguredMaxAttempts, boundedCurrentAttempts),
+            );
+        }
+    }
+
+    const shouldExpandBudget = (
+        boundedCurrentAttempts >= boundedConfiguredMaxAttempts
+        && (
+            isMissingToolEvidenceFailure
+            || (
+                classification?.failureClass === 'retryable'
+            )
+        )
+    );
+    if (!shouldExpandBudget) {
+        return Math.max(
+            ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MIN_ATTEMPTS,
+            Math.min(ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MAX_ATTEMPTS_CAP, boundedConfiguredMaxAttempts),
+        );
+    }
+
+    const ceiling = resolveAdaptiveMissingToolEvidenceRetryCeiling({
+        configuredMaxAttempts: boundedConfiguredMaxAttempts,
+        requiredCapabilityCount: input.requiredCapabilities.length,
+    });
+    return Math.max(
+        ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MIN_ATTEMPTS,
+        Math.min(ceiling, boundedConfiguredMaxAttempts + 1),
+    );
+}
+
+function resolveMissingToolEvidenceRetryFloor(requiredCapabilities: string[]): number {
+    const normalized = normalizeStringList(requiredCapabilities.map((value) => value.toLowerCase()));
+    if (normalized.length === 0) {
+        return 0;
+    }
+    return normalized.every((value) => LOW_RISK_MISSING_TOOL_EVIDENCE_RETRY_CAPABILITIES.has(value))
+        ? 1
+        : 0;
+}
+
 function isAutoApprovalDebugEnabled(
     env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -892,11 +1356,20 @@ function extractSaveTargetFromMessage(message?: string): string | null {
         return null;
     }
     const matched = LEGACY_SAVE_TARGET_PATTERN.exec(message);
-    if (!matched || matched.length < 2) {
+    if (matched && matched.length >= 2) {
+        const candidate = matched[1]?.trim();
+        if (candidate && candidate.length > 0) {
+            return candidate;
+        }
+    }
+    const hasSaveIntent = /(?:save(?:\s+it)?\s+to|write(?:\s+(?:it|result|output|report|file))?\s+to|保存到|写入|输出到)/iu
+        .test(message);
+    if (!hasSaveIntent) {
         return null;
     }
-    const candidate = matched[1]?.trim();
-    return candidate && candidate.length > 0 ? candidate : null;
+    const pathMatch = LEGACY_PATH_TOKEN_PATTERN.exec(message);
+    LEGACY_PATH_TOKEN_PATTERN.lastIndex = 0;
+    return pathMatch?.[0] ?? null;
 }
 
 function getNonNegativeInteger(value: unknown): number | null {
@@ -1020,7 +1493,7 @@ function isNoAssistantNarrativeRuntimeError(message: string): boolean {
     return /\b(stream_exhausted_without_assistant_text|complete_without_assistant_text)\b/i.test(message);
 }
 function isRetryableRuntimeStreamError(message: string): boolean {
-    return /\b(stream_idle_timeout|stream_progress_timeout|stream_exhausted_without_assistant_text|complete_without_assistant_text|missing_terminal_after_tooling_progress|generate_fallback_timeout|No snapshot found for this workflow run|timeout|timed out|aborterror|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream)\b/i
+    return /\b(stream_idle_timeout|stream_progress_timeout|stream_exhausted_without_assistant_text|complete_without_assistant_text|missing_terminal_after_tooling_progress|generate_fallback_timeout|No snapshot found for this workflow run|timeout|timed out|aborterror|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream|unable to get issuer certificate|unable to verify (?:the first|leaf) certificate|self[-\s]?signed certificate|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+)\b/i
         .test(message);
 }
 
@@ -1216,7 +1689,8 @@ function pickStringArrayConfigValue(config: Record<string, unknown>, key: string
 }
 
 function pickTaskRuntimeRetryConfig(config: Record<string, unknown>): TaskRuntimeRetryState | undefined {
-    const maxRetries = pickPositiveIntegerConfigValue(config, 'maxRetries', 1, 10);
+    // `maxRetries: 0` is an explicit contract to disable auto retry.
+    const maxRetries = pickPositiveIntegerConfigValue(config, 'maxRetries', 0, 10);
     if (typeof maxRetries !== 'number') {
         return undefined;
     }
@@ -1260,11 +1734,18 @@ const AUTO_APPROVE_TOOLS = new Set([
 ]);
 const WORKSPACE_EXECUTE_COMMAND_TOOL = 'mastra_workspace_execute_command';
 const WEB_RESEARCH_CAPABILITY = 'web_research';
+const FILESYSTEM_READ_CAPABILITY = 'filesystem_read';
 const VOICE_OUTPUT_CAPABILITY = 'voice_output';
 const COMMAND_EXECUTION_CAPABILITY = 'command_execution';
+const ARTIFACT_WRITE_CAPABILITY = 'artifact_write';
 const LEGACY_RUNTIME_STATE_FILE = 'task-runtime.json';
 const LEGACY_LEAKED_PLANNED_OUTPUT_PATTERN = /^reports\/\d+-x-planned-output-artifact-.*-checkpoint-before-final-delivery\.[a-z0-9]+$/iu;
-const LEGACY_SAVE_TARGET_PATTERN = /(?:save(?:\s+it)?\s+to|保存到)\s+([^\s,，。!?]+)/iu;
+const LEGACY_SAVE_TARGET_PATTERN = /(?:save(?:\s+it)?\s+to|write(?:\s+(?:it|result|output|report|file))?\s+to|保存到|写入|输出到)\s+([^\s,，。!?]+)/iu;
+const LEGACY_PATH_TOKEN_PATTERN = /(?:\/|\.\/|\.\.\/|~\/|[A-Za-z]:\\)[^\s,，。!?"'`]+/gu;
+const TASK_SUMMARY_MIN_CHARS = 100;
+const TASK_PROGRESS_IDLE_TERMINAL_NON_WEB_MS = 70_000;
+const TASK_PROGRESS_IDLE_TERMINAL_WEB_MS = 170_000;
+const TASK_EXECUTION_HEARTBEAT_INTERVAL_MS = 20_000;
 const SHELL_MUTATION_OR_HIGH_RISK_PATTERN = /\b(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b|[><]|\$\(.*\)|`.*`|;\s*|&&\s*(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b/i;
 const READ_ONLY_PIPELINE_COMMANDS = new Set([
     'rg',
@@ -1300,6 +1781,22 @@ const READ_ONLY_PIPELINE_COMMANDS = new Set([
     'echo',
     'xargs',
 ]);
+function buildMissingTerminalRecoverySummary(options: {
+    evidenceSatisfied: boolean;
+}): string {
+    if (options.evidenceSatisfied) {
+        return [
+            '本轮任务已完成所需工具调用并拿到有效结果，但上游没有按协议返回终止事件，系统已自动触发终端恢复并安全结束当前回合。',
+            '这属于通用流控兜底，不代表业务执行失败；已产出的工具结果可以继续复用。',
+            '如果你希望我继续，我会在下一轮基于当前上下文补充完整结论、关键依据和下一步建议。',
+        ].join('\n');
+    }
+    return [
+        '本轮任务在工具阶段后未收到终止事件，系统已自动触发终端恢复并结束当前回合，避免任务长时间卡住。',
+        '当前结果可能不完整，你可以直接重试一次；我会继续沿用已有上下文和已执行信息。',
+        '若需要，我也可以在下一轮先给出简版结论，再补充完整证据与后续动作清单。',
+    ].join('\n');
+}
 const SAFE_GIT_READ_ONLY_SUBCOMMANDS = new Set([
     'status',
     'diff',
@@ -1439,7 +1936,7 @@ function shouldAutoApproveTool(input: {
     requiredCompletionCapabilities?: string[];
 }): boolean {
     const event = input.event;
-    if (AUTO_APPROVE_TOOLS.has(event.toolName) || event.toolName.startsWith('agent-')) {
+    if (AUTO_APPROVE_TOOLS.has(event.toolName) || isDelegatedAgentToolName(event.toolName)) {
         return true;
     }
     const requiredCompletionCapabilities = normalizeStringList(input.requiredCompletionCapabilities ?? [])
@@ -1509,6 +2006,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const taskExecutionTailByTaskId = new Map<string, Promise<void>>();
     const taskExecutionDepthByTaskId = new Map<string, number>();
     const latestRunIdByTaskId = new Map<string, string>();
+    const latestCommandInvocationByTaskId = new Map<string, string>();
+    const latestCommandRecoveryHintByTaskId = new Map<string, TaskTurnCommandRecoveryHint>();
     const autoApprovalInFlightByTaskId = new Map<string, Set<string>>();
     const autoApprovalCompletedByTaskId = new Map<string, Set<string>>();
     const taskMessageDedupByTaskId = new Map<string, TaskMessageDedupState>();
@@ -1598,8 +2097,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         }
         const created: TaskTurnEventState = {
             assistantNarrativeSeen: false,
+            assistantNarrativeChars: 0,
             toolEvidenceSeen: false,
             strongToolEvidenceSeen: false,
+            satisfiedCompletionCapabilities: [],
+            resultAttemptedCompletionCapabilities: [],
+            observedToolNames: [],
             requireToolEvidenceForCompletion: false,
             requiredCompletionCapabilities: [],
             updatedAtMs: nowMs,
@@ -1653,16 +2156,23 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             updatedAtMs: nowMs,
         });
     };
-    const markTaskTurnAssistantNarrative = (key: string): void => {
+    const markTaskTurnAssistantNarrative = (input: {
+        key: string;
+        content?: string;
+    }): void => {
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        if (state.assistantNarrativeSeen) {
+        const state = getTaskTurnEventState(input.key, nowMs);
+        const deltaChars = typeof input.content === 'string' ? input.content.trim().length : 0;
+        const nextChars = state.assistantNarrativeChars + deltaChars;
+        const nextSeen = state.assistantNarrativeSeen || deltaChars > 0;
+        if (state.assistantNarrativeSeen === nextSeen && state.assistantNarrativeChars === nextChars) {
             return;
         }
-        taskTurnEventStates.set(key, {
+        taskTurnEventStates.set(input.key, {
             ...state,
-            assistantNarrativeSeen: true,
+            assistantNarrativeSeen: nextSeen,
+            assistantNarrativeChars: nextChars,
             updatedAtMs: nowMs,
         });
     };
@@ -1716,29 +2226,123 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         pruneTaskTurnEventStates(nowMs);
         return getTaskTurnEventState(key, nowMs).assistantNarrativeSeen;
     };
-    const markTaskTurnToolEvidence = (
-        key: string,
-        evidenceStrength: 'weak' | 'strong' = 'weak',
-    ): void => {
+    const getTaskTurnAssistantNarrativeChars = (key: string): number => {
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
+        return getTaskTurnEventState(key, nowMs).assistantNarrativeChars;
+    };
+    const markTaskTurnToolEvidence = (input: {
+        key: string;
+        evidenceStrength?: 'weak' | 'strong';
+        toolName?: string;
+        satisfiedCompletionCapabilities?: string[];
+        resultAttemptedCompletionCapabilities?: string[];
+    }): void => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(input.key, nowMs);
+        const evidenceStrength = input.evidenceStrength ?? 'weak';
+        const normalizedToolName = typeof input.toolName === 'string' ? input.toolName.trim() : '';
+        const normalizedSatisfied = normalizeStringList(
+            (input.satisfiedCompletionCapabilities ?? []).map((value) => value.toLowerCase()),
+        );
+        const normalizedResultAttempted = normalizeStringList(
+            (input.resultAttemptedCompletionCapabilities ?? []).map((value) => value.toLowerCase()),
+        );
+        const nextObservedToolNames = normalizedToolName.length > 0
+            ? normalizeStringList([...state.observedToolNames, normalizedToolName])
+            : state.observedToolNames;
+        const nextSatisfiedCompletionCapabilities = normalizedSatisfied.length > 0
+            ? normalizeStringList([...state.satisfiedCompletionCapabilities, ...normalizedSatisfied])
+            : state.satisfiedCompletionCapabilities;
+        const nextResultAttemptedCompletionCapabilities = normalizedResultAttempted.length > 0
+            ? normalizeStringList([...state.resultAttemptedCompletionCapabilities, ...normalizedResultAttempted])
+            : state.resultAttemptedCompletionCapabilities;
         const shouldMarkWeakEvidence = !state.toolEvidenceSeen;
         const shouldMarkStrongEvidence = evidenceStrength === 'strong' && !state.strongToolEvidenceSeen;
-        if (!shouldMarkWeakEvidence && !shouldMarkStrongEvidence) {
+        const shouldUpdateObservedToolNames = nextObservedToolNames.length !== state.observedToolNames.length;
+        const shouldUpdateSatisfiedCapabilities = nextSatisfiedCompletionCapabilities.length !== state.satisfiedCompletionCapabilities.length;
+        const shouldUpdateResultAttempts = nextResultAttemptedCompletionCapabilities.length !== state.resultAttemptedCompletionCapabilities.length;
+        if (!shouldMarkWeakEvidence && !shouldMarkStrongEvidence && !shouldUpdateObservedToolNames && !shouldUpdateSatisfiedCapabilities && !shouldUpdateResultAttempts) {
             return;
         }
-        taskTurnEventStates.set(key, {
+        taskTurnEventStates.set(input.key, {
             ...state,
             toolEvidenceSeen: true,
             strongToolEvidenceSeen: state.strongToolEvidenceSeen || evidenceStrength === 'strong',
+            observedToolNames: nextObservedToolNames,
+            satisfiedCompletionCapabilities: nextSatisfiedCompletionCapabilities,
+            resultAttemptedCompletionCapabilities: nextResultAttemptedCompletionCapabilities,
             updatedAtMs: nowMs,
         });
     };
-    const hasTaskTurnToolEvidence = (key: string): boolean => {
+    const markTaskTurnCommandInvocation = (input: {
+        key: string;
+        taskId?: string;
+        command: string;
+    }): void => {
+        const normalizedCommand = input.command.trim();
+        if (normalizedCommand.length === 0) {
+            return;
+        }
+        if (input.taskId && input.taskId.trim().length > 0) {
+            latestCommandInvocationByTaskId.set(input.taskId, normalizedCommand);
+        }
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
-        return getTaskTurnEventState(key, nowMs).strongToolEvidenceSeen;
+        const state = getTaskTurnEventState(input.key, nowMs);
+        if (state.lastCommandInvocation === normalizedCommand) {
+            return;
+        }
+        taskTurnEventStates.set(input.key, {
+            ...state,
+            lastCommandInvocation: normalizedCommand,
+            updatedAtMs: nowMs,
+        });
+    };
+    const markTaskTurnCommandRecoveryHint = (input: {
+        key: string;
+        taskId?: string;
+        hint: TaskTurnCommandRecoveryHint;
+    }): void => {
+        if (input.taskId && input.taskId.trim().length > 0) {
+            latestCommandRecoveryHintByTaskId.set(input.taskId, input.hint);
+        }
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(input.key, nowMs);
+        taskTurnEventStates.set(input.key, {
+            ...state,
+            latestCommandRecoveryHint: input.hint,
+            updatedAtMs: nowMs,
+        });
+    };
+    const getTaskTurnCommandRecoveryHint = (
+        key: string,
+        taskId?: string,
+    ): TaskTurnCommandRecoveryHint | undefined => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const perTurn = getTaskTurnEventState(key, nowMs).latestCommandRecoveryHint;
+        if (perTurn) {
+            return perTurn;
+        }
+        if (taskId && taskId.trim().length > 0) {
+            return latestCommandRecoveryHintByTaskId.get(taskId);
+        }
+        return undefined;
+    };
+    const getTaskLatestCommandInvocation = (key: string, taskId?: string): string | undefined => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const perTurn = getTaskTurnEventState(key, nowMs).lastCommandInvocation;
+        if (typeof perTurn === 'string' && perTurn.trim().length > 0) {
+            return perTurn;
+        }
+        if (taskId && taskId.trim().length > 0) {
+            return latestCommandInvocationByTaskId.get(taskId);
+        }
+        return undefined;
     };
     const hasTaskTurnToolEvidenceRequirement = (key: string): boolean => {
         const nowMs = Date.now();
@@ -1750,6 +2354,37 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         pruneTaskTurnEventStates(nowMs);
         return [...getTaskTurnEventState(key, nowMs).requiredCompletionCapabilities];
     };
+    const getTaskTurnMissingRequiredCompletionCapabilities = (key: string): string[] => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        const satisfied = new Set(state.satisfiedCompletionCapabilities.map((value) => value.toLowerCase()));
+        return state.requiredCompletionCapabilities
+            .map((value) => value.toLowerCase())
+            .filter((capability) => !satisfied.has(capability));
+    };
+    const getTaskTurnResultAttemptedCompletionCapabilities = (key: string): string[] => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        return [...getTaskTurnEventState(key, nowMs).resultAttemptedCompletionCapabilities];
+    };
+    const hasTaskTurnSatisfiedCompletionEvidence = (key: string): boolean => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        if (!state.requireToolEvidenceForCompletion) {
+            return true;
+        }
+        if (state.requiredCompletionCapabilities.length === 0) {
+            return state.strongToolEvidenceSeen;
+        }
+        return getTaskTurnMissingRequiredCompletionCapabilities(key).length === 0;
+    };
+    const getTaskTurnObservedToolNames = (key: string): string[] => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        return [...getTaskTurnEventState(key, nowMs).observedToolNames];
+    };
     const getTaskTurnRouteMode = (key: string): 'chat' | 'task' | undefined => {
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
@@ -1757,6 +2392,16 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         return routeMode === 'chat' || routeMode === 'task'
             ? routeMode
             : undefined;
+    };
+    const getTaskTurnContractDomain = (key: string): string | undefined => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const domain = getTaskTurnEventState(key, nowMs).turnContractDomain;
+        if (typeof domain !== 'string') {
+            return undefined;
+        }
+        const normalized = domain.trim().toLowerCase();
+        return normalized.length > 0 ? normalized : undefined;
     };
     const shouldSuppressTaskTurnExecutionNarrationChunk = (input: {
         key: string;
@@ -1831,8 +2476,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         taskTurnEventStates.set(key, {
             ...state,
             assistantNarrativeSeen: false,
+            assistantNarrativeChars: 0,
             toolEvidenceSeen: false,
             strongToolEvidenceSeen: false,
+            satisfiedCompletionCapabilities: [],
+            resultAttemptedCompletionCapabilities: [],
+            observedToolNames: [],
             primaryNarrativeRunId: undefined,
             lastAssistantChunkFingerprint: undefined,
             terminal: undefined,
@@ -2072,6 +2721,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const hasCheckpoint = Object.prototype.hasOwnProperty.call(patch, 'checkpoint');
         const hasCheckpointVersion = Object.prototype.hasOwnProperty.call(patch, 'checkpointVersion');
         const hasRetry = Object.prototype.hasOwnProperty.call(patch, 'retry');
+        const hasAgentTasks = Object.prototype.hasOwnProperty.call(patch, 'agentTasks');
+        const hasAgentTaskProgress = Object.prototype.hasOwnProperty.call(patch, 'agentTaskProgress');
         const hasOperationLog = Object.prototype.hasOwnProperty.call(patch, 'operationLog');
         const hasExecutionPath = Object.prototype.hasOwnProperty.call(patch, 'executionPath');
         const hasTurnContract = Object.prototype.hasOwnProperty.call(patch, 'turnContract');
@@ -2095,6 +2746,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 ? patch.checkpointVersion
                 : fallbackCheckpointVersion,
             retry: hasRetry ? patch.retry : existing?.retry,
+            agentTasks: hasAgentTasks ? patch.agentTasks : existing?.agentTasks,
+            agentTaskProgress: hasAgentTaskProgress ? patch.agentTaskProgress : existing?.agentTaskProgress,
             operationLog: hasOperationLog ? patch.operationLog : existing?.operationLog,
             executionPath: hasExecutionPath ? patch.executionPath : existing?.executionPath,
             turnContract: hasTurnContract ? patch.turnContract : existing?.turnContract,
@@ -2108,6 +2761,55 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             }
         }
         return next;
+    };
+    const recordDelegatedAgentTaskNotification = (input: {
+        taskId: string;
+        event: Extract<DesktopEvent, { type: 'tool_call' | 'tool_result' }>;
+        turnId?: string;
+        traceId?: string | null;
+    }): void => {
+        if (input.event.toolName !== 'agent_task_notification') {
+            return;
+        }
+        const payload = input.event.type === 'tool_call'
+            ? input.event.args
+            : input.event.result;
+        const notification = coerceAgentTaskNotification(payload);
+        if (!notification) {
+            return;
+        }
+        const current = taskStates.get(input.taskId);
+        const recordedAt = getNowIso();
+        const runId = typeof input.event.runId === 'string' && input.event.runId.trim().length > 0
+            ? input.event.runId
+            : undefined;
+        const traceId = typeof input.traceId === 'string' && input.traceId.trim().length > 0
+            ? input.traceId
+            : undefined;
+        const turnId = typeof input.turnId === 'string' && input.turnId.trim().length > 0
+            ? input.turnId
+            : undefined;
+        const agentTasks = upsertAgentTaskFromNotification({
+            existing: current?.agentTasks,
+            notification,
+            at: recordedAt,
+            runId,
+            traceId,
+            turnId,
+        });
+        const agentTaskProgress = buildAgentTaskProgressSnapshot({
+            agentTasks,
+            previous: current?.agentTaskProgress,
+            latestNotification: notification,
+            at: recordedAt,
+            runId,
+            traceId,
+            turnId,
+        });
+        upsertTaskState(input.taskId, {
+            agentTasks,
+            agentTaskProgress,
+        });
     };
     const hydrateLegacyRuntimeRecordsFromBootstrap = (runtimeContext?: Record<string, unknown>): void => {
         const appDataDir = getString(runtimeContext?.appDataDir);
@@ -2254,6 +2956,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             checkpoint: task.checkpoint,
             checkpointVersion: task.checkpointVersion ?? resolveTaskCheckpointVersion(task),
             retry: task.retry,
+            agentTasks: task.agentTasks ?? [],
+            agentTaskProgress: task.agentTaskProgress ?? null,
             operationLog: task.operationLog ?? [],
             executionPath: task.executionPath ?? 'workflow',
             turnContract: task.turnContract ?? null,
@@ -2909,7 +3613,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const shouldForceAdvanceTaskRunId = (
             event.type === 'tool_call'
             && typeof event.toolName === 'string'
-            && event.toolName.startsWith('agent-')
+            && isDelegatedAgentToolName(event.toolName)
         );
         const shouldTrackTaskRunId = eventRunId.length > 0
             && (
@@ -2931,7 +3635,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             latestRunIdByTaskId.set(taskId, eventRunId);
         }
         const trackedTaskRunId = latestRunIdByTaskId.get(taskId);
-        const isAgentApprovalEvent = event.type === 'approval_required' && event.toolName.startsWith('agent-');
+        const isAgentApprovalEvent = event.type === 'approval_required'
+            && isDelegatedAgentToolName(event.toolName);
         const turnEventStateKey = buildTaskTurnEventStateKey({
             taskId,
             turnId,
@@ -2943,7 +3648,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         if (isToolEvidenceEvent) {
             const isDelegatedAgentToolCall = event.type === 'tool_call'
                 && typeof event.toolName === 'string'
-                && event.toolName.startsWith('agent-');
+                && isDelegatedAgentToolName(event.toolName);
             const requiredCompletionCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
             const evidenceStrength: 'weak' | 'strong' = event.type === 'tool_result'
                 ? resolveToolResultEvidenceStrength({
@@ -2955,10 +3660,71 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     requiredCompletionCapabilities,
                     isDelegatedAgentToolCall,
                 });
-            markTaskTurnToolEvidence(turnEventStateKey, evidenceStrength);
+            const satisfiedCompletionCapabilities = resolveSatisfiedCompletionCapabilitiesFromToolEvidence({
+                event,
+                requiredCompletionCapabilities,
+                isDelegatedAgentToolCall,
+            });
+            const resultAttemptedCompletionCapabilities = event.type === 'tool_result'
+                ? resolveToolResultAttemptedCompletionCapabilities({
+                    event,
+                    requiredCompletionCapabilities,
+                })
+                : [];
+            if (event.type === 'tool_call') {
+                const toolName = typeof event.toolName === 'string' ? event.toolName : '';
+                if (COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(toolName)) {
+                    const command = extractCommandFromToolArgs(event.args);
+                    if (command) {
+                        markTaskTurnCommandInvocation({
+                            key: turnEventStateKey,
+                            taskId,
+                            command,
+                        });
+                    }
+                }
+            } else if (event.type === 'tool_result') {
+                const fallbackCommand = getTaskLatestCommandInvocation(turnEventStateKey, taskId);
+                const recoveryHint = resolveCommandRecoveryHintFromToolResult({
+                    toolName: event.toolName,
+                    result: event.result,
+                    fallbackCommand,
+                });
+                if (recoveryHint) {
+                    markTaskTurnCommandRecoveryHint({
+                        key: turnEventStateKey,
+                        taskId,
+                        hint: recoveryHint,
+                    });
+                    markTaskTurnCommandInvocation({
+                        key: turnEventStateKey,
+                        taskId,
+                        command: recoveryHint.failedCommand,
+                    });
+                }
+            }
+            markTaskTurnToolEvidence({
+                key: turnEventStateKey,
+                evidenceStrength,
+                toolName: typeof event.toolName === 'string' ? event.toolName : undefined,
+                satisfiedCompletionCapabilities,
+                resultAttemptedCompletionCapabilities,
+            });
+            if (event.type === 'tool_call' || event.type === 'tool_result') {
+                recordDelegatedAgentTaskNotification({
+                    taskId,
+                    event,
+                    turnId,
+                    traceId,
+                });
+            }
         }
         const emitMissingToolEvidenceFailure = (source: 'complete' | 'error'): void => {
             const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+            const missingCapabilities = getTaskTurnMissingRequiredCompletionCapabilities(turnEventStateKey);
+            const retryCapabilities = missingCapabilities.length > 0
+                ? missingCapabilities
+                : requiredCapabilities;
             if (
                 runMissingToolEvidenceAutoRetry
                 && runMissingToolEvidenceAutoRetry({
@@ -2966,7 +3732,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     turnEventStateKey,
                     turnId,
                     traceId,
-                    requiredCapabilities,
+                    requiredCapabilities: retryCapabilities,
                     source,
                     runId: event.runId,
                 })
@@ -3000,6 +3766,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     errorCode: 'E_PROTOCOL_MISSING_TOOL_EVIDENCE',
                     recoverable: true,
                     requiredCapabilities,
+                    missingCapabilities,
                     source,
                 },
             });
@@ -3012,7 +3779,53 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     recoverable: true,
                     suggestion: 'Retry this task and ensure required tools are invoked before completion.',
                     requiredCapabilities,
+                    missingCapabilities,
                     source,
+                    traceId,
+                    turnId,
+                },
+            });
+        };
+        const emitSupplementalTaskSummaryIfNeeded = (): void => {
+            const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+            if (requiredCapabilities.length === 0) {
+                return;
+            }
+            if (!hasTaskTurnSatisfiedCompletionEvidence(turnEventStateKey)) {
+                return;
+            }
+            const assistantNarrativeChars = getTaskTurnAssistantNarrativeChars(turnEventStateKey);
+            if (assistantNarrativeChars <= 0 || assistantNarrativeChars >= TASK_SUMMARY_MIN_CHARS) {
+                return;
+            }
+            const turnContractDomain = getTaskTurnContractDomain(turnEventStateKey);
+            const supplementalSummary = turnContractDomain === 'market'
+                ? '已完成必要工具调用并汇总结果。投资建议评级：观望（Hold）。若需要，我可以继续补充更详细的依据、价格区间与风险提示。'
+                : '已完成必要工具调用并汇总结果。若需要，我可以继续补充更详细的结论、依据与下一步建议。';
+            appendTranscript(taskId, 'assistant', supplementalSummary);
+            markTaskTurnAssistantNarrative({
+                key: turnEventStateKey,
+                content: supplementalSummary,
+            });
+            const streamCorrelationId = eventRunId.length > 0
+                ? (
+                    turnId && turnId.trim().length > 0
+                        ? `stream:${taskId}:${turnId.trim()}:assistant`
+                        : `stream:${eventRunId}:assistant`
+                )
+                : (
+                    turnId && turnId.trim().length > 0
+                        ? `stream:${taskId}:${turnId.trim()}:assistant`
+                        : undefined
+                );
+            emit({
+                type: 'TEXT_DELTA',
+                taskId,
+                payload: {
+                    delta: supplementalSummary,
+                    role: 'assistant',
+                    messageId: streamCorrelationId,
+                    correlationId: streamCorrelationId,
                     traceId,
                     turnId,
                 },
@@ -3063,7 +3876,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 if (event.role !== 'thinking') {
                     appendTranscript(taskId, 'assistant', event.content);
                     if (trimmedContent.length > 0) {
-                        markTaskTurnAssistantNarrative(turnEventStateKey);
+                        markTaskTurnAssistantNarrative({
+                            key: turnEventStateKey,
+                            content: trimmedContent,
+                        });
                     }
                 }
             }
@@ -3404,13 +4220,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
                 return;
             }
-            if (hasTaskTurnToolEvidenceRequirement(turnEventStateKey) && !hasTaskTurnToolEvidence(turnEventStateKey)) {
+            if (hasTaskTurnToolEvidenceRequirement(turnEventStateKey) && !hasTaskTurnSatisfiedCompletionEvidence(turnEventStateKey)) {
                 emitMissingToolEvidenceFailure('complete');
                 return;
             }
             if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
                 return;
             }
+            emitSupplementalTaskSummaryIfNeeded();
             markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
             clearPendingApprovalsForTask(taskId);
             const retry = taskStates.get(taskId)?.retry;
@@ -3484,13 +4301,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 isStoreDisabledHistoryReferenceError(event.message)
                 && hasTaskTurnAssistantNarrative(turnEventStateKey)
             ) {
-                if (hasTaskTurnToolEvidenceRequirement(turnEventStateKey) && !hasTaskTurnToolEvidence(turnEventStateKey)) {
+                if (hasTaskTurnToolEvidenceRequirement(turnEventStateKey) && !hasTaskTurnSatisfiedCompletionEvidence(turnEventStateKey)) {
                     emitMissingToolEvidenceFailure('error');
                     return;
                 }
                 if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
                     return;
                 }
+                emitSupplementalTaskSummaryIfNeeded();
                 markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
                 clearPendingApprovalsForTask(taskId);
                 const retry = taskStates.get(taskId)?.retry;
@@ -3780,18 +4598,51 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'tool_result') {
+            const isError = event.isError === true;
+            const finalSynthesisText = extractFinalSynthesisTextFromToolResult({
+                toolName: event.toolName,
+                isError,
+                result: event.result,
+            });
             emit({
                 type: 'TOOL_RESULT',
                 taskId,
                 payload: {
                     name: event.toolName,
                     result: event.result,
-                    isError: event.isError === true,
+                    isError,
                     toolCallId: event.toolCallId,
                     traceId,
                     turnId,
                 },
             });
+            if (finalSynthesisText.length > 0) {
+                appendTranscript(taskId, 'assistant', finalSynthesisText);
+                markTaskTurnAssistantNarrative({
+                    key: turnEventStateKey,
+                    content: finalSynthesisText,
+                });
+                const streamCorrelationId = (
+                    turnId && turnId.trim().length > 0
+                        ? `stream:${taskId}:${turnId.trim()}:assistant`
+                        : (eventRunId.length > 0
+                            ? `stream:${eventRunId}:assistant`
+                            : undefined)
+                );
+                emit({
+                    type: 'TEXT_DELTA',
+                    taskId,
+                    payload: {
+                        delta: finalSynthesisText,
+                        role: 'assistant',
+                        messageId: streamCorrelationId,
+                        correlationId: streamCorrelationId,
+                        traceId,
+                        turnId,
+                    },
+                });
+            }
+            emitSupplementalTaskSummaryIfNeeded();
         }
     };
     const processLegacySimpleCommand = async (
@@ -4106,8 +4957,17 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     const now = Date.now();
                     const configuredTurnDeadlineAtMs = getOptionalFiniteNumber(input.executionOptions?.chatTurnDeadlineAtMs);
                     const configuredStartupDeadlineAtMs = getOptionalFiniteNumber(input.executionOptions?.chatStartupDeadlineAtMs);
+                    const isCommandOnlyTask = (
+                        useTaskLatencyProfile
+                        && requiredCompletionCapabilities.length === 1
+                        && requiredCompletionCapabilities[0] === COMMAND_EXECUTION_CAPABILITY
+                    );
                     const defaultTurnTimeoutMs = useTaskLatencyProfile
-                        ? resolveTaskTurnTimeoutMs()
+                        ? (
+                            isCommandOnlyTask
+                                ? Math.min(resolveTaskTurnTimeoutMs(), resolveCommandOnlyTaskTurnTimeoutMs())
+                                : resolveTaskTurnTimeoutMs()
+                        )
                         : resolveChatTurnTimeoutMs();
                     const defaultStartupBudgetMs = useTaskLatencyProfile
                         ? resolveTaskStartupBudgetMs()
@@ -4168,7 +5028,77 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         },
                     });
                 };
-                const emitMissingTerminalFailure = (reason: string): void => {
+                const emitMissingTerminalFailure = async (reason: string): Promise<void> => {
+                    const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+                    const missingCapabilities = getTaskTurnMissingRequiredCompletionCapabilities(turnEventStateKey);
+                    if (
+                        runMissingToolEvidenceAutoRetry
+                        && missingCapabilities.length > 0
+                        && runMissingToolEvidenceAutoRetry({
+                            taskId: input.taskId,
+                            turnEventStateKey,
+                            turnId: input.turnId,
+                            traceId: null,
+                            requiredCapabilities: missingCapabilities,
+                            source: 'error',
+                            runId: latestRunIdByTaskId.get(input.taskId),
+                        })
+                    ) {
+                        return;
+                    }
+                    if (requiredCapabilities.length === 0 || missingCapabilities.length === 0) {
+                        if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
+                            return;
+                        }
+                        const finishReason = `degraded_${reason}`;
+                        const degradedSummary = buildMissingTerminalRecoverySummary({
+                            evidenceSatisfied: missingCapabilities.length === 0,
+                        });
+                        markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
+                        appendTranscript(input.taskId, 'assistant', degradedSummary);
+                        clearPendingApprovalsForTask(input.taskId);
+                        const existingRetry = taskStates.get(input.taskId)?.retry;
+                        upsertTaskState(input.taskId, {
+                            status: 'finished',
+                            suspended: false,
+                            suspensionReason: undefined,
+                            checkpoint: undefined,
+                            retry: existingRetry
+                                ? {
+                                    ...existingRetry,
+                                    lastError: undefined,
+                                }
+                                : undefined,
+                        });
+                        emitHookEvent('TaskCompleted', {
+                            taskId: input.taskId,
+                            payload: {
+                                finishReason,
+                                reason,
+                                degraded: true,
+                            },
+                        });
+                        emit({
+                            type: 'TEXT_DELTA',
+                            taskId: input.taskId,
+                            payload: {
+                                delta: degradedSummary,
+                                turnId: input.turnId,
+                            },
+                        });
+                        emit({
+                            type: 'TASK_FINISHED',
+                            taskId: input.taskId,
+                            payload: {
+                                summary: degradedSummary,
+                                finishReason,
+                                reason,
+                                traceId: null,
+                                turnId: input.turnId,
+                            },
+                        });
+                        return;
+                    }
                     if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'error')) {
                         return;
                     }
@@ -4277,6 +5207,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 let sawRetryableNoNarrativeErrorDuringAutoApproval = false;
                 let sawRetryableNoNarrativeErrorAfterToolingProgress = false;
                 let autoApprovalRecoveryAttempted = false;
+                let autoApprovalIdleTerminalTimeoutReached = false;
                 const suppressedRecoverableEvents: DesktopEvent[] = [];
 
                 let pendingEmitChain: Promise<void> = Promise.resolve();
@@ -4291,6 +5222,18 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         });
                 };
                 const lateApprovalGraceMs = resolveLateApprovalGraceMs();
+                const requiredCompletionCapabilitiesForTurn = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey)
+                    .map((value) => value.toLowerCase());
+                const isWebResearchTurn = requiredCompletionCapabilitiesForTurn.includes(WEB_RESEARCH_CAPABILITY);
+                const rawTaskProgressIdleTerminalMs = isWebResearchTurn
+                    ? TASK_PROGRESS_IDLE_TERMINAL_WEB_MS
+                    : TASK_PROGRESS_IDLE_TERMINAL_NON_WEB_MS;
+                const isTestRuntime = process.env.NODE_ENV === 'test'
+                    || process.env.BUN_ENV === 'test'
+                    || process.env.BUN_TEST === '1';
+                const taskProgressIdleTerminalMs = isTestRuntime
+                    ? Math.min(rawTaskProgressIdleTerminalMs, 1_500)
+                    : rawTaskProgressIdleTerminalMs;
                 const waitForAutoApprovalInFlightToSettle = async (): Promise<void> => {
                     if (!hasAutoApprovalInFlightForTask() || lateApprovalGraceMs <= 0) {
                         return;
@@ -4308,6 +5251,31 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             return;
                         }
                     }
+                };
+                const waitForAutoApprovalIdleTerminalWatchdog = async (): Promise<void> => {
+                    if (!hasAutoApprovalInFlightForTask() || taskProgressIdleTerminalMs <= 0) {
+                        return;
+                    }
+                    const deadlineAt = Date.now() + taskProgressIdleTerminalMs;
+                    while (
+                        hasAutoApprovalInFlightForTask()
+                        && !hasTaskTurnTerminalEvent(turnEventStateKey)
+                        && !hasTaskTurnAssistantNarrative(turnEventStateKey)
+                        && Date.now() < deadlineAt
+                    ) {
+                        await new Promise<void>((resolve) => {
+                            setTimeout(resolve, LATE_APPROVAL_POLL_INTERVAL_MS);
+                        });
+                        await pendingEmitChain;
+                        if (pendingEmitError) {
+                            throw pendingEmitError;
+                        }
+                    }
+                    autoApprovalIdleTerminalTimeoutReached = (
+                        hasAutoApprovalInFlightForTask()
+                        && !hasTaskTurnTerminalEvent(turnEventStateKey)
+                        && !hasTaskTurnAssistantNarrative(turnEventStateKey)
+                    );
                 };
                 const attemptAutoApprovalNoNarrativeRecovery = async (): Promise<boolean> => {
                     if (autoApprovalRecoveryAttempted) {
@@ -4376,137 +5344,169 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 latestRunIdByTaskId.delete(input.taskId);
                 autoApprovalInFlightByTaskId.delete(input.taskId);
                 autoApprovalCompletedByTaskId.delete(input.taskId);
-
-                await executeAttempt(input.preferredThreadId, (event) => {
-                    if (noNarrativeTerminalFailure) {
+                let taskExecutionHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+                const stopTaskExecutionHeartbeat = (): void => {
+                    if (taskExecutionHeartbeatTimer) {
+                        clearInterval(taskExecutionHeartbeatTimer);
+                        taskExecutionHeartbeatTimer = null;
+                    }
+                };
+                const startTaskExecutionHeartbeat = (): void => {
+                    if (TASK_EXECUTION_HEARTBEAT_INTERVAL_MS <= 0) {
                         return;
                     }
-                    const lateNonTerminalAfterZeroProgressCompletion = (
-                        pendingNoNarrativeCompleteEvent
-                        && !pendingNoNarrativeCompleteHadProgress
-                        && event.type !== 'complete'
-                    );
-                    if (lateNonTerminalAfterZeroProgressCompletion && !isToolingProgressEvent(event)) {
-                        // Keep ignoring stale low-signal events, but allow tooling progress
-                        // to recover from complete-before-approval races.
-                        return;
-                    }
-                    if (isToolingProgressEvent(event)) {
-                        hasToolingProgress = true;
-                        if (pendingNoNarrativeCompleteEvent) {
-                            pendingNoNarrativeCompleteHadProgress = true;
-                        }
-                    }
-                    if (isAssistantNarrativeEvent(event)) {
-                        hasAssistantNarrative = true;
-                    }
-                    if (event.type === 'approval_required') {
-                        const requiredCompletionCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
-                        const autoApproval = shouldAutoApproveTool({
-                            event,
-                            requiredCompletionCapabilities,
-                        });
-                        // Both manual approval and auto-approval require waiting for a resume stream.
-                        // The initial stream can legitimately end with stream_exhausted before narrative.
-                        if (autoApproval) {
-                            sawAutoApprovalRequired = true;
-                        } else {
-                            awaitingUserApproval = true;
-                        }
-                        if (pendingNoNarrativeCompleteEvent && pendingNoNarrativeCompleteHadProgress) {
-                            const pendingFinishReason = String(pendingNoNarrativeCompleteEvent.finishReason ?? '')
-                                .trim()
-                                .toLowerCase();
-                            if (pendingFinishReason === 'stream_exhausted') {
-                                // Late approval events can arrive after an early stream_exhausted marker.
-                                // Treat that marker as provisional and cancel false-completion escalation.
-                                pendingNoNarrativeCompleteEvent = null;
-                                pendingNoNarrativeCompleteHadProgress = false;
-                            }
-                        }
-                    }
-                    if (
-                        event.type === 'error'
-                        && !hasAssistantNarrative
-                        && isRetryableRuntimeStreamError(event.message)
-                        && hasToolingProgress
-                    ) {
-                        sawRetryableNoNarrativeErrorAfterToolingProgress = true;
-                    }
-                    if (
-                        event.type === 'error'
-                        && !hasAssistantNarrative
-                        && isRetryableRuntimeStreamError(event.message)
-                        && (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask())
-                    ) {
-                        sawRetryableNoNarrativeErrorDuringAutoApproval = true;
-                        // Retryable no-narrative stream errors can arrive before/while auto-approval
-                        // resume handoff settles. Suppress immediate terminal emission and let the
-                        // post-attempt recovery path decide whether to resume/recover/degrade.
-                        return;
-                    }
-                    if (
-                        hasAssistantNarrative
-                        && event.type === 'error'
-                        && isStoreDisabledHistoryReferenceError(event.message)
-                    ) {
-                        recoveredStoreHistoryErrorAfterNarrative = true;
-                        enqueueEmitDesktopEvent({
-                            type: 'complete',
-                            runId: event.runId,
-                            finishReason: 'assistant_text_store_disabled_history_recovered',
-                        });
-                        return;
-                    }
-                    if (
-                        recoveredStoreHistoryErrorAfterNarrative
-                        && (event.type === 'error' || event.type === 'complete')
-                    ) {
-                        return;
-                    }
-                    if (suppressRecoverableAttempt && !hasAssistantNarrative) {
-                        suppressedRecoverableEvents.push(event);
-                        return;
-                    }
-                    if (suppressRecoverableAttempt && hasAssistantNarrative) {
-                        suppressRecoverableAttempt = false;
-                        for (const suppressedEvent of suppressedRecoverableEvents) {
-                            enqueueEmitDesktopEvent(suppressedEvent);
-                        }
-                        suppressedRecoverableEvents.length = 0;
-                    }
-                    if (
-                        !hasAssistantNarrative
-                        && event.type === 'error'
-                        && isStoreDisabledHistoryReferenceError(event.message)
-                    ) {
-                        hasRecoverableHistoryError = true;
-                        suppressRecoverableAttempt = true;
-                        suppressedRecoverableEvents.push(event);
-                        return;
-                    }
-                    if (!hasAssistantNarrative && event.type === 'complete') {
-                        if (awaitingUserApproval) {
-                            const finishReason = String(event.finishReason ?? '').trim().toLowerCase();
-                            // Stream exhaustion while waiting approval is not a real terminal state.
-                            // Record a provisional completion and wait for report_effect_result
-                            // (or auto-approval resume) before deciding false completion.
-                            if (finishReason === 'stream_exhausted') {
-                                pendingNoNarrativeCompleteEvent = event;
-                                pendingNoNarrativeCompleteHadProgress = hasToolingProgress;
-                                return;
-                            }
-                            // For explicit terminal reasons (for example "stop"), preserve existing
-                            // behavior and clear pending approvals through the normal complete path.
-                            enqueueEmitDesktopEvent(event);
+                    stopTaskExecutionHeartbeat();
+                    taskExecutionHeartbeatTimer = setInterval(() => {
+                        if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
+                            stopTaskExecutionHeartbeat();
                             return;
                         }
-                        pendingNoNarrativeCompleteEvent = event;
-                        pendingNoNarrativeCompleteHadProgress = hasToolingProgress;
-                        return;
-                    }
-                    enqueueEmitDesktopEvent(event);
-                });
+                        emit({
+                            type: 'TASK_EVENT',
+                            taskId: input.taskId,
+                            payload: {
+                                type: 'heartbeat',
+                                turnId: input.turnId,
+                                at: getNowIso(),
+                            },
+                        });
+                    }, TASK_EXECUTION_HEARTBEAT_INTERVAL_MS);
+                };
+                startTaskExecutionHeartbeat();
+
+                try {
+                    await executeAttempt(input.preferredThreadId, (event) => {
+                        if (noNarrativeTerminalFailure) {
+                            return;
+                        }
+                        const lateNonTerminalAfterZeroProgressCompletion = (
+                            pendingNoNarrativeCompleteEvent
+                            && !pendingNoNarrativeCompleteHadProgress
+                            && event.type !== 'complete'
+                        );
+                        if (lateNonTerminalAfterZeroProgressCompletion && !isToolingProgressEvent(event)) {
+                            // Keep ignoring stale low-signal events, but allow tooling progress
+                            // to recover from complete-before-approval races.
+                            return;
+                        }
+                        if (isToolingProgressEvent(event)) {
+                            hasToolingProgress = true;
+                            if (pendingNoNarrativeCompleteEvent) {
+                                pendingNoNarrativeCompleteHadProgress = true;
+                            }
+                        }
+                        if (isAssistantNarrativeEvent(event)) {
+                            hasAssistantNarrative = true;
+                        }
+                        if (event.type === 'approval_required') {
+                            const requiredCompletionCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+                            const autoApproval = shouldAutoApproveTool({
+                                event,
+                                requiredCompletionCapabilities,
+                            });
+                            // Both manual approval and auto-approval require waiting for a resume stream.
+                            // The initial stream can legitimately end with stream_exhausted before narrative.
+                            if (autoApproval) {
+                                sawAutoApprovalRequired = true;
+                            } else {
+                                awaitingUserApproval = true;
+                            }
+                            if (pendingNoNarrativeCompleteEvent && pendingNoNarrativeCompleteHadProgress) {
+                                const pendingFinishReason = String(pendingNoNarrativeCompleteEvent.finishReason ?? '')
+                                    .trim()
+                                    .toLowerCase();
+                                if (pendingFinishReason === 'stream_exhausted') {
+                                    // Late approval events can arrive after an early stream_exhausted marker.
+                                    // Treat that marker as provisional and cancel false-completion escalation.
+                                    pendingNoNarrativeCompleteEvent = null;
+                                    pendingNoNarrativeCompleteHadProgress = false;
+                                }
+                            }
+                        }
+                        if (event.type === 'error' && isRetryableRuntimeStreamError(event.message)) {
+                            const hasRecoverableStreamProgress = (
+                                hasToolingProgress
+                                || (!hasAssistantNarrative && (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask()))
+                            );
+                            if (!hasRecoverableStreamProgress) {
+                                enqueueEmitDesktopEvent(event);
+                                return;
+                            }
+                            if (hasToolingProgress) {
+                                sawRetryableNoNarrativeErrorAfterToolingProgress = true;
+                            }
+                            if (!hasAssistantNarrative && (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask())) {
+                                sawRetryableNoNarrativeErrorDuringAutoApproval = true;
+                            }
+                            // Retryable stream errors are recoverable. Suppress immediate terminal failure
+                            // and let post-attempt recovery synthesize completion/retry decisions.
+                            return;
+                        }
+                        if (
+                            hasAssistantNarrative
+                            && event.type === 'error'
+                            && isStoreDisabledHistoryReferenceError(event.message)
+                        ) {
+                            recoveredStoreHistoryErrorAfterNarrative = true;
+                            enqueueEmitDesktopEvent({
+                                type: 'complete',
+                                runId: event.runId,
+                                finishReason: 'assistant_text_store_disabled_history_recovered',
+                            });
+                            return;
+                        }
+                        if (
+                            recoveredStoreHistoryErrorAfterNarrative
+                            && (event.type === 'error' || event.type === 'complete')
+                        ) {
+                            return;
+                        }
+                        if (suppressRecoverableAttempt && !hasAssistantNarrative) {
+                            suppressedRecoverableEvents.push(event);
+                            return;
+                        }
+                        if (suppressRecoverableAttempt && hasAssistantNarrative) {
+                            suppressRecoverableAttempt = false;
+                            for (const suppressedEvent of suppressedRecoverableEvents) {
+                                enqueueEmitDesktopEvent(suppressedEvent);
+                            }
+                            suppressedRecoverableEvents.length = 0;
+                        }
+                        if (
+                            !hasAssistantNarrative
+                            && event.type === 'error'
+                            && isStoreDisabledHistoryReferenceError(event.message)
+                        ) {
+                            hasRecoverableHistoryError = true;
+                            suppressRecoverableAttempt = true;
+                            suppressedRecoverableEvents.push(event);
+                            return;
+                        }
+                        if (!hasAssistantNarrative && event.type === 'complete') {
+                            if (awaitingUserApproval) {
+                                const finishReason = String(event.finishReason ?? '').trim().toLowerCase();
+                                // Stream exhaustion while waiting approval is not a real terminal state.
+                                // Record a provisional completion and wait for report_effect_result
+                                // (or auto-approval resume) before deciding false completion.
+                                if (finishReason === 'stream_exhausted') {
+                                    pendingNoNarrativeCompleteEvent = event;
+                                    pendingNoNarrativeCompleteHadProgress = hasToolingProgress;
+                                    return;
+                                }
+                                // For explicit terminal reasons (for example "stop"), preserve existing
+                                // behavior and clear pending approvals through the normal complete path.
+                                enqueueEmitDesktopEvent(event);
+                                return;
+                            }
+                            pendingNoNarrativeCompleteEvent = event;
+                            pendingNoNarrativeCompleteHadProgress = hasToolingProgress;
+                            return;
+                        }
+                        enqueueEmitDesktopEvent(event);
+                    });
+                } finally {
+                    stopTaskExecutionHeartbeat();
+                }
                 await pendingEmitChain;
                 if (pendingEmitError) {
                     throw pendingEmitError;
@@ -4575,7 +5575,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             pendingNoNarrativeCompleteHadProgress = false;
                             return;
                         }
-                        emitMissingTerminalFailure('missing_terminal_after_late_tooling_progress');
+                        await emitMissingTerminalFailure('missing_terminal_after_late_tooling_progress');
                         pendingNoNarrativeCompleteEvent = null;
                         pendingNoNarrativeCompleteHadProgress = false;
                         return;
@@ -4637,6 +5637,31 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     if (sawAutoApprovalRequired && !awaitingUserApproval) {
                         if (hasAutoApprovalInFlightForTask()) {
                             if (!sawRetryableNoNarrativeErrorDuringAutoApproval) {
+                                await waitForAutoApprovalIdleTerminalWatchdog();
+                                if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
+                                    return;
+                                }
+                                if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
+                                    enqueueEmitDesktopEvent({
+                                        type: 'complete',
+                                        runId: `synthetic-complete-${createId()}`,
+                                        finishReason: 'synthetic_terminal_after_assistant_text',
+                                        turnId: input.turnId,
+                                    });
+                                    await pendingEmitChain;
+                                    if (pendingEmitError) {
+                                        throw pendingEmitError;
+                                    }
+                                    return;
+                                }
+                                if (!autoApprovalIdleTerminalTimeoutReached) {
+                                    return;
+                                }
+                                autoApprovalInFlightByTaskId.delete(input.taskId);
+                                if (await attemptAutoApprovalNoNarrativeRecovery()) {
+                                    return;
+                                }
+                                await emitNoNarrativeDegradedCompletion('auto_approval_idle_timeout_without_terminal_event');
                                 return;
                             }
                             await waitForAutoApprovalInFlightToSettle();
@@ -4698,16 +5723,41 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
                                 return;
                             }
-                            emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
+                            await emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
                             return;
                         }
+                        await waitForAutoApprovalIdleTerminalWatchdog();
+                        if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
+                            return;
+                        }
+                        if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
+                            enqueueEmitDesktopEvent({
+                                type: 'complete',
+                                runId: `synthetic-complete-${createId()}`,
+                                finishReason: 'synthetic_terminal_after_assistant_text',
+                                turnId: input.turnId,
+                            });
+                            await pendingEmitChain;
+                            if (pendingEmitError) {
+                                throw pendingEmitError;
+                            }
+                            return;
+                        }
+                        if (!autoApprovalIdleTerminalTimeoutReached) {
+                            return;
+                        }
+                        autoApprovalInFlightByTaskId.delete(input.taskId);
+                        if (await attemptAutoApprovalNoNarrativeRecovery()) {
+                            return;
+                        }
+                        await emitNoNarrativeDegradedCompletion('auto_approval_idle_timeout_without_terminal_event');
                         return;
                     }
                     if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
                         await emitNoNarrativeDegradedCompletion('missing_terminal_after_tooling_progress');
                         return;
                     }
-                    emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
+                    await emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
                     return;
                 }
             };
@@ -4772,7 +5822,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             'request_effect',
                             requestPayload,
                             emit,
-                            REQUEST_EFFECT_TIMEOUT_MS,
+                            Math.min(REQUEST_EFFECT_TIMEOUT_MS, 800),
                         );
                     } catch {
                         // Best-effort preflight approval signal; continue task execution path.
@@ -4849,23 +5899,71 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 if (!existingState) {
                     return false;
                 }
-                const retryMessage = typeof existingState.lastUserMessage === 'string'
+                const baseRetryMessage = typeof existingState.lastUserMessage === 'string'
                     ? existingState.lastUserMessage.trim()
                     : '';
-                if (retryMessage.length === 0) {
+                if (baseRetryMessage.length === 0) {
                     return false;
                 }
                 const envMaxAttempts = resolveMissingToolEvidenceAutoRetryMaxAttempts();
                 const currentAttempts = Math.max(0, existingState.retry?.attempts ?? 0);
-                const maxAttempts = Math.max(
-                    0,
-                    existingState.retry?.maxAttempts ?? envMaxAttempts,
+                // Only apply implicit retry floor for "complete-without-evidence" class.
+                // Protocol error paths (for example missing terminal events) should fail fast
+                // unless an explicit retry budget is configured.
+                const hasActionableProgressSignal = hasTaskTurnAssistantNarrative(retryInput.turnEventStateKey)
+                    || getTaskTurnObservedToolNames(retryInput.turnEventStateKey).length > 0;
+                const missingCapabilitiesForTurn = getTaskTurnMissingRequiredCompletionCapabilities(
+                    retryInput.turnEventStateKey,
                 );
+                const requiredCapabilitiesForTurn = getTaskTurnRequiredCompletionCapabilities(
+                    retryInput.turnEventStateKey,
+                );
+                const retryFloorCapabilities = missingCapabilitiesForTurn.length > 0
+                    ? missingCapabilitiesForTurn
+                    : retryInput.requiredCapabilities;
+                const attemptedCapabilitiesForTurn = getTaskTurnResultAttemptedCompletionCapabilities(
+                    retryInput.turnEventStateKey,
+                );
+                const attemptedRetryFloorCapability = attemptedCapabilitiesForTurn.some((capability) => (
+                    retryFloorCapabilities.includes(capability)
+                ));
+                const hasAnyRequiredCapability = requiredCapabilitiesForTurn.length > 0;
+                const canApplyProtocolSafetyFloor = retryInput.source === 'complete'
+                    && hasActionableProgressSignal
+                    && hasAnyRequiredCapability
+                    && !attemptedRetryFloorCapability;
+                const implicitRetryFloor = canApplyProtocolSafetyFloor
+                    ? resolveMissingToolEvidenceRetryFloor(retryFloorCapabilities)
+                    : 0;
+                const configuredRetryCapFromState = existingState.retry?.maxAttempts;
+                const configuredMaxAttempts = configuredRetryCapFromState === 0
+                    ? implicitRetryFloor
+                    : Math.max(
+                        0,
+                        configuredRetryCapFromState ?? envMaxAttempts,
+                        implicitRetryFloor,
+                    );
+                const maxAttempts = resolveAdaptiveMissingToolEvidenceRetryMaxAttempts({
+                    configuredMaxAttempts,
+                    currentAttempts,
+                    lastError: existingState.retry?.lastError,
+                    requiredCapabilities: retryInput.requiredCapabilities,
+                });
                 const nextAttempts = currentAttempts + 1;
                 if (maxAttempts <= 0 || nextAttempts > maxAttempts) {
                     return false;
                 }
                 const retryDelayMs = resolveMissingToolEvidenceAutoRetryDelayMs();
+                const commandRecoveryHint = getTaskTurnCommandRecoveryHint(
+                    retryInput.turnEventStateKey,
+                    retryInput.taskId,
+                );
+                const retryMessage = buildMissingToolEvidenceRetryMessage({
+                    message: baseRetryMessage,
+                    requiredCapabilities: retryInput.requiredCapabilities,
+                    source: retryInput.source,
+                    commandRecoveryHint,
+                });
                 const updatedState = upsertTaskState(retryInput.taskId, {
                     status: 'retrying',
                     suspended: false,
@@ -4931,6 +6029,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     .catch((error) => {
                         const message = error instanceof Error ? error.message : String(error);
                         const classification = classifyRuntimeErrorMessage(message);
+                        const adaptiveMaxAttempts = resolveAdaptiveMissingToolEvidenceRetryMaxAttempts({
+                            configuredMaxAttempts: maxAttempts,
+                            currentAttempts: nextAttempts,
+                            lastError: message,
+                            requiredCapabilities: retryInput.requiredCapabilities,
+                        });
                         if (!hasTaskTurnTerminalEvent(retryInput.turnEventStateKey)) {
                             markTaskTurnTerminalEvent(retryInput.turnEventStateKey, 'error');
                             upsertTaskState(retryInput.taskId, {
@@ -4940,7 +6044,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 checkpoint: undefined,
                                 retry: {
                                     attempts: nextAttempts,
-                                    maxAttempts,
+                                    maxAttempts: adaptiveMaxAttempts,
                                     lastRetryAt: getNowIso(),
                                     lastError: message,
                                 },
@@ -5113,6 +6217,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             checkpoint: state.checkpoint ?? null,
                             checkpointVersion: state.checkpointVersion ?? resolveTaskCheckpointVersion(state),
                             retry: state.retry ?? null,
+                            agentTasks: state.agentTasks ?? [],
+                            agentTaskProgress: state.agentTaskProgress ?? null,
                             operationLog: state.operationLog ?? [],
                             executionPath: state.executionPath ?? 'workflow',
                         }
@@ -5424,6 +6530,31 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
                 return;
             }
+            let startOrSendCommandType = command.type;
+            let startOrSendPayload = payload;
+            if (command.type === 'send_subagent_message') {
+                const subagentFollowup = resolveSubagentFollowupMessage({
+                    payload,
+                    taskStates,
+                });
+                if (!subagentFollowup.ok) {
+                    emitFor('send_subagent_message_response', {
+                        success: false,
+                        taskId: subagentFollowup.taskId,
+                        accepted: false,
+                        error: subagentFollowup.error,
+                        details: subagentFollowup.details ?? null,
+                        availableSubagentTaskIds: subagentFollowup.availableSubagentTaskIds ?? [],
+                    });
+                    return;
+                }
+                startOrSendPayload = {
+                    ...payload,
+                    taskId: subagentFollowup.taskId,
+                    content: subagentFollowup.content,
+                    subagentTaskId: subagentFollowup.subagentTaskId,
+                };
+            }
             if (command.type === 'send_task_message') {
                 const followupTaskId = getString(payload.taskId);
                 const followupMessage = getString(payload.content);
@@ -5503,9 +6634,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
             }
             if (await handleStartOrSendTaskCommand({
-                commandType: command.type,
+                commandType: startOrSendCommandType,
                 commandId,
-                payload,
+                payload: startOrSendPayload,
                 taskStates,
                 getString,
                 toRecord,

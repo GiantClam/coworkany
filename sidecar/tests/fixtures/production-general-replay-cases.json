@@ -1,0 +1,99 @@
+{
+  "cases": [
+    {
+      "id": "market-minimax-hk-trend",
+      "source": "production",
+      "message": "今天 minimax 的港股股价怎么样？本周会有哪些趋势？",
+      "expectedDomain": "market",
+      "requiredCapabilities": ["web_research"],
+      "forbiddenCapabilities": ["command_execution"]
+    },
+    {
+      "id": "market-buy-price-followup",
+      "source": "production",
+      "message": "我应该在哪个价位买入？",
+      "expectedDomain": "market",
+      "requiredCapabilities": ["web_research"]
+    },
+    {
+      "id": "business-cooperation-decision",
+      "source": "production",
+      "message": "请评估和字节在 AI Agent 方向的商业合作可行性，给出合作方案建议和主要风险",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["web_research"]
+    },
+    {
+      "id": "platform-trending-bilibili",
+      "source": "production",
+      "message": "今天 blibli 上有什么热门视频",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["web_research"]
+    },
+    {
+      "id": "platform-trending-generic",
+      "source": "production",
+      "message": "今天有什么热门视频推荐？",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["web_research"]
+    },
+    {
+      "id": "host-recycle-bin-cleanup",
+      "source": "production",
+      "message": "帮我清空回收站",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["command_execution"],
+      "forbiddenCapabilities": ["web_research"],
+      "hostCommandByPlatform": {
+        "darwin": "osascript -e 'tell application \"Finder\" to empty the trash'",
+        "win32": "PowerShell -NoProfile -Command \"Clear-RecycleBin -Force\"",
+        "linux": "if command -v gio >/dev/null 2>&1; then gio trash --empty; elif command -v trash-empty >/dev/null 2>&1; then trash-empty; else echo \"no_supported_trash_cli\"; exit 127; fi"
+      }
+    },
+    {
+      "id": "host-folder-move",
+      "source": "production",
+      "message": "把 /Users/demo/Downloads/tmp 移动到 /Users/demo/Documents/archive",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["command_execution"],
+      "forbiddenCapabilities": ["web_research"]
+    },
+    {
+      "id": "host-current-date-cn",
+      "source": "production",
+      "message": "今天是几号",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["command_execution"],
+      "forbiddenCapabilities": ["web_research"]
+    },
+    {
+      "id": "host-current-date-en",
+      "source": "production",
+      "message": "What's the current date today?",
+      "expectedDomain": "general",
+      "requiredCapabilities": ["command_execution"],
+      "forbiddenCapabilities": ["web_research"]
+    },
+    {
+      "id": "local-readonly-listing",
+      "source": "production",
+      "message": "列出当前目录下的所有文件并按大小排序",
+      "expectedDomain": "general",
+      "forbiddenCapabilities": ["command_execution", "web_research"]
+    },
+    {
+      "id": "market-with-local-output-path",
+      "source": "production",
+      "message": "查询 NVDA 最新股价并把结果写入 ./reports/nvda.md",
+      "expectedDomain": "market",
+      "requiredCapabilities": ["web_research"],
+      "forbiddenCapabilities": ["command_execution"]
+    },
+    {
+      "id": "explicit-no-command-constraint",
+      "source": "production",
+      "message": "请用一句中文回复‘桌面端回复回归验证通过’，不要执行命令或调用工具。",
+      "expectedDomain": "general",
+      "forbiddenCapabilities": ["command_execution", "web_research", "browser_automation", "voice_output"]
+    }
+  ]
+}

@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
     createRestartInterruptedFailure,
     planTaskRuntimeRecovery,
-} from '../src/execution/taskRuntimeRecovery';
-import type { PersistedTaskRuntimeRecord } from '../src/execution/taskRuntimeStore';
+} from '../src/mastra/taskRuntime/taskRuntimeRecovery';
+import type { PersistedTaskRuntimeRecord } from '../src/mastra/taskRuntime/taskRuntimeStore';
 
 function makeRecord(
     overrides: Partial<PersistedTaskRuntimeRecord> = {}

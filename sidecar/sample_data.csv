@@ -1,9 +1,4 @@
-name,age,email,city,salary
-张三,28,zhangsan@example.com,北京,8000
-李四,35,lisi@example.com,上海,12000
-王五,42,wangwu@example.com,广州,15000
-赵六,31,zhaoliu@example.com,深圳,10000
-钱七,26,qianqi@example.com,杭州,9000
-孙八,39,sunba@example.com,成都,11000
-周九,33,zhoujiu@example.com,武汉,9500
-吴十,29,wushi@example.com,南京,8500
+姓名,年龄,城市
+张三,25,北京
+李四,30,上海
+王五,28,深圳

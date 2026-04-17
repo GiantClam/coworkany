@@ -1,3 +1,8 @@
+import {
+    buildAgentTaskNotificationXml,
+    tryBuildAgentTaskNotificationFromEvent,
+} from '../mastra/agentTaskNotification';
+
 type DesktopEventBase = {
     runId?: string;
     traceId?: string;
@@ -543,6 +548,33 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
             return { type: 'complete', runId };
         }
         return null;
+    }
+    const normalizedType = typeof normalizedChunk.type === 'string' ? normalizedChunk.type : '';
+    const agentTaskNotification = tryBuildAgentTaskNotificationFromEvent(normalizedType, data);
+    if (agentTaskNotification) {
+        const toolName = 'agent_task_notification';
+        if (agentTaskNotification.status === 'running') {
+            return {
+                type: 'tool_call',
+                runId,
+                toolName,
+                args: {
+                    ...agentTaskNotification,
+                    xml: buildAgentTaskNotificationXml(agentTaskNotification),
+                },
+            };
+        }
+        return {
+            type: 'tool_result',
+            runId,
+            toolCallId: `agent-task:${agentTaskNotification.taskId}`,
+            toolName,
+            result: {
+                ...agentTaskNotification,
+                xml: buildAgentTaskNotificationXml(agentTaskNotification),
+            },
+            isError: agentTaskNotification.status === 'failed',
+        };
     }
     switch (normalizedChunk.type) {
         case 'text-delta': {

@@ -22,6 +22,9 @@ const OPENAI_COMPATIBLE_PROFILE_PROVIDERS = new Set([
     'minimax',
     'kimi',
 ]);
+const MODEL_PROVIDER_AUTHORITATIVE_FOR_NATIVE_STACK = new Set([
+    'anthropic',
+]);
 let runtimeLlmEnvSeeded = false;
 
 function ensureRuntimeLlmEnvSeeded(): void {
@@ -29,8 +32,9 @@ function ensureRuntimeLlmEnvSeeded(): void {
         return;
     }
     const runningInTest = process.env.NODE_ENV === 'test';
-    const allowSeedInTest = process.env.COWORKANY_ALLOW_RUNTIME_LLM_ENV_SEED_IN_TEST === '1';
-    if (runningInTest && !allowSeedInTest) {
+    const legacyAllowSeedInTest = process.env.COWORKANY_ALLOW_RUNTIME_LLM_ENV_SEED_IN_TEST === '1';
+    const disableSeedInTest = process.env.COWORKANY_DISABLE_RUNTIME_LLM_ENV_SEED_IN_TEST === '1';
+    if (runningInTest && disableSeedInTest && !legacyAllowSeedInTest) {
         runtimeLlmEnvSeeded = true;
         return;
     }
@@ -87,11 +91,15 @@ export function shouldUseOpenAICompatibleChatModel(input: {
 
     const provider = input.llmConfigProvider?.toLowerCase() ?? '';
     const customApiFormat = input.llmCustomApiFormat?.toLowerCase() ?? '';
+    const modelProvider = input.modelId.split('/')[0]?.toLowerCase() ?? '';
     if (provider === 'custom') {
         return customApiFormat !== 'anthropic';
     }
 
     if (OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(provider)) {
+        if (MODEL_PROVIDER_AUTHORITATIVE_FOR_NATIVE_STACK.has(modelProvider)) {
+            return false;
+        }
         return true;
     }
 

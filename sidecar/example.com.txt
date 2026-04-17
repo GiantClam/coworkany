@@ -1,0 +1,3 @@
+URL: https://example.com
+Title: Example Domain
+Screenshot: example_com.png

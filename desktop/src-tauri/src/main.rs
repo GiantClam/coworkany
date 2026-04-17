@@ -113,6 +113,7 @@ fn main() {
             ipc::start_task,
             ipc::cancel_task,
             ipc::send_task_message,
+            ipc::send_subagent_message,
             ipc::resume_interrupted_task,
             ipc::clear_task_history,
             ipc::get_tasks, // Previously added

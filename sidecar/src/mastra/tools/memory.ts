@@ -64,7 +64,10 @@ export const recallTool = createTool({
     inputSchema: z.object({
         key: z.string().optional(),
         query: z.string().optional(),
-        limit: z.number().int().min(1).max(100).optional(),
+        limit: z.union([
+            z.number().int().min(1).max(100),
+            z.string().trim().regex(/^\d+$/u),
+        ]).optional(),
         workspace_path: z.string().optional(),
     }),
     outputSchema: z.object({
@@ -82,6 +85,18 @@ export const recallTool = createTool({
         if (!recallStandardTool) {
             return { error: 'recall_tool_unavailable' };
         }
+        const normalizedLimit = (() => {
+            if (typeof input.limit === 'number' && Number.isFinite(input.limit)) {
+                return Math.floor(input.limit);
+            }
+            if (typeof input.limit === 'string') {
+                const parsed = Number.parseInt(input.limit, 10);
+                if (Number.isFinite(parsed)) {
+                    return parsed;
+                }
+            }
+            return undefined;
+        })();
         const context: StandardToolContext = {
             workspacePath: resolveWorkspacePath(input.workspace_path),
             taskId: 'mastra-memory-recall',
@@ -89,7 +104,7 @@ export const recallTool = createTool({
         return await recallStandardTool.handler({
             key: input.key,
             query: input.query,
-            limit: input.limit,
+            limit: normalizedLimit,
         }, context);
     },
 });

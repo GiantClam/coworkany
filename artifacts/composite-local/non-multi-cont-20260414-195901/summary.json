@@ -1,0 +1,6 @@
+{
+  "runId": "non-multi-cont-20260414-195901",
+  "startedAt": "2026-04-14T11:59:01Z",
+  "profiles": [
+    {"profile":"regression-hard","status":0,"startedAt":"2026-04-14T11:59:01Z","endedAt":"2026-04-14T11:59:34Z","log":"/Users/beihuang/Documents/github/coworkany/artifacts/composite-local/non-multi-cont-20260414-195901/regression-hard.log"},
+    {"profile":"runtime-stress","status":0,"startedAt":"2026-04-14T11:59:34Z","endedAt":"2026-04-14T12:00:38Z","log":"/Users/beihuang/Documents/github/coworkany/artifacts/composite-local/non-multi-cont-20260414-195901/runtime-stress.log"}

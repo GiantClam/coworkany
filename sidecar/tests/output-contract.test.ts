@@ -45,9 +45,45 @@ describe('output contract extraction', () => {
         ]);
     });
 
+    test('does not treat URL fragments as output paths', () => {
+        const message = 'Open https://example.com, then save screenshot to ./example.com.';
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            './example.com',
+        ]);
+    });
+
+    test('ignores internal retry contract block when extracting output paths', () => {
+        const message = [
+            '[CoworkAny Retry Execution Contract]',
+            '- Do not repeat refusal/disclaimer-only output in this retry.',
+            '',
+            'Write the final result to /tmp/final-result.json.',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            '/tmp/final-result.json',
+        ]);
+    });
+
     test('ignores file paths that are not output cues', () => {
         const message = 'Read `workspace/form.html` and inspect `<input>` fields.';
         expect(extractExplicitOutputPaths(message)).toEqual([]);
+    });
+
+    test('does not treat directory-like tokens as output file paths', () => {
+        const message = [
+            'Create workspace/orchestration and then write status to workspace/orchestration/task_plan.json.',
+            'Record approval status as approved/rejected in the report.',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/orchestration/task_plan.json',
+        ]);
+    });
+
+    test('supports known extensionless file names', () => {
+        const message = 'Create workspace/Dockerfile and save final instructions there.';
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/Dockerfile',
+        ]);
     });
 });
 

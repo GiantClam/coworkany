@@ -1,0 +1,15 @@
+Screenshot Information
+=====================
+
+URL: https://example.com
+Timestamp: 2026-04-15T05:34:00Z
+Screenshot File: example_com_screenshot.png
+File Size: 21207 bytes
+Image Format: PNG
+Dimensions: 1920 x 1080 pixels
+Color Depth: 8-bit/color RGB
+
+Page Title: Example Domain
+Page Status: 200 OK
+
+Screenshot successfully captured and saved to workspace.

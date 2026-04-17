@@ -560,6 +560,13 @@ function buildStagePlan(repositoryRoot: string, options: CliOptions): StageDefin
                 args: ['run', 'test:assistant-ui-contracts'],
             },
             {
+                id: 'sidecar-composite-regression-hard',
+                label: 'Sidecar Composite Regression Hard Gate',
+                cwd: sidecarDir,
+                command: bin('npm'),
+                args: ['run', 'test:composite'],
+            },
+            {
                 id: 'sidecar-control-plane-eval',
                 label: 'Sidecar Control-Plane Eval',
                 cwd: sidecarDir,

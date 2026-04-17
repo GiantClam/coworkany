@@ -2,7 +2,7 @@
   "id": "coworkany-composite-benchmark-v1",
   "name": "CoworkAny 组合测试集（功能+稳定性）",
   "version": "1.0.0",
-  "defaultProfile": "smoke",
+  "defaultProfile": "regression-hard",
   "description": "聚合 claw-bench/openclaw 风格验证与现有 sidecar 任务链路，支持分层执行。",
   "profiles": [
     {
@@ -25,6 +25,85 @@
           "kind": "bun-test",
           "files": [
             "tests/openclaw-quick.test.ts"
+          ],
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "regression-hard",
+      "name": "P0+ 核心回归硬门禁",
+      "objective": "覆盖任务路由、工具能力判定、协议执行契约与本机指令执行回归（默认组合测试入口，保持可重复稳定）",
+      "steps": [
+        {
+          "name": "意图与能力路由硬门禁",
+          "kind": "bun-test",
+          "files": [
+            "tests/capability-registry.test.ts",
+            "tests/production-general-replay.test.ts",
+            "tests/research-tool.test.ts",
+            "tests/mastra-skill-prompt.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "协议与本机执行契约硬门禁",
+          "kind": "bun-test",
+          "files": [
+            "tests/mastra-entrypoint.test.ts",
+            "tests/command-alternatives.test.ts",
+            "tests/mastra-health.test.ts"
+          ],
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "runtime-stress",
+      "name": "P0x 运行时重压链路（非默认）",
+      "objective": "覆盖高压重试、超时恢复与运行时链路（可能受模型配置/环境影响）",
+      "steps": [
+        {
+          "name": "运行时与多轮重试链路",
+          "kind": "bun-test",
+          "files": [
+            "tests/task-runtime-recovery.test.ts",
+            "tests/task-runtime-store.test.ts",
+            "tests/phase3-agent-loop.test.ts"
+          ],
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "multi-agent-regression",
+      "name": "P0m Multi-Agent 回归",
+      "objective": "覆盖多代理意图识别、supervisor 路由、subagent 跟进消息与任务通知存储链路",
+      "steps": [
+        {
+          "name": "多代理策略与路由",
+          "kind": "bun-test",
+          "files": [
+            "tests/multi-agent-execution.test.ts",
+            "tests/streaming-multi-agent-network.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "Subagent 消息与任务记录",
+          "kind": "bun-test",
+          "files": [
+            "tests/subagent-message-router.test.ts",
+            "tests/agent-task-notification.test.ts",
+            "tests/agent-task-store.test.ts"
+          ],
+          "critical": true
+        },
+        {
+          "name": "入口协议多代理回归",
+          "kind": "bun-test",
+          "files": [
+            "tests/mastra-entrypoint.test.ts"
           ],
           "critical": true
         }
@@ -187,7 +266,7 @@
           ],
           "repoDirEnv": "CLAW_BENCH_REPO_DIR",
           "workingDirMode": "env-first",
-          "critical": false,
+          "critical": true,
           "artifactsDir": "artifacts/composite-external/claw-bench"
         },
         {
@@ -200,7 +279,7 @@
             "OSWORLD_REPO_DIR"
           ],
           "workingDirMode": "osworld-repo",
-          "critical": false,
+          "critical": true,
           "artifactsDir": "artifacts/composite-external/osworld"
         },
         {
@@ -213,7 +292,7 @@
             "BROWSERGYM_REPO_DIR"
           ],
           "workingDirMode": "browsergym-repo",
-          "critical": false,
+          "critical": true,
           "artifactsDir": "artifacts/composite-external/browsergym"
         },
         {
@@ -226,7 +305,7 @@
             "GAIA2_REPO_DIR"
           ],
           "workingDirMode": "gaia2-repo",
-          "critical": false,
+          "critical": true,
           "artifactsDir": "artifacts/composite-external/gaia2"
         },
         {
@@ -239,7 +318,7 @@
             "THEAGENTCOMPANY_REPO_DIR"
           ],
           "workingDirMode": "the-agent-company-repo",
-          "critical": false,
+          "critical": true,
           "artifactsDir": "artifacts/composite-external/the-agent-company"
         },
         {

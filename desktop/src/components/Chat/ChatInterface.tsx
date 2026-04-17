@@ -13,7 +13,7 @@ import { useStartTask, useCancelTask, useSpawnSidecar, useShutdownSidecar } from
 import { useActiveSession, useTaskEventStore } from '../../stores/useTaskEventStore';
 import { useSkills } from '../../hooks/useSkills';
 import { useToolpacks } from '../../hooks/useToolpacks';
-import { useResumeInterruptedTask, useSendTaskMessage } from '../../hooks/useSendTaskMessage';
+import { useResumeInterruptedTask, useSendSubagentMessage, useSendTaskMessage } from '../../hooks/useSendTaskMessage';
 import { useClearTaskHistory } from '../../hooks/useClearTaskHistory';
 import { useVoicePlayback } from '../../hooks/useVoicePlayback';
 import { useWorkspace } from '../../hooks/useWorkspace';
@@ -222,6 +222,108 @@ function normalizeComparableMessage(value: string): string {
     return value.trim().replace(/\s+/g, ' ');
 }
 
+type SubagentTaskStatus = 'running' | 'completed' | 'failed' | 'killed' | 'unknown';
+
+type SubagentTaskOption = {
+    taskId: string;
+    status: SubagentTaskStatus;
+    summary: string;
+    updatedAt: string;
+};
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    return value as Record<string, unknown>;
+}
+
+function resolveSubagentStatus(value: unknown): SubagentTaskStatus {
+    if (typeof value !== 'string') {
+        return 'unknown';
+    }
+    const normalized = value.trim().toLowerCase();
+    if (
+        normalized === 'running'
+        || normalized === 'completed'
+        || normalized === 'failed'
+        || normalized === 'killed'
+    ) {
+        return normalized;
+    }
+    return 'unknown';
+}
+
+function parseSubagentTaskOptionFromPayload(
+    value: unknown,
+    timestamp: string,
+): SubagentTaskOption | null {
+    const record = toRecord(value);
+    if (!record) {
+        return null;
+    }
+    const taskIdCandidate = [record.taskId, record.agentId, record.id]
+        .find((candidate) => typeof candidate === 'string' && candidate.trim().length > 0);
+    if (typeof taskIdCandidate !== 'string') {
+        return null;
+    }
+    const taskId = taskIdCandidate.trim();
+    if (!taskId) {
+        return null;
+    }
+    const summaryCandidate = [record.summary, record.result, record.message]
+        .find((candidate) => typeof candidate === 'string' && candidate.trim().length > 0);
+    return {
+        taskId,
+        status: resolveSubagentStatus(record.status),
+        summary: typeof summaryCandidate === 'string' ? summaryCandidate.trim() : '',
+        updatedAt: timestamp,
+    };
+}
+
+function getSubagentTaskOptions(session: TaskSession | undefined): SubagentTaskOption[] {
+    if (!session) {
+        return [];
+    }
+    const optionMap = new Map<string, SubagentTaskOption>();
+    for (const event of session.events) {
+        if (event.type !== 'TOOL_CALLED' && event.type !== 'TOOL_RESULT') {
+            continue;
+        }
+        const payload = toRecord(event.payload);
+        if (!payload) {
+            continue;
+        }
+        const toolName = typeof payload.toolName === 'string' ? payload.toolName.trim() : '';
+        if (toolName !== 'agent_task_notification') {
+            continue;
+        }
+        const rawNotificationPayload = event.type === 'TOOL_CALLED'
+            ? payload.args
+            : payload.result;
+        const parsed = parseSubagentTaskOptionFromPayload(rawNotificationPayload, event.timestamp);
+        if (!parsed) {
+            continue;
+        }
+        optionMap.set(parsed.taskId, parsed);
+    }
+    const statusRank: Record<SubagentTaskStatus, number> = {
+        running: 0,
+        failed: 1,
+        completed: 2,
+        killed: 3,
+        unknown: 4,
+    };
+    return Array.from(optionMap.values())
+        .sort((a, b) => {
+            const rankDiff = statusRank[a.status] - statusRank[b.status];
+            if (rankDiff !== 0) {
+                return rankDiff;
+            }
+            return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+        });
+}
+
 function getUserBoundaryContent(event: TaskEvent): string | null {
     const payload = event.payload as Record<string, unknown>;
     if (event.type === 'CHAT_MESSAGE') {
@@ -392,6 +494,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
     const [entryMode, setEntryMode] = useState<EntryMode>('chat');
     const [nextRouteMode, setNextRouteMode] = useState<EntryMode | null>(null);
+    const [selectedSubagentTaskId, setSelectedSubagentTaskId] = useState<string | null>(null);
     const [isReconnectingLlm, setIsReconnectingLlm] = useState(false);
     const [turnLockTick, setTurnLockTick] = useState(0);
     const [optimisticUserEntry, setOptimisticUserEntry] = useState<{
@@ -407,6 +510,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const { startTask, isLoading: isStarting, error: startError } = useStartTask();
     const { cancelTask, isLoading: isCancelling, error: cancelError } = useCancelTask();
     const { sendMessage, isLoading: isSending, error: sendError } = useSendTaskMessage();
+    const { sendSubagentMessage, isLoading: isSendingSubagent, error: sendSubagentError } = useSendSubagentMessage();
     const { resumeInterruptedTask, isLoading: isResumingInterruptedTask, error: resumeError } = useResumeInterruptedTask();
     const { clearHistory, isLoading: isClearing, error: clearError } = useClearTaskHistory();
     const clearCanonicalSession = useCanonicalTaskStreamStore((state) => state.clearSession);
@@ -568,6 +672,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         setNextRouteMode(null);
     }, [activeSession?.taskId, activeSession?.isDraft]);
+
+    useEffect(() => {
+        setSelectedSubagentTaskId(null);
+    }, [activeSession?.taskId]);
+
+    const subagentTaskOptions = useMemo(
+        () => getSubagentTaskOptions(activeSession),
+        [activeSession]
+    );
+
+    useEffect(() => {
+        if (!selectedSubagentTaskId) {
+            return;
+        }
+        const stillExists = subagentTaskOptions.some((entry) => entry.taskId === selectedSubagentTaskId);
+        if (!stillExists) {
+            setSelectedSubagentTaskId(null);
+        }
+    }, [selectedSubagentTaskId, subagentTaskOptions]);
 
     const setActiveProfile = useCallback(async (id: string) => {
         try {
@@ -838,7 +961,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 }),
             },
         );
-        const executionPath = routedMode === 'chat' ? 'direct' : 'workflow';
+        const executionPath: 'direct' | 'workflow' = routedMode === 'chat' ? 'direct' : 'workflow';
         const titleSource = effectiveQuery || (includeAttachments ? attachments[0]?.name : undefined) || t('chat.currentTask');
         const shouldUseLeanChatRuntime = routedMode === 'chat' && executionPath === 'direct';
         const enabledSkillsForRequest = shouldUseLeanChatRuntime ? [] : enabledSkills;
@@ -859,18 +982,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             appendLocalTaskEvent(taskId, 'TASK_STATUS', {
                 status: 'running',
             });
-            const result = await sendMessage({
-                taskId,
-                content: routedRequestContent,
-                config: {
-                    executionPath,
-                    enabledClaudeSkills: enabledSkillsForRequest,
-                    enabledToolpacks: enabledToolpacksForRequest,
-                    enabledSkills: enabledSkillsForRequest,
-                    enableChatSkills,
-                    voiceProviderMode: voiceSettings.providerMode,
-                },
-            });
+            const config = {
+                executionPath,
+                enabledClaudeSkills: enabledSkillsForRequest,
+                enabledToolpacks: enabledToolpacksForRequest,
+                enabledSkills: enabledSkillsForRequest,
+                enableChatSkills,
+                voiceProviderMode: voiceSettings.providerMode,
+            };
+            const result = selectedSubagentTaskId
+                ? await sendSubagentMessage({
+                    taskId,
+                    subagentTaskId: selectedSubagentTaskId,
+                    content: routedRequestContent,
+                    config,
+                })
+                : await sendMessage({
+                    taskId,
+                    content: routedRequestContent,
+                    config,
+                });
             if (result?.success) {
                 setQuery('');
                 if (includeAttachments) {
@@ -882,6 +1013,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     status: 'idle',
                 });
                 setWorkspaceError(result?.error ?? t('chat.connectionError'));
+                const availableSubagentTaskIds = result && 'availableSubagentTaskIds' in result
+                    ? result.availableSubagentTaskIds
+                    : undefined;
+                if (
+                    selectedSubagentTaskId
+                    && Array.isArray(availableSubagentTaskIds)
+                    && !availableSubagentTaskIds.includes(selectedSubagentTaskId)
+                ) {
+                    setSelectedSubagentTaskId(null);
+                }
             }
             return result?.success === true;
         }
@@ -950,7 +1091,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setNextRouteMode(null);
         }
         return result?.success === true;
-    }, [attachments, buildContentWithAttachments, t, enabledSkills, enabledToolpacks, activeSession, sendMessage, clearAttachments, activeWorkspace, startTask, stageOptimisticUserEcho, appendLocalTaskEvent, createDraftSession, entryMode, nextRouteMode]);
+    }, [
+        attachments,
+        buildContentWithAttachments,
+        t,
+        enabledSkills,
+        enabledToolpacks,
+        activeSession,
+        sendMessage,
+        sendSubagentMessage,
+        selectedSubagentTaskId,
+        clearAttachments,
+        activeWorkspace,
+        startTask,
+        stageOptimisticUserEcho,
+        appendLocalTaskEvent,
+        createDraftSession,
+        entryMode,
+        nextRouteMode,
+    ]);
 
     const handleSubmit = useCallback(async () => {
         if (isTurnLocked) {
@@ -1187,7 +1346,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [activeSession?.taskId, enabledSkills, enabledToolpacks, interruptedRecovery, resumeInterruptedTask]);
 
-    const currentError = workspaceError || startError || cancelError || sendError || resumeError || clearError || stopVoiceError;
+    const currentError = workspaceError || startError || cancelError || sendSubagentError || sendError || resumeError || clearError || stopVoiceError;
     const showErrorBanner = Boolean(currentError);
     const isLlmError = isLlmConfigError(currentError);
     const suggestedPrompts = useMemo(() => ([
@@ -1247,11 +1406,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     onSelectFiles={handleSelectFiles}
                     onPaste={handleInputPaste}
                     onDrop={handleInputDrop}
-                    llmProfiles={llmConfig.profiles ?? []}
-                    activeProfileId={llmConfig.activeProfileId}
-                    onSelectProfile={setActiveProfile}
-                    routeMode={nextRouteMode ?? entryMode}
-                />
+                llmProfiles={llmConfig.profiles ?? []}
+                activeProfileId={llmConfig.activeProfileId}
+                onSelectProfile={setActiveProfile}
+                routeMode={nextRouteMode ?? entryMode}
+                subagentOptions={[]}
+                selectedSubagentTaskId={null}
+                onSelectSubagentTaskId={undefined}
+            />
             </div>
         );
     }
@@ -1362,7 +1524,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 placeholder={isTurnLocked
                     ? t('chat.turnLockedPlaceholder', { defaultValue: '等待 CoworkAny 完成当前回合，需补充时请使用上方输入面板。' })
                     : t('chat.newInstructions')}
-                disabled={isTurnLocked || isSending || isStarting}
+                disabled={isTurnLocked || isSending || isSendingSubagent || isStarting}
                 onQueryChange={setQuery}
                 onSubmit={handleSubmit}
                 onVoiceSegment={handleVoiceSegment}
@@ -1376,9 +1538,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 activeProfileId={llmConfig.activeProfileId}
                 onSelectProfile={setActiveProfile}
                 routeMode={nextRouteMode ?? entryMode}
-                isRunning={activeSession.status === 'running'}
+                isRunning={activeSession.status === 'running' || isSendingSubagent}
                 isInterrupting={isCancelling}
                 onInterrupt={handleCancel}
+                subagentOptions={subagentTaskOptions}
+                selectedSubagentTaskId={selectedSubagentTaskId}
+                onSelectSubagentTaskId={setSelectedSubagentTaskId}
             />
 
             {/* Dialogs */}

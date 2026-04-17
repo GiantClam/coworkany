@@ -22,6 +22,15 @@ describe('Phase 2: Tool System', () => {
         expect((output?.exitCode ?? 0) !== 0).toBe(true);
     });
 
+    test('bash tool returns command recovery hints for missing commands', async () => {
+        const output = await bashTool.execute?.({ command: '__coworkany_missing_cmd__ --version' }, {});
+        expect(output).toBeDefined();
+        expect((output?.exitCode ?? 0) !== 0).toBe(true);
+        expect(output?.error_type).toBe('not_found');
+        expect(typeof output?.suggested_fix).toBe('string');
+        expect((output?.probe_commands?.length ?? 0) > 0).toBe(true);
+    });
+
     test('bash tool timeout returns quickly', async () => {
         const output = await bashTool.execute?.({ command: 'sleep 2', timeout: 100 }, {});
         expect(output).toBeDefined();

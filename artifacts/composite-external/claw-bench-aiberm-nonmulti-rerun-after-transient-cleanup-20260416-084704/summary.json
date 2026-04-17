@@ -1,0 +1,295 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/claude-sonnet-4-6",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 99.54,
+    "overall_raw": 99.54,
+    "overall_effective": 99.54,
+    "tasks_total": 12,
+    "tasks_passed": 11,
+    "tasks_failed": 1,
+    "tasks_errored": 0,
+    "tasks_invalid": 0,
+    "tasks_effective_total": 12,
+    "tasks_effective_passed": 11,
+    "tasks_effective_failed": 1,
+    "pass_rate": 91.67,
+    "pass_rate_effective": 91.67
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 0,
+    "other_error": 0,
+    "total_errors": 0
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "comm-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/communication/comm-004-chat-analysis",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "debug-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/debugging/debug-002",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "code-001",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/code-assistance/code-001-write-unittest",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "eml-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/email/eml-004-classify-emails",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "db-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/database/db-002",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "fin-008",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/financial-analysis/fin-008-calculate-wacc-from-financial-statements",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "doc-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/document-editing/doc-004-find-replace",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "edu-001",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/educational-assessment/edu-001-rubric-grading",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "web-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/web-browsing/web-004-form-inventory",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "math-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/math-reasoning/math-002",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "plan-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/planning/plan-002",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "tool-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/real-tools/tool-002",
+        "invalidReasons": []
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "comm-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 51.47,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".................                                                        [100%]\n17 passed in 0.02s"
+    },
+    {
+      "task_id": "debug-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 65.29,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: calculator.py\n...................                                                      [100%]\n19 passed in 0.02s"
+    },
+    {
+      "task_id": "code-001",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 90.77,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..........                                                               [100%]\n10 passed in 0.22s"
+    },
+    {
+      "task_id": "eml-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 56.09,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "..............                                                           [100%]\n14 passed in 0.02s"
+    },
+    {
+      "task_id": "db-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 59.58,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: schema.sql\n....................                                                     [100%]\n20 passed in 0.03s"
+    },
+    {
+      "task_id": "fin-008",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 94.32,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "......                                                                   [100%]\n6 passed in 0.41s"
+    },
+    {
+      "task_id": "doc-004",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.9444,
+      "duration_s": 164.63,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...........F......                                                       [100%]\n=================================== FAILURES ===================================\n__________________________ test_no_placeholder_values __________________________\nverifier/test_output.py:86: in test_no_placeholder_values\n    assert p.lower() not in content, f\"Placeholder '{p}' found in {f.name}\"\nE   AssertionError: Placeholder 'TODO' found in replacements.json\nE   assert 'todo' not in '[\\n  {\\n   ...t\"\\n  }\\n]\\n'\nE     \nE     'todo' is contained here:\nE       attern\": \"todo:\",\nE     ?           ++++\nE           \"replacement\": \"[ ]\",\nE           \"description\": \"convert todo markers to checkbox format\"\nE         },...\nE     \nE     ...Full output truncated (11 lines hidden), use '-vv' to show\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_no_placeholder_values - AssertionError: ...\n1 failed, 17 passed in 0.04s"
+    },
+    {
+      "task_id": "edu-001",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 36.47,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".....                                                                    [100%]\n5 passed in 0.02s"
+    },
+    {
+      "task_id": "web-004",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 57,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...................                                                      [100%]\n19 passed in 0.02s"
+    },
+    {
+      "task_id": "math-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 148.67,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: items.json\n.................                                                        [100%]\n17 passed in 0.02s"
+    },
+    {
+      "task_id": "plan-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 61.19,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: project_brief.md\n.................                                                        [100%]\n17 passed in 0.02s"
+    },
+    {
+      "task_id": "tool-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 60.16,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "workspace_hydrated: requirements_a.txt, requirements_b.txt\n.................                                                        [100%]\n17 passed in 0.02s"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/claude-sonnet-4-6",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

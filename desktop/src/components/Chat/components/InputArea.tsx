@@ -21,6 +21,12 @@ interface LlmProfile {
 
 type InputRouteMode = 'chat' | 'task';
 
+type InputSubagentOption = {
+    taskId: string;
+    status: string;
+    summary?: string;
+};
+
 interface InputAreaProps {
     query: string;
     placeholder: string;
@@ -41,6 +47,9 @@ interface InputAreaProps {
     isRunning?: boolean;
     isInterrupting?: boolean;
     onInterrupt?: () => void;
+    subagentOptions?: InputSubagentOption[];
+    selectedSubagentTaskId?: string | null;
+    onSelectSubagentTaskId?: (taskId: string | null) => void;
 }
 
 const InputAreaComponent: React.FC<InputAreaProps> = ({
@@ -63,6 +72,9 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
     isRunning = false,
     isInterrupting = false,
     onInterrupt,
+    subagentOptions = [],
+    selectedSubagentTaskId = null,
+    onSelectSubagentTaskId,
 }) => {
     const { t } = useTranslation();
     const voiceInput = useVoiceInput(getCurrentLanguage());
@@ -191,6 +203,23 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
         if (id) {
             onSelectProfile(id);
         }
+    };
+
+    const handleSubagentChange: React.ChangeEventHandler<HTMLSelectElement> = (event) => {
+        if (!onSelectSubagentTaskId) {
+            return;
+        }
+        const next = event.target.value.trim();
+        onSelectSubagentTaskId(next.length > 0 ? next : null);
+    };
+
+    const formatSubagentOptionLabel = (option: InputSubagentOption): string => {
+        const status = option.status.trim().length > 0 ? option.status.toUpperCase() : 'UNKNOWN';
+        const summary = option.summary?.trim() ?? '';
+        const label = summary.length > 0
+            ? `[${status}] ${option.taskId} · ${summary}`
+            : `[${status}] ${option.taskId}`;
+        return label.length > 96 ? `${label.slice(0, 95)}…` : label;
     };
 
     const handlePasteEvent: React.ClipboardEventHandler<HTMLDivElement> = (event) => {
@@ -341,6 +370,27 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
                                 ))}
                             </select>
                         </label>
+                        {subagentOptions.length > 0 && (
+                            <label className="subagent-select-wrap">
+                                <span className="subagent-select-icon" aria-hidden="true">AGENT</span>
+                                <select
+                                    className="subagent-select"
+                                    value={selectedSubagentTaskId ?? ''}
+                                    onChange={handleSubagentChange}
+                                    disabled={disabled}
+                                    aria-label={t('chat.subagentFollowupTarget', { defaultValue: 'Subagent follow-up target' })}
+                                >
+                                    <option value="">
+                                        {t('chat.followupMainTask', { defaultValue: 'Main task follow-up' })}
+                                    </option>
+                                    {subagentOptions.map((option) => (
+                                        <option key={option.taskId} value={option.taskId}>
+                                            {formatSubagentOptionLabel(option)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
                     </div>
                     <div className="input-actions-right">
                         <span className="input-submit-hint">
@@ -385,6 +435,8 @@ const InputAreaComponent: React.FC<InputAreaProps> = ({
 // Only re-render when query, placeholder, or disabled state changes
 // Note: Callback functions are assumed to be stable (memoized in parent)
 const arePropsEqual = (prevProps: InputAreaProps, nextProps: InputAreaProps): boolean => {
+    const prevSubagentOptions = prevProps.subagentOptions ?? [];
+    const nextSubagentOptions = nextProps.subagentOptions ?? [];
     return (
         prevProps.query === nextProps.query &&
         prevProps.placeholder === nextProps.placeholder &&
@@ -393,8 +445,11 @@ const arePropsEqual = (prevProps: InputAreaProps, nextProps: InputAreaProps): bo
         prevProps.isInterrupting === nextProps.isInterrupting &&
         prevProps.attachmentError === nextProps.attachmentError &&
         prevProps.activeProfileId === nextProps.activeProfileId &&
+        prevProps.selectedSubagentTaskId === nextProps.selectedSubagentTaskId &&
         prevProps.attachments.map((item) => item.id).join('|') === nextProps.attachments.map((item) => item.id).join('|') &&
-        JSON.stringify(prevProps.llmProfiles) === JSON.stringify(nextProps.llmProfiles)
+        JSON.stringify(prevProps.llmProfiles) === JSON.stringify(nextProps.llmProfiles) &&
+        prevSubagentOptions.map((option) => `${option.taskId}:${option.status}:${option.summary ?? ''}`).join('|')
+            === nextSubagentOptions.map((option) => `${option.taskId}:${option.status}:${option.summary ?? ''}`).join('|')
     );
 };
 

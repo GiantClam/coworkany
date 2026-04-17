@@ -946,6 +946,36 @@ class DarwinBrowserHarness {
                     error: typeof payload.error === 'string' ? payload.error : undefined,
                 };
             }
+            case 'send_subagent_message': {
+                this.logs.push('send_subagent_message command received\n');
+                const input = args.input as Record<string, unknown>;
+                const config = (input?.config as Record<string, unknown> | undefined) ?? {};
+                const existingDisabled = Array.isArray(config.disabledTools) ? config.disabledTools as string[] : [];
+                const response = await this.sendSidecarCommand('send_subagent_message', {
+                    ...input,
+                    environmentContext: input?.environmentContext ?? this.buildRuntimeContext(),
+                    config: {
+                        ...config,
+                        disabledTools: Array.from(new Set([...existingDisabled, ...this.disabledTools])),
+                    },
+                });
+                const payload = response.payload ?? {};
+                return {
+                    success: Boolean(payload.success),
+                    taskId: String(payload.taskId ?? input?.taskId ?? ''),
+                    turnId: typeof payload.turnId === 'string' ? payload.turnId : undefined,
+                    queuePosition: typeof payload.queuePosition === 'number' ? payload.queuePosition : undefined,
+                    deduplicated: typeof payload.deduplicated === 'boolean' ? payload.deduplicated : undefined,
+                    dedupReason: typeof payload.dedupReason === 'string' ? payload.dedupReason : undefined,
+                    availableSubagentTaskIds: Array.isArray(payload.availableSubagentTaskIds)
+                        ? payload.availableSubagentTaskIds.filter((entry): entry is string => typeof entry === 'string')
+                        : undefined,
+                    details: payload.details && typeof payload.details === 'object'
+                        ? payload.details
+                        : undefined,
+                    error: typeof payload.error === 'string' ? payload.error : undefined,
+                };
+            }
             case 'start_task': {
                 this.logs.push('start_task command received\n');
                 // Some tests use this marker to confirm the message submission path.

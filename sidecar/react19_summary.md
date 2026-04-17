@@ -1,73 +1,57 @@
 # React 19 新特性简短技术总结
 
-基于 React 官方发布文档（React v19，2024-12-05）整理。
+## 版本与背景
+React 19 已于 **2024-12-05** 稳定发布。相比 React 18，React 19 的重点是：
+- 更完整的异步交互模型（Actions）
+- 更原生的表单与乐观更新支持
+- 更强的资源加载与文档元数据能力
+- RSC（React Server Components）生态稳定化
 
-## 1) Actions：异步状态管理范式升级
-React 19 将“数据变更 + 提交状态 + 错误处理 + 乐观更新”整合为统一的 Actions 模型：
-- 支持在 `startTransition` 中直接使用 async 函数
-- 自动管理 pending 状态
-- 与错误边界和乐观更新联动
-- 与表单能力深度集成
+## 核心新特性
 
-**价值**：减少手写 `isPending/error` 样板代码，让提交交互更一致。
+### 1) Actions：异步状态更新的一等公民
+React 19 允许在 `startTransition` 中直接使用 async 函数（称为 Actions），从而统一处理：
+- pending 状态
+- 错误处理
+- 乐观更新
+- 表单提交流程
 
-## 2) 新 Hook：`useActionState`
-用于封装常见 Action 流程：
-- 返回上次 Action 结果
-- 提供包装后的提交函数
-- 提供 pending 状态
+这降低了以往手动管理 `isPending/error` 等状态的样板代码。
 
-典型场景：表单提交后返回错误信息或成功结果，组件内逻辑更集中。
+### 2) 新 Hooks：`useActionState`、`useOptimistic`、`use`
+- **`useActionState`**：封装 Action 调用，直接得到 action 结果和 pending 状态。
+- **`useOptimistic`**：请求未完成时先显示“预期结果”，提升交互体验。
+- **`use`**：可在 render 中读取 Promise 或 Context；传 Promise 时会触发 Suspense。
 
-## 3) React DOM 表单增强：`<form action={fn}>`
-React 19 支持给 `<form>` / `<button>` / `<input>` 直接传函数作为 action：
-- 提交更声明式
-- 成功后可自动重置（非受控表单）
-- 可配合 `requestFormReset` 做手动重置
+### 3) 表单能力增强（React DOM）
+React 19 中 `<form action={fn}>`、`formAction` 支持函数，配合：
+- **`useFormStatus`**：读取父级表单状态（`pending/data/method/action`）
+- **`requestFormReset`**：手动重置表单
 
-**价值**：表单提交从“事件驱动 + 手工拼装”转向“声明式动作调用”。
+这使“提交按钮随提交状态禁用/展示提交中”等场景更标准化。
 
-## 4) 新 Hook：`useFormStatus`（react-dom）
-在设计系统组件里无需层层透传 props，即可读取父级 form 状态（如 `pending`）。
+### 4) 资源与文档管理能力提升
+React DOM 新增对以下能力的原生支持：
+- 文档元数据标签（自动提升到 `<head>`）
+- 样式表插入顺序优化（配合 Suspense）
+- 异步脚本渲染顺序与去重
+- 资源预加载 API（`preinit/preload/prefetchDNS/preconnect`）
 
-**价值**：提升按钮、输入组件等通用组件的可复用性和解耦程度。
+对首屏性能优化和框架层 SSR/Streaming 有明显价值。
 
-## 5) 新 Hook：`useOptimistic`
-为异步提交提供内置乐观更新能力：
-- 请求发出时立即显示预期结果
-- 请求成功或失败后自动回到真实状态
+### 5) Server Components 进入稳定阶段
+React 19 中与 RSC 相关的指令、Server Components、Server Functions 已稳定，便于库作者将 React 19 作为 peer 目标。
 
-**价值**：显著改善交互“响应速度感知”，降低自行回滚的复杂度。
+## 升级关注点（简）
+- 官方建议先升级到 **18.3.1**（含 React 19 迁移预警）再升 19。
+- React 19 要求 **新 JSX Transform**。
+- `ref` 作为 prop 更主流（减少 `forwardRef` 需求），部分旧 API 已弃用或发出警告。
 
-## 6) 新 API：`use`
-`use` 允许在 render 阶段读取资源：
-- 可读取 Promise（配合 Suspense）
-- 可条件化读取 Context（相比 `useContext` 更灵活）
+## 一句话结论
+React 19 的核心价值是把“异步交互 + 表单 + Suspense + 资源调度”打通：开发体验更统一、用户体验更流畅，也为全栈 React（尤其 RSC/SSR）提供了更稳的基础设施。
 
-注意：不支持在客户端组件 render 内即时创建且未缓存的 Promise。
-
-## 7) 新静态渲染 API（`react-dom/static`）
-新增：
-- `prerender`
-- `prerenderToNodeStream`
-
-用于静态 HTML 生成，支持等待数据就绪后输出，更适合 SSG 场景。
-
-## 8) Server Components 能力进入稳定版本生态
-React 19 将 Canary 阶段的相关能力纳入稳定版本，便于框架和库以 React 19 为依赖目标推进全栈 React 架构。
-
----
-
-## 升级建议（简短）
-1. **先升级核心依赖**：`react` / `react-dom` 到 19，并按官方 Upgrade Guide 处理 breaking changes。
-2. **优先改造表单流**：从 `onSubmit + useState` 逐步迁移到 `action + useActionState`。
-3. **引入乐观交互**：在高频提交场景使用 `useOptimistic`。
-4. **结合 Suspense 评估 `use`**：先在框架支持良好的数据流中试点。
-
-## 结论
-React 19 的核心方向是：
-- **把异步交互“内建化”**（Actions / 表单 / 乐观更新）
-- **把资源读取“渲染期化”**（`use` + Suspense）
-- **把服务端与静态能力“平台化”**（static APIs / Server Components）
-
-这会让 React 应用在“数据提交、加载协同、全栈渲染”三个方面代码更少、语义更统一。
+## 参考资料（检索证据）
+1. React 官方博客：React v19（稳定发布）  
+   https://react.dev/blog/2024/12/05/react-19
+2. React 官方 Changelog（19.0.0）  
+   https://raw.githubusercontent.com/facebook/react/1825990c5608f0ab0c1475b4292218a508a171c9/CHANGELOG.md

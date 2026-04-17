@@ -22,12 +22,16 @@ This directory contains several different classes of tests. They do not all have
 | `npm run test:browser` | Browser automation suites | Low | Browser service, Playwright/Chrome/CDP, possible manual login |
 | `npm run test:desktop` | Full desktop GUI launch test | Low | Built desktop binary or GUI-capable environment |
 | `npm run test:all` | Every `*.test.ts` file | Very low | Only for deliberate broad sweeps |
-| `npm run test:composite` | Composite benchmark (P0 + config-defined profiles) | High | 已配置 LLM 与基础依赖 |
+| `npm run test:composite` | Composite benchmark（P0+ 核心硬门禁，默认） | High | 已配置 LLM 与基础依赖 |
+| `npm run test:composite:smoke` | Composite benchmark（P0 冒烟） | High | Bun + 本地依赖 |
 | `npm run test:composite:agent` | Composite benchmark（P1） | Medium | 需要有效 LLM 配置 |
+| `npm run test:composite:runtime-stress` | Composite benchmark（P0x 运行时重压链路） | Medium-Low | 需要稳定模型配置与较高运行时预算 |
 | `npm run test:composite:core-robust` | Composite benchmark（P2 恢复链路） | Low-Medium | 长链路任务执行环境稳定 |
 | `npm run test:composite:e2e` | Composite benchmark（P3 端到端） | Medium-Low | 受外部服务与网络波动影响 |
 | `npm run test:composite:all` | Composite benchmark 所有本地 profile | Very low | 发布前综合检查 |
-| `npm run test:composite:external` | 外部 benchmark 接线清单 | 不可纯自动化 | 需要 OSWorld/BrowserGym/TheAgentCompany 环境 |
+| `npm run test:composite:multi-agent` | Composite benchmark（P0m Multi-Agent 回归） | High | 需要 sidecar/mastra 单元链路可运行 |
+| `npm run test:composite:external` | 外部 benchmark 接线清单（缺环境可跳过） | 不可纯自动化 | 需要 OSWorld/BrowserGym/TheAgentCompany 环境 |
+| `npm run test:composite:external:strict` | 外部 benchmark 严格门禁（缺环境直接失败） | 低 | 需要完整外部基准环境 |
 
 ## File classification
 
@@ -40,6 +44,7 @@ These are the default test surface because they are deterministic and do not dep
 | `tests/token-usage.test.ts` | Structural/unit validation for token accounting and frontend integration |
 | `tests/command-sandbox.test.ts` | Static command policy coverage |
 | `tests/scheduler-heartbeat.test.ts` | Structural scheduler/daemon coverage |
+| `tests/production-general-replay.test.ts` | Production log-derived general scenario replay (routing + capability + host-command contract) |
 
 ### Agent core integration
 
@@ -99,12 +104,16 @@ These should only run in environments where browser automation is intentionally 
 
 组合测试集定义在 `tests/composite-benchmark-suite.json`，按 profile 分层运行。
 
-1. `npm run test:composite`（P0 冒烟）
-2. `npm run test:composite:agent`（P1 核心）
-3. `npm run test:composite:core-robust`（P2 关键链路恢复）
-4. `npm run test:composite:e2e`（P3 端到端）
-5. `npm run test:composite:all`（发布前全覆盖）
-6. `npm run test:composite:external`（外部 benchmark 接线）
+1. `npm run test:composite`（P0+ 核心硬门禁，默认）
+2. `npm run test:composite:smoke`（P0 冒烟快速）
+3. `npm run test:composite:agent`（P1 核心）
+4. `npm run test:composite:runtime-stress`（P0x 运行时重压链路）
+5. `npm run test:composite:multi-agent`（P0m Multi-Agent 回归）
+6. `npm run test:composite:core-robust`（P2 关键链路恢复）
+7. `npm run test:composite:e2e`（P3 端到端）
+8. `npm run test:composite:all`（发布前全覆盖）
+9. `npm run test:composite:external`（外部 benchmark 接线，缺环境可跳过）
+10. `npm run test:composite:external:strict`（外部 benchmark 严格门禁）
 
 ## Prerequisite notes
 

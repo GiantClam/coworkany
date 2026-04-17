@@ -1,0 +1,5 @@
+URL: https://example.com
+Page title: Example Domain
+HTTP status: 200
+Screenshot file: example.com.png
+Saved at: /Users/beihuang/Documents/github/coworkany/sidecar/example.com.png

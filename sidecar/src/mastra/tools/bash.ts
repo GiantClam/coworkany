@@ -1,6 +1,11 @@
 import { spawn } from 'child_process';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v4';
+import {
+    buildCommandRecoveryHints,
+    type CommandRecoveryHints,
+} from '../../utils/commandAlternatives';
+import { checkCommand } from '../../tools/commandSandbox';
 export const DANGEROUS_PATTERNS: RegExp[] = [
     /\brm\s+-rf\s+\/?\s*$/i,
     /\brm\s+-rf\s+~\//i,
@@ -25,6 +30,20 @@ export type BashExecutionResult = {
     exitCode: number;
     rejected: boolean;
     reason?: string;
+    error_type?: 'not_found' | 'unknown';
+    suggested_fix?: string;
+    alternative_commands?: string[];
+    probe_commands?: string[];
+    command_recovery?: CommandRecoveryHints;
+    retry_attempted?: boolean;
+    retry_command?: string;
+    resolved_by_retry?: boolean;
+    attempts?: Array<{
+        command: string;
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+    }>;
 };
 export function isDangerousCommand(command: string): boolean {
     return DANGEROUS_PATTERNS.some((pattern) => pattern.test(command));
@@ -32,12 +51,84 @@ export function isDangerousCommand(command: string): boolean {
 export function needsApprovalForCommand(command: string): boolean {
     return APPROVAL_PATTERNS.some((pattern) => pattern.test(command));
 }
-async function executeShellCommand(input: {
+
+function attachCommandRecoveryHints(
+    command: string,
+    result: BashExecutionResult,
+): BashExecutionResult {
+    const recovery = buildCommandRecoveryHints({
+        command,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+    });
+    if (!recovery) {
+        return result;
+    }
+    const executableAlternatives = recovery.alternativeCommands;
+    const resolvedAlternatives = buildAlternativeRetryCommands({
+        command,
+        alternatives: executableAlternatives,
+    });
+    return {
+        ...result,
+        error_type: 'not_found',
+        suggested_fix: recovery.suggestion,
+        alternative_commands: resolvedAlternatives,
+        probe_commands: recovery.probeCommands,
+        command_recovery: recovery,
+    };
+}
+
+function buildAlternativeRetryCommands(input: {
+    command: string;
+    alternatives: string[];
+}): string[] {
+    const rawCommand = input.command.trim();
+    if (rawCommand.length === 0) {
+        return input.alternatives;
+    }
+    if (/[|&;<>`\n]/.test(rawCommand)) {
+        return input.alternatives;
+    }
+    const firstSpace = rawCommand.search(/\s/u);
+    const base = firstSpace >= 0 ? rawCommand.slice(0, firstSpace).trim() : rawCommand;
+    const rest = firstSpace >= 0 ? rawCommand.slice(firstSpace + 1).trim() : '';
+    if (base.length === 0) {
+        return input.alternatives;
+    }
+    const candidates = input.alternatives
+        .map((alternative) => alternative.trim())
+        .filter((alternative) => alternative.length > 0)
+        .map((alternative) => (rest.length > 0 ? `${alternative} ${rest}` : alternative));
+    const deduped = Array.from(new Set(candidates));
+    return deduped.length > 0 ? deduped : input.alternatives;
+}
+
+function pickAutomaticRetryCommand(input: {
+    originalCommand: string;
+    alternatives?: string[];
+}): string | null {
+    const original = input.originalCommand.trim();
+    const candidates = Array.isArray(input.alternatives) ? input.alternatives : [];
+    for (const rawCandidate of candidates) {
+        const candidate = typeof rawCandidate === 'string' ? rawCandidate.trim() : '';
+        if (candidate.length === 0 || candidate === original) {
+            continue;
+        }
+        const safety = checkCommand(candidate);
+        if (!safety.allowed || safety.needsInteraction) {
+            continue;
+        }
+        return candidate;
+    }
+    return null;
+}
+
+async function executeSingleShellCommand(input: {
     command: string;
     workdir?: string;
-    timeout?: number;
+    timeout: number;
 }): Promise<BashExecutionResult> {
-    const timeoutMs = Math.max(100, input.timeout ?? 30_000);
     return await new Promise<BashExecutionResult>((resolve) => {
         const child = spawn(input.command, {
             cwd: input.workdir || process.cwd(),
@@ -63,12 +154,12 @@ async function executeShellCommand(input: {
             child.kill('SIGTERM');
             finish({
                 stdout,
-                stderr: stderr || `Command timed out after ${timeoutMs}ms`,
+                stderr: stderr || `Command timed out after ${input.timeout}ms`,
                 exitCode: 124,
                 rejected: false,
                 reason: 'timeout',
             });
-        }, timeoutMs);
+        }, input.timeout);
         child.stdout.on('data', (chunk: Buffer | string) => {
             stdout += chunk.toString();
         });
@@ -96,6 +187,64 @@ async function executeShellCommand(input: {
         });
     });
 }
+
+async function executeShellCommand(input: {
+    command: string;
+    workdir?: string;
+    timeout?: number;
+}): Promise<BashExecutionResult> {
+    const timeoutMs = Math.max(100, input.timeout ?? 30_000);
+    const startedAt = Date.now();
+    const firstAttemptRaw = await executeSingleShellCommand({
+        command: input.command,
+        workdir: input.workdir,
+        timeout: timeoutMs,
+    });
+    const firstAttempt = attachCommandRecoveryHints(input.command, firstAttemptRaw);
+    const attempts: BashExecutionResult['attempts'] = [{
+        command: input.command,
+        exitCode: firstAttempt.exitCode,
+        stdout: firstAttempt.stdout,
+        stderr: firstAttempt.stderr,
+    }];
+    if (firstAttempt.exitCode === 0 || firstAttempt.rejected || firstAttempt.error_type !== 'not_found') {
+        return {
+            ...firstAttempt,
+            attempts,
+        };
+    }
+    const retryCommand = pickAutomaticRetryCommand({
+        originalCommand: input.command,
+        alternatives: firstAttempt.alternative_commands,
+    });
+    if (!retryCommand) {
+        return {
+            ...firstAttempt,
+            attempts,
+        };
+    }
+    const elapsed = Date.now() - startedAt;
+    const remainingTimeout = Math.max(100, timeoutMs - elapsed);
+    const retryAttemptRaw = await executeSingleShellCommand({
+        command: retryCommand,
+        workdir: input.workdir,
+        timeout: remainingTimeout,
+    });
+    const retryAttempt = attachCommandRecoveryHints(retryCommand, retryAttemptRaw);
+    attempts.push({
+        command: retryCommand,
+        exitCode: retryAttempt.exitCode,
+        stdout: retryAttempt.stdout,
+        stderr: retryAttempt.stderr,
+    });
+    return {
+        ...retryAttempt,
+        retry_attempted: true,
+        retry_command: retryCommand,
+        resolved_by_retry: retryAttempt.exitCode === 0,
+        attempts,
+    };
+}
 const bashInputSchema = z.object({
     command: z.string().min(1),
     workdir: z.string().optional(),
@@ -107,6 +256,29 @@ const bashOutputSchema = z.object({
     exitCode: z.number(),
     rejected: z.boolean(),
     reason: z.string().optional(),
+    error_type: z.enum(['not_found', 'unknown']).optional(),
+    suggested_fix: z.string().optional(),
+    alternative_commands: z.array(z.string()).optional(),
+    probe_commands: z.array(z.string()).optional(),
+    retry_attempted: z.boolean().optional(),
+    retry_command: z.string().optional(),
+    resolved_by_retry: z.boolean().optional(),
+    attempts: z.array(z.object({
+        command: z.string(),
+        exitCode: z.number(),
+        stdout: z.string(),
+        stderr: z.string(),
+    })).optional(),
+    command_recovery: z.object({
+        failedCommand: z.string(),
+        baseCommand: z.string(),
+        platform: z.enum(['windows', 'macos', 'linux']),
+        alternativeCommands: z.array(z.string()),
+        staticAlternatives: z.array(z.string()),
+        discoveredCommands: z.array(z.string()),
+        probeCommands: z.array(z.string()),
+        suggestion: z.string(),
+    }).optional(),
 });
 export const bashTool = createTool({
     id: 'bash',

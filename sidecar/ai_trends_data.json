@@ -1,131 +1,112 @@
 {
-  "trends": {
-    "AI Agents": {
-      "market_impact": 9,
-      "maturity": 7,
+  "trends": [
+    {
+      "name": "开源AI模型",
+      "importance": 95,
       "growth_rate": 85,
-      "investment_priority": 9,
-      "adoption_rate": 65
+      "adoption_rate": 80,
+      "region": "全球",
+      "key_players": [
+        "中国开源社区",
+        "Meta",
+        "Mistral"
+      ],
+      "investment": 50,
+      "growth_potential": 17.0
     },
-    "Multimodal AI": {
-      "market_impact": 9,
-      "maturity": 8,
-      "growth_rate": 75,
-      "investment_priority": 8,
-      "adoption_rate": 70
-    },
-    "Enterprise AI Infrastructure": {
-      "market_impact": 8,
-      "maturity": 7,
-      "growth_rate": 40,
-      "investment_priority": 9,
-      "adoption_rate": 55
-    },
-    "Federated AI": {
-      "market_impact": 7,
-      "maturity": 6,
-      "growth_rate": 60,
-      "investment_priority": 7,
-      "adoption_rate": 45
-    },
-    "Embodied Intelligence": {
-      "market_impact": 8,
-      "maturity": 5,
-      "growth_rate": 90,
-      "investment_priority": 8,
-      "adoption_rate": 30
-    },
-    "Generative AI Security": {
-      "market_impact": 8,
-      "maturity": 6,
-      "growth_rate": 70,
-      "investment_priority": 9,
-      "adoption_rate": 50
-    },
-    "AI-Enhanced Research": {
-      "market_impact": 7,
-      "maturity": 7,
-      "growth_rate": 55,
-      "investment_priority": 6,
-      "adoption_rate": 60
-    },
-    "Quantum AI": {
-      "market_impact": 6,
-      "maturity": 3,
+    {
+      "name": "AI代理技术",
+      "importance": 90,
       "growth_rate": 95,
-      "investment_priority": 5,
-      "adoption_rate": 10
+      "adoption_rate": 45,
+      "region": "中国、美国",
+      "key_players": [
+        "百度",
+        "阿里巴巴",
+        "OpenAI"
+      ],
+      "investment": 80,
+      "growth_potential": 52.25
     },
-    "AI ROI Measurement": {
-      "market_impact": 7,
-      "maturity": 6,
-      "growth_rate": 50,
-      "investment_priority": 8,
-      "adoption_rate": 55
+    {
+      "name": "AI专用芯片",
+      "importance": 88,
+      "growth_rate": 75,
+      "adoption_rate": 60,
+      "region": "全球",
+      "key_players": [
+        "Arm",
+        "阿里巴巴",
+        "NVIDIA"
+      ],
+      "investment": 120,
+      "growth_potential": 30.0
     },
-    "Hyper-Personalization": {
-      "market_impact": 7,
-      "maturity": 8,
-      "growth_rate": 45,
-      "investment_priority": 7,
-      "adoption_rate": 75
+    {
+      "name": "大规模AI投资",
+      "importance": 85,
+      "growth_rate": 90,
+      "adoption_rate": 70,
+      "region": "美国",
+      "key_players": [
+        "OpenAI",
+        "微软",
+        "谷歌"
+      ],
+      "investment": 630,
+      "growth_potential": 27.0
+    },
+    {
+      "name": "AI能源管理",
+      "importance": 75,
+      "growth_rate": 80,
+      "adoption_rate": 35,
+      "region": "全球",
+      "key_players": [
+        "数据中心运营商",
+        "能源公司"
+      ],
+      "investment": 45,
+      "growth_potential": 52.0
     }
-  },
-  "market_data": {
-    "china_ai_market_size": 1200,
-    "china_growth_rate": 30,
-    "china_companies": 6000,
-    "global_downloads": 10000,
-    "productivity_increase": 40
-  },
-  "rankings": [
-    [
-      "AI Agents",
-      33.2
-    ],
-    [
-      "Multimodal AI",
-      31.25
-    ],
-    [
-      "Embodied Intelligence",
-      30.1
-    ],
-    [
-      "Quantum AI",
-      27.9
-    ],
-    [
-      "Generative AI Security",
-      27.45
-    ],
-    [
-      "AI-Enhanced Research",
-      24.15
-    ],
-    [
-      "Federated AI",
-      23.85
-    ],
-    [
-      "Hyper-Personalization",
-      23.5
-    ],
-    [
-      "AI ROI Measurement",
-      22.5
-    ],
-    [
-      "Enterprise AI Infrastructure",
-      20.65
-    ]
   ],
-  "statistics": {
-    "average_market_impact": 7.6,
-    "average_growth_rate": 66.5,
-    "average_adoption_rate": 51.5,
-    "median_growth_rate": 65.0,
-    "stdev_growth_rate": 19.44
-  },
-  "generated_at": "2026-03-16T21:23:54.457111"
+  "risks": [
+    {
+      "category": "技术风险",
+      "severity": 7,
+      "probability": 60
+    },
+    {
+      "category": "商业风险",
+      "severity": 8,
+      "probability": 70
+    },
+    {
+      "category": "地缘政治风险",
+      "severity": 9,
+      "probability": 80
+    },
+    {
+      "category": "环境风险",
+      "severity": 7,
+      "probability": 65
+    }
+  ],
+  "regions": {
+    "美国": {
+      "strength": 85,
+      "challenges": 70,
+      "investment": 400
+    },
+    "中国": {
+      "strength": 80,
+      "challenges": 60,
+      "investment": 200
+    },
+    "欧洲": {
+      "strength": 60,
+      "challenges": 75,
+      "investment": 80
+    }
+  }
 }

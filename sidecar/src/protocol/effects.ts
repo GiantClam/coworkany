@@ -11,6 +11,7 @@ export const EffectTypeSchema = z.enum([
     'knowledge:update',     // Update knowledge base - auto-approve for AI learning
     'secrets:read',         // Access secrets/credentials - default DENY
     'screen:capture',       // Screenshot/screen recording - requires Confirm
+    'ui:notify',            // Non-interactive UI notifications/toasts
     'ui:control',           // UI automation - default DENY
 ]);
 export type EffectType = z.infer<typeof EffectTypeSchema>;
@@ -95,6 +96,7 @@ export const DEFAULT_EFFECT_POLICIES: Record<EffectType, ConfirmationPolicy> = {
     'knowledge:update': 'never',        // Auto-approve knowledge updates (AI learning)
     'secrets:read': 'always',           // Would be 'deny' in production
     'screen:capture': 'always',
+    'ui:notify': 'never',
     'ui:control': 'always',             // Would be 'deny' in production
 };
 export const EFFECT_RISK_LEVELS: Record<EffectType, number> = {
@@ -109,5 +111,6 @@ export const EFFECT_RISK_LEVELS: Record<EffectType, number> = {
     'knowledge:update': 2,          // Low risk - updating knowledge
     'secrets:read': 10,
     'screen:capture': 6,
+    'ui:notify': 1,
     'ui:control': 10,
 };

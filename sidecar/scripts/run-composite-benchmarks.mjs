@@ -15,7 +15,7 @@ const WORKING_DIR_MODE_MAP = {
 };
 
 function usage() {
-    console.error('Usage: bun run scripts/run-composite-benchmarks.mjs [--profile <id>|--all] [--list] [--include-external]');
+    console.error('Usage: node scripts/run-composite-benchmarks.mjs [--profile <id>|--all] [--list] [--include-external] [--fail-on-external-skip]');
     process.exit(2);
 }
 
@@ -38,10 +38,11 @@ function parseArgs() {
         usage();
     }
 
-    let profile = 'smoke';
+    let profile;
     let includeAll = false;
     let listOnly = false;
     let includeExternal = false;
+    let failOnExternalSkip = false;
 
     for (let i = 0; i < args.length; i += 1) {
         const arg = args[i];
@@ -57,6 +58,10 @@ function parseArgs() {
             includeExternal = true;
             continue;
         }
+        if (arg === '--fail-on-external-skip') {
+            failOnExternalSkip = true;
+            continue;
+        }
         if (arg === '--profile') {
             const next = getArgValue(i, args);
             if (!next) {
@@ -69,7 +74,7 @@ function parseArgs() {
         usage();
     }
 
-    return { profile, includeAll, listOnly, includeExternal };
+    return { profile, includeAll, listOnly, includeExternal, failOnExternalSkip };
 }
 
 function readSuiteConfig() {
@@ -84,6 +89,9 @@ function readSuiteConfig() {
 
 function printList(suite) {
     console.log('组合测试集 Profile:');
+    if (suite.defaultProfile) {
+        console.log(`默认 Profile: ${suite.defaultProfile}`);
+    }
     for (const profile of suite.profiles) {
         console.log(`- ${profile.id}: ${profile.name}`);
         console.log(`  ${profile.objective}`);
@@ -103,7 +111,8 @@ function resolveExternalWorkingDir(step) {
     return ROOT_DIR;
 }
 
-function runStep(step, includeExternal, failures) {
+function runStep(step, includeExternal, failures, options = {}) {
+    const failOnExternalSkip = options.failOnExternalSkip === true;
     if (step.kind === 'bun-test') {
         const files = Array.isArray(step.files) ? step.files : [];
         if (files.length === 0) {
@@ -167,8 +176,11 @@ function runStep(step, includeExternal, failures) {
             workingDir,
             '--required-env',
             requiredEnv,
-            '--skip-on-missing-env',
         ];
+
+        if (!failOnExternalSkip) {
+            commandArgs.push('--skip-on-missing-env');
+        }
 
         if (bootstrap.length > 0) {
             commandArgs.push('--bootstrap', bootstrap);
@@ -195,12 +207,13 @@ function runStep(step, includeExternal, failures) {
 
 function runProfile(profile, includeExternal) {
     const failures = [];
+    const failOnExternalSkip = profile.failOnExternalSkip === true;
     console.log(`\n=== Running profile: ${profile.id} (${profile.name}) ===`);
     console.log(profile.objective || '');
 
     for (const step of profile.steps || []) {
         console.log(`\n- Step: ${step.name || 'unnamed'}`);
-        runStep(step, includeExternal, failures);
+        runStep(step, includeExternal, failures, { failOnExternalSkip });
         if (failures.length > 0 && step.critical === true) {
             console.log(`[FAIL] Critical step 失败: ${failures[failures.length - 1]}`);
         }
@@ -210,8 +223,15 @@ function runProfile(profile, includeExternal) {
 }
 
 function main() {
-    const { profile: targetProfile, includeAll, listOnly, includeExternal } = parseArgs();
+    const {
+        profile: targetProfile,
+        includeAll,
+        listOnly,
+        includeExternal,
+        failOnExternalSkip,
+    } = parseArgs();
     const suite = readSuiteConfig();
+    const resolvedProfile = targetProfile || suite.defaultProfile || 'smoke';
 
     const profileById = new Map(suite.profiles.map((p) => [p.id, p]));
 
@@ -222,10 +242,10 @@ function main() {
 
     const selectedProfiles = includeAll
         ? suite.profiles
-        : [profileById.get(targetProfile)].filter(Boolean);
+        : [profileById.get(resolvedProfile)].filter(Boolean);
 
     if (selectedProfiles.length === 0) {
-        console.error(`[ERROR] 未找到 profile: ${targetProfile}`);
+        console.error(`[ERROR] 未找到 profile: ${resolvedProfile}`);
         printList(suite);
         process.exit(2);
     }
@@ -233,7 +253,10 @@ function main() {
     let failedSteps = 0;
     let totalSteps = 0;
     for (const profile of selectedProfiles) {
-        const failures = runProfile(profile, includeExternal);
+        const effectiveProfile = failOnExternalSkip
+            ? { ...profile, failOnExternalSkip: true }
+            : profile;
+        const failures = runProfile(effectiveProfile, includeExternal);
         totalSteps += (profile.steps || []).length;
         failedSteps += failures.length;
     }

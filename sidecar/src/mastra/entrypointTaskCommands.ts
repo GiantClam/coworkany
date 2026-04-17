@@ -29,7 +29,7 @@ type UserMessageExecutionOptions = {
     turnContractDomain?: string;
 };
 
-type StartOrSendCommandType = 'start_task' | 'send_task_message';
+type StartOrSendCommandType = 'start_task' | 'send_task_message' | 'send_subagent_message';
 
 type TaskStartedMode = 'chat' | 'immediate_task' | 'scheduled_task';
 
@@ -211,7 +211,11 @@ type HandleStartOrSendTaskCommandInput = {
 };
 
 function isStartOrSendCommandType(commandType: string): commandType is StartOrSendCommandType {
-    return commandType === 'start_task' || commandType === 'send_task_message';
+    return (
+        commandType === 'start_task'
+        || commandType === 'send_task_message'
+        || commandType === 'send_subagent_message'
+    );
 }
 
 const EXPLICIT_SCHEDULE_PREFIX = /^(?:创建|新建)?定时任务[：:\s,，、-]*/u;
@@ -228,11 +232,64 @@ const GENERAL_CAPABILITY_QUERY_PATTERN = /你(?:能|可)做什么|你会什么|�
 const WEB_RESEARCH_AVAILABLE_TOOL_PATTERN = /\b(search_web|crawl_url|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|websearch|lookup|research)\b|股|行情|涨跌|天气|新闻|资讯|预报|查询|检索/iu;
 const BROWSER_AVAILABLE_TOOL_PATTERN = /\b(browser_[a-z_]+|playwright|browser|navigate|screenshot|click|fill|crawl_url|extract_content|open_in_browser)\b/iu;
 const VOICE_OUTPUT_AVAILABLE_TOOL_PATTERN = /\b(voice_speak|tts|text[-\s]?to[-\s]?speech|read[_\s-]?aloud|speak)\b|语音|朗读|播报/iu;
+const FILESYSTEM_READ_AVAILABLE_TOOL_PATTERN = /\b(list_dir|view_file|read_file|mastra_workspace_list_files|mastra_workspace_read_file|mastra_workspace_file_stat|filesystem)\b|文件|目录|路径|列出|读取|查看/iu;
+const ARTIFACT_WRITE_AVAILABLE_TOOL_PATTERN = /\b(write_to_file|replace_file_content|append_to_file|move_file|delete_path|mastra_workspace_write_file|mastra_workspace_replace_in_file|mastra_workspace_delete_file)\b|写入|保存|替换|更新|创建文件/iu;
+const ARTIFACT_WRITE_CAPABILITY = 'artifact_write';
+const SAVE_TARGET_INTENT_PATTERN = /(?:save(?:\s+it)?\s+to|write(?:\s+(?:it|result|output|report|file))?\s+to|保存到|写入|输出到)\s+([^\s,，。!?]+)/iu;
+const SAVE_TARGET_PATH_PATTERN = /(?:\/|\.\/|\.\.\/|~\/|[A-Za-z]:\\)[^\s,，。!?"'`]+/gu;
 const TOOL_PREVIEW_LIMIT = 12;
 const FILESYSTEM_TOOLS_PATH_HINT_PATTERN = /(?:^|[\\/])(?:src|lib|app|test|tests|tools?)(?:[\\/]|$)|(?:^|[\\/])[^\s\\/]+\.[a-z0-9]{1,8}(?:$|[\\/])|目录|文件|路径|\b(?:path|folder|directory)\b/iu;
+const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_SIMPLE = 1;
+const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_MODERATE = 2;
+const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_COMPLEX = 3;
+const RETRY_COMPLEXITY_CHAIN_PATTERN = /\b(first|then|after\s+that|next|finally|and\s+then)\b|先|然后|接着|随后|之后|再(?:执行|做|进行)?/iu;
+const RETRY_COMPLEXITY_PARALLEL_PATTERN = /\b(parallel|concurrently|simultaneously|in\s+parallel)\b|并行|同时/iu;
 
 function hasToolBackedCapabilityRequirement(requirements: TaskCapabilityRequirement[]): boolean {
     return requirements.length > 0;
+}
+
+function resolveDefaultCapabilityRetryMaxAttempts(input: {
+    message: string;
+    workspacePath: string;
+    requirements: TaskCapabilityRequirement[];
+}): number {
+    const normalizedMessage = input.message.trim();
+    const hasParallelCue = RETRY_COMPLEXITY_PARALLEL_PATTERN.test(normalizedMessage);
+    const hasChainCue = RETRY_COMPLEXITY_CHAIN_PATTERN.test(normalizedMessage);
+    const hasLongInstruction = normalizedMessage.length >= 140;
+    const hasMultiCapability = input.requirements.length >= 2;
+
+    let hasMultiTaskPlan = false;
+    let hasDependencyChain = false;
+    try {
+        const normalizedRequest = analyzeWorkRequest({
+            sourceText: input.message,
+            workspacePath: input.workspacePath,
+        });
+        hasMultiTaskPlan = normalizedRequest.tasks.length > 1;
+        hasDependencyChain = normalizedRequest.tasks.some((task) => (task.dependencies?.length ?? 0) > 0);
+    } catch {
+        // Best-effort complexity inference should not block default routing.
+    }
+
+    if (hasMultiCapability || hasMultiTaskPlan || hasDependencyChain || hasParallelCue) {
+        return DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_COMPLEX;
+    }
+    if (hasChainCue || hasLongInstruction) {
+        return DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_MODERATE;
+    }
+    return DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_SIMPLE;
+}
+
+function buildDefaultCapabilityRetryState(maxAttempts: number): TaskRuntimeRetryState {
+    const boundedMaxAttempts = Math.max(1, Math.min(5, Math.floor(maxAttempts)));
+    return {
+        attempts: 0,
+        maxAttempts: boundedMaxAttempts,
+        lastRetryAt: undefined,
+        lastError: undefined,
+    };
 }
 
 function normalizeCapabilityValues(values: string[]): string[] {
@@ -241,6 +298,21 @@ function normalizeCapabilityValues(values: string[]): string[] {
             .map((value) => value.trim())
             .filter((value) => value.length > 0),
     )).sort((left, right) => left.localeCompare(right, 'zh-Hans-CN', { sensitivity: 'base' }));
+}
+
+function maybeAppendArtifactWriteCapability(message: string, capabilities: string[]): string[] {
+    const normalized = normalizeCapabilityValues(capabilities);
+    const explicitSaveIntent = SAVE_TARGET_INTENT_PATTERN.test(message);
+    SAVE_TARGET_INTENT_PATTERN.lastIndex = 0;
+    if (!explicitSaveIntent) {
+        return normalized;
+    }
+    const pathHint = SAVE_TARGET_PATH_PATTERN.exec(message);
+    SAVE_TARGET_PATH_PATTERN.lastIndex = 0;
+    if (!pathHint) {
+        return normalized;
+    }
+    return normalizeCapabilityValues([...normalized, ARTIFACT_WRITE_CAPABILITY]);
 }
 
 function collectEnabledToolpackHints(snapshot: RuntimeCapabilitySnapshot | null): string[] {
@@ -361,11 +433,17 @@ function isRequirementAvailable(
     if (requirement === 'voice_output') {
         return hints.some((hint) => VOICE_OUTPUT_AVAILABLE_TOOL_PATTERN.test(hint));
     }
+    if (requirement === 'filesystem_read') {
+        return hints.some((hint) => FILESYSTEM_READ_AVAILABLE_TOOL_PATTERN.test(hint));
+    }
     if (requirement === 'command_execution') {
         // Command execution is a core built-in lane in direct task mode.
         // Runtime toolset snapshots may not enumerate built-ins consistently.
         void hints;
         return true;
+    }
+    if (requirement === 'artifact_write') {
+        return hints.some((hint) => ARTIFACT_WRITE_AVAILABLE_TOOL_PATTERN.test(hint));
     }
     return false;
 }
@@ -486,7 +564,7 @@ async function evaluateTaskCapabilityGate(input: {
         `运行时工具预览：${truncateCapabilityPreview(runtimeToolHints)}`,
         `运行时可调用工具包预览：${truncateCapabilityPreview(callableConfiguredToolHints)}`,
         `已启用工具包预览：${truncateCapabilityPreview(configuredToolHints)}`,
-        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*、run_command）。',
+        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*、run_command、write_to_file）。',
     ].join('\n');
 
     return {
@@ -729,6 +807,10 @@ export async function handleStartOrSendTaskCommand(
     const { commandType, commandId, payload } = input;
     const turnId = commandId;
     const taskId = input.getString(payload.taskId) ?? '';
+    const isFollowupCommand = commandType === 'send_task_message' || commandType === 'send_subagent_message';
+    const followupResponseType = commandType === 'send_subagent_message'
+        ? 'send_subagent_message_response'
+        : 'send_task_message_response';
     const rawMessage = commandType === 'start_task'
         ? input.getString(payload.userQuery)
         : input.getString(payload.content);
@@ -796,7 +878,7 @@ export async function handleStartOrSendTaskCommand(
     const configuredExecutionPath = input.pickTaskExecutionPath(commandConfig);
     const hasKnownExecutionPath = previousState?.executionPath === 'direct' || previousState?.executionPath === 'workflow';
     const defaultExecutionPath = (
-        commandType === 'send_task_message'
+        isFollowupCommand
         && routedMessage.forcedRouteMode !== 'task'
         && !hasKnownExecutionPath
     )
@@ -809,7 +891,7 @@ export async function handleStartOrSendTaskCommand(
             : undefined
     );
     if (
-        commandType === 'send_task_message'
+        isFollowupCommand
         && routedMessage.forcedRouteMode == null
         && resolvedExecutionPath === 'direct'
     ) {
@@ -890,6 +972,19 @@ export async function handleStartOrSendTaskCommand(
             : undefined,
     };
     const resourceId = input.resolveTaskResourceId(taskId, payload, previousState?.resourceId);
+    const shouldSeedDefaultCapabilityRetryBudget = (
+        commandType === 'start_task'
+        && !retryConfig
+        && !previousState?.retry
+        && hasToolBackedCapabilityRequirement(inferredCapabilityRequirements)
+    );
+    const defaultCapabilityRetryMaxAttempts = shouldSeedDefaultCapabilityRetryBudget
+        ? resolveDefaultCapabilityRetryMaxAttempts({
+            message,
+            workspacePath,
+            requirements: inferredCapabilityRequirements,
+        })
+        : DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_SIMPLE;
     const nextRetryState: TaskRuntimeRetryState | undefined = retryConfig
         ? retryConfig
         : (previousState?.retry
@@ -899,7 +994,11 @@ export async function handleStartOrSendTaskCommand(
                 lastRetryAt: undefined,
                 lastError: undefined,
             }
-            : undefined);
+            : (
+                shouldSeedDefaultCapabilityRetryBudget
+                    ? buildDefaultCapabilityRetryState(defaultCapabilityRetryMaxAttempts)
+                    : undefined
+            ));
 
     if (
         commandType === 'send_task_message'
@@ -1137,7 +1236,10 @@ export async function handleStartOrSendTaskCommand(
                 workspacePath,
                 mode: 'task',
                 route: 'direct',
-                requiredCapabilities: taskCapabilityGate.requirements.map(formatTaskCapabilityRequirement),
+                requiredCapabilities: maybeAppendArtifactWriteCapability(
+                    message,
+                    taskCapabilityGate.requirements.map(formatTaskCapabilityRequirement),
+                ),
                 createdAt: new Date().toISOString(),
             });
             const state = input.upsertTaskState(taskId, {
@@ -1200,14 +1302,18 @@ export async function handleStartOrSendTaskCommand(
             return true;
         }
         if (taskCapabilityGate.requirements.length > 0) {
+            const requiredCompletionCapabilities = maybeAppendArtifactWriteCapability(
+                message,
+                taskCapabilityGate.requirements.map(formatRequirementLabel),
+            );
             executionOptions = {
                 ...executionOptions,
-                requireToolEvidenceForCompletion: true,
-                requiredCompletionCapabilities: taskCapabilityGate.requirements.map(formatRequirementLabel),
+                requireToolEvidenceForCompletion: requiredCompletionCapabilities.length > 0,
+                requiredCompletionCapabilities,
             };
         }
     }
-    const shouldDisableChatSkills = commandType === 'send_task_message'
+    const shouldDisableChatSkills = isFollowupCommand
         && executionOptions.executionPath === 'direct'
         && executionOptions.forcedRouteMode !== 'task'
         && input.pickBooleanConfigValue(commandConfig, 'enableChatSkills') !== true;
@@ -1219,6 +1325,15 @@ export async function handleStartOrSendTaskCommand(
         };
     }
 
+    const augmentedRequiredCompletionCapabilities = maybeAppendArtifactWriteCapability(
+        message,
+        executionOptions.requiredCompletionCapabilities ?? [],
+    );
+    executionOptions = {
+        ...executionOptions,
+        requiredCompletionCapabilities: augmentedRequiredCompletionCapabilities,
+        requireToolEvidenceForCompletion: augmentedRequiredCompletionCapabilities.length > 0,
+    };
     const turnContract = buildTaskTurnContract({
         message,
         workspacePath,
@@ -1307,7 +1422,7 @@ export async function handleStartOrSendTaskCommand(
         }
         | undefined;
     if (
-        commandType === 'send_task_message'
+        isFollowupCommand
         && !allowDuplicateTaskMessage
         && input.claimTaskMessageDispatch
     ) {
@@ -1322,7 +1437,7 @@ export async function handleStartOrSendTaskCommand(
             }),
         });
         if (claim.deduplicated) {
-            input.emitFor('send_task_message_response', {
+            input.emitFor(followupResponseType, {
                 success: true,
                 taskId,
                 accepted: true,

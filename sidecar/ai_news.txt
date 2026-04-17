@@ -1,0 +1,21 @@
+AI 新闻汇总（自动抓取）
+
+1) アンソロピック、評価額最大8000億ドルでＶＣが関心＝報道 | ロイター
+链接: https://jp.reuters.com/markets/japan/5NO773OB4ZOXTFRTUJBF5DQZDA-2026-04-15/
+摘要: 人工智能公司 Anthropic 传出获得多家风投投资兴趣，估值可能升至高位。
+发布时间: 2026-04-15
+
+2) 米副大統領らがテック大手と協議、アンソロピック最新ＡＩ巡り＝報道 | ロイター
+链接: http://jp.reuters.com/markets/global-markets/MFIZBDJIPFOUXGJ32OVYSCICMI-2026-04-13/
+摘要: 报道称美国政府高层与科技公司讨论了新一代AI模型在安全与网络攻击方面的风险。
+发布时间: 2026-04-13
+
+3) Apple plans to open Siri to rival AI services, Bloomberg News reports | Reuters
+链接: https://www.reuters.com/business/apple-plans-open-siri-rival-ai-services-bloomberg-news-reports-2026-03-26/
+摘要: 报道称苹果计划让 Siri 接入更多第三方AI服务，不再局限于当前合作模式。
+发布时间: 2026-03-26
+
+4) Baidu joins China's OpenClaw frenzy with new AI agents | Reuters
+链接: https://www.reuters.com/business/media-telecom/baidu-joins-chinas-openclaw-frenzy-with-new-ai-agents-2026-03-17/
+摘要: 百度发布新一批AI智能体产品，跟进国内开源智能体生态热潮。
+发布时间: 2026-03-17

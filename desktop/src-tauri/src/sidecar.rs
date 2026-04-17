@@ -195,6 +195,20 @@ pub struct SendTaskMessagePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub struct SendSubagentMessagePayload {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "subagentTaskId")]
+    pub subagent_task_id: String,
+    pub content: String,
+    #[serde(rename = "environmentContext", skip_serializing_if = "Option::is_none")]
+    pub environment_context: Option<PlatformRuntimeContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<TaskConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ResumeInterruptedTaskPayload {
     #[serde(rename = "taskId")]
     pub task_id: String,
@@ -244,6 +258,12 @@ pub enum IpcCommand {
         id: String,
         timestamp: String,
         payload: SendTaskMessagePayload,
+    },
+    #[serde(rename = "send_subagent_message")]
+    SendSubagentMessage {
+        id: String,
+        timestamp: String,
+        payload: SendSubagentMessagePayload,
     },
     #[serde(rename = "resume_interrupted_task")]
     ResumeInterruptedTask {
@@ -301,6 +321,26 @@ impl IpcCommand {
             timestamp: chrono_now(),
             payload: SendTaskMessagePayload {
                 task_id,
+                content,
+                environment_context,
+                config,
+            },
+        }
+    }
+
+    pub fn send_subagent_message(
+        task_id: String,
+        subagent_task_id: String,
+        content: String,
+        environment_context: Option<PlatformRuntimeContext>,
+        config: Option<TaskConfig>,
+    ) -> Self {
+        IpcCommand::SendSubagentMessage {
+            id: Uuid::new_v4().to_string(),
+            timestamp: chrono_now(),
+            payload: SendSubagentMessagePayload {
+                task_id,
+                subagent_task_id,
                 content,
                 environment_context,
                 config,
@@ -3512,7 +3552,7 @@ impl Default for SidecarState {
 mod tests {
     use super::{
         classify_sidecar_message, extract_stream_delta_log_entry, is_json_object_line,
-        is_sidecar_metrics_line, truncate_log_line, SidecarManager, SidecarMessageKind,
+        is_sidecar_metrics_line, truncate_log_line, IpcCommand, SidecarManager, SidecarMessageKind,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -3564,6 +3604,35 @@ mod tests {
                 None => std::env::remove_var(key),
             }
         }
+    }
+
+    #[test]
+    fn ipc_command_send_subagent_message_serializes_expected_payload() {
+        let command = IpcCommand::send_subagent_message(
+            "task-parent-1".to_string(),
+            "agent-subtask-7".to_string(),
+            "continue this lane only".to_string(),
+            None,
+            None,
+        );
+        let value = serde_json::to_value(command).expect("serialize command");
+        assert_eq!(
+            value.get("type").and_then(|node| node.as_str()),
+            Some("send_subagent_message")
+        );
+        let payload = value.get("payload").expect("payload");
+        assert_eq!(
+            payload.get("taskId").and_then(|node| node.as_str()),
+            Some("task-parent-1")
+        );
+        assert_eq!(
+            payload.get("subagentTaskId").and_then(|node| node.as_str()),
+            Some("agent-subtask-7")
+        );
+        assert_eq!(
+            payload.get("content").and_then(|node| node.as_str()),
+            Some("continue this lane only")
+        );
     }
 
     #[test]

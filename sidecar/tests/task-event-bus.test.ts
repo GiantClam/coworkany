@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { TaskEventBus } from '../src/execution/taskEventBus';
+import { TaskEventBus } from '../src/mastra/taskRuntime/taskEventBus';
 
 describe('task event bus', () => {
     test('increments per-task sequence numbers independently and supports reset', () => {

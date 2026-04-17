@@ -24,11 +24,47 @@ type SearchAttempt = {
     provider: SearchProvider;
     label: string;
 };
+const PROVIDER_HARD_FAILURE_BACKOFF_MS = 10 * 60 * 1000;
+const providerDisabledUntilByName = new Map<SearchProvider, number>();
+
+function normalizeOptionalIntLike(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return Math.trunc(value);
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length === 0) {
+            return undefined;
+        }
+        const parsed = Number.parseInt(trimmed, 10);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        const marker = typeof record.$type === 'string'
+            ? record.$type.trim().toLowerCase()
+            : '';
+        if (marker === 'null' || marker === 'undefined') {
+            return undefined;
+        }
+        if ('value' in record) {
+            return normalizeOptionalIntLike(record.value);
+        }
+    }
+    return undefined;
+}
+
+function optionalIntField(min: number, max: number) {
+    return z.preprocess(
+        (value) => normalizeOptionalIntLike(value),
+        z.number().int().min(min).max(max).optional(),
+    );
+}
 
 const searchInputSchema = z.object({
     query: z.string().min(1),
-    max_results: z.number().int().min(1).max(10).optional(),
-    recency_days: z.number().int().min(1).max(30).optional(),
+    max_results: optionalIntField(1, 10),
+    recency_days: optionalIntField(1, 30),
 });
 
 const searchOutputSchema = z.object({
@@ -45,7 +81,7 @@ const searchOutputSchema = z.object({
 
 const crawlInputSchema = z.object({
     url: z.string().url(),
-    max_chars: z.number().int().min(200).max(20_000).optional(),
+    max_chars: optionalIntField(200, 20_000),
 });
 
 const crawlOutputSchema = z.object({
@@ -60,7 +96,7 @@ const crawlOutputSchema = z.object({
 const extractInputSchema = z.object({
     url: z.string().url().optional(),
     html: z.string().optional(),
-    max_chars: z.number().int().min(200).max(20_000).optional(),
+    max_chars: optionalIntField(200, 20_000),
 });
 
 const extractOutputSchema = z.object({
@@ -111,6 +147,35 @@ const SEARCH_PROVIDER_LABELS: Record<SearchProvider, string> = {
     tavily: 'Tavily',
     brave: 'Brave Search',
 };
+
+function isProviderTemporarilyDisabled(provider: SearchProvider, nowMs: number = Date.now()): boolean {
+    const disabledUntil = providerDisabledUntilByName.get(provider);
+    if (!Number.isFinite(disabledUntil)) {
+        return false;
+    }
+    if ((disabledUntil ?? 0) <= nowMs) {
+        providerDisabledUntilByName.delete(provider);
+        return false;
+    }
+    return true;
+}
+
+function isNonRetryableProviderError(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    if (normalized.length === 0) {
+        return false;
+    }
+    return /\bhttp_(400|401|403|404)\b/.test(normalized)
+        || /\b(invalid|unauthorized|forbidden|quota|billing)\b/.test(normalized);
+}
+
+function recordProviderFailure(provider: SearchProvider, message: string): void {
+    if (!isNonRetryableProviderError(message)) {
+        return;
+    }
+    const disabledUntil = Date.now() + PROVIDER_HARD_FAILURE_BACKOFF_MS;
+    providerDisabledUntilByName.set(provider, disabledUntil);
+}
 
 function normalizeText(value: string): string {
     return value.replace(/\s+/g, ' ').trim();
@@ -496,17 +561,18 @@ export function filterSearchResultsByQuality(
 
 function getRuntimeProviderAttempts(resolved: RuntimeSearchConfigResolution): SearchAttempt[] {
     const available = new Set<SearchProvider>();
+    const nowMs = Date.now();
 
-    if (resolved.settings.serperApiKey) {
+    if (resolved.settings.serperApiKey && !isProviderTemporarilyDisabled('serper', nowMs)) {
         available.add('serper');
     }
-    if (resolved.settings.exaApiKey) {
+    if (resolved.settings.exaApiKey && !isProviderTemporarilyDisabled('exa', nowMs)) {
         available.add('exa');
     }
-    if (resolved.settings.tavilyApiKey) {
+    if (resolved.settings.tavilyApiKey && !isProviderTemporarilyDisabled('tavily', nowMs)) {
         available.add('tavily');
     }
-    if (resolved.settings.braveApiKey) {
+    if (resolved.settings.braveApiKey && !isProviderTemporarilyDisabled('brave', nowMs)) {
         available.add('brave');
     }
     const attempts: SearchAttempt[] = [];
@@ -695,6 +761,7 @@ export async function runWebSearch(input: {
             const message = error instanceof Error ? error.message : String(error);
             lastError = message;
             console.warn(`[WebSearch] ${attempt.label} failed: ${message}`);
+            recordProviderFailure(attempt.provider, message);
         }
     }
 

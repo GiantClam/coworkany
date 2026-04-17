@@ -231,7 +231,7 @@ function resolveWorkflowRetryDelayMs(input: {
 
 function isRetryableWorkflowError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
-    return /\b(workflow_run_timeout|workflow_retryable_failure|missing_terminal_after_tooling_progress|No snapshot found for this workflow run|timeout|timed out|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream)\b/i
+    return /\b(workflow_run_timeout|workflow_retryable_failure|missing_terminal_after_tooling_progress|No snapshot found for this workflow run|timeout|timed out|econnreset|etimedout|socket hang up|network|429|rate.?limit|temporar(?:y|ily)|unavailable|gateway|upstream|unable to get issuer certificate|unable to verify (?:the first|leaf) certificate|self[-\s]?signed certificate|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+)\b/i
         .test(message);
 }
 

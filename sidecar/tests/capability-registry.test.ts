@@ -48,9 +48,51 @@ describe('capabilityRegistry', () => {
         expect(detectTaskIntentDomain(message)).toBe('market');
     });
 
+    test('infers web_research for buy-price follow-up query without explicit ticker', () => {
+        const message = '根据上述信息，给我兖矿能源的买入价格';
+        const requirements = resolveTaskCapabilityRequirements({
+            message,
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('web_research');
+        expect(detectTaskIntentDomain(message)).toBe('market');
+    });
+
+    test('infers web_research for business cooperation decision-support query', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '请评估我们和字节在 AI Agent 方向的商业合作可行性，给出合作方案建议和主要风险',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('web_research');
+    });
+
+    test('infers web_research for platform trending content lookup queries', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '今天 blibli 上有什么热门视频？',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('web_research');
+    });
+
+    test('infers web_research for generic trending-content lookup without platform keyword', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '今天有什么热门视频推荐？',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('web_research');
+    });
+
     test('does not over-trigger web_research for local directory listing requests with temporal words', () => {
         const requirements = resolveTaskCapabilityRequirements({
             message: '列出当前目录下的所有文件并按大小排序',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).not.toContain('web_research');
+    });
+
+    test('does not over-trigger web_research for local video folder operations', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '把 workspace/videos/热门视频 目录下的文件重命名并按日期归档',
             workspacePath: process.cwd(),
         });
         expect(requirements).not.toContain('web_research');
@@ -62,11 +104,93 @@ describe('capabilityRegistry', () => {
             workspacePath: process.cwd(),
         });
         expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('artifact_write');
     });
 
-    test('does not over-trigger command_execution for read-only directory listing requests', () => {
+    test('infers command_execution for explicit run_command token requests', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '请使用 run_command 执行 echo "CoworkAny Test Success" 并返回输出',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+    });
+
+    test('does not infer artifact_write for command-output wording with script paths', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: [
+                'Clean similar images in: ./images',
+                'Use this exact script first: node "./remove_similar_images.mjs" "./images" --delete --threshold 0',
+                'You must print DEDUPE_DONE marker from command output and then stop.',
+            ].join('\n'),
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('artifact_write');
+    });
+
+    test('infers command_execution for recycle-bin cleanup intents', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '帮我清空回收站',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+    });
+
+    test('infers command_execution for folder move intents', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '把 /Users/demo/Downloads/tmp 移动到 /Users/demo/Documents/archive',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+    });
+
+    test('infers command_execution for generic local host-operation intents', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '请整理 Downloads 文件夹并归档到桌面',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+    });
+
+    test('infers command_execution for current date/time queries', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '今天是几号',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+    });
+
+    test('infers command_execution for english current date/time queries', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: "What's the current date today?",
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('web_research');
+    });
+
+    test('does not infer command_execution for read-only local directory listing requests', () => {
         const requirements = resolveTaskCapabilityRequirements({
             message: '列出 workspace/images 目录下的文件并统计数量',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).not.toContain('command_execution');
+        expect(requirements).toContain('filesystem_read');
+        expect(requirements).not.toContain('web_research');
+    });
+
+    test('infers command_execution for relative-path move intents', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '请把 workspace/videos/热门视频 移动到 archive',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('web_research');
+    });
+
+    test('does not infer command_execution for explicit "do not execute commands" constraints', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '请用一句中文回复“桌面端回复回归验证通过”，不要执行命令或调用工具。',
             workspacePath: process.cwd(),
         });
         expect(requirements).not.toContain('command_execution');
@@ -77,6 +201,25 @@ describe('capabilityRegistry', () => {
             message: '查询 NVDA 最新股价并把结果写入 ./reports/nvda.md',
             workspacePath: process.cwd(),
         });
+        expect(requirements).toContain('web_research');
+        expect(requirements).toContain('artifact_write');
+        expect(requirements).not.toContain('command_execution');
+    });
+
+    test('infers artifact_write for explicit file replacement tasks', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '把 .coworkany/test-workspace/fs03-replace.txt 中的 Hello World 替换成 Hello CoworkAny',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('artifact_write');
+    });
+
+    test('does not infer artifact_write for pure external research without local file intent', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '搜索今天 AI 行业最新新闻并总结三个重点',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).not.toContain('artifact_write');
         expect(requirements).toContain('web_research');
     });
 });

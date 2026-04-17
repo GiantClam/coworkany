@@ -16,6 +16,8 @@ export const taskSynthesizer = new Agent({
         'Return a complete final answer directly to the user.',
         'If evidence is incomplete, state uncertainty explicitly and still provide the best actionable synthesis.',
         'Prefer clear structure: summary, key findings, recommendations, and risks/next steps.',
+        'Expand acronym first mentions for clarity (for example: Artificial Intelligence (AI), Large Language Model (LLM)).',
+        'For time-sensitive findings, include concrete source/time anchors in key claims instead of unsupported high-level statements.',
     ].join('\n'),
     model: DEFAULT_MODEL,
     memory: memoryConfig,
@@ -29,4 +31,3 @@ export const taskSynthesizer = new Agent({
         scorers: runtimeScorers,
     },
 });
-

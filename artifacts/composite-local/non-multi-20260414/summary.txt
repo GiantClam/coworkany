@@ -1,0 +1,11 @@
+===== PROFILE smoke =====
+smoke PASS 423s
+===== PROFILE regression-hard =====
+regression-hard PASS 33s
+===== PROFILE runtime-stress =====
+runtime-stress PASS 100s
+===== PROFILE agent-core =====
+agent-core FAIL 1093s
+===== PROFILE agent-robustness =====
+agent-robustness PASS 141s
+===== PROFILE agent-e2e =====

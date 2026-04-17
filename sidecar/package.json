@@ -23,7 +23,7 @@
     "eval:control-plane:apply-threshold-suggestion": "bun run scripts/apply-control-plane-threshold-suggestion.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:stable",
-    "test:stable": "bun test tests/token-usage.test.ts tests/command-sandbox.test.ts tests/scheduler-heartbeat.test.ts",
+    "test:stable": "bun test tests/token-usage.test.ts tests/command-sandbox.test.ts tests/scheduler-heartbeat.test.ts tests/production-general-replay.test.ts",
     "test:assistant-ui-contracts": "bun test tests/ipc-bridge.test.ts tests/mastra-bridge.test.ts tests/protocol-canonical-stream.test.ts tests/mastra-entrypoint.test.ts",
     "test:regression:task-message-dedup": "bun test tests/mastra-entrypoint.test.ts --test-name-pattern \"send_task_message deduplicates same task message while the first run is in flight|send_task_message deduplicates immediate repeated content after completion|retry_task deduplicates same retry message while a retry run is still in flight|send_task_message treats store-disabled history error after assistant narrative as recovered completion|send_task_message treats wrapped store-disabled history error after assistant narrative as recovered completion|send_task_message suppresses repeated terminal errors after store-disabled recovery completion|send_task_message emits at most one TASK_FAILED for repeated terminal error events in same turn\" --rerun-each 3",
     "test:real-model-smoke": "bun test tests/real-model-smoke.e2e.test.ts",
@@ -31,12 +31,16 @@
     "test:agent:core": "node scripts/run-tests-sequential.mjs tests/llm-core.test.ts tests/file-operations.test.ts tests/memory-learning.test.ts tests/gui-simulation.test.ts",
     "test:agent:scenarios": "node scripts/run-tests-sequential.mjs tests/capabilities.test.ts tests/user-scenarios.test.ts tests/e2e-composite.test.ts tests/openclaw-quick.test.ts tests/openclaw-simulation.test.ts tests/openclaw-extended.test.ts tests/openclow-comparison.test.ts",
     "test:agent:research": "node scripts/run-tests-sequential.mjs tests/websearch.test.ts tests/stock-research.test.ts tests/ppt-smart-city.test.ts tests/tts-speak.test.ts",
-    "test:composite": "bun run scripts/run-composite-benchmarks.mjs --profile smoke",
-    "test:composite:all": "bun run scripts/run-composite-benchmarks.mjs --all",
-    "test:composite:agent": "bun run scripts/run-composite-benchmarks.mjs --profile agent-core",
-    "test:composite:core-robust": "bun run scripts/run-composite-benchmarks.mjs --profile agent-robustness",
-    "test:composite:e2e": "bun run scripts/run-composite-benchmarks.mjs --profile agent-e2e",
-    "test:composite:external": "bun run scripts/run-composite-benchmarks.mjs --profile external --include-external",
+    "test:composite": "node scripts/run-composite-benchmarks.mjs --profile regression-hard",
+    "test:composite:smoke": "node scripts/run-composite-benchmarks.mjs --profile smoke",
+    "test:composite:all": "node scripts/run-composite-benchmarks.mjs --all",
+    "test:composite:agent": "node scripts/run-composite-benchmarks.mjs --profile agent-core",
+    "test:composite:multi-agent": "node scripts/run-composite-benchmarks.mjs --profile multi-agent-regression",
+    "test:composite:runtime-stress": "node scripts/run-composite-benchmarks.mjs --profile runtime-stress",
+    "test:composite:core-robust": "node scripts/run-composite-benchmarks.mjs --profile agent-robustness",
+    "test:composite:e2e": "node scripts/run-composite-benchmarks.mjs --profile agent-e2e",
+    "test:composite:external": "node scripts/run-composite-benchmarks.mjs --profile external --include-external",
+    "test:composite:external:strict": "node scripts/run-composite-benchmarks.mjs --profile external --include-external --fail-on-external-skip",
     "test:composite:external:claw-nonmulti": "node scripts/external/run-claw-bench-nonmulti.mjs",
     "test:browser": "node scripts/run-tests-sequential.mjs tests/browser-automation.test.ts tests/xiaohongshu-posting.test.ts tests/x-following-ai-learning-e2e.test.ts",
     "test:desktop": "bun test tests/desktop-full.test.ts",
@@ -48,12 +52,12 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",
     "@ai-sdk/openai": "^3.0.36",
-    "@mastra/core": "^1.17.0",
+    "@mastra/core": "1.24.1",
     "@mastra/fastembed": "^1.0.1",
-    "@mastra/libsql": "^1.7.2",
-    "@mastra/loggers": "^1.0.3",
-    "@mastra/mcp": "^1.3.1",
-    "@mastra/memory": "^1.10.0",
+    "@mastra/libsql": "1.8.0",
+    "@mastra/loggers": "1.1.1",
+    "@mastra/mcp": "1.4.2",
+    "@mastra/memory": "1.15.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@modelcontextprotocol/server-filesystem": "^2026.1.14",
@@ -62,7 +66,7 @@
     "express": "^4.22.1",
     "googleapis": "^133.0.0",
     "playwright": "^1.50.0",
-    "puppeteer": "^24.40.0",
+    "puppeteer": "^24.41.0",
     "yaml": "^2.8.2",
     "zod": "^3.23.8"
   },
@@ -86,5 +90,11 @@
   "engines": {
     "node": ">=22.22.1 <23",
     "bun": ">=1.2.0"
-  }
+  },
+  "directories": {
+    "test": "tests"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }

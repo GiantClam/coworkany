@@ -1,0 +1,8 @@
+DEDUPE_DONE removed=2 remaining=1
+
+Deduplication completed successfully:
+- Images found: 3
+- Similar groups: 1
+- Kept: img_a.png
+- Removed: img_b.png, img_c.png
+- Final count: 1 image remaining

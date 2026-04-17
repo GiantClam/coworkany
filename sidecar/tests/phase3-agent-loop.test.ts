@@ -8,6 +8,7 @@ import { coworker } from '../src/mastra/agents/coworker';
 import { coder } from '../src/mastra/agents/coder';
 import { researcher } from '../src/mastra/agents/researcher';
 import { supervisor } from '../src/mastra/agents/supervisor';
+import { supervisorSolo } from '../src/mastra/agents/supervisorSolo';
 import { chatResponder } from '../src/mastra/agents/chatResponder';
 import { getWorkspacePolicySnapshot } from '../src/mastra/workspace/runtime';
 import { resolveTelemetryPolicy } from '../src/mastra/telemetry';
@@ -20,6 +21,24 @@ import {
     hasWeatherInformationTool,
     resolveMissingApiKeyForModel,
 } from '../src/ipc/streaming';
+
+(
+    supervisorSolo as unknown as {
+        stream: (...args: unknown[]) => unknown;
+        generate: (...args: unknown[]) => unknown;
+    }
+).stream = ((...args: unknown[]) => (
+    supervisor.stream as unknown as (...streamArgs: unknown[]) => unknown
+)(...args));
+
+(
+    supervisorSolo as unknown as {
+        stream: (...args: unknown[]) => unknown;
+        generate: (...args: unknown[]) => unknown;
+    }
+).generate = ((...args: unknown[]) => (
+    supervisor.generate as unknown as (...generateArgs: unknown[]) => unknown
+)(...args));
 
 const echoTool = createTool({
     id: 'echo',

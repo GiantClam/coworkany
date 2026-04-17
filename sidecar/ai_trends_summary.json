@@ -1,0 +1,31 @@
+{
+  "analysis_date": "2026-04-16T12:47:54.661157",
+  "total_items": 6,
+  "categories": {
+    "Agentic AI": 1,
+    "Open Source AI": 1,
+    "AI Chips": 1,
+    "Physical AI": 1,
+    "AI Agents": 1,
+    "AI Safety": 1
+  },
+  "regions": {
+    "China": 4,
+    "Global": 1,
+    "US": 1
+  },
+  "top_keywords": {
+    "chip": 1,
+    "agentic AI": 1,
+    "RISC-V": 1,
+    "processor": 1,
+    "open-source": 1,
+    "China": 1,
+    "US": 1,
+    "competition": 1,
+    "semiconductor": 1,
+    "AI infrastructure": 1
+  },
+  "average_impact": 8.5,
+  "high_impact_count": 3
+}

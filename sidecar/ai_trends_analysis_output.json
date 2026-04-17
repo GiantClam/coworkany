@@ -1,0 +1,68 @@
+{
+  "analysis_date": "2026-04-15",
+  "investment_analysis": {
+    "total_investment_usd": 630000000000,
+    "total_investment_billion": 630.0,
+    "per_company_avg": 126000000000.0,
+    "analysis": "大型科技公司AI投资规模巨大，显示对AI长期价值的信心"
+  },
+  "market_dynamics": {
+    "chinese_opensource_penetration": "80.0%",
+    "growth_rate": "45.0%",
+    "market_shift": "开源模型正在重塑AI竞争格局",
+    "risk_level": "高",
+    "projected_next_year": "95.0%"
+  },
+  "technology_trends": {
+    "average_importance": 8.75,
+    "average_maturity": 6.75,
+    "average_growth_potential": 8.25,
+    "top_trend": "AI代理",
+    "highest_growth_potential": "AI代理",
+    "maturity_gap": 2.0,
+    "interpretation": "技术重要性高于成熟度，表明市场仍在快速发展阶段"
+  },
+  "trend_scores": [
+    {
+      "name": "AI代理",
+      "composite_score": 8.6,
+      "priority": "极高",
+      "recommendation": "早期投资机会，高风险高回报"
+    },
+    {
+      "name": "开源模型",
+      "composite_score": 8.5,
+      "priority": "极高",
+      "recommendation": "成熟市场，稳定回报"
+    },
+    {
+      "name": "专用芯片",
+      "composite_score": 8.0,
+      "priority": "高",
+      "recommendation": "持续观察"
+    },
+    {
+      "name": "基础设施",
+      "composite_score": 7.5,
+      "priority": "高",
+      "recommendation": "持续观察"
+    }
+  ],
+  "future_predictions": {
+    "year_1": {
+      "opensource_market_share": "95.0%",
+      "investment_projection": "$724B",
+      "key_milestone": "AI代理大规模商业化"
+    },
+    "year_2": {
+      "opensource_market_share": "95.0%",
+      "investment_projection": "$833B",
+      "key_milestone": "开源模型性能达到闭源水平"
+    },
+    "year_3": {
+      "opensource_market_share": "95.0%",
+      "investment_projection": "$958B",
+      "key_milestone": "AI基础设施瓶颈基本解决"
+    }
+  }
+}

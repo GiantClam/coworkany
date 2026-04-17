@@ -780,6 +780,38 @@
     color: var(--text-muted);
 }
 
+.subagent-select-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-element) 74%, var(--bg-panel));
+    padding: 4px 10px;
+}
+
+.subagent-select-icon {
+    font-family: var(--font-code);
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+}
+
+.subagent-select {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    min-width: 156px;
+    max-width: 360px;
+    font-family: var(--font-body);
+    outline: none;
+}
+
+.subagent-select:disabled {
+    color: var(--text-muted);
+}
+
 .lazy-fallback {
     padding: var(--space-4);
     color: var(--text-muted);
@@ -841,7 +873,13 @@
         max-width: 100%;
     }
 
-    .llm-select {
+    .input-actions-left .subagent-select-wrap {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .llm-select,
+    .subagent-select {
         min-width: 0;
         width: 100%;
     }
@@ -1143,7 +1181,8 @@
 }
 
 .input-mode-badge,
-.llm-select-wrap {
+.llm-select-wrap,
+.subagent-select-wrap {
     background: color-mix(in srgb, var(--bg-element) 94%, transparent);
     border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent);
 }

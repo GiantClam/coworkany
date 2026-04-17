@@ -1,0 +1,20 @@
+Screenshot Capture Report
+========================
+
+URL: https://example.com
+Timestamp: 2026-04-15 16:53
+Status: Success
+
+Page Information:
+- Title: Example Domain
+- Content: "This domain is for use in documentation examples without needing permission."
+- Page verified and accessible
+
+Screenshot Details:
+- Filename: example_com_screenshot.png
+- Resolution: 1920x1080
+- File size: 21KB
+- Format: PNG
+- Location: /Users/beihuang/Documents/github/coworkany/sidecar/example_com_screenshot.png
+
+Capture Method: Chrome Headless (--headless --disable-gpu)

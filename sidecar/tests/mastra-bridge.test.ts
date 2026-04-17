@@ -247,4 +247,72 @@ describe('mastra bridge mapping', () => {
             isError: true,
         });
     });
+
+    test('maps agent-start lifecycle chunks as agent_task_notification tool_call', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'agent-execution-event-agent-start',
+            payload: {
+                agentId: 'agent-123',
+                summary: 'Agent task started',
+            },
+        }, 'run-11');
+
+        expect(event).toEqual({
+            type: 'tool_call',
+            runId: 'run-11',
+            toolName: 'agent_task_notification',
+            args: {
+                taskId: 'agent-123',
+                status: 'running',
+                summary: 'Agent task started',
+                xml: `<task-notification>
+<task-id>agent-123</task-id>
+<status>running</status>
+<summary>Agent task started</summary>
+</task-notification>`,
+            },
+        });
+    });
+
+    test('maps agent-finish lifecycle chunks as agent_task_notification tool_result', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'agent-execution-event-agent-finish',
+            payload: {
+                taskId: 'agent-a1b',
+                summary: 'Agent completed auth investigation',
+                result: 'Found issue in src/auth/validate.ts:42',
+                usage: {
+                    total_tokens: 118,
+                    tool_uses: 2,
+                    duration_ms: 540,
+                },
+            },
+        }, 'run-12');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-12',
+            toolCallId: 'agent-task:agent-a1b',
+            toolName: 'agent_task_notification',
+            result: {
+                taskId: 'agent-a1b',
+                status: 'completed',
+                summary: 'Agent completed auth investigation',
+                result: 'Found issue in src/auth/validate.ts:42',
+                usage: {
+                    totalTokens: 118,
+                    toolUses: 2,
+                    durationMs: 540,
+                },
+                xml: `<task-notification>
+<task-id>agent-a1b</task-id>
+<status>completed</status>
+<summary>Agent completed auth investigation</summary>
+<result>Found issue in src/auth/validate.ts:42</result>
+<usage><total_tokens>118</total_tokens><tool_uses>2</tool_uses><duration_ms>540</duration_ms></usage>
+</task-notification>`,
+            },
+            isError: false,
+        });
+    });
 });

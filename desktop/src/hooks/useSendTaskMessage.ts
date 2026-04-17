@@ -15,6 +15,13 @@ export interface SendTaskMessageInput {
     bypassDedup?: boolean;
 }
 
+export interface SendSubagentMessageInput {
+    taskId: string;
+    subagentTaskId: string;
+    content: string;
+    config?: StartTaskConfig;
+}
+
 export interface SendTaskMessageResult {
     success: boolean;
     taskId: string;
@@ -22,6 +29,18 @@ export interface SendTaskMessageResult {
     queuePosition?: number;
     deduplicated?: boolean;
     dedupReason?: string;
+    error?: string;
+}
+
+export interface SendSubagentMessageResult {
+    success: boolean;
+    taskId: string;
+    turnId?: string;
+    queuePosition?: number;
+    deduplicated?: boolean;
+    dedupReason?: string;
+    availableSubagentTaskIds?: string[];
+    details?: Record<string, unknown>;
     error?: string;
 }
 
@@ -91,6 +110,59 @@ export function useSendTaskMessage() {
 
     return {
         sendMessage,
+        isLoading,
+        error,
+    };
+}
+
+export function useSendSubagentMessage() {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const sendSubagentMessage = useCallback(
+        async (input: SendSubagentMessageInput): Promise<SendSubagentMessageResult | null> => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const result = await invoke<SendSubagentMessageResult>('send_subagent_message', { input });
+                if (!result.success && isQueuedTimeoutError(result.error)) {
+                    console.warn('[useSendSubagentMessage] Timeout acknowledged as queued delivery:', result.error);
+                    return {
+                        success: true,
+                        taskId: result.taskId || input.taskId,
+                        error: undefined,
+                    };
+                }
+                if (!result.success && result.error) {
+                    setError(result.error);
+                }
+                return result;
+            } catch (e) {
+                const errorMessage = e instanceof Error ? e.message : String(e);
+                if (isQueuedTimeoutError(errorMessage)) {
+                    console.warn('[useSendSubagentMessage] Timeout exception treated as queued delivery:', errorMessage);
+                    return {
+                        success: true,
+                        taskId: input.taskId,
+                        error: undefined,
+                    };
+                }
+                setError(errorMessage);
+                console.error('[useSendSubagentMessage] Error:', e);
+                return {
+                    success: false,
+                    taskId: input.taskId,
+                    error: errorMessage,
+                };
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        []
+    );
+
+    return {
+        sendSubagentMessage,
         isLoading,
         error,
     };

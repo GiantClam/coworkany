@@ -1,135 +1,173 @@
 {
-  "report_date": "2026-04-13T11:08:21.690606",
-  "source_data": {
-    "report_date": "2025-04",
-    "data_sources": 20,
-    "recency_days": 30,
-    "technology_trends": [
-      {
-        "name": "智能代理 (Agentic AI)",
-        "priority": 1,
-        "maturity": "emerging",
-        "growth_rate": "high",
-        "mentions": 8,
-        "key_players": [
-          "OpenAI",
-          "Anthropic",
-          "各大科技公司"
-        ],
-        "applications": [
-          "自主编码",
-          "任务规划",
-          "工具集成"
-        ]
-      },
-      {
-        "name": "多模态AI (Multimodal AI)",
-        "priority": 2,
-        "maturity": "growing",
-        "growth_rate": "high",
-        "mentions": 6,
-        "key_players": [
-          "OpenAI",
-          "Google",
-          "Meta"
-        ],
-        "applications": [
-          "文本图像处理",
-          "语音识别",
-          "视频分析"
-        ]
-      },
-      {
-        "name": "推理模型 (Reasoning Models)",
-        "priority": 3,
-        "maturity": "emerging",
-        "growth_rate": "medium",
-        "mentions": 5,
-        "key_players": [
-          "DeepSeek",
-          "OpenAI",
-          "研究机构"
-        ],
-        "applications": [
-          "复杂问题解决",
-          "逻辑推理",
-          "决策支持"
-        ]
-      },
-      {
-        "name": "大语言模型 (LLM)",
-        "priority": 4,
-        "maturity": "mature",
-        "growth_rate": "medium",
-        "mentions": 10,
-        "key_players": [
-          "OpenAI",
-          "Anthropic",
-          "Google",
-          "Meta"
-        ],
-        "applications": [
-          "内容生成",
-          "对话系统",
-          "代码辅助"
-        ]
-      },
-      {
-        "name": "AI基础设施",
-        "priority": 5,
-        "maturity": "growing",
-        "growth_rate": "very_high",
-        "mentions": 7,
-        "key_players": [
-          "Nvidia",
-          "TSMC",
-          "云服务商"
-        ],
-        "applications": [
-          "数据中心",
-          "AI芯片",
-          "云计算"
-        ]
-      }
-    ],
-    "market_data": {
-      "infrastructure_investment_billion": 630,
-      "tsmc_revenue_growth_percent": 35,
-      "ai_stocks_outperform_years": 3,
-      "data_center_power_demand": "快速增长"
-    },
-    "challenges": [
-      {
-        "name": "需求不确定性",
-        "severity": "high",
-        "impact": "投资回报"
-      },
-      {
-        "name": "能源消耗",
-        "severity": "high",
-        "impact": "环境可持续性"
-      },
-      {
-        "name": "领域特定推理",
-        "severity": "medium",
-        "impact": "技术能力"
-      },
-      {
-        "name": "成本控制",
-        "severity": "medium",
-        "impact": "商业化"
-      }
-    ],
-    "timeline": {
-      "2024": "推理型AI主导",
-      "2025": "自主代理崛起",
-      "2026": "新一代AI能力预测"
-    }
+  "生成时间": "2026-04-16T01:35:21.361775",
+  "数据条目数": 10,
+  "类别分析": {
+    "AI Agents": 1,
+    "Open Source": 1,
+    "AI Chips": 2,
+    "Infrastructure": 1,
+    "Investment": 1,
+    "Funding": 1,
+    "AI Models": 1,
+    "Organization": 1,
+    "Vertical Application": 1
   },
-  "statistics": {
-    "total_trends": 5,
-    "total_mentions": 36,
-    "avg_mentions": 7.2,
-    "high_growth_count": 3
-  }
+  "地区分析": {
+    "China": 2,
+    "Global": 4,
+    "US": 4
+  },
+  "公司分析": {
+    "Baidu": 1,
+    "US Advisory": 1,
+    "Alibaba": 1,
+    "Energy Sector": 1,
+    "Arm": 1,
+    "Big Tech": 1,
+    "OpenAI": 1,
+    "Meta": 2,
+    "Amazon": 1
+  },
+  "影响力统计": {
+    "平均影响力": 8.2,
+    "最高影响力": 10,
+    "最低影响力": 7,
+    "中位数": 8.0,
+    "标准差": 1.14
+  },
+  "投资分析": {
+    "总投资额（美元）": 752000000000,
+    "总投资额（十亿美元）": 752.0,
+    "投资事件数": 2,
+    "投资详情": [
+      {
+        "公司": "Big Tech",
+        "金额（十亿美元）": 630.0,
+        "日期": "2026-03-26"
+      },
+      {
+        "公司": "OpenAI",
+        "金额（十亿美元）": 122.0,
+        "日期": "2026-04-01"
+      }
+    ]
+  },
+  "时间线": [
+    {
+      "日期": "2026-03-17",
+      "公司": "Baidu",
+      "事件": "发布OpenClaw AI代理产品",
+      "类别": "AI Agents",
+      "影响力": 8
+    },
+    {
+      "日期": "2026-03-23",
+      "公司": "US Advisory",
+      "事件": "警告中国开源AI威胁",
+      "类别": "Open Source",
+      "影响力": 9
+    },
+    {
+      "日期": "2026-03-24",
+      "公司": "Alibaba",
+      "事件": "发布XuanTie C950处理器",
+      "类别": "AI Chips",
+      "影响力": 7
+    },
+    {
+      "日期": "2026-03-24",
+      "公司": "Energy Sector",
+      "事件": "AI需求推动长时储能部署",
+      "类别": "Infrastructure",
+      "影响力": 8
+    },
+    {
+      "日期": "2026-03-25",
+      "公司": "Arm",
+      "事件": "新AI芯片预计带来数十亿收入",
+      "类别": "AI Chips",
+      "影响力": 8
+    },
+    {
+      "日期": "2026-03-26",
+      "公司": "Big Tech",
+      "事件": "AI投资达6300亿美元",
+      "类别": "Investment",
+      "影响力": 10
+    },
+    {
+      "日期": "2026-04-01",
+      "公司": "OpenAI",
+      "事件": "完成1220亿美元融资",
+      "类别": "Funding",
+      "影响力": 10
+    },
+    {
+      "日期": "2026-04-08",
+      "公司": "Meta",
+      "事件": "发布Muse Spark模型",
+      "类别": "AI Models",
+      "影响力": 8
+    },
+    {
+      "日期": "2026-04-09",
+      "公司": "Meta",
+      "事件": "组建新AI工程组织",
+      "类别": "Organization",
+      "影响力": 7
+    },
+    {
+      "日期": "2026-04-14",
+      "公司": "Amazon",
+      "事件": "推出Amazon Bio Discovery",
+      "类别": "Vertical Application",
+      "影响力": 7
+    }
+  ],
+  "Top趋势": [
+    {
+      "date": "2026-03-26",
+      "company": "Big Tech",
+      "category": "Investment",
+      "event": "AI投资达6300亿美元",
+      "impact_score": 10,
+      "region": "Global",
+      "investment_usd": 630000000000
+    },
+    {
+      "date": "2026-04-01",
+      "company": "OpenAI",
+      "category": "Funding",
+      "event": "完成1220亿美元融资",
+      "impact_score": 10,
+      "region": "US",
+      "investment_usd": 122000000000,
+      "valuation_usd": 852000000000
+    },
+    {
+      "date": "2026-03-23",
+      "company": "US Advisory",
+      "category": "Open Source",
+      "event": "警告中国开源AI威胁",
+      "impact_score": 9,
+      "region": "Global",
+      "detail": "80%美国初创公司使用中国开源模型"
+    },
+    {
+      "date": "2026-03-17",
+      "company": "Baidu",
+      "category": "AI Agents",
+      "event": "发布OpenClaw AI代理产品",
+      "impact_score": 8,
+      "region": "China"
+    },
+    {
+      "date": "2026-03-24",
+      "company": "Energy Sector",
+      "category": "Infrastructure",
+      "event": "AI需求推动长时储能部署",
+      "impact_score": 8,
+      "region": "Global"
+    }
+  ]
 }

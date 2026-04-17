@@ -82,6 +82,20 @@ describe('runtime model resolver', () => {
         })).toBe(false);
     });
 
+    test('keeps native anthropic path when explicit anthropic model conflicts with openai-compatible profile provider', () => {
+        process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+        process.env.OPENAI_BASE_URL = 'https://aiberm.com/v1';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.COWORKANY_LLM_CONFIG_PROVIDER = 'aiberm';
+
+        expect(shouldUseOpenAICompatibleChatModel({
+            modelId: 'anthropic/claude-sonnet-4-5',
+            openAiBaseUrl: 'https://aiberm.com/v1',
+            llmConfigProvider: 'aiberm',
+        })).toBe(false);
+        expect(resolveRuntimeModelConfig()).toBe('anthropic/claude-sonnet-4-5');
+    });
+
     test('returns openai-compatible config for aiberm claude runtime', () => {
         process.env.COWORKANY_MODEL = 'aiberm/claude-sonnet-4-6';
         process.env.OPENAI_BASE_URL = 'https://aiberm.com/v1';
