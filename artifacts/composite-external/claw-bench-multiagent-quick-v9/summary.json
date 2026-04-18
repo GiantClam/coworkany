@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 15.82,
+    "overall_raw": 15.82,
+    "overall_effective": 15.82,
+    "tasks_total": 3,
+    "tasks_passed": 0,
+    "tasks_failed": 3,
+    "tasks_errored": 2,
+    "tasks_invalid": 0,
+    "tasks_effective_total": 3,
+    "tasks_effective_passed": 0,
+    "tasks_effective_failed": 3,
+    "pass_rate": 0,
+    "pass_rate_effective": 0
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 0,
+    "other_error": 2,
+    "total_errors": 2
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "mag-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "mag-003",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "mag-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition",
+        "invalidReasons": []
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "mag-002",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.1111,
+      "duration_s": 58.52,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".FFFFFFFF                                                                [100%]\n=================================== FAILURES ===================================\n___________________________ test_pro_argument_exists ___________________________\nverifier/test_output.py:38: in test_pro_argument_exists\n    assert _word_count(f.read_text()) >= 250, \"Pro argument too short (need >= 250 words)\"\nE   AssertionError: Pro argument too short (need >= 250 words)\nE   assert 15 >= 250\nE    +  where 15 = _word_count('Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n')\nE    +    where 'Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n' = read_text()\nE    +      where read_text = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/pro_argument.md').read_text\n___________________________ test_con_argument_exists ___________________________\nverifier/test_output.py:45: in test_con_argument_exists\n    assert _word_count(f.read_text()) >= 250, \"Con argument too short (need >= 250 words)\"\nE   AssertionError: Con argument too short (need >= 250 words)\nE   assert 15 >= 250\nE    +  where 15 = _word_count('Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n')\nE    +    where 'Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n' = read_text()\nE    +      where read_text = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/con_argument.md').read_text\n_____________________________ test_rebuttals_exist _____________________________\nverifier/test_output.py:53: in test_rebuttals_exist\n    assert _word_count(f.read_text()) >= 100, f\"{name} too short\"\nE   AssertionError: rebuttal_pro.md too short\nE   assert 15 >= 100\nE    +  where 15 = _word_count('Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n')\nE    +    where 'Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n' = read_text()\nE    +      where read_text = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/rebuttal_pro.md').read_text\n____________________________ test_synthesis_exists _____________________________\nverifier/test_output.py:60: in test_synthesis_exists\n    assert _word_count(f.read_text()) >= 200, \"Synthesis too short\"\nE   AssertionError: Synthesis too short\nE   assert 15 >= 200\nE    +  where 15 = _word_count('Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n')\nE    +    where 'Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n' = read_text()\nE    +      where read_text = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/synthesis.md').read_text\n_____________________ test_pro_con_substantive_difference ______________________\nverifier/test_output.py:71: in test_pro_con_substantive_difference\n    assert overlap < 0.35, f\"Pro and Con overlap too high ({overlap:.2%}); must be < 35%\"\nE   AssertionError: Pro and Con overlap too high (100.00%); must be < 35%\nE   assert 1.0 < 0.35\n______________________ test_rebuttals_reference_opposing _______________________\nverifier/test_output.py:81: in test_rebuttals_reference_opposing\n    assert any(w in rebuttal_pro for w in [\"con \", \"against\", \"opponent\", \"counter\", \"however\", \"disagree\"]), \\\nE   AssertionError: Pro rebuttal doesn't seem to reference the opposing argument\nE   assert False\nE    +  where False = any(<generator object test_rebuttals_reference_opposing.<locals>.<genexpr> at 0x106129d80>)\n_____________________________ test_final_analysis ______________________________\nverifier/test_output.py:94: in test_final_analysis\n    assert _word_count(content) >= 400, \"Final analysis too short (need >= 400 words)\"\nE   AssertionError: Final analysis too short (need >= 400 words)\nE   assert 15 >= 400\nE    +  where 15 = _word_count('Implemented and verified:\\n- `workspace/debate/pro_argument.md`\\n- `workspace/debate/con_argument.md`\\n- `workspace/d...rebuttal_pro.md`\\n- `workspace/debate/rebuttal_con.md`\\n- `workspace/debate/synthesis.md`\\n- `workspace/analysis.md`\\n')\n_____________________ test_analysis_references_both_sides ______________________\nverifier/test_output.py:113: in test_analysis_references_both_sides\n    assert has_pro >= 2, \"Analysis doesn't sufficiently represent the pro side\"\nE   AssertionError: Analysis doesn't sufficiently represent the pro side\nE   assert 1 >= 2\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_pro_argument_exists - AssertionError: Pr...\nFAILED verifier/test_output.py::test_con_argument_exists - AssertionError: Co...\nFAILED verifier/test_output.py::test_rebuttals_exist - AssertionError: rebutt...\nFAILED verifier/test_output.py::test_synthesis_exists - AssertionError: Synth...\nFAILED verifier/test_output.py::test_pro_con_substantive_difference - Asserti...\nFAILED verifier/test_output.py::test_rebuttals_reference_opposing - Assertion...\nFAILED verifier/test_output.py::test_final_analysis - AssertionError: Final a...\nFAILED verifier/test_output.py::test_analysis_references_both_sides - Asserti...\n8 failed, 1 passed in 0.04s"
+    },
+    {
+      "task_id": "mag-003",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.3636,
+      "duration_s": 59.29,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "missing_required_output_files:/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage1_clean.csv,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage2_features.csv,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage3_stats.json",
+      "error_type": "other_error",
+      "skills_mode": "vanilla",
+      "details": ".FFF...FFFF                                                              [100%]\n=================================== FAILURES ===================================\n______________________________ test_stage1_output ______________________________\nverifier/test_output.py:24: in test_stage1_output\n    assert f.exists(), \"stage1_clean.csv missing\"\nE   AssertionError: stage1_clean.csv missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage1_clean.csv').exists\n______________________________ test_stage2_output ______________________________\nverifier/test_output.py:34: in test_stage2_output\n    assert f.exists(), \"stage2_features.csv missing\"\nE   AssertionError: stage2_features.csv missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage2_features.csv').exists\n______________________________ test_stage3_output ______________________________\nverifier/test_output.py:45: in test_stage3_output\n    assert f.exists(), \"stage3_stats.json missing\"\nE   AssertionError: stage3_stats.json missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage3_stats.json').exists\n_____________________________ test_logs_mention_io _____________________________\nverifier/test_output.py:84: in test_logs_mention_io\n    assert \"output\" in content or \"write\" in content or \"produce\" in content, \\\nE   AssertionError: stage1_log doesn't mention output\nE   assert ('output' in 'i can’t access tools in this turn to actually create and verify workspace files. without tool execution, i would be f...hs,\\n- fills each with substantive stage-specific content,\\n- and verifies each file is non-empty before finalizing.\\n' or 'write' in 'i can’t access tools in this turn to actually create and verify workspace files. without tool execution, i would be f...hs,\\n- fills each with substantive stage-specific content,\\n- and verifies each file is non-empty before finalizing.\\n' or 'produce' in 'i can’t access tools in this turn to actually create and verify workspace files. without tool execution, i would be f...hs,\\n- fills each with substantive stage-specific content,\\n- and verifies each file is non-empty before finalizing.\\n')\n___________________________ test_dates_standardized ____________________________\nverifier/test_output.py:93: in test_dates_standardized\n    rows = list(csv.DictReader(f.open()))\n                               ^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage1_clean.csv'\n_____________________________ test_amounts_numeric _____________________________\nverifier/test_output.py:105: in test_amounts_numeric\n    rows = list(csv.DictReader(f.open()))\n                               ^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage1_clean.csv'\n_________________________ test_report_has_real_numbers _________________________\nverifier/test_output.py:120: in test_report_has_real_numbers\n    assert len(numbers) >= 5, \"Report should contain at least 5 numeric values from the analysis\"\nE   AssertionError: Report should contain at least 5 numeric values from the analysis\nE   assert 1 >= 5\nE    +  where 1 = len(['9'])\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_stage1_output - AssertionError: stage1_c...\nFAILED verifier/test_output.py::test_stage2_output - AssertionError: stage2_f...\nFAILED verifier/test_output.py::test_stage3_output - AssertionError: stage3_s...\nFAILED verifier/test_output.py::test_logs_mention_io - AssertionError: stage1...\nFAILED verifier/test_output.py::test_dates_standardized - FileNotFoundError: ...\nFAILED verifier/test_output.py::test_amounts_numeric - FileNotFoundError: [Er...\nFAILED verifier/test_output.py::test_report_has_real_numbers - AssertionError...\n7 failed, 4 passed in 0.06s"
+    },
+    {
+      "task_id": "mag-004",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0,
+      "duration_s": 51.59,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "missing_required_output_files:/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/orchestration/task_plan.json,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/orchestration/integration_log.md",
+      "error_type": "other_error",
+      "skills_mode": "vanilla",
+      "details": "FFFFFFFFFF                                                               [100%]\n=================================== FAILURES ===================================\n____________________________ test_task_plan_exists _____________________________\nverifier/test_output.py:21: in test_task_plan_exists\n    assert f.exists(), \"task_plan.json missing\"\nE   AssertionError: task_plan.json missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/orchestration/task_plan.json').exists\n____________________________ test_agent_logs_exist _____________________________\nverifier/test_output.py:33: in test_agent_logs_exist\n    assert len(logs) >= 3, f\"Need >= 3 agent logs, found {len(logs)}\"\nE   AssertionError: Need >= 3 agent logs, found 0\nE   assert 0 >= 3\nE    +  where 0 = len([])\n_____________________________ test_integration_log _____________________________\nverifier/test_output.py:42: in test_integration_log\n    assert f.exists(), \"integration_log.md missing\"\nE   AssertionError: integration_log.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/orchestration/integration_log.md').exists\n__________________________ test_project_source_exists __________________________\nverifier/test_output.py:57: in test_project_source_exists\n    assert len(py_files) >= 1, \"No Python source files in project/\"\nE   AssertionError: No Python source files in project/\nE   assert 0 >= 1\nE    +  where 0 = len([])\n______________________________ test_readme_exists ______________________________\nverifier/test_output.py:66: in test_readme_exists\n    assert readme.exists(), \"README.md missing in project/\"\nE   AssertionError: README.md missing in project/\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/project/readme.md').exists\n_______________________________ test_tests_exist _______________________________\nverifier/test_output.py:78: in test_tests_exist\n    assert len(test_files) >= 1, \"No test files found in project/\"\nE   AssertionError: No test files found in project/\nE   assert 0 >= 1\nE    +  where 0 = len([])\n____________________________ test_cli_add_and_list _____________________________\nverifier/test_output.py:103: in test_cli_add_and_list\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n________________________________ test_cli_done _________________________________\nverifier/test_output.py:121: in test_cli_done\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n_______________________________ test_cli_remove ________________________________\nverifier/test_output.py:134: in test_cli_remove\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n___________________________ test_cli_error_handling ____________________________\nverifier/test_output.py:146: in test_cli_error_handling\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_task_plan_exists - AssertionError: task_...\nFAILED verifier/test_output.py::test_agent_logs_exist - AssertionError: Need ...\nFAILED verifier/test_output.py::test_integration_log - AssertionError: integr...\nFAILED verifier/test_output.py::test_project_source_exists - AssertionError: ...\nFAILED verifier/test_output.py::test_readme_exists - AssertionError: README.m...\nFAILED verifier/test_output.py::test_tests_exist - AssertionError: No test fi...\nFAILED verifier/test_output.py::test_cli_add_and_list - AssertionError: Canno...\nFAILED verifier/test_output.py::test_cli_done - AssertionError: Cannot find m...\nFAILED verifier/test_output.py::test_cli_remove - AssertionError: Cannot find...\nFAILED verifier/test_output.py::test_cli_error_handling - AssertionError: Can...\n10 failed in 0.05s"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/gpt-5.3-codex",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

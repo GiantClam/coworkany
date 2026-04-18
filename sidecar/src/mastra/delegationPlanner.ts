@@ -44,11 +44,11 @@ const ROLE_PATTERNS: Array<{ roleId: DelegationRoleId; pattern: RegExp }> = [
 
 const ROLE_DEFAULT_OBJECTIVES: Record<DelegationRoleId, string> = {
     planner: 'Define concrete task decomposition, ordering, and ownership boundaries.',
-    researcher: 'Collect primary evidence and constraints needed for implementation decisions.',
+    researcher: 'Collect primary evidence and constraints needed for implementation decisions; prioritize workspace/local inputs unless external web research is explicitly required.',
     developer: 'Implement changes within assigned scope and produce concrete artifacts.',
     reviewer: 'Review implementation for regressions, correctness, and maintainability risks.',
     tester: 'Validate behavior with focused tests and report reproducible failures.',
-    analyst: 'Evaluate tradeoffs, risk profile, and acceptance criteria coverage.',
+    analyst: 'Evaluate tradeoffs, risk profile, and acceptance criteria coverage using available task/workspace evidence first.',
     synthesizer: 'Integrate role outputs into a coherent final result with evidence.',
 };
 

@@ -1746,7 +1746,7 @@ const TASK_SUMMARY_MIN_CHARS = 100;
 const TASK_PROGRESS_IDLE_TERMINAL_NON_WEB_MS = 70_000;
 const TASK_PROGRESS_IDLE_TERMINAL_WEB_MS = 170_000;
 const TASK_EXECUTION_HEARTBEAT_INTERVAL_MS = 20_000;
-const SHELL_MUTATION_OR_HIGH_RISK_PATTERN = /\b(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b|[><]|\$\(.*\)|`.*`|;\s*|&&\s*(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b/i;
+const SHELL_MUTATION_OR_HIGH_RISK_PATTERN = /\b(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b|[><]|\$\(.*\)|`.*`|&&\s*(rm|mv|cp|mkdir|touch|chmod|chown|ln|truncate|dd|mkfs|mount|umount|sudo|npm|pnpm|yarn|pip|brew)\b/i;
 const READ_ONLY_PIPELINE_COMMANDS = new Set([
     'rg',
     'curl',
@@ -1780,6 +1780,7 @@ const READ_ONLY_PIPELINE_COMMANDS = new Set([
     'printf',
     'echo',
     'xargs',
+    'command',
 ]);
 function buildMissingTerminalRecoverySummary(options: {
     evidenceSatisfied: boolean;
@@ -1838,7 +1839,7 @@ function isLowRiskReadOnlyWorkspaceCommand(command: string): boolean {
     if (SHELL_MUTATION_OR_HIGH_RISK_PATTERN.test(normalized)) {
         return false;
     }
-    const segments = normalized.split(/\||&&/).map((segment) => segment.trim()).filter((segment) => segment.length > 0);
+    const segments = splitShellSegments(normalized);
     if (segments.length === 0) {
         return false;
     }
@@ -1860,6 +1861,61 @@ function isLowRiskReadOnlyWorkspaceCommand(command: string): boolean {
         }
     }
     return true;
+}
+
+function splitShellSegments(command: string): string[] {
+    const segments: string[] = [];
+    let current = '';
+    let quote: '\'' | '"' | '`' | null = null;
+    let escaped = false;
+    for (let index = 0; index < command.length; index += 1) {
+        const char = command[index] ?? '';
+        const next = command[index + 1] ?? '';
+        if (escaped) {
+            current += char;
+            escaped = false;
+            continue;
+        }
+        if (char === '\\' && quote !== '\'') {
+            current += char;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            current += char;
+            if (char === quote) {
+                quote = null;
+            }
+            continue;
+        }
+        if (char === '\'' || char === '"' || char === '`') {
+            current += char;
+            quote = char;
+            continue;
+        }
+        if (
+            char === ';'
+            || (char === '|' && next === '|')
+            || (char === '&' && next === '&')
+            || char === '|'
+        ) {
+            const segment = current.trim();
+            if (segment.length > 0) {
+                segments.push(segment);
+            }
+            current = '';
+            if ((char === '|' && next === '|') || (char === '&' && next === '&')) {
+                index += 1;
+            }
+            continue;
+        }
+        current += char;
+    }
+    const finalSegment = current.trim();
+    if (finalSegment.length > 0) {
+        segments.push(finalSegment);
+    }
+    return segments;
 }
 
 function splitShellTokens(command: string): string[] {
@@ -5212,6 +5268,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
 
                 let pendingEmitChain: Promise<void> = Promise.resolve();
                 let pendingEmitError: unknown;
+                const hasToolingEvidenceForTurn = (): boolean => (
+                    hasToolingProgress
+                    || getTaskTurnObservedToolNames(turnEventStateKey).length > 0
+                );
                 const enqueueEmitDesktopEvent = (event: DesktopEvent): void => {
                     pendingEmitChain = pendingEmitChain
                         .then(async () => {
@@ -5425,14 +5485,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         }
                         if (event.type === 'error' && isRetryableRuntimeStreamError(event.message)) {
                             const hasRecoverableStreamProgress = (
-                                hasToolingProgress
+                                hasToolingEvidenceForTurn()
                                 || (!hasAssistantNarrative && (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask()))
                             );
                             if (!hasRecoverableStreamProgress) {
                                 enqueueEmitDesktopEvent(event);
                                 return;
                             }
-                            if (hasToolingProgress) {
+                            if (hasToolingEvidenceForTurn()) {
                                 sawRetryableNoNarrativeErrorAfterToolingProgress = true;
                             }
                             if (!hasAssistantNarrative && (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask())) {
@@ -5633,7 +5693,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     }
                     return;
                 }
-                if (!hasTerminalEvent && !assistantNarrativeSeen && hasToolingProgress && !(awaitingUserApproval && hasPendingApproval)) {
+                if (!hasTerminalEvent && !assistantNarrativeSeen && hasToolingEvidenceForTurn() && !(awaitingUserApproval && hasPendingApproval)) {
                     if (sawAutoApprovalRequired && !awaitingUserApproval) {
                         if (hasAutoApprovalInFlightForTask()) {
                             if (!sawRetryableNoNarrativeErrorDuringAutoApproval) {
@@ -6655,6 +6715,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 resolveTaskResourceId,
                 upsertTaskState,
                 appendTranscript,
+                listTaskTranscriptEntries: (taskId, limit) => (
+                    deps.taskTranscriptStore?.list(taskId, limit).map((entry) => ({
+                        role: entry.role,
+                        content: entry.content,
+                    })) ?? []
+                ),
                 applyPolicyDecision,
                 emitCurrentInvalidPayload,
                 emitCurrent,

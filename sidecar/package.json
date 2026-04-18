@@ -42,6 +42,7 @@
     "test:composite:external": "node scripts/run-composite-benchmarks.mjs --profile external --include-external",
     "test:composite:external:strict": "node scripts/run-composite-benchmarks.mjs --profile external --include-external --fail-on-external-skip",
     "test:composite:external:claw-nonmulti": "node scripts/external/run-claw-bench-nonmulti.mjs",
+    "serve:claw-agent": "bun scripts/external/claw-agent-server.ts",
     "test:browser": "node scripts/run-tests-sequential.mjs tests/browser-automation.test.ts tests/xiaohongshu-posting.test.ts tests/x-following-ai-learning-e2e.test.ts",
     "test:desktop": "bun test tests/desktop-full.test.ts",
     "test:all": "npm run test:stable && npm run test:agent:core && npm run test:agent:scenarios && npm run test:agent:research && npm run test:browser && npm run test:desktop",

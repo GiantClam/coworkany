@@ -74,6 +74,11 @@ type TaskCapabilityGateResult = {
     summary?: string;
 };
 
+type TaskTranscriptHistoryEntry = {
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+};
+
 type HandleStartOrSendTaskCommandInput = {
     commandType: string;
     commandId: string;
@@ -115,6 +120,7 @@ type HandleStartOrSendTaskCommandInput = {
         patch: Partial<TaskRuntimeState>,
     ) => TaskRuntimeState;
     appendTranscript: (taskId: string, role: 'user' | 'assistant' | 'system', content: string) => void;
+    listTaskTranscriptEntries?: (taskId: string, limit?: number) => TaskTranscriptHistoryEntry[];
     applyPolicyDecision: (input: {
         requestId: string;
         action: 'task_command' | 'forward_command' | 'approval_result';
@@ -244,6 +250,68 @@ const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_MODERATE = 2;
 const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_COMPLEX = 3;
 const RETRY_COMPLEXITY_CHAIN_PATTERN = /\b(first|then|after\s+that|next|finally|and\s+then)\b|先|然后|接着|随后|之后|再(?:执行|做|进行)?/iu;
 const RETRY_COMPLEXITY_PARALLEL_PATTERN = /\b(parallel|concurrently|simultaneously|in\s+parallel)\b|并行|同时/iu;
+const RESOLVED_ATTACHMENTS_HEADER_PATTERN = /^\s*\[Resolved attachments\]\s*$/iu;
+const RESOLVED_ATTACHMENT_LIST_ITEM_PATTERN = /^\s*-\s+(?:\/|~\/|[A-Za-z]:\\|[A-Za-z0-9._-]+[\\/]).+/u;
+const ATTACHMENT_CONTEXT_REFERENCE_PATTERN = /\b(?:above|previous|earlier|prior|these|those|same)\b|上述|以上|上面|前面|前面的|之前|刚才|这些|那些|这几张|那几张|这批|那批|同一批/u;
+const ATTACHMENT_OBJECT_REFERENCE_PATTERN = /\b(?:image|images|picture|pictures|photo|photos|screenshot|screenshots|file|files|attachment|attachments)\b|图片|照片|截图|文件|附件/u;
+const ATTACHMENT_DERIVATIVE_ACTION_PATTERN = /(?:\b(convert|transcode|re-?encode|compress|resize|crop|rotate|merge|split|extract|export|transform)\b|转(?:换|成|为)|改成|变成|另存为|导出(?:为)?|压缩|缩放|裁剪|旋转|合并|拆分|提取|生成)/iu;
+const ATTACHMENT_MEDIA_TARGET_PATTERN = /\b(video|image|images|picture|pictures|photo|photos|screenshot|screenshots|gif|png|jpe?g|webp|heic|pdf|mp4|mov|avi|mkv|audio|voice|wav|mp3)\b|视频|图片|照片|截图|附件|文件|音频|语音|动图|png|jpg|jpeg|webp|heic|pdf|mp4|mov|avi|mkv|wav|mp3/iu;
+
+function extractResolvedAttachmentBlock(message: string | undefined): string | null {
+    if (typeof message !== 'string' || message.trim().length === 0) {
+        return null;
+    }
+    const lines = message.split(/\r?\n/u);
+    const attachmentLines: string[] = [];
+    let inAttachmentBlock = false;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (RESOLVED_ATTACHMENTS_HEADER_PATTERN.test(trimmed)) {
+            inAttachmentBlock = true;
+            continue;
+        }
+        if (!inAttachmentBlock) {
+            continue;
+        }
+        if (!trimmed) {
+            continue;
+        }
+        if (!RESOLVED_ATTACHMENT_LIST_ITEM_PATTERN.test(trimmed)) {
+            break;
+        }
+        attachmentLines.push(trimmed);
+    }
+    if (attachmentLines.length === 0) {
+        return null;
+    }
+    return ['[Resolved attachments]', ...attachmentLines].join('\n');
+}
+
+function inheritResolvedAttachmentsForFollowup(input: {
+    message: string;
+    previousMessages?: Array<string | undefined>;
+}): string {
+    if (RESOLVED_ATTACHMENTS_HEADER_PATTERN.test(input.message)) {
+        return input.message;
+    }
+    const attachmentBlock = (input.previousMessages ?? [])
+        .map((message) => extractResolvedAttachmentBlock(message))
+        .find((value): value is string => typeof value === 'string');
+    if (!attachmentBlock) {
+        return input.message;
+    }
+    const hasContextReference = ATTACHMENT_CONTEXT_REFERENCE_PATTERN.test(input.message);
+    const hasObjectReference = ATTACHMENT_OBJECT_REFERENCE_PATTERN.test(input.message);
+    const hasDerivativeTargetReference = (
+        ATTACHMENT_DERIVATIVE_ACTION_PATTERN.test(input.message)
+        && ATTACHMENT_MEDIA_TARGET_PATTERN.test(input.message)
+    );
+    const shouldInherit = hasContextReference && (hasObjectReference || hasDerivativeTargetReference);
+    if (!shouldInherit) {
+        return input.message;
+    }
+    return `${attachmentBlock}\n\n${input.message}`;
+}
 
 function hasToolBackedCapabilityRequirement(requirements: TaskCapabilityRequirement[]): boolean {
     return requirements.length > 0;
@@ -832,6 +900,24 @@ export async function handleStartOrSendTaskCommand(
         input.emitCurrentInvalidPayload({ taskId });
         return true;
     }
+    const followupHistoryMessages = isFollowupCommand
+        ? (
+            input.listTaskTranscriptEntries?.(taskId, 32)
+                .filter((entry) => entry.role === 'user')
+                .map((entry) => entry.content)
+                .reverse()
+            ?? []
+        )
+        : [];
+    const effectiveMessage = isFollowupCommand
+        ? inheritResolvedAttachmentsForFollowup({
+            message,
+            previousMessages: [
+                previousState?.lastUserMessage,
+                ...followupHistoryMessages,
+            ],
+        })
+        : message;
     const taskCommandGuard = await runGuardPipeline<undefined>([
         () => {
             const taskCommandDecision = input.applyPolicyDecision({
@@ -861,7 +947,7 @@ export async function handleStartOrSendTaskCommand(
     };
     const workspacePath = input.getString(input.toRecord(payload.context).workspacePath) ?? process.cwd();
     const inferredCapabilityRequirements = resolveTaskCapabilityRequirements({
-        message,
+        message: effectiveMessage,
         workspacePath,
     });
     const commandConfig = input.toRecord(payload.config);
@@ -911,11 +997,13 @@ export async function handleStartOrSendTaskCommand(
     }
     const shouldApplyStartTaskIntentRouting = commandType === 'start_task'
         && routedMessage.forcedRouteMode == null
-        && !hasExplicitToolingRuntimeConfig
-        && configuredExecutionPath === undefined;
+        && !hasExplicitToolingRuntimeConfig;
     if (shouldApplyStartTaskIntentRouting) {
+        // `executionPath` from desktop can be a UI default (especially chat/direct),
+        // not an explicit user routing decision. Re-run server-side intent routing
+        // unless the user provided an explicit route token.
         const intentRoute = resolveStartTaskIntentRoute({
-            message,
+            message: effectiveMessage,
             workspacePath,
             capabilityRequirements: inferredCapabilityRequirements,
         });
@@ -923,7 +1011,7 @@ export async function handleStartOrSendTaskCommand(
         resolvedForcedRouteMode = intentRoute.forcedRouteMode;
     }
     const shouldDisableChatSkillsByDefault = resolvedExecutionPath === 'direct'
-        && routedMessage.forcedRouteMode !== 'task'
+        && resolvedForcedRouteMode !== 'task'
         && (!explicitEnabledSkills || explicitEnabledSkills.length === 0)
         && input.pickBooleanConfigValue(commandConfig, 'enableChatSkills') !== true;
     const resolvedSkillPrompt = shouldDisableChatSkillsByDefault
@@ -934,7 +1022,7 @@ export async function handleStartOrSendTaskCommand(
         : (
             input.resolveSkillPrompt
                 ? input.resolveSkillPrompt({
-                    message,
+                    message: effectiveMessage,
                     workspacePath,
                     explicitEnabledSkills,
                 })
@@ -980,7 +1068,7 @@ export async function handleStartOrSendTaskCommand(
     );
     const defaultCapabilityRetryMaxAttempts = shouldSeedDefaultCapabilityRetryBudget
         ? resolveDefaultCapabilityRetryMaxAttempts({
-            message,
+            message: effectiveMessage,
             workspacePath,
             requirements: inferredCapabilityRequirements,
         })
@@ -1003,12 +1091,12 @@ export async function handleStartOrSendTaskCommand(
     if (
         commandType === 'send_task_message'
         && input.cancelScheduledTasksForSourceTask
-        && input.isScheduledCancellationRequest(message)
+        && input.isScheduledCancellationRequest(effectiveMessage)
     ) {
         appendUserTranscript();
         const cancelled = await input.cancelScheduledTasksForSourceTask({
             sourceTaskId: taskId,
-            userMessage: message,
+            userMessage: effectiveMessage,
         });
         input.upsertTaskState(taskId, {
             title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
@@ -1016,7 +1104,7 @@ export async function handleStartOrSendTaskCommand(
             status: 'idle',
             suspended: false,
             suspensionReason: undefined,
-            lastUserMessage: message,
+            lastUserMessage: effectiveMessage,
             enabledSkills: resolvedSkillPrompt.enabledSkillIds,
             modelId: resolvedModelId,
             resourceId,
@@ -1042,7 +1130,7 @@ export async function handleStartOrSendTaskCommand(
         return true;
     }
 
-    const capabilityQueryIntent = detectCapabilityQueryIntent(message);
+    const capabilityQueryIntent = detectCapabilityQueryIntent(effectiveMessage);
     if (capabilityQueryIntent && input.listRuntimeCapabilities) {
         try {
             const capabilitySummary = buildCapabilitySummary(
@@ -1057,7 +1145,7 @@ export async function handleStartOrSendTaskCommand(
                     status: 'idle',
                     suspended: false,
                     suspensionReason: undefined,
-                    lastUserMessage: message,
+                        lastUserMessage: effectiveMessage,
                     enabledSkills: resolvedSkillPrompt.enabledSkillIds,
                     modelId: resolvedModelId,
                     resourceId,
@@ -1085,7 +1173,7 @@ export async function handleStartOrSendTaskCommand(
                     input.emitTaskStarted({
                         taskId,
                         title: input.getString(payload.title) ?? 'Task',
-                        message,
+                        message: effectiveMessage,
                         workspacePath,
                         mode: resolveTaskStartedMode({
                             forcedRouteMode: executionOptions.forcedRouteMode,
@@ -1113,7 +1201,7 @@ export async function handleStartOrSendTaskCommand(
             // Best-effort optimization; fall back to normal LLM execution on capability lookup failure.
         }
     }
-    if (isGeneralCapabilityQuery(message) && input.listRuntimeCapabilities) {
+    if (isGeneralCapabilityQuery(effectiveMessage) && input.listRuntimeCapabilities) {
         try {
             const capabilitySummary = buildGeneralCapabilitySummary(await input.listRuntimeCapabilities());
             appendUserTranscript();
@@ -1123,7 +1211,7 @@ export async function handleStartOrSendTaskCommand(
                 status: 'idle',
                 suspended: false,
                 suspensionReason: undefined,
-                lastUserMessage: message,
+                lastUserMessage: effectiveMessage,
                 enabledSkills: resolvedSkillPrompt.enabledSkillIds,
                 modelId: resolvedModelId,
                 resourceId,
@@ -1151,7 +1239,7 @@ export async function handleStartOrSendTaskCommand(
                 input.emitTaskStarted({
                     taskId,
                     title: input.getString(payload.title) ?? 'Task',
-                    message,
+                    message: effectiveMessage,
                     workspacePath,
                     mode: resolveTaskStartedMode({
                         forcedRouteMode: executionOptions.forcedRouteMode,
@@ -1180,9 +1268,9 @@ export async function handleStartOrSendTaskCommand(
     }
 
     const hasExplicitSchedulePrefix = EXPLICIT_SCHEDULE_PREFIX.test(rawMessage);
-    const isHighRiskHostAction = HIGH_RISK_HOST_ACTION_PATTERN.test(message);
-    const hasSpacedAbsoluteTimeCue = SPACED_ABSOLUTE_TIME_PATTERN.test(message);
-    const isDatabaseOperation = DATABASE_OPERATION_PATTERN.test(message);
+    const isHighRiskHostAction = HIGH_RISK_HOST_ACTION_PATTERN.test(effectiveMessage);
+    const hasSpacedAbsoluteTimeCue = SPACED_ABSOLUTE_TIME_PATTERN.test(effectiveMessage);
+    const isDatabaseOperation = DATABASE_OPERATION_PATTERN.test(effectiveMessage);
     const skipImplicitSchedule =
         !routedMessage.usedEnvelope
         && !hasExplicitSchedulePrefix
@@ -1221,7 +1309,7 @@ export async function handleStartOrSendTaskCommand(
     const shouldRunTaskCapabilityGate = executionOptions.forcedRouteMode === 'task';
     if (shouldRunTaskCapabilityGate) {
         const taskCapabilityGate = await evaluateTaskCapabilityGate({
-            message,
+            message: effectiveMessage,
             workspacePath,
             requirements: inferredCapabilityRequirements,
             listRuntimeCapabilities: input.listRuntimeCapabilities,
@@ -1232,12 +1320,12 @@ export async function handleStartOrSendTaskCommand(
         if (!taskCapabilityGate.ready && taskCapabilityGate.summary) {
             appendUserTranscript();
             const turnContract = buildTaskTurnContract({
-                message,
+                message: effectiveMessage,
                 workspacePath,
                 mode: 'task',
                 route: 'direct',
                 requiredCapabilities: maybeAppendArtifactWriteCapability(
-                    message,
+                    effectiveMessage,
                     taskCapabilityGate.requirements.map(formatTaskCapabilityRequirement),
                 ),
                 createdAt: new Date().toISOString(),
@@ -1248,7 +1336,7 @@ export async function handleStartOrSendTaskCommand(
                 status: 'idle',
                 suspended: false,
                 suspensionReason: undefined,
-                lastUserMessage: message,
+                lastUserMessage: effectiveMessage,
                 enabledSkills: resolvedSkillPrompt.enabledSkillIds,
                 modelId: resolvedModelId,
                 resourceId,
@@ -1277,7 +1365,7 @@ export async function handleStartOrSendTaskCommand(
                 input.emitTaskStarted({
                     taskId,
                     title: input.getString(payload.title) ?? 'Task',
-                    message,
+                    message: effectiveMessage,
                     workspacePath,
                     mode: resolveTaskStartedMode({
                         forcedRouteMode: 'task',
@@ -1303,7 +1391,7 @@ export async function handleStartOrSendTaskCommand(
         }
         if (taskCapabilityGate.requirements.length > 0) {
             const requiredCompletionCapabilities = maybeAppendArtifactWriteCapability(
-                message,
+                effectiveMessage,
                 taskCapabilityGate.requirements.map(formatRequirementLabel),
             );
             executionOptions = {
@@ -1326,7 +1414,7 @@ export async function handleStartOrSendTaskCommand(
     }
 
     const augmentedRequiredCompletionCapabilities = maybeAppendArtifactWriteCapability(
-        message,
+        effectiveMessage,
         executionOptions.requiredCompletionCapabilities ?? [],
     );
     executionOptions = {
@@ -1335,7 +1423,7 @@ export async function handleStartOrSendTaskCommand(
         requireToolEvidenceForCompletion: augmentedRequiredCompletionCapabilities.length > 0,
     };
     const turnContract = buildTaskTurnContract({
-        message,
+        message: effectiveMessage,
         workspacePath,
         mode: executionOptions.forcedRouteMode === 'task' ? 'task' : 'chat',
         route: executionOptions.executionPath === 'workflow' ? 'workflow' : 'direct',
@@ -1354,7 +1442,7 @@ export async function handleStartOrSendTaskCommand(
         const scheduleDecision = await input.scheduleTaskIfNeeded({
             sourceTaskId: taskId,
             title: input.getString(payload.title) ?? undefined,
-            message,
+            message: effectiveMessage,
             workspacePath,
             config: input.toRecord(payload.config),
         });
@@ -1374,7 +1462,7 @@ export async function handleStartOrSendTaskCommand(
                 status: 'scheduled',
                 suspended: false,
                 suspensionReason: undefined,
-                lastUserMessage: message,
+                lastUserMessage: effectiveMessage,
                 enabledSkills: resolvedSkillPrompt.enabledSkillIds,
                 modelId: resolvedModelId,
                 resourceId,
@@ -1386,7 +1474,7 @@ export async function handleStartOrSendTaskCommand(
                 input.emitTaskStarted({
                     taskId,
                     title: input.getString(payload.title) ?? 'Task',
-                    message,
+                    message: effectiveMessage,
                     workspacePath,
                     mode: resolveTaskStartedMode({
                         forcedRouteMode: executionOptions.forcedRouteMode,
@@ -1428,9 +1516,9 @@ export async function handleStartOrSendTaskCommand(
     ) {
         const claim = input.claimTaskMessageDispatch({
             taskId,
-            message,
+            message: effectiveMessage,
             dedupeKey: buildTaskMessageDispatchKey({
-                message,
+                message: effectiveMessage,
                 route: turnContract.route,
                 mode: turnContract.mode,
                 contractHash: turnContract.hash,
@@ -1458,7 +1546,7 @@ export async function handleStartOrSendTaskCommand(
         status: 'running',
         suspended: false,
         suspensionReason: undefined,
-        lastUserMessage: message,
+        lastUserMessage: effectiveMessage,
         enabledSkills: resolvedSkillPrompt.enabledSkillIds,
         modelId: resolvedModelId,
         resourceId,
@@ -1487,7 +1575,7 @@ export async function handleStartOrSendTaskCommand(
         input.emitTaskStarted({
             taskId,
             title: input.getString(payload.title) ?? 'Task',
-            message,
+            message: effectiveMessage,
             workspacePath,
             mode: resolveTaskStartedMode({
                 forcedRouteMode: executionOptions.forcedRouteMode,
@@ -1504,7 +1592,7 @@ export async function handleStartOrSendTaskCommand(
             run: () => input.executeTaskMessage({
                 taskId,
                 turnId,
-                message,
+                message: effectiveMessage,
                 resourceId,
                 preferredThreadId: state.conversationThreadId,
                 workspacePath: state.workspacePath,

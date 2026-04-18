@@ -1,4 +1,4 @@
-export const MARKET_QUERY_PATTERN = /\b(stock|stocks|share|shares|price|prices|quote|quotes|market|markets|equity|equities|finance|financial|ticker|tickers|investment|invest|portfolio|analyst|rating|buy|sell|hold|earnings|revenue|valuation|hkex|nasdaq|nyse|a-share)\b|a股|港股|美股|股价|行情|涨跌|走势|市值|成交量|成交额|开盘|收盘|最高|最低|投资|买入|卖出|持有|评级|目标价|财报|营收|估值|\(([A-Z]{1,5}|\d{3,5}\.HK)\)/iu;
+export const MARKET_QUERY_PATTERN = /\b(stock|stocks|share|shares|price|prices|quote|quotes|market|markets|equity|equities|finance|financial|ticker|tickers|investment|invest|portfolio|analyst|rating|buy|sell|hold|earnings|revenue|valuation|hkex|nasdaq|nyse|a-share)\b|a股|港股|美股|股价|行情|涨跌|走势|市值|成交量|成交额|开盘|收盘|最高|最低|投资|买入|卖出|持有|评级|目标价|财报|营收|估值|\(([A-Z]{2,5}|\d{3,5}\.HK)\)/iu;
 
 export const BUSINESS_COOPERATION_QUERY_PATTERN = /\b(partnership|partner(?:ship)?|collaboration|collaborate|joint venture|strategic alliance|business cooperation|business development|go[-\s]?to[-\s]?market|channel partner|vendor|supplier|distribution deal|commercial deal)\b|商业合作|业务合作|商务合作|合作伙伴|渠道合作|战略合作|联合(?:方案|营销|推广)|生态合作|供应商/u;
 

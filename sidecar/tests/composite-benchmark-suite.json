@@ -255,17 +255,10 @@
           "name": "Claw-Bench（基础回归）",
           "kind": "external",
           "runner": "scripts/external/run-external-benchmark-step.mjs",
-          "command": "claw-bench run --agent-url \"${COWORKANY_AGENT_URL}\" --agent-name \"${COWORKANY_AGENT_NAME}\" -t quick -n 3",
+          "command": "node scripts/external/run-claw-bench-nonmulti.mjs --claw-root \"${CLAW_BENCH_REPO_DIR}\" --tasks \"mag-002,mag-003,mag-004\" --output-dir \"../artifacts/composite-external/claw-bench\"",
           "requiredEnv": [
-            "COWORKANY_AGENT_URL",
-            "COWORKANY_AGENT_NAME"
+            "CLAW_BENCH_REPO_DIR"
           ],
-          "bootstrap": [
-            "python -m pip install -r requirements.txt",
-            "python -m pip install -e ."
-          ],
-          "repoDirEnv": "CLAW_BENCH_REPO_DIR",
-          "workingDirMode": "env-first",
           "critical": true,
           "artifactsDir": "artifacts/composite-external/claw-bench"
         },
@@ -326,7 +319,7 @@
           "name": "外部基准运行前提检查",
           "kind": "checklist",
           "items": [
-            "COWORKANY_AGENT_URL 可用且指向可被外部基准调用的 agent 入口",
+            "CLAW_BENCH_REPO_DIR 已配置且指向本地 Claw-Bench 仓库",
             "外部基准环境已安装并通过 smoke 验证",
             "必要凭据（SERPER/BRAVE/EXA/邮箱/API）已就绪",
             "桌面端环境具备权限与会话恢复能力"

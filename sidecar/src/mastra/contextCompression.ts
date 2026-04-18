@@ -54,6 +54,8 @@ const MEMORY_INDEX_FILE = 'MEMORY.md';
 const MEMORY_TOPICS_DIR = 'memory';
 const MAX_TOPIC_MEMORY_CANDIDATES = 64;
 const MAX_RECALLED_TOPIC_MEMORIES = 3;
+const COWORKANY_CONTRACT_MARKER_PATTERN = /\[coworkany[^\]]*contract\]/iu;
+const EXPLICIT_CONSTRAINT_PATTERN = /^(?:constraints?|requirement|限制|要求|注意|请用|请不要|不要|必须|仅|只)\b|\b(?:must|should|need(?:\s+to)?|do\s+not|don't|without|only|exactly|required?)\b|必须|不要|仅|只|限制|要求|务必/iu;
 
 function resolveAppDataRoot(): string {
     const configured = process.env.COWORKANY_APP_DATA_DIR?.trim();
@@ -70,6 +72,44 @@ function pickContentSnippet(content: string, maxChars: number): string {
     return `${normalized.slice(0, maxChars)}...`;
 }
 
+function normalizeTurnContentForSummary(content: string): string {
+    return content
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function extractExplicitConstraintsFromMessage(content: string): string[] {
+    const normalized = normalizeTurnContentForSummary(content);
+    if (normalized.length === 0) {
+        return [];
+    }
+    const candidates = normalized
+        .split('\n')
+        .flatMap((line) => line.split(/\s+\|\s+/u))
+        .map((segment) => segment.trim())
+        .filter((segment) => segment.length > 0);
+    const unique = new Set<string>();
+    const constraints: string[] = [];
+    for (const candidate of candidates) {
+        if (COWORKANY_CONTRACT_MARKER_PATTERN.test(candidate)) {
+            continue;
+        }
+        if (!EXPLICIT_CONSTRAINT_PATTERN.test(candidate)) {
+            continue;
+        }
+        const clipped = pickContentSnippet(candidate, 120);
+        if (unique.has(clipped)) {
+            continue;
+        }
+        unique.add(clipped);
+        constraints.push(clipped);
+        if (constraints.length >= 5) {
+            break;
+        }
+    }
+    return constraints;
+}
+
 function buildMicroSummary(turns: CompressionTurn[]): string {
     const recent = turns.slice(-MICRO_SUMMARY_TURN_WINDOW);
     if (recent.length === 0) {
@@ -84,12 +124,14 @@ function buildStructuredSummary(turns: CompressionTurn[]): string {
     const userTurns = turns.filter((turn) => turn.role === 'user').slice(-STRUCTURED_USER_TURN_WINDOW);
     const assistantTurns = turns.filter((turn) => turn.role === 'assistant').slice(-STRUCTURED_ASSISTANT_TURN_WINDOW);
     const latestUser = userTurns[userTurns.length - 1];
-    const previousConstraints = userTurns.slice(0, -1).map((turn) => pickContentSnippet(turn.content, 120));
+    const explicitConstraints = latestUser
+        ? extractExplicitConstraintsFromMessage(latestUser.content)
+        : [];
     const assistantProgress = assistantTurns.map((turn) => pickContentSnippet(turn.content, 120));
 
     return [
         `Current objective: ${latestUser ? pickContentSnippet(latestUser.content, 180) : 'none'}`,
-        `User constraints: ${previousConstraints.length > 0 ? previousConstraints.join(' | ') : 'none'}`,
+        `User constraints: ${explicitConstraints.length > 0 ? explicitConstraints.join(' | ') : 'none'}`,
         `Assistant progress: ${assistantProgress.length > 0 ? assistantProgress.join(' | ') : 'none'}`,
     ].join('\n');
 }
@@ -270,7 +312,7 @@ export class TaskContextCompressionStore {
             : undefined;
         const nextTurn: CompressionTurn = {
             role,
-            content: pickContentSnippet(input.content, MAX_TURN_CONTENT_CHARS),
+            content: pickContentSnippet(normalizeTurnContentForSummary(input.content), MAX_TURN_CONTENT_CHARS),
             at: new Date().toISOString(),
             turnId: normalizedTurnId,
         };

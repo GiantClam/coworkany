@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 100,
+    "overall_raw": 100,
+    "overall_effective": 100,
+    "tasks_total": 1,
+    "tasks_passed": 1,
+    "tasks_failed": 0,
+    "tasks_errored": 0,
+    "tasks_invalid": 0,
+    "tasks_effective_total": 1,
+    "tasks_effective_passed": 1,
+    "tasks_effective_failed": 0,
+    "pass_rate": 100,
+    "pass_rate_effective": 100
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 0,
+    "other_error": 0,
+    "total_errors": 0
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "mag-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate",
+        "invalidReasons": []
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "mag-002",
+      "status": "passed",
+      "passed": true,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 1,
+      "duration_s": 520.76,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".........                                                                [100%]\n9 passed in 0.02s"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/gpt-5.3-codex",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

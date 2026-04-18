@@ -42,7 +42,7 @@ const FILE_READ_PATTERN = /(读取|读一下|查看文件|查看这个文件|列
 const MEMORY_PATTERN = /(记住|记下来|记忆|remember|memorize|save (?:this )?preference|偏好)/i;
 const SHELL_PATTERN = /(运行命令|执行命令|terminal|shell|bash|zsh|command line|run command|run[_\s-]?command|mastra[_\s-]?workspace[_\s-]?execute[_\s-]?command|npm\s+run|bun\s+run|\bnode\s+["']?.+\.m?(?:js|ts)\b|dedupe|duplicate|checksum|hash|bulk\s+(?:process|cleanup)|batch\s+(?:process|cleanup)|empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin)|(?:move|rename|copy|delete|remove|relocate)\s+(?:file|files|folder|folders|directory|directories|path)|(?:move|rename|copy|delete|remove|relocate).{0,20}(?:\/|~\/|[A-Za-z]:\\)|(?:\/|~\/|[A-Za-z]:\\).{0,20}(?:move|rename|copy|delete|remove|relocate)|去重|重复|相似(?:文件|图片)|批量(?:处理|清理)|清空(?:回收站|垃圾桶)|(?:移动|迁移|重命名|复制|拷贝|删除|移除).{0,12}(?:文件|文件夹|目录|路径)|(?:移动|迁移|重命名|复制|拷贝|删除|移除).{0,20}(?:\/|~\/|[A-Za-z]:\\)|(?:\/|~\/|[A-Za-z]:\\).{0,20}(?:移动|迁移|重命名|复制|拷贝|删除|移除))/i;
 const HOST_CONTROL_PATTERN = /(关机|重启|清空(?:回收站|垃圾桶)|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b|\bempty\s+(?:the\s+)?(?:trash|recycle\s+bin)\b|\bclear\s+(?:the\s+)?(?:trash|recycle\s+bin)\b)/i;
-const BROWSER_PATTERN = /(浏览器|网页|页面|网站|网址|click|navigate|browser|playwright|screenshot|open\s+(?:https?:\/\/|www\.|[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\b)|打开(?:\s*\S+)?\s*(?:网站|网页|网址|https?:\/\/))/i;
+const BROWSER_PATTERN = /((?:浏览器|网页|页面|网站|网址|click|navigate|browser|playwright|open\s+(?:https?:\/\/|www\.|[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\b)|打开(?:\s*\S+)?\s*(?:网站|网页|网址|https?:\/\/)))|((?:网页|页面|网站).{0,12}(?:截图|截屏|screenshot))|((?:截图|截屏|screenshot).{0,12}(?:网页|页面|网站))/i;
 const WEB_RESEARCH_PATTERN = /(\bweb\s*(research|search|lookup|news|data)\b|\bonline\b|互联网|网上|新闻|news|行情|市场|商业合作|业务合作|商务合作|合作伙伴|战略合作|partnership|collaboration|joint venture)/i;
 const MARKET_QUERY_PATTERN = /(股价|港股|美股|a股|买入|卖出|持有|目标价|估值|市盈率|ticker|stock|stocks|market|equity|quote|analyst|rating)/i;
 const VOICE_PATTERN = /(语音|朗读|读给我听|播报|tts|text-to-speech|voice\s*(read|speak|tts)?|speak\s+(?:it|this|that)\s+aloud|read\s+(?:it|this|that)\s+aloud)/i;
@@ -53,6 +53,9 @@ const SELF_MANAGEMENT_PATTERN = /toolpack|skill|workspace 管理|workspace manag
 const PARALLEL_PATTERN = /(并行|同时|parallel|concurrently|in parallel)/i;
 const CHAIN_PATTERN = /(然后|接着|随后|之后|再(?:执行|做|进行)?|first\b[\s\S]{0,80}\bthen|then\b[\s\S]{0,40}\bfinally)/i;
 const WEB_URGENT_PATTERN = /latest|最新|today|新闻|news/i;
+const RESOLVED_ATTACHMENTS_HEADER_PATTERN = /^\s*\[Resolved attachments\]\s*$/iu;
+const RESOLVED_ATTACHMENT_LIST_ITEM_PATTERN = /^\s*-\s+(?:\/|~\/|[A-Za-z]:\\|[A-Za-z0-9._-]+[\\/]).+/u;
+const RESOLVED_ATTACHMENT_PATH_LINE_PATTERN = /^\s*(?:\/|~\/|[A-Za-z]:\\|[A-Za-z0-9._-]+[\\/]).+/u;
 type IntentSignals = {
     code: boolean;
     fileWrite: boolean;
@@ -74,6 +77,37 @@ const dedupe = <T extends string>(values: T[]): T[] =>
     Array.from(new Set(values.filter((value) => value.trim().length > 0))) as T[];
 const normalizeText = (text: string): string => text.replace(/\s+/g, ' ').trim();
 const detectLanguage = (text: string): string => (/[\u3400-\u9FFF]/u.test(text) ? 'zh-CN' : 'en-US');
+
+function sanitizeIntentSourceText(text: string): string {
+    if (!text.trim()) {
+        return '';
+    }
+    const lines = text.split(/\r?\n/u);
+    const sanitized: string[] = [];
+    let skippingResolvedAttachmentPaths = false;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (RESOLVED_ATTACHMENTS_HEADER_PATTERN.test(trimmed)) {
+            skippingResolvedAttachmentPaths = true;
+            continue;
+        }
+        if (skippingResolvedAttachmentPaths) {
+            if (!trimmed) {
+                continue;
+            }
+            if (
+                RESOLVED_ATTACHMENT_LIST_ITEM_PATTERN.test(trimmed)
+                || RESOLVED_ATTACHMENT_PATH_LINE_PATTERN.test(trimmed)
+            ) {
+                continue;
+            }
+            skippingResolvedAttachmentPaths = false;
+        }
+        sanitized.push(line);
+    }
+    return sanitized.join('\n').replace(/\n{3,}/gu, '\n\n').trim();
+}
+
 function extractUrls(text: string): string[] {
     return dedupe((text.match(URL_PATTERN) ?? []).map((item) => item.trim()));
 }
@@ -469,8 +503,9 @@ export function analyzeWorkRequest(input: {
     const baseSourceText = routedInput.cleanText.trim().length > 0
         ? routedInput.cleanText
         : input.sourceText;
+    const sanitizedSourceText = sanitizeIntentSourceText(baseSourceText);
     const sourceText = maybeInjectFollowUpContext({
-        sourceText: baseSourceText,
+        sourceText: sanitizedSourceText,
         followUpContext: input.followUpContext,
     });
     const scheduledIntent = detectScheduledIntent(sourceText, input.now);

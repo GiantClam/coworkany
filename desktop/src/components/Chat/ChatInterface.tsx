@@ -530,7 +530,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         clearAttachments,
         handlePaste,
         buildContentWithAttachments,
-    } = useFileAttachment();
+    } = useFileAttachment(activeWorkspace?.path);
     const voiceSegmentQueueRef = useRef<string[]>([]);
     const processingVoiceSegmentsRef = useRef(false);
     useEffect(() => {

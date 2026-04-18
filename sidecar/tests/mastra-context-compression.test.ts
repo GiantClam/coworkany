@@ -163,4 +163,46 @@ describe('task context compression store', () => {
         const assistantTurn1 = turns.find((turn) => turn.role === 'assistant' && turn.turnId === 'turn-1');
         expect(assistantTurn1?.content).toContain('今日完成');
     });
+
+    test('summarizes path-based attachments and only keeps constraints from latest user turn', () => {
+        const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-context-inline-'));
+        const workspacePath = path.join(appDataRoot, 'workspace');
+        fs.mkdirSync(workspacePath, { recursive: true });
+        tempDirs.push(appDataRoot);
+
+        const storePath = path.join(appDataRoot, 'mastra-context-state.json');
+        const store = new TaskContextCompressionStore(storePath);
+
+        store.recordUserTurn({
+            taskId: 'task-inline-1',
+            threadId: 'thread-inline-1',
+            resourceId: 'resource-inline-1',
+            workspacePath,
+            content: '必须使用中文回答',
+        });
+        store.recordAssistantTurn({
+            taskId: 'task-inline-1',
+            threadId: 'thread-inline-1',
+            resourceId: 'resource-inline-1',
+            workspacePath,
+            content: '好的，我会使用中文。',
+        });
+        store.recordUserTurn({
+            taskId: 'task-inline-1',
+            threadId: 'thread-inline-1',
+            resourceId: 'resource-inline-1',
+            workspacePath,
+            content: [
+                '[Resolved attachments]',
+                '- /tmp/test.png',
+                '将附件图片转成 png',
+            ].join('\n'),
+        });
+
+        const snapshot = store.get('task-inline-1');
+        expect(snapshot).toBeDefined();
+        expect(snapshot?.structuredSummary).toContain('Current objective:');
+        expect(snapshot?.structuredSummary).toContain('/tmp/test.png');
+        expect(snapshot?.structuredSummary).toContain('User constraints: none');
+    });
 });

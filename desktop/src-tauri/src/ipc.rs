@@ -116,6 +116,24 @@ pub struct SendSubagentMessageInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistAttachmentFileInput {
+    pub file_name: String,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistAttachmentFileResult {
+    pub success: bool,
+    pub file_path: String,
+    pub mime_type: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ResumeInterruptedTaskInput {
     #[serde(rename = "taskId")]
     pub task_id: String,
@@ -2933,6 +2951,65 @@ fn dedupe_download_path(dir: &PathBuf, file_name: &str) -> PathBuf {
     }
 
     dir.join(format!("{stem}-{}", Uuid::new_v4()))
+}
+
+#[tauri::command]
+pub async fn persist_attachment_file(
+    app_handle: AppHandle,
+    input: PersistAttachmentFileInput,
+) -> Result<PersistAttachmentFileResult, String> {
+    const MAX_ATTACHMENT_BYTES: usize = 12 * 1024 * 1024;
+
+    if input.bytes.is_empty() {
+        return Ok(PersistAttachmentFileResult {
+            success: false,
+            file_path: String::new(),
+            mime_type: input.mime_type,
+            error: Some("empty_attachment".to_string()),
+        });
+    }
+    if input.bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Ok(PersistAttachmentFileResult {
+            success: false,
+            file_path: String::new(),
+            mime_type: input.mime_type,
+            error: Some("attachment_too_large".to_string()),
+        });
+    }
+
+    let workspace_root = if let Some(raw_workspace_path) = input.workspace_path.as_deref() {
+        let trimmed = raw_workspace_path.trim();
+        if trimmed.is_empty() {
+            app_data_dir(&app_handle)?.join("workspaces").join("workspace")
+        } else {
+            PathBuf::from(trimmed)
+        }
+    } else {
+        app_data_dir(&app_handle)?.join("workspaces").join("workspace")
+    };
+
+    tokio::fs::create_dir_all(&workspace_root)
+        .await
+        .map_err(|e| e.to_string())?;
+    let staging_dir = workspace_root
+        .join(".coworkany")
+        .join("attachments")
+        .join("staged");
+    tokio::fs::create_dir_all(&staging_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let safe_name = sanitize_filename(&input.file_name);
+    let staged_path = staging_dir.join(format!("{}-{safe_name}", Uuid::new_v4()));
+    tokio::fs::write(&staged_path, &input.bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(PersistAttachmentFileResult {
+        success: true,
+        file_path: staged_path.to_string_lossy().to_string(),
+        mime_type: input.mime_type,
+        error: None,
+    })
 }
 
 #[tauri::command]

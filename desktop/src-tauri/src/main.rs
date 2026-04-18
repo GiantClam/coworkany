@@ -130,6 +130,7 @@ fn main() {
             ipc::validate_llm_settings,
             ipc::get_workspace_root,
             ipc::get_default_workspace_path,
+            ipc::persist_attachment_file,
             ipc::open_local_file,
             ipc::download_remote_file,
             ipc::read_text_file_preview,

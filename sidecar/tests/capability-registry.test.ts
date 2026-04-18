@@ -38,6 +38,55 @@ describe('capabilityRegistry', () => {
         expect(requirements).not.toContain('web_research');
     });
 
+    test('does not force web_research for workspace-only debate orchestration tasks', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: [
+                'Task: Multi-Agent Research Debate',
+                'Read workspace/topic.md and generate workspace/debate/pro_argument.md, workspace/debate/con_argument.md,',
+                'workspace/debate/rebuttal_pro.md, workspace/debate/rebuttal_con.md, workspace/debate/synthesis.md,',
+                'then write final workspace/analysis.md.',
+            ].join('\n'),
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).not.toContain('web_research');
+        expect(requirements).toContain('artifact_write');
+    });
+
+    test('does not force web_research or command_execution for workspace decomposition instructions', () => {
+        const message = [
+            '# Task: Multi-Agent Project Decomposition',
+            'Create workspace/orchestration/task_plan.json and workspace/orchestration/integration_log.md.',
+            'Write workspace/project/tasknote.py, workspace/project/test_tasknote.py, workspace/project/README.md.',
+            'Document acceptance evidence in integration log.',
+        ].join('\n');
+        const requirements = resolveTaskCapabilityRequirements({
+            message,
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('artifact_write');
+        expect(requirements).not.toContain('web_research');
+        expect(requirements).not.toContain('command_execution');
+        expect(detectTaskIntentDomain(message)).toBe('general');
+    });
+
+    test('does not force command_execution for staged workspace data-pipeline specs', () => {
+        const message = [
+            '# Task: Multi-Agent Data Pipeline Handoff',
+            'Input: workspace/raw_data.csv',
+            'Output: workspace/pipeline/stage1_clean.csv',
+            'Output: workspace/pipeline/stage2_features.csv',
+            'Output: workspace/pipeline/stage3_stats.json',
+            'Output: workspace/pipeline/stage4_report.md',
+            'Output: workspace/report.md',
+        ].join('\n');
+        const requirements = resolveTaskCapabilityRequirements({
+            message,
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('artifact_write');
+        expect(requirements).not.toContain('command_execution');
+    });
+
     test('infers web_research for investment advice query with ticker format', () => {
         const message = '帮我研究 Nvidia (NVDA) 最近的表现，给出投资建议（买入/持有/卖出），说明理由';
         const requirements = resolveTaskCapabilityRequirements({
@@ -113,6 +162,39 @@ describe('capabilityRegistry', () => {
             workspacePath: process.cwd(),
         });
         expect(requirements).toContain('command_execution');
+    });
+
+    test('infers command_execution for resolved-attachment derivative tasks', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '[Resolved attachments]\n- /tmp/input.jpeg\n\n将附件图片转为 png 格式',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
+    });
+
+    test('does not infer command_execution for resolved-attachment read-only requests', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: '[Resolved attachments]\n- /tmp/input.jpeg\n\n请描述这张附件图片里有什么',
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).not.toContain('command_execution');
+    });
+
+    test('does not infer browser domain from attachment filenames containing screenshot words', () => {
+        const message = [
+            '[Resolved attachments]',
+            '- /tmp/截屏2026-04-03 09.25.43.png',
+            '- /tmp/截屏2026-04-06 21.01.29.png',
+            '',
+            '把附件图片合并为一个视频，每张图片播放 5s',
+        ].join('\n');
+        const requirements = resolveTaskCapabilityRequirements({
+            message,
+            workspacePath: process.cwd(),
+        });
+        expect(detectTaskIntentDomain(message)).toBe('general');
+        expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('browser_automation');
     });
 
     test('does not infer artifact_write for command-output wording with script paths', () => {

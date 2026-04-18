@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 64.01,
+    "overall_raw": 64.01,
+    "overall_effective": 64.01,
+    "tasks_total": 3,
+    "tasks_passed": 0,
+    "tasks_failed": 3,
+    "tasks_errored": 2,
+    "tasks_invalid": 0,
+    "tasks_effective_total": 3,
+    "tasks_effective_passed": 0,
+    "tasks_effective_failed": 3,
+    "pass_rate": 0,
+    "pass_rate_effective": 0
+  },
+  "error_breakdown": {
+    "timeout": 0,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 0,
+    "other_error": 2,
+    "total_errors": 2
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "mag-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "mag-003",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "mag-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition",
+        "invalidReasons": []
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "mag-002",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.1111,
+      "duration_s": 54,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "missing_required_output_files:/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/pro_argument.md,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/con_argument.md,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/rebuttal_pro.md,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/rebuttal_con.md,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/synthesis.md,/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/analysis.md",
+      "error_type": "other_error",
+      "skills_mode": "vanilla",
+      "details": ".FFFFFFFF                                                                [100%]\n=================================== FAILURES ===================================\n___________________________ test_pro_argument_exists ___________________________\nverifier/test_output.py:37: in test_pro_argument_exists\n    assert f.exists(), \"pro_argument.md missing\"\nE   AssertionError: pro_argument.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/pro_argument.md').exists\n___________________________ test_con_argument_exists ___________________________\nverifier/test_output.py:44: in test_con_argument_exists\n    assert f.exists(), \"con_argument.md missing\"\nE   AssertionError: con_argument.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/con_argument.md').exists\n_____________________________ test_rebuttals_exist _____________________________\nverifier/test_output.py:52: in test_rebuttals_exist\n    assert f.exists(), f\"{name} missing\"\nE   AssertionError: rebuttal_pro.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/rebuttal_pro.md').exists\n____________________________ test_synthesis_exists _____________________________\nverifier/test_output.py:59: in test_synthesis_exists\n    assert f.exists(), \"synthesis.md missing\"\nE   AssertionError: synthesis.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/synthesis.md').exists\n_____________________ test_pro_con_substantive_difference ______________________\nverifier/test_output.py:68: in test_pro_con_substantive_difference\n    pro = (workspace / \"debate\" / \"pro_argument.md\").read_text()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/pro_argument.md'\n______________________ test_rebuttals_reference_opposing _______________________\nverifier/test_output.py:77: in test_rebuttals_reference_opposing\n    pro_arg = (workspace / \"debate\" / \"pro_argument.md\").read_text().lower()\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/pro_argument.md'\n_____________________________ test_final_analysis ______________________________\nverifier/test_output.py:92: in test_final_analysis\n    assert f.exists(), \"analysis.md missing at workspace root\"\nE   AssertionError: analysis.md missing at workspace root\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/analysis.md').exists\n_____________________ test_analysis_references_both_sides ______________________\nverifier/test_output.py:108: in test_analysis_references_both_sides\n    analysis = (workspace / \"analysis.md\").read_text().lower()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/analysis.md'\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_pro_argument_exists - AssertionError: pr...\nFAILED verifier/test_output.py::test_con_argument_exists - AssertionError: co...\nFAILED verifier/test_output.py::test_rebuttals_exist - AssertionError: rebutt...\nFAILED verifier/test_output.py::test_synthesis_exists - AssertionError: synth...\nFAILED verifier/test_output.py::test_pro_con_substantive_difference - FileNot...\nFAILED verifier/test_output.py::test_rebuttals_reference_opposing - FileNotFo...\nFAILED verifier/test_output.py::test_final_analysis - AssertionError: analysi...\nFAILED verifier/test_output.py::test_analysis_references_both_sides - FileNot...\n8 failed, 1 passed in 0.09s"
+    },
+    {
+      "task_id": "mag-003",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.9091,
+      "duration_s": 117.49,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": "...F.......                                                              [100%]\n=================================== FAILURES ===================================\n______________________________ test_stage3_output ______________________________\nverifier/test_output.py:47: in test_stage3_output\n    assert \"total\" in stats or \"summary\" in stats or \"amount\" in stats, \\\nE   AssertionError: Stats JSON missing expected top-level keys\nE   assert ('total' in {'amount_summary': {'count': 32, 'max': 610.0, 'mean': 255.33, 'median': 220.0, ...}, 'by_category': {'high': {'count'...ons': [{'region': 'South', 'total': 2237.5}, {'region': 'West', 'total': 2215.0}, {'region': 'East', 'total': 1998.5}]} or 'summary' in {'amount_summary': {'count': 32, 'max': 610.0, 'mean': 255.33, 'median': 220.0, ...}, 'by_category': {'high': {'count'...ons': [{'region': 'South', 'total': 2237.5}, {'region': 'West', 'total': 2215.0}, {'region': 'East', 'total': 1998.5}]} or 'amount' in {'amount_summary': {'count': 32, 'max': 610.0, 'mean': 255.33, 'median': 220.0, ...}, 'by_category': {'high': {'count'...ons': [{'region': 'South', 'total': 2237.5}, {'region': 'West', 'total': 2215.0}, {'region': 'East', 'total': 1998.5}]})\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_stage3_output - AssertionError: Stats JS...\n1 failed, 10 passed in 0.04s"
+    },
+    {
+      "task_id": "mag-004",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.9,
+      "duration_s": 115.68,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "missing_required_output_files:/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/orchestration/integration_log.md",
+      "error_type": "other_error",
+      "skills_mode": "vanilla",
+      "details": "..F.......                                                               [100%]\n=================================== FAILURES ===================================\n_____________________________ test_integration_log _____________________________\nverifier/test_output.py:42: in test_integration_log\n    assert f.exists(), \"integration_log.md missing\"\nE   AssertionError: integration_log.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/orchestration/integration_log.md').exists\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_integration_log - AssertionError: integr...\n1 failed, 9 passed in 0.35s"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/gpt-5.3-codex",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

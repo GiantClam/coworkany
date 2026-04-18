@@ -85,6 +85,67 @@ describe('output contract extraction', () => {
             'workspace/Dockerfile',
         ]);
     });
+
+    test('ignores templated placeholder paths in output cues', () => {
+        const message = [
+            'Create workspace/orchestration/{role}_agent_log.md for each role.',
+            'Write final merged plan to workspace/orchestration/task_plan.json.',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/orchestration/task_plan.json',
+        ]);
+    });
+
+    test('expands templated role placeholder paths when explicit agent roles are listed', () => {
+        const message = [
+            'Required Sub-Agent Roles:',
+            '- **Backend Agent** — implements core logic',
+            '- **Test Agent** — validates behavior',
+            '- **Docs Agent** — writes user documentation',
+            'For each sub-agent, create `workspace/orchestration/{role}_agent_log.md`.',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/orchestration/backend_agent_log.md',
+            'workspace/orchestration/test_agent_log.md',
+            'workspace/orchestration/docs_agent_log.md',
+        ]);
+    });
+
+    test('infers concrete file outputs from directory include requirements', () => {
+        const message = [
+            'The final project must be in `workspace/project/` and include:',
+            '- Working source code (the CLI tool described in requirements.md)',
+            '- Test file(s) that validate the tool',
+            '- A README.md with usage instructions',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/project/main.py',
+            'workspace/project/test_main.py',
+            'workspace/project/README.md',
+            'workspace/project/readme.md',
+        ]);
+    });
+
+    test('drops likely truncated extension variants when full path exists', () => {
+        const message = [
+            'Write the con argument to `workspace/debate/con_argument.m`.',
+            'Write the con argument to `workspace/debate/con_argument.md`.',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/debate/con_argument.md',
+        ]);
+    });
+
+    test('ignores input-only path lines inside output cue windows', () => {
+        const message = [
+            'Produce the following files:',
+            '- Input: `workspace/raw_data.csv`',
+            '- Output: `workspace/report.json`',
+        ].join('\n');
+        expect(extractExplicitOutputPaths(message)).toEqual([
+            'workspace/report.json',
+        ]);
+    });
 });
 
 describe('output contract injection', () => {
@@ -93,6 +154,7 @@ describe('output contract injection', () => {
         const injected = injectOutputPathContract(message);
         expect(injected).toContain('[Output File Contract]');
         expect(injected).toContain('/tmp/task/workspace/form_fields.json');
+        expect(injected).toContain('FILE: <exact path>');
         expect(injected.endsWith(message)).toBe(true);
     });
 

@@ -1,283 +1,63 @@
 {
-  "framework": "dryrun",
-  "model": "dryrun",
-  "overall": 26.0,
-  "taskCompletion": 0.0,
-  "efficiency": 100.0,
-  "security": 0.0,
-  "skills": 40.0,
-  "ux": 0.0,
-  "testTier": null,
-  "agentProfile": {
-    "profileId": "8f38ae5338e14b99e1cad5d4030e1581a4ef420af12bbf78d257b5bb3316ae13",
-    "displayName": "dryrun / dryrun",
-    "model": "dryrun",
-    "framework": "dryrun",
-    "skillsMode": "vanilla",
-    "skills": [],
-    "mcpServers": [],
-    "memoryModules": [],
-    "modelTier": null,
-    "tags": {}
-  },
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "overall": 25.59,
+  "effectiveOverall": 25.59,
+  "taskCompletion": 0,
+  "effectiveTaskCompletion": 0,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 25.59,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
   "metadata": {
-    "skills_mode": "vanilla",
-    "runs_per_task": 3,
-    "total_tasks": 20,
-    "total_runs": 60,
-    "overall_pass_rate": 0.0,
-    "overall_mean_score": 0.4,
-    "overall_std_dev": 0.2,
-    "confidence_interval_95": [
-      0.349393,
-      0.450607
-    ]
+    "runs_per_task": 1,
+    "total_tasks": 3,
+    "invalid_tasks": 0,
+    "effective_tasks": 3,
+    "overall_pass_rate_raw": 0,
+    "overall_pass_rate_effective": 0,
+    "overall_mean_score_raw": 0.2559,
+    "overall_mean_score_effective": 0.2559
   },
-  "domainBreakdown": {
-    "calendar": 50.0,
-    "code-assistance": 50.0,
-    "cross-domain": 50.0,
-    "data-analysis": 50.0,
-    "database": 50.0,
-    "debugging": 50.0,
-    "document-editing": 50.0,
-    "email": 50.0,
-    "file-operations": 50.0,
-    "math-reasoning": 0.0,
-    "memory": 50.0,
-    "planning": 0.0,
-    "real-tools": 0.0,
-    "security": 50.0,
-    "system-admin": 50.0,
-    "web-browsing": 50.0,
-    "workflow-automation": 50.0
-  },
-  "levelBreakdown": {
-    "L1": 50.0,
-    "L2": 42.86,
-    "L3": 30.0,
-    "L4": 33.33
-  },
-  "moltbook": null,
   "taskDetails": [
     {
-      "taskId": "cal-006",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
+      "taskId": "mag-002",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.2222,
+      "stdDev": 0,
       "ci95": [
-        0.5,
-        0.5
+        0.2222,
+        0.2222
       ]
     },
     {
-      "taskId": "code-002",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
+      "taskId": "mag-003",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.5455,
+      "stdDev": 0,
       "ci95": [
-        0.5,
-        0.5
+        0.5455,
+        0.5455
       ]
     },
     {
-      "taskId": "code-014",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
+      "taskId": "mag-004",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0,
+      "stdDev": 0,
       "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "data-002",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "db-002",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "debug-001",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "debug-005",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "doc-004",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "eml-001",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "file-002",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "math-004",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.0,
-      "stdDev": 0.0,
-      "ci95": [
-        0.0,
-        0.0
-      ]
-    },
-    {
-      "taskId": "mem-005",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "plan-004",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.0,
-      "stdDev": 0.0,
-      "ci95": [
-        0.0,
-        0.0
-      ]
-    },
-    {
-      "taskId": "sec-004",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "sys-004",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "tool-002",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.0,
-      "stdDev": 0.0,
-      "ci95": [
-        0.0,
-        0.0
-      ]
-    },
-    {
-      "taskId": "tool-005",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.0,
-      "stdDev": 0.0,
-      "ci95": [
-        0.0,
-        0.0
-      ]
-    },
-    {
-      "taskId": "web-006",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "wfl-003",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
-      ]
-    },
-    {
-      "taskId": "xdom-001",
-      "numRuns": 3,
-      "passRate": 0.0,
-      "meanScore": 0.5,
-      "stdDev": 0.0,
-      "ci95": [
-        0.5,
-        0.5
+        0,
+        0
       ]
     }
   ]

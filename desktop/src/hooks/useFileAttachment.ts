@@ -9,6 +9,7 @@
  */
 
 import { useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface FileAttachment {
     id: string;
@@ -16,11 +17,9 @@ export interface FileAttachment {
     type: 'image' | 'text' | 'pdf' | 'other';
     mimeType: string;
     size: number;
-    /** base64-encoded content for images */
-    base64?: string;
-    /** text content for text files */
-    textContent?: string;
-    /** thumbnail data URL for preview */
+    /** absolute persisted file path for sidecar consumption */
+    filePath: string;
+    /** thumbnail URL for preview */
     preview?: string;
 }
 
@@ -37,29 +36,35 @@ function getFileType(mimeType: string): FileAttachment['type'] {
     return 'other';
 }
 
-function readFileAsBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const result = reader.result as string;
-            // Remove the data URL prefix
-            resolve(result.split(',')[1] || result);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
+type PersistAttachmentFileInput = {
+    fileName: string;
+    mimeType: string;
+    bytes: number[];
+    workspacePath?: string;
+};
+
+type PersistAttachmentFileResult = {
+    success: boolean;
+    filePath: string;
+    error?: string;
+};
+
+async function persistAttachmentFile(file: File, workspacePath?: string): Promise<string> {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const input: PersistAttachmentFileInput = {
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        bytes,
+        workspacePath,
+    };
+    const result = await invoke<PersistAttachmentFileResult>('persist_attachment_file', { input });
+    if (!result.success || typeof result.filePath !== 'string' || result.filePath.trim().length === 0) {
+        throw new Error(result.error || 'persist_attachment_failed');
+    }
+    return result.filePath;
 }
 
-function readFileAsText(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsText(file);
-    });
-}
-
-export function useFileAttachment() {
+export function useFileAttachment(workspacePath?: string) {
     const [attachments, setAttachments] = useState<FileAttachment[]>([]);
     const [error, setError] = useState<string | null>(null);
 
@@ -87,18 +92,11 @@ export function useFileAttachment() {
                 type: fileType,
                 mimeType: file.type,
                 size: file.size,
+                filePath: await persistAttachmentFile(file, workspacePath),
             };
 
             if (fileType === 'image') {
-                attachment.base64 = await readFileAsBase64(file);
-                attachment.preview = `data:${file.type};base64,${attachment.base64}`;
-            } else if (fileType === 'text') {
-                attachment.textContent = await readFileAsText(file);
-            } else if (fileType === 'pdf') {
-                // For PDF, read as base64 and extract text later on sidecar side
-                attachment.base64 = await readFileAsBase64(file);
-            } else {
-                attachment.base64 = await readFileAsBase64(file);
+                attachment.preview = URL.createObjectURL(file);
             }
 
             setAttachments((prev) => [...prev, attachment]);
@@ -106,7 +104,7 @@ export function useFileAttachment() {
             setError('read_error');
             console.error('[useFileAttachment] Failed to read file:', err);
         }
-    }, [attachments.length]);
+    }, [attachments.length, workspacePath]);
 
     const addFiles = useCallback(async (files: FileList | File[]) => {
         for (const file of Array.from(files)) {
@@ -115,11 +113,24 @@ export function useFileAttachment() {
     }, [addFile]);
 
     const removeAttachment = useCallback((id: string) => {
-        setAttachments((prev) => prev.filter((a) => a.id !== id));
+        setAttachments((prev) => {
+            const target = prev.find((attachment) => attachment.id === id);
+            if (target?.preview?.startsWith('blob:')) {
+                URL.revokeObjectURL(target.preview);
+            }
+            return prev.filter((attachment) => attachment.id !== id);
+        });
     }, []);
 
     const clearAttachments = useCallback(() => {
-        setAttachments([]);
+        setAttachments((prev) => {
+            for (const attachment of prev) {
+                if (attachment.preview?.startsWith('blob:')) {
+                    URL.revokeObjectURL(attachment.preview);
+                }
+            }
+            return [];
+        });
         setError(null);
     }, []);
 
@@ -147,33 +158,20 @@ export function useFileAttachment() {
     }, [addFiles]);
 
     /**
-     * Build content array for sending to the sidecar.
-     * Combines text message with attachments into Anthropic-compatible content blocks.
+     * Build sidecar message content with resolved local attachment paths.
      */
     const buildContentWithAttachments = useCallback((textMessage: string): string => {
         if (attachments.length === 0) return textMessage;
 
-        const parts: string[] = [];
-
-        // Add attachments info as text
-        for (const att of attachments) {
-            if (att.type === 'image' && att.base64) {
-                parts.push(`[Attached image: ${att.name} (${att.mimeType})]`);
-                parts.push(`<image_base64 name="${att.name}" type="${att.mimeType}">${att.base64}</image_base64>`);
-            } else if (att.type === 'text' && att.textContent) {
-                parts.push(`[Attached file: ${att.name}]`);
-                parts.push(`<attached_file name="${att.name}">\n${att.textContent}\n</attached_file>`);
-            } else if (att.base64) {
-                parts.push(`[Attached file: ${att.name} (${att.mimeType}, ${(att.size / 1024).toFixed(1)}KB)]`);
-            }
-        }
-
-        // Add the user's text message
+        const parts: string[] = [
+            '[Resolved attachments]',
+            ...attachments.map((att) => `- ${att.filePath}`),
+        ];
         if (textMessage.trim()) {
-            parts.push(textMessage);
+            parts.push('');
+            parts.push(textMessage.trim());
         }
-
-        return parts.join('\n\n');
+        return parts.join('\n');
     }, [attachments]);
 
     return {

@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.3.0",
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "skills_mode": "vanilla",
+  "claw_bench_version": "0.1.0",
+  "runs_per_task": 1,
+  "test_tier": "quick-nonmulti",
+  "scores": {
+    "overall": 59.19,
+    "overall_raw": 59.19,
+    "overall_effective": 59.19,
+    "tasks_total": 3,
+    "tasks_passed": 0,
+    "tasks_failed": 3,
+    "tasks_errored": 2,
+    "tasks_invalid": 0,
+    "tasks_effective_total": 3,
+    "tasks_effective_passed": 0,
+    "tasks_effective_failed": 3,
+    "pass_rate": 0,
+    "pass_rate_effective": 0
+  },
+  "error_breakdown": {
+    "timeout": 2,
+    "network": 0,
+    "api_error": 0,
+    "invalid_task": 0,
+    "other_error": 0,
+    "total_errors": 2
+  },
+  "preflight": {
+    "skip_invalid": true,
+    "install_missing_verifier_deps": true,
+    "pandas_ready": true,
+    "checks": [
+      {
+        "taskId": "mag-002",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "mag-003",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff",
+        "invalidReasons": []
+      },
+      {
+        "taskId": "mag-004",
+        "taskDir": "/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition",
+        "invalidReasons": []
+      }
+    ]
+  },
+  "task_results": [
+    {
+      "task_id": "mag-002",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.6667,
+      "duration_s": 420.45,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "[coworkany-mcp-toolset-resolution] {\"taskId\":\"mag-002\",\"routeMode\":\"task\",\"useChatLatencyProfile\":false,\"loadStatus\":\"disabled\",\"servedFromCache\":false,\"cacheAgeMs\":null,\"timeoutMs\":0,\"elapsedMs\":0,\"mcpToolCount\":0}\n[coworkany-task-route-agent] {\"taskId\":\"mag-002\",\"routeMode\":\"task\",\"selectedAgent\":\"supervisor\",\"requiredCompletionCapabilities\":[\"artifact_write\"],\"turnContractDomain\":null,\"enabledToolpackCount\":0,\"useAgentNetworkExecution\":false,\"multiAgentContractInjected\":true,\"delegationPlanInjected\":true,\"delegationWorkflowShape\":\"parallel\",\"delegationRoleCount\":3,\"networkReason\":\"prefer_supervisor_stream\",\"multiAgentSignalScore\":6}",
+      "error_type": "timeout",
+      "skills_mode": "vanilla",
+      "details": "....F..FF                                                                [100%]\n=================================== FAILURES ===================================\n____________________________ test_synthesis_exists _____________________________\nverifier/test_output.py:59: in test_synthesis_exists\n    assert f.exists(), \"synthesis.md missing\"\nE   AssertionError: synthesis.md missing\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/debate/synthesis.md').exists\n_____________________________ test_final_analysis ______________________________\nverifier/test_output.py:92: in test_final_analysis\n    assert f.exists(), \"analysis.md missing at workspace root\"\nE   AssertionError: analysis.md missing at workspace root\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/analysis.md').exists\n_____________________ test_analysis_references_both_sides ______________________\nverifier/test_output.py:108: in test_analysis_references_both_sides\n    analysis = (workspace / \"analysis.md\").read_text().lower()\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1027: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/pathlib.py:1013: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-002-research-debate/workspace/gpt-5.3-codex_run0/analysis.md'\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_synthesis_exists - AssertionError: synth...\nFAILED verifier/test_output.py::test_final_analysis - AssertionError: analysi...\nFAILED verifier/test_output.py::test_analysis_references_both_sides - FileNot...\n3 failed, 6 passed in 0.05s"
+    },
+    {
+      "task_id": "mag-003",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.9091,
+      "duration_s": 420.42,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": "[coworkany-mcp-toolset-resolution] {\"taskId\":\"mag-003\",\"routeMode\":\"task\",\"useChatLatencyProfile\":false,\"loadStatus\":\"disabled\",\"servedFromCache\":false,\"cacheAgeMs\":null,\"timeoutMs\":0,\"elapsedMs\":0,\"mcpToolCount\":0}\n[coworkany-task-route-agent] {\"taskId\":\"mag-003\",\"routeMode\":\"task\",\"selectedAgent\":\"supervisor\",\"requiredCompletionCapabilities\":[\"artifact_write\",\"command_execution\"],\"turnContractDomain\":null,\"enabledToolpackCount\":0,\"useAgentNetworkExecution\":false,\"multiAgentContractInjected\":true,\"delegationPlanInjected\":true,\"delegationWorkflowShape\":\"staged\",\"delegationRoleCount\":5,\"networkReason\":\"prefer_supervisor_stream\",\"multiAgentSignalScore\":3}\n[coworkany-task-fallback-output-materialized] {\"taskId\":\"mag-003\",\"outputs\":[\"/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage1_clean.csv\",\"/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-003-data-pipeline-handoff/workspace/gpt-5.3-codex_run0/pipeline/stage2_features.csv\"]}\n[coworkany-metrics] {\"event\":\"llm_timing\",\"taskId\":\"mag-003\",\"threadId\":\"thread-mag-003\",\"turnId\":null,\"modelId\":\"openai/gpt-5.3-codex\",\"provider\":\"openai\",\"phase\":\"generate_fallback\",\"outcome\":\"success\",\"attempt\":2,\"maxAttempts\":2,\"assistantChars\":3201,\"finishReason\":\"stop\",\"error\":null,\"timings\":{\"elapsedMs\":71610,\"dnsMs\":null,\"connectMs\":null,\"ttfbMs\":null,\"firstTokenMs\":71610,\"lastTokenMs\":71610},\"proxy\":{\"before\":{\"enabled\":false,\"source\":null,\"endpoint\":null,\"noProxy\":null},\"after\":{\"enabled\":false,\"source\":null,\"endpoint\":null,\"noProxy\":null}},\"timestamp\":\"2026-04-17T06:30:52.297Z\"}",
+      "error_type": "timeout",
+      "skills_mode": "vanilla",
+      "details": "...F.......                                                              [100%]\n=================================== FAILURES ===================================\n______________________________ test_stage3_output ______________________________\nverifier/test_output.py:47: in test_stage3_output\n    assert \"total\" in stats or \"summary\" in stats or \"amount\" in stats, \\\nE   AssertionError: Stats JSON missing expected top-level keys\nE   assert ('total' in [{'region': 'South', 'total': 2237.5}, {'region': 'West', 'total': 2215}, {'region': 'East', 'total': 1998.5}] or 'summary' in [{'region': 'South', 'total': 2237.5}, {'region': 'West', 'total': 2215}, {'region': 'East', 'total': 1998.5}] or 'amount' in [{'region': 'South', 'total': 2237.5}, {'region': 'West', 'total': 2215}, {'region': 'East', 'total': 1998.5}])\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_stage3_output - AssertionError: Stats JS...\n1 failed, 10 passed in 0.03s"
+    },
+    {
+      "task_id": "mag-004",
+      "status": "failed",
+      "passed": false,
+      "invalid": false,
+      "invalid_reasons": [],
+      "score": 0.2,
+      "duration_s": 288.79,
+      "tokens_input": 0,
+      "tokens_output": 0,
+      "error": null,
+      "error_type": "none",
+      "skills_mode": "vanilla",
+      "details": ".F.FFFFFFF                                                               [100%]\n=================================== FAILURES ===================================\n____________________________ test_agent_logs_exist _____________________________\nverifier/test_output.py:33: in test_agent_logs_exist\n    assert len(logs) >= 3, f\"Need >= 3 agent logs, found {len(logs)}\"\nE   AssertionError: Need >= 3 agent logs, found 0\nE   assert 0 >= 3\nE    +  where 0 = len([])\n__________________________ test_project_source_exists __________________________\nverifier/test_output.py:57: in test_project_source_exists\n    assert len(py_files) >= 1, \"No Python source files in project/\"\nE   AssertionError: No Python source files in project/\nE   assert 0 >= 1\nE    +  where 0 = len([])\n______________________________ test_readme_exists ______________________________\nverifier/test_output.py:66: in test_readme_exists\n    assert readme.exists(), \"README.md missing in project/\"\nE   AssertionError: README.md missing in project/\nE   assert False\nE    +  where False = exists()\nE    +    where exists = PosixPath('/Users/beihuang/Documents/github/coworkany/tmp/claw-bench/tasks/multi-agent/mag-004-project-decomposition/workspace/gpt-5.3-codex_run0/project/readme.md').exists\n_______________________________ test_tests_exist _______________________________\nverifier/test_output.py:78: in test_tests_exist\n    assert len(test_files) >= 1, \"No test files found in project/\"\nE   AssertionError: No test files found in project/\nE   assert 0 >= 1\nE    +  where 0 = len([])\n____________________________ test_cli_add_and_list _____________________________\nverifier/test_output.py:103: in test_cli_add_and_list\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n________________________________ test_cli_done _________________________________\nverifier/test_output.py:121: in test_cli_done\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n_______________________________ test_cli_remove ________________________________\nverifier/test_output.py:134: in test_cli_remove\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n___________________________ test_cli_error_handling ____________________________\nverifier/test_output.py:146: in test_cli_error_handling\n    assert script, \"Cannot find main CLI script\"\nE   AssertionError: Cannot find main CLI script\nE   assert None\n=========================== short test summary info ============================\nFAILED verifier/test_output.py::test_agent_logs_exist - AssertionError: Need ...\nFAILED verifier/test_output.py::test_project_source_exists - AssertionError: ...\nFAILED verifier/test_output.py::test_readme_exists - AssertionError: README.m...\nFAILED verifier/test_output.py::test_tests_exist - AssertionError: No test fi...\nFAILED verifier/test_output.py::test_cli_add_and_list - AssertionError: Canno...\nFAILED verifier/test_output.py::test_cli_done - AssertionError: Cannot find m...\nFAILED verifier/test_output.py::test_cli_remove - AssertionError: Cannot find...\nFAILED verifier/test_output.py::test_cli_error_handling - AssertionError: Can...\n8 failed, 2 passed in 0.05s"
+    }
+  ],
+  "agent_profile": {
+    "model": "openai/gpt-5.3-codex",
+    "framework": "coworkany-sidecar",
+    "skills": [],
+    "skills_mode": "vanilla",
+    "mcp_servers": [],
+    "memory_modules": [],
+    "model_tier": null,
+    "tags": {
+      "skip_invalid": true
+    },
+    "profile_id": "coworkany-sidecar-nonmulti",
+    "display_name": "coworkany-sidecar / nonmulti"
+  }
+}

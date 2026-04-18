@@ -28,7 +28,8 @@ type TaskRunResult = {
 function usage(): never {
     console.error(
         'Usage: node --import tsx scripts/external/run-claw-bench-task.ts'
-        + ' --task-id <id> --workspace <dir> --instruction <file> --model-id <model> [--result-path <file>]',
+        + ' --task-id <id> --workspace <dir> --instruction <file> --model-id <model>'
+        + ' [--result-path <file>] [--max-steps <n>]',
     );
     process.exit(2);
 }
@@ -47,6 +48,7 @@ function parseArgs(): {
     instructionPath: string;
     modelId: string;
     resultPath?: string;
+    maxSteps: number;
 } {
     const args = process.argv.slice(2);
     if (args.includes('--help') || args.includes('-h')) {
@@ -57,10 +59,19 @@ function parseArgs(): {
     const instructionPath = readArg(args, '--instruction');
     const modelId = readArg(args, '--model-id');
     const resultPath = readArg(args, '--result-path');
+    const maxStepsArg = readArg(args, '--max-steps');
 
     if (!taskId || !workspacePath || !instructionPath || !modelId) {
         usage();
     }
+
+    const maxStepsCandidate = Number.parseInt(
+        maxStepsArg ?? process.env.COWORKANY_CLAW_TASK_MAX_STEPS ?? '',
+        10,
+    );
+    const maxSteps = Number.isFinite(maxStepsCandidate) && maxStepsCandidate > 0
+        ? Math.min(128, Math.max(1, maxStepsCandidate))
+        : 24;
 
     return {
         taskId,
@@ -68,6 +79,7 @@ function parseArgs(): {
         instructionPath: path.resolve(instructionPath),
         modelId,
         resultPath: resultPath ? path.resolve(resultPath) : undefined,
+        maxSteps,
     };
 }
 
@@ -122,7 +134,7 @@ async function main(): Promise<void> {
                 requireToolApproval: false,
                 autoResumeSuspendedTools: true,
                 forcePostAssistantCompletion: true,
-                maxSteps: 8,
+                maxSteps: args.maxSteps,
             },
         );
         if (run && typeof run.runId === 'string' && run.runId.trim().length > 0) {

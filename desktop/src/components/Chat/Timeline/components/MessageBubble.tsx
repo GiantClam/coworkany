@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import styles from '../Timeline.module.css';
-import { parseInlineAttachments } from '../../../../lib/text/inlineAttachments';
 import { RichMessageContent } from './RichMessageContent';
 
 interface MessageBubbleItem {
@@ -18,8 +17,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
     const { t } = useTranslation();
     const [showCopy, setShowCopy] = useState(false);
     const [copied, setCopied] = useState(false);
-    const userContent = isUser ? parseInlineAttachments(item.content) : null;
-    const copyableContent = isUser ? (userContent?.text || item.content) : item.content;
+    const copyableContent = item.content;
 
     const handleCopy = async () => {
         try {
@@ -49,32 +47,10 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({ item, isUser }) 
             <div className={`${styles.contentBubble} ${!isUser ? styles.markdownBody : ''}`.trim()}>
                 {isUser ? (
                     <div className={styles.userMessageBody}>
-                        {userContent?.text ? (
-                            <RichMessageContent
-                                content={userContent.text}
-                                inlineFiles={userContent.files}
-                                className={styles.userText}
-                            />
-                        ) : null}
-                        {!userContent?.text && userContent?.files?.length ? (
-                            <RichMessageContent
-                                content=""
-                                inlineFiles={userContent.files}
-                                className={styles.userText}
-                            />
-                        ) : null}
-                        {userContent?.images?.length ? (
-                            <div className={styles.userImageList}>
-                                {userContent.images.map((image, index) => (
-                                    <img
-                                        key={`${item.id}-image-${index}`}
-                                        src={image.dataUrl}
-                                        alt={image.name}
-                                        className={styles.userImage}
-                                    />
-                                ))}
-                            </div>
-                        ) : null}
+                        <RichMessageContent
+                            content={item.content}
+                            className={styles.userText}
+                        />
                     </div>
                 ) : (
                     <RichMessageContent

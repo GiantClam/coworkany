@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { parseInlineAttachments } from '../src/lib/text/inlineAttachments';
 
 describe('parseInlineAttachments', () => {
-    test('extracts inline images and removes base64 tags from visible text', () => {
+    test('keeps message text untouched and does not parse legacy inline tags', () => {
         const raw = [
             '[Attached image: cat.png (image/png)]',
             '',
@@ -13,19 +13,12 @@ describe('parseInlineAttachments', () => {
 
         const parsed = parseInlineAttachments(raw);
 
-        expect(parsed.text).toContain('[Attached image: cat.png (image/png)]');
-        expect(parsed.text).toContain('请分析这张图');
-        expect(parsed.text).not.toContain('ZmFrZQ==');
-        expect(parsed.images).toEqual([
-            {
-                name: 'cat.png',
-                mimeType: 'image/png',
-                dataUrl: 'data:image/png;base64,ZmFrZQ==',
-            },
-        ]);
+        expect(parsed.text).toBe(raw.trim());
+        expect(parsed.images).toEqual([]);
+        expect(parsed.files).toEqual([]);
     });
 
-    test('drops attached file wrappers from visible text', () => {
+    test('returns plain text for attached file wrappers', () => {
         const raw = [
             '[Attached file: notes.md]',
             '',
@@ -36,7 +29,8 @@ describe('parseInlineAttachments', () => {
 
         const parsed = parseInlineAttachments(raw);
 
-        expect(parsed.text).toBe('[Attached file: notes.md]');
+        expect(parsed.text).toBe(raw.trim());
         expect(parsed.images).toEqual([]);
+        expect(parsed.files).toEqual([]);
     });
 });

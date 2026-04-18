@@ -1,0 +1,64 @@
+{
+  "framework": "coworkany-sidecar",
+  "model": "openai/gpt-5.3-codex",
+  "overall": 87.88,
+  "effectiveOverall": 87.88,
+  "taskCompletion": 66.67,
+  "effectiveTaskCompletion": 66.67,
+  "efficiency": 90,
+  "security": 100,
+  "skills": 87.88,
+  "ux": 0,
+  "testTier": "quick-nonmulti",
+  "metadata": {
+    "runs_per_task": 1,
+    "total_tasks": 3,
+    "invalid_tasks": 0,
+    "effective_tasks": 3,
+    "overall_pass_rate_raw": 0.6667,
+    "overall_pass_rate_effective": 0.6667,
+    "overall_mean_score_raw": 0.8788,
+    "overall_mean_score_effective": 0.8788
+  },
+  "taskDetails": [
+    {
+      "taskId": "mag-002",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    },
+    {
+      "taskId": "mag-003",
+      "status": "failed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 0,
+      "meanScore": 0.6364,
+      "stdDev": 0,
+      "ci95": [
+        0.6364,
+        0.6364
+      ]
+    },
+    {
+      "taskId": "mag-004",
+      "status": "passed",
+      "invalid": false,
+      "numRuns": 1,
+      "passRate": 1,
+      "meanScore": 1,
+      "stdDev": 0,
+      "ci95": [
+        1,
+        1
+      ]
+    }
+  ]
+}

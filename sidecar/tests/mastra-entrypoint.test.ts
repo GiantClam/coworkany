@@ -171,6 +171,10 @@ function createHarness(overrides?: {
         durationMs: number;
     }>;
     initialTaskStates?: TaskRuntimeState[];
+    initialTaskTranscripts?: Record<string, Array<{
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+    }>>;
     policyGateResponseTimeoutMs?: number;
     policyGateTimeoutRetryCount?: number;
     onPolicyEvaluate?: (input: {
@@ -193,7 +197,17 @@ function createHarness(overrides?: {
     const persistedTaskStates = new Map<string, TaskRuntimeState>(
         (overrides?.initialTaskStates ?? []).map((state) => [state.taskId, state]),
     );
-    const transcriptByTask = new Map<string, TranscriptEntry[]>();
+    const transcriptByTask = new Map<string, TranscriptEntry[]>(
+        Object.entries(overrides?.initialTaskTranscripts ?? {}).map(([taskId, entries]) => [
+            taskId,
+            entries.map((entry, index) => ({
+                id: `tx-seed-${taskId}-${index + 1}`,
+                role: entry.role,
+                content: entry.content.trim(),
+                at: '2026-03-30T00:00:00.000Z',
+            })),
+        ]),
+    );
     let transcriptEntryId = 0;
     const policyDecisions: PolicyDecisionEntry[] = [];
     const hookEvents: HookEvent[] = [];
@@ -1940,6 +1954,89 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
         expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
         expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('web_research');
+    });
+
+    test('start_task does not let client direct config suppress server task intent routing', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-direct-attachment-transform',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-direct-attachment-transform',
+                title: 'direct attachment transform',
+                userQuery: '[Resolved attachments]\n- /tmp/input.jpeg\n\n将附件图片转为 png 格式',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+    });
+
+    test('start_task keeps skill prompt resolution after server reroutes default direct config to task', async () => {
+        const harness = createHarness({
+            onResolveSkillPrompt: () => ({
+                prompt: '[Enabled Skills]\n- attachment-executor: handle local attachment processing',
+                enabledSkillIds: ['attachment-executor'],
+            }),
+        });
+        await harness.process({
+            id: 'cmd-start-direct-attachment-skill-route',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-direct-attachment-skill-route',
+                title: 'direct attachment skill route',
+                userQuery: '[Resolved attachments]\n- /tmp/input.jpeg\n\n将附件图片转为 png 格式',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+        expect(harness.userMessageCalls[0]?.options?.enabledSkills).toEqual(['attachment-executor']);
+        expect(harness.userMessageCalls[0]?.options?.skillPrompt).toContain('attachment-executor');
+    });
+
+    test('start_task routes attachment screenshot-filename video merge request to command_execution without browser capability', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-direct-attachment-video-merge',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-direct-attachment-video-merge',
+                title: 'direct attachment video merge',
+                userQuery: [
+                    '[Resolved attachments]',
+                    '- /tmp/截屏2025-10-17 22.01.27.png',
+                    '- /tmp/截屏2026-01-06 15.34.56.png',
+                    '- /tmp/截屏2026-04-06 21.01.29.png',
+                    '',
+                    '把附件图片合并为一个视频，每张图片播放 5s',
+                ].join('\n'),
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).not.toContain('browser_automation');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).not.toContain('web_research');
     });
 
     test('start_task keeps task deadline budget fixed across recovery attempts for direct market route', async () => {
@@ -2066,6 +2163,152 @@ describe('mastra entrypoint processor', () => {
         expect((sendResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(0);
         const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
         expect((textDelta?.payload as Record<string, unknown>)?.turnId).toBe('cmd-followup');
+    });
+
+    test('send_task_message inherits resolved attachment paths for contextual follow-up references', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-attachment-followup',
+                    conversationThreadId: 'thread-attachment-followup',
+                    title: 'attachment followup',
+                    workspacePath: '/tmp/ws-attachment-followup',
+                    createdAt: '2026-04-18T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-attachment-followup',
+                    executionPath: 'direct',
+                    lastUserMessage: [
+                        '[Resolved attachments]',
+                        '- /tmp/example-a.png',
+                        '- /tmp/example-b.png',
+                        '',
+                        '把附件图片合并为一个视频，每张图片播放 5s',
+                    ].join('\n'),
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-followup-attachment-context',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-attachment-followup',
+                content: '将上述图片合并为一个视频，每张图片播放 5s',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        const executionMessage = harness.userMessageCalls[0]?.message ?? '';
+        expect(harness.userMessageCalls[0]?.threadId).toBe('thread-attachment-followup');
+        expect(executionMessage).toContain('[Resolved attachments]');
+        expect(executionMessage).toContain('/tmp/example-a.png');
+        expect(executionMessage).toContain('/tmp/example-b.png');
+        expect(executionMessage).toContain('将上述图片合并为一个视频，每张图片播放 5s');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+    });
+
+    test('send_task_message inherits resolved attachment paths when follow-up omits attachment noun but requests transform target', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-attachment-followup-implicit-object',
+                    conversationThreadId: 'thread-attachment-followup-implicit-object',
+                    title: 'attachment followup implicit object',
+                    workspacePath: '/tmp/ws-attachment-followup-implicit-object',
+                    createdAt: '2026-04-18T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-attachment-followup-implicit-object',
+                    executionPath: 'direct',
+                    lastUserMessage: [
+                        '[Resolved attachments]',
+                        '- /tmp/example-a.png',
+                        '- /tmp/example-b.png',
+                        '',
+                        '把附件图片合并为一个视频，每张图片播放 5s',
+                    ].join('\n'),
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-followup-attachment-context-implicit-object',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-attachment-followup-implicit-object',
+                content: '把上面的合并为一个视频，每张 5s',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        const executionMessage = harness.userMessageCalls[0]?.message ?? '';
+        expect(harness.userMessageCalls[0]?.threadId).toBe('thread-attachment-followup-implicit-object');
+        expect(executionMessage).toContain('[Resolved attachments]');
+        expect(executionMessage).toContain('/tmp/example-a.png');
+        expect(executionMessage).toContain('/tmp/example-b.png');
+        expect(executionMessage).toContain('把上面的合并为一个视频，每张 5s');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+    });
+
+    test('send_task_message falls back to transcript attachment block when runtime state lost previous attachment message', async () => {
+        const taskId = 'task-attachment-followup-transcript-fallback';
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId,
+                    conversationThreadId: 'thread-attachment-followup-transcript-fallback',
+                    title: 'attachment followup transcript fallback',
+                    workspacePath: '/tmp/ws-attachment-followup-transcript-fallback',
+                    createdAt: '2026-04-18T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-attachment-followup-transcript-fallback',
+                    executionPath: 'direct',
+                    // Simulate previously corrupted/overwritten runtime state.
+                    lastUserMessage: '将上述图片合并为一个视频，每张图片播放 5s',
+                },
+            ],
+            initialTaskTranscripts: {
+                [taskId]: [
+                    {
+                        role: 'user',
+                        content: [
+                            '[Resolved attachments]',
+                            '- /tmp/example-a.png',
+                            '- /tmp/example-b.png',
+                            '',
+                            '把附件图片合并为一个视频，每张图片播放 5s',
+                        ].join('\n'),
+                    },
+                    {
+                        role: 'assistant',
+                        content: '已识别方案',
+                    },
+                    {
+                        role: 'user',
+                        content: '将上述图片合并为一个视频，每张图片播放 5s',
+                    },
+                ],
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-followup-attachment-transcript-fallback',
+            type: 'send_task_message',
+            payload: {
+                taskId,
+                content: '把上面的合并为一个视频，每张 5s',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        const executionMessage = harness.userMessageCalls[0]?.message ?? '';
+        expect(executionMessage).toContain('[Resolved attachments]');
+        expect(executionMessage).toContain('/tmp/example-a.png');
+        expect(executionMessage).toContain('/tmp/example-b.png');
+        expect(executionMessage).toContain('把上面的合并为一个视频，每张 5s');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
     });
 
     test('send_subagent_message routes follow-up to targeted subagent lane', async () => {
@@ -3492,6 +3735,123 @@ describe('mastra entrypoint processor', () => {
             approved: true,
         });
         expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves low-risk workspace command chain separated by semicolons', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-semicolon-inspection',
+                    toolCallId: 'tool-safe-semicolon-inspection',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: "pwd; ls -la; echo '---'; find . -maxdepth 2 -type d | sed -n '1,10p'",
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-semicolon-inspection' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-semicolon-inspection',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-semicolon-inspection',
+                content: '查看当前目录结构',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-semicolon-inspection',
+            toolCallId: 'tool-safe-semicolon-inspection',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message auto-approves read-only command -v/which probe chain without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-command-probe',
+                    toolCallId: 'tool-safe-command-probe',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: 'pwd && ls -la "/tmp/a.png" "/tmp/b.png" && command -v ffmpeg || which ffmpeg',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-command-probe' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-command-probe',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-command-probe',
+                content: '检查图片文件并探测 ffmpeg 是否可用',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-command-probe',
+            toolCallId: 'tool-safe-command-probe',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+    });
+
+    test('send_task_message replay: attachment video-merge probe command chain does not emit EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-replay-attachment-video-merge-probe',
+                    toolCallId: 'tool-replay-attachment-video-merge-probe',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        background: false,
+                        command: "pwd; ls -la; echo '---'; find . -maxdepth 4 -type d | sed -n '1,40p'",
+                        cwd: '/Users/beihuang/Documents/github/coworkany/sidecar',
+                        tail: 400,
+                        timeout: 60,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-replay-attachment-video-merge-probe' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-replay-attachment-video-merge-probe',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-replay-attachment-video-merge-probe',
+                content: [
+                    '[Resolved attachments]',
+                    '- /tmp/截屏2025-10-17 22.01.27.png',
+                    '- /tmp/截屏2026-01-06 15.34.56.png',
+                    '- /tmp/截屏2026-04-06 21.01.29.png',
+                    '',
+                    '把附件图片合并为一个视频，每张图片播放 5s',
+                ].join('\n'),
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-replay-attachment-video-merge-probe',
+            toolCallId: 'tool-replay-attachment-video-merge-probe',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
     test('send_task_message auto-approves low-risk workspace git status command without EFFECT_REQUESTED', async () => {
