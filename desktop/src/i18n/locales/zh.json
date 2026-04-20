@@ -245,6 +245,7 @@
     "pendingWaitingForModel": "已发送，正在思考中…",
     "pendingUsingTool": "消息已发送，正在调用 {{tool}}…",
     "pendingRetrying": "请求暂时受限，正在自动重试…",
+    "awaitingApprovalRetryBlocked": "当前任务正在等待授权，请在授权卡片中点击“批准”或“拒绝”后继续。",
     "stalledSuspended": "长时间未收到响应，任务已暂停。你可以稍后重试或继续。",
     "failureNeedsConfigTitle": "需要检查服务商配置",
     "failureNeedsConfigDesc": "模型服务不可用或配置异常。请先更新 LLM 设置后重试。",

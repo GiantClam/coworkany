@@ -1713,7 +1713,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
-    test('send_task_message emits rich terminal-recovery summary when terminal event is missing after tool evidence', async () => {
+    test('send_task_message emits terminal-recovery summary when terminal event is missing after tool evidence', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -1752,13 +1752,13 @@ describe('mastra entrypoint processor', () => {
 
         const degradedDelta = harness.outgoing.find((message) =>
             message.type === 'TEXT_DELTA'
-            && toString(toRecord(message.payload).delta).includes('系统已自动触发终端恢复'),
+            && toString(toRecord(message.payload).delta).includes('终止事件丢失'),
         );
         expect(degradedDelta).toBeDefined();
-        expect(toString(toRecord(degradedDelta?.payload).delta).length).toBeGreaterThanOrEqual(100);
+        expect(toString(toRecord(degradedDelta?.payload).delta).length).toBeGreaterThanOrEqual(20);
         const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
         expect(finished).toBeDefined();
-        expect(toString(toRecord(finished?.payload).summary).length).toBeGreaterThanOrEqual(100);
+        expect(toString(toRecord(finished?.payload).summary).includes('终止事件丢失')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
@@ -3523,6 +3523,43 @@ describe('mastra entrypoint processor', () => {
         expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
     });
 
+    test('send_task_message fails when tooling progress has no tool_result before terminal recovery', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-missing-tool-result',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: { command: 'ls -la' },
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-missing-tool-result',
+                    finishReason: 'stream_exhausted',
+                });
+                return { runId: 'run-missing-tool-result' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-missing-tool-result',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-missing-tool-result',
+                content: '你好',
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities ?? []).toEqual([]);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
+    });
+
     test('send_task_message tolerates zero-progress complete before late approval and resumes successfully', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -4980,6 +5017,39 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
         expect(assistantText).toContain('上游检索流在输出正文前中断');
+    });
+
+    test('send_task_message fails when retryable no-narrative error follows tooling progress without tool_result', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-tooling-progress-no-result',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: { command: 'ls -la ".coworkany/attachments/staged"' },
+                });
+                emit({
+                    type: 'error',
+                    runId: 'run-tooling-progress-no-result',
+                    message: 'Error: stream_idle_timeout:30000',
+                });
+                return { runId: 'run-tooling-progress-no-result' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-tooling-progress-no-result',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-tooling-progress-no-result',
+                content: '把附件图片合并为一个视频，每张图片播放 5s',
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
     });
 
     test('send_task_message retries failed command step when retryable timeout is thrown after tooling progress without explicit error event', async () => {

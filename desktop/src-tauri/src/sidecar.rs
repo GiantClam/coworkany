@@ -1679,6 +1679,10 @@ impl SidecarManager {
             .unwrap_or_else(|| "0".to_string());
         let output_guardrails = Self::first_non_empty_env(&["COWORKANY_ENABLE_OUTPUT_GUARDRAILS"])
             .unwrap_or_else(|| "0".to_string());
+        let task_generate_fallback = Self::first_non_empty_env(&[
+            "COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK",
+        ])
+        .unwrap_or_else(|| "1".to_string());
         let start_retry_count = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT"],
             5,
@@ -1853,6 +1857,10 @@ impl SidecarManager {
             .env("COWORKANY_ENABLE_GUARDRAILS", &guardrails)
             .env("COWORKANY_ENABLE_OUTPUT_GUARDRAILS", &output_guardrails)
             .env(
+                "COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK",
+                &task_generate_fallback,
+            )
+            .env(
                 "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
                 start_retry_count.to_string(),
             )
@@ -1966,9 +1974,10 @@ impl SidecarManager {
             );
 
         info!(
-            "Sidecar chat runtime configured: guardrails={} output_guardrails={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} stream_progress_timeout_ms={} stream_idle_timeout_ms={} post_assistant_max_ms={} post_assistant_idle_complete_ms={} mcp_toolsets_timeout_ms={} mcp_server_timeout_ms={} task_turn_timeout_ms={} task_startup_budget_ms={} task_stream_progress_timeout_ms={} task_stream_idle_timeout_ms={} task_pre_narrative_progress_timeout_ms={} task_pre_narrative_idle_timeout_ms={} task_no_narrative_tooling_max_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
+            "Sidecar chat runtime configured: guardrails={} output_guardrails={} task_generate_fallback={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} stream_progress_timeout_ms={} stream_idle_timeout_ms={} post_assistant_max_ms={} post_assistant_idle_complete_ms={} mcp_toolsets_timeout_ms={} mcp_server_timeout_ms={} task_turn_timeout_ms={} task_startup_budget_ms={} task_stream_progress_timeout_ms={} task_stream_idle_timeout_ms={} task_pre_narrative_progress_timeout_ms={} task_pre_narrative_idle_timeout_ms={} task_no_narrative_tooling_max_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
             guardrails,
             output_guardrails,
+            task_generate_fallback,
             start_retry_count,
             start_retry_delay_ms,
             start_timeout_ms,
@@ -3849,6 +3858,7 @@ mod tests {
             "COWORKANY_ENABLE_MCP",
             "COWORKANY_ENABLE_GUARDRAILS",
             "COWORKANY_ENABLE_OUTPUT_GUARDRAILS",
+            "COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK",
             "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
             "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS",
             "COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS",
@@ -3895,6 +3905,10 @@ mod tests {
         assert_eq!(
             envs.get("COWORKANY_ENABLE_OUTPUT_GUARDRAILS"),
             Some(&"0".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK"),
+            Some(&"1".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT"),
@@ -4019,6 +4033,7 @@ mod tests {
             "COWORKANY_ENABLE_MCP",
             "COWORKANY_ENABLE_GUARDRAILS",
             "COWORKANY_ENABLE_OUTPUT_GUARDRAILS",
+            "COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK",
             "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT",
             "COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS",
             "COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS",
@@ -4053,6 +4068,7 @@ mod tests {
         std::env::set_var("COWORKANY_ENABLE_MCP", "0");
         std::env::set_var("COWORKANY_ENABLE_GUARDRAILS", "1");
         std::env::set_var("COWORKANY_ENABLE_OUTPUT_GUARDRAILS", "1");
+        std::env::set_var("COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK", "0");
         std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT", "99");
         std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_DELAY_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS", "1");
@@ -4106,6 +4122,10 @@ mod tests {
         assert_eq!(
             envs.get("COWORKANY_ENABLE_OUTPUT_GUARDRAILS"),
             Some(&"1".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK"),
+            Some(&"0".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_CHAT_STREAM_START_RETRY_COUNT"),

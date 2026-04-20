@@ -196,6 +196,7 @@ type TaskTurnEventState = {
     assistantNarrativeChars: number;
     toolEvidenceSeen: boolean;
     strongToolEvidenceSeen: boolean;
+    toolResultSeen: boolean;
     satisfiedCompletionCapabilities: string[];
     resultAttemptedCompletionCapabilities: string[];
     observedToolNames: string[];
@@ -2228,15 +2229,13 @@ function buildMissingTerminalRecoverySummary(options: {
 }): string {
     if (options.evidenceSatisfied) {
         return [
-            '本轮任务已完成所需工具调用并拿到有效结果，但上游没有按协议返回终止事件，系统已自动触发终端恢复并安全结束当前回合。',
-            '这属于通用流控兜底，不代表业务执行失败；已产出的工具结果可以继续复用。',
-            '如果你希望我继续，我会在下一轮基于当前上下文补充完整结论、关键依据和下一步建议。',
+            '检测到工具结果已产出，但上游终止事件丢失；系统已自动结束本轮以避免界面卡住。',
+            '可直接基于当前结果继续下一步，或重试以获取完整正文。',
         ].join('\n');
     }
     return [
-        '本轮任务在工具阶段后未收到终止事件，系统已自动触发终端恢复并结束当前回合，避免任务长时间卡住。',
-        '当前结果可能不完整，你可以直接重试一次；我会继续沿用已有上下文和已执行信息。',
-        '若需要，我也可以在下一轮先给出简版结论，再补充完整证据与后续动作清单。',
+        '检测到工具阶段后终止事件丢失，系统已自动结束本轮避免界面卡住。',
+        '当前结果可能不完整，请重试本轮任务。',
     ].join('\n');
 }
 const SAFE_GIT_READ_ONLY_SUBCOMMANDS = new Set([
@@ -2602,6 +2601,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             assistantNarrativeChars: 0,
             toolEvidenceSeen: false,
             strongToolEvidenceSeen: false,
+            toolResultSeen: false,
             satisfiedCompletionCapabilities: [],
             resultAttemptedCompletionCapabilities: [],
             observedToolNames: [],
@@ -2740,6 +2740,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         toolName?: string;
         satisfiedCompletionCapabilities?: string[];
         resultAttemptedCompletionCapabilities?: string[];
+        toolResultSeen?: boolean;
     }): void => {
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
@@ -2761,18 +2762,28 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         const nextResultAttemptedCompletionCapabilities = normalizedResultAttempted.length > 0
             ? normalizeStringList([...state.resultAttemptedCompletionCapabilities, ...normalizedResultAttempted])
             : state.resultAttemptedCompletionCapabilities;
+        const nextToolResultSeen = state.toolResultSeen || input.toolResultSeen === true;
         const shouldMarkWeakEvidence = !state.toolEvidenceSeen;
         const shouldMarkStrongEvidence = evidenceStrength === 'strong' && !state.strongToolEvidenceSeen;
         const shouldUpdateObservedToolNames = nextObservedToolNames.length !== state.observedToolNames.length;
         const shouldUpdateSatisfiedCapabilities = nextSatisfiedCompletionCapabilities.length !== state.satisfiedCompletionCapabilities.length;
         const shouldUpdateResultAttempts = nextResultAttemptedCompletionCapabilities.length !== state.resultAttemptedCompletionCapabilities.length;
-        if (!shouldMarkWeakEvidence && !shouldMarkStrongEvidence && !shouldUpdateObservedToolNames && !shouldUpdateSatisfiedCapabilities && !shouldUpdateResultAttempts) {
+        const shouldUpdateToolResultSeen = nextToolResultSeen !== state.toolResultSeen;
+        if (
+            !shouldMarkWeakEvidence
+            && !shouldMarkStrongEvidence
+            && !shouldUpdateObservedToolNames
+            && !shouldUpdateSatisfiedCapabilities
+            && !shouldUpdateResultAttempts
+            && !shouldUpdateToolResultSeen
+        ) {
             return;
         }
         taskTurnEventStates.set(input.key, {
             ...state,
             toolEvidenceSeen: true,
             strongToolEvidenceSeen: state.strongToolEvidenceSeen || evidenceStrength === 'strong',
+            toolResultSeen: nextToolResultSeen,
             observedToolNames: nextObservedToolNames,
             satisfiedCompletionCapabilities: nextSatisfiedCompletionCapabilities,
             resultAttemptedCompletionCapabilities: nextResultAttemptedCompletionCapabilities,
@@ -2938,6 +2949,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         pruneTaskTurnEventStates(nowMs);
         return [...getTaskTurnEventState(key, nowMs).observedToolNames];
     };
+    const hasTaskTurnToolResultEvidence = (key: string): boolean => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        return getTaskTurnEventState(key, nowMs).toolResultSeen;
+    };
     const getTaskTurnRouteMode = (key: string): 'chat' | 'task' | undefined => {
         const nowMs = Date.now();
         pruneTaskTurnEventStates(nowMs);
@@ -3032,6 +3048,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             assistantNarrativeChars: 0,
             toolEvidenceSeen: false,
             strongToolEvidenceSeen: false,
+            toolResultSeen: false,
             satisfiedCompletionCapabilities: [],
             resultAttemptedCompletionCapabilities: [],
             observedToolNames: [],
@@ -4283,6 +4300,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 toolName: typeof event.toolName === 'string' ? event.toolName : undefined,
                 satisfiedCompletionCapabilities,
                 resultAttemptedCompletionCapabilities,
+                toolResultSeen: event.type === 'tool_result',
             });
             if (event.type === 'tool_call' || event.type === 'tool_result') {
                 recordDelegatedAgentTaskNotification({
@@ -5776,6 +5794,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     }
                     const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
                     const missingCapabilities = getTaskTurnMissingRequiredCompletionCapabilities(turnEventStateKey);
+                    const toolResultSeen = hasTaskTurnToolResultEvidence(turnEventStateKey);
                     if (
                         runMissingToolEvidenceAutoRetry
                         && missingCapabilities.length > 0
@@ -5791,13 +5810,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     ) {
                         return;
                     }
-                    if (requiredCapabilities.length === 0 || missingCapabilities.length === 0) {
+                    if ((requiredCapabilities.length === 0 || missingCapabilities.length === 0) && toolResultSeen) {
                         if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
                             return;
                         }
                         const finishReason = `degraded_${reason}`;
                         const degradedSummary = buildMissingTerminalRecoverySummary({
-                            evidenceSatisfied: missingCapabilities.length === 0,
+                            evidenceSatisfied: hasTaskTurnSatisfiedCompletionEvidence(turnEventStateKey) && toolResultSeen,
                         });
                         markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
                         appendTranscript(input.taskId, 'assistant', degradedSummary);
@@ -6090,6 +6109,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         return;
                     }
                     if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
+                        return;
+                    }
+                    // Never synthesize a successful terminal summary when no tool result was observed.
+                    // This prevents "fake completion" explanatory text when execution never produced output.
+                    if (!hasTaskTurnToolResultEvidence(turnEventStateKey)) {
+                        await emitMissingTerminalFailure(reason);
                         return;
                     }
                     const clippedOriginalRequest = input.message.trim().slice(0, 2400);

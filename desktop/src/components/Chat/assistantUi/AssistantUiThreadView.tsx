@@ -721,6 +721,7 @@ interface AssistantUiMessageProps {
         decision: 'approve' | 'deny' | 'modify_approve';
         note?: string;
     }) => Promise<void> | void;
+    disableReloadAction?: boolean;
 }
 
 const MarkdownTextPart = ({ text }: { text: string }) => {
@@ -777,7 +778,10 @@ const MarkdownTextPart = ({ text }: { text: string }) => {
     );
 };
 
-const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecision }) => {
+const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({
+    onApprovalDecision,
+    disableReloadAction = false,
+}) => {
     const { t, i18n } = useTranslation();
     const customValue = useAuiState((state) => state.message.metadata?.custom);
     const messageCreatedAt = useAuiState((state) => state.message.createdAt as Date | string | number | null | undefined);
@@ -821,6 +825,8 @@ const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecis
         [structured?.runtime, t],
     );
     const runtimePendingLabel = (structured?.runtime?.pendingLabel ?? '').trim();
+    const hasPendingApproval = disableReloadAction
+        || (structured?.approvals ?? []).some((approval) => approval.decision === 'pending');
     const normalizedMessageText = messageText.toLowerCase();
     const isRuntimePlaceholderText = (
         messageText.length === 0
@@ -908,15 +914,17 @@ const AssistantUiMessage: React.FC<AssistantUiMessageProps> = ({ onApprovalDecis
                                         >
                                             <span className={styles.messageActionGlyph} aria-hidden="true">⧉</span>
                                         </ActionBarPrimitive.Copy>
-                                        <MessagePrimitive.If last>
-                                            <ActionBarPrimitive.Reload
-                                                className={styles.messageActionButton}
-                                                title={t('common.retry')}
-                                                aria-label={t('common.retry')}
-                                            >
-                                                <span className={styles.messageActionGlyph} aria-hidden="true">↻</span>
-                                            </ActionBarPrimitive.Reload>
-                                        </MessagePrimitive.If>
+                                        {!hasPendingApproval ? (
+                                            <MessagePrimitive.If last>
+                                                <ActionBarPrimitive.Reload
+                                                    className={styles.messageActionButton}
+                                                    title={t('common.retry')}
+                                                    aria-label={t('common.retry')}
+                                                >
+                                                    <span className={styles.messageActionGlyph} aria-hidden="true">↻</span>
+                                                </ActionBarPrimitive.Reload>
+                                            </MessagePrimitive.If>
+                                        ) : null}
                                     </ActionBarPrimitive.Root>
                                 </MessagePrimitive.If>
                             </div>
@@ -983,9 +991,13 @@ interface AssistantUiThreadViewProps {
         decision: 'approve' | 'deny' | 'modify_approve';
         note?: string;
     }) => Promise<void> | void;
+    disableReloadAction?: boolean;
 }
 
-export const AssistantUiThreadView: React.FC<AssistantUiThreadViewProps> = ({ onApprovalDecision }) => {
+export const AssistantUiThreadView: React.FC<AssistantUiThreadViewProps> = ({
+    onApprovalDecision,
+    disableReloadAction = false,
+}) => {
     const [isViewportScrolling, setIsViewportScrolling] = React.useState(false);
     const hideScrollbarTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1017,7 +1029,12 @@ export const AssistantUiThreadView: React.FC<AssistantUiThreadViewProps> = ({ on
             >
                 <ThreadPrimitive.Messages
                     components={{
-                        Message: () => <AssistantUiMessage onApprovalDecision={onApprovalDecision} />,
+                        Message: () => (
+                            <AssistantUiMessage
+                                onApprovalDecision={onApprovalDecision}
+                                disableReloadAction={disableReloadAction}
+                            />
+                        ),
                     }}
                 />
             </ThreadPrimitive.Viewport>

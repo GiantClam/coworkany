@@ -2795,7 +2795,7 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('task-mode tooling timeout does not switch to non-streaming fallback even when task fallback env is enabled', async () => {
+    test('task-mode tooling timeout switches to non-streaming fallback when task fallback env is enabled', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -2845,11 +2845,111 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(result.runId).toBe('run-task-fallback-env-enabled-stream');
-            expect(generateCalls).toBe(0);
+            expect(result.runId).toBe('run-task-fallback-env-enabled-generate');
+            expect(generateCalls).toBe(1);
             expect(events.some((event) => (
                 event.type === 'rate_limited'
                 && String(event.message ?? '').includes('Switching to non-streaming fallback')
+            ))).toBe(true);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousPreferResearcher === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER = previousPreferResearcher;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER;
+            }
+            if (typeof previousForwardRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = previousForwardRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+            }
+            if (typeof previousTaskGenerateFallback === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = previousTaskGenerateFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
+            }
+        }
+    });
+
+    test('task-mode turn-timeout budget falls back to non-streaming recovery when enabled', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const originalGenerate = supervisor.generate.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousPreferResearcher = process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER;
+        const previousForwardRetryCount = process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+        const previousForwardRetryDelay = process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS;
+        const previousTaskGenerateFallback = process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
+        const events: Array<Record<string, unknown>> = [];
+        let generateCalls = 0;
+        let streamCalls = 0;
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER = '0';
+            process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = '1';
+            process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS = '10';
+            process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = 'true';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                streamCalls += 1;
+                return {
+                    runId: `run-task-budget-fallback-stream-${streamCalls}`,
+                    fullStream: (async function* stalledStream() {
+                        await new Promise<void>(() => {
+                            // keep stream open so idle timeout + turn budget recovery drives fallback
+                        });
+                    })(),
+                };
+            }) as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => {
+                generateCalls += 1;
+                return {
+                    runId: 'run-task-budget-fallback-generate',
+                    text: '已切换到非流式恢复并继续执行任务。',
+                    finishReason: 'stop',
+                };
+            }) as typeof supervisor.generate;
+
+            const now = Date.now();
+            const result = await handleUserMessage(
+                '把附件图片合并为一个视频，每张图片播放 5s',
+                'thread-task-budget-fallback',
+                'employee-task-budget-fallback',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                    forcedRouteMode: 'task',
+                    chatTurnDeadlineAtMs: now + 500,
+                    chatStartupDeadlineAtMs: now + 30_000,
+                },
+            );
+
+            expect(streamCalls).toBe(1);
+            expect(generateCalls).toBe(1);
+            expect(result.runId).toBe('run-task-budget-fallback-generate');
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.error ?? '').includes('chat_turn_timeout_budget_exhausted')
+            ))).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('Switching to non-streaming fallback')
+            ))).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'error'
+                && String(event.message ?? '').includes('chat_turn_timeout_budget_exhausted')
             ))).toBe(false);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
@@ -2873,6 +2973,11 @@ describe('Phase 3: Agent Loop', () => {
                 process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = previousForwardRetryCount;
             } else {
                 delete process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+            }
+            if (typeof previousForwardRetryDelay === 'string') {
+                process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS = previousForwardRetryDelay;
+            } else {
+                delete process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_DELAY_MS;
             }
             if (typeof previousTaskGenerateFallback === 'string') {
                 process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = previousTaskGenerateFallback;
@@ -3949,6 +4054,101 @@ describe('Phase 3: Agent Loop', () => {
                 process.env.ANTHROPIC_API_KEY = previousAnthropic;
             } else {
                 delete process.env.ANTHROPIC_API_KEY;
+            }
+        }
+    });
+
+    test('handleApprovalResponse converts retryable no-narrative approval-resume stalls into complete', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const originalApprove = supervisor.approveToolCall.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousApprovalResumeIdleTimeout = process.env.COWORKANY_MASTRA_APPROVAL_RESUME_IDLE_TIMEOUT_MS;
+        const previousApprovalResumeProgressTimeout = process.env.COWORKANY_MASTRA_APPROVAL_RESUME_PROGRESS_TIMEOUT_MS;
+
+        const emittedEvents: Record<string, unknown>[] = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_APPROVAL_RESUME_IDLE_TIMEOUT_MS = '1000';
+            process.env.COWORKANY_MASTRA_APPROVAL_RESUME_PROGRESS_TIMEOUT_MS = '1000';
+
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => {
+                return {
+                    runId: 'run-approval-resume-timeout',
+                    fullStream: (async function* seedApprovalContext() {
+                        yield {
+                            type: 'text-delta',
+                            payload: { text: 'seed approval context' },
+                        };
+                    })(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
+            }) as typeof supervisor.stream;
+
+            (supervisor as unknown as { approveToolCall: typeof supervisor.approveToolCall }).approveToolCall = (async (
+                options: Record<string, unknown>,
+            ) => {
+                return {
+                    runId: String(options.runId ?? 'run-approval-resume-timeout'),
+                    fullStream: (async function* stalledApprovalResume() {
+                        await new Promise<void>(() => undefined);
+                    })(),
+                } as unknown as Awaited<ReturnType<typeof supervisor.approveToolCall>>;
+            }) as typeof supervisor.approveToolCall;
+
+            await handleUserMessage(
+                'seed approval timeout context',
+                'thread-approval-resume-timeout',
+                'employee-approval-resume-timeout',
+                () => undefined,
+                {
+                    taskId: 'task-approval-resume-timeout',
+                    workspacePath: '/tmp/approval-resume-timeout',
+                    forcedRouteMode: 'task',
+                },
+            );
+
+            await handleApprovalResponse(
+                'run-approval-resume-timeout',
+                'tool-call-approval-timeout',
+                true,
+                (event) => emittedEvents.push(event as Record<string, unknown>),
+                {
+                    taskId: 'task-approval-resume-timeout',
+                },
+            );
+
+            expect(emittedEvents.some((event) => (
+                event.type === 'complete'
+                && String(event.finishReason ?? '') === 'stream_exhausted'
+            ))).toBe(true);
+            expect(emittedEvents.some((event) => (
+                event.type === 'error'
+                && String(event.message ?? '').includes('stream_idle_timeout')
+            ))).toBe(false);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            (supervisor as unknown as { approveToolCall: typeof supervisor.approveToolCall }).approveToolCall = originalApprove as typeof supervisor.approveToolCall;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousApprovalResumeIdleTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_APPROVAL_RESUME_IDLE_TIMEOUT_MS = previousApprovalResumeIdleTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_APPROVAL_RESUME_IDLE_TIMEOUT_MS;
+            }
+            if (typeof previousApprovalResumeProgressTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_APPROVAL_RESUME_PROGRESS_TIMEOUT_MS = previousApprovalResumeProgressTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_APPROVAL_RESUME_PROGRESS_TIMEOUT_MS;
             }
         }
     });

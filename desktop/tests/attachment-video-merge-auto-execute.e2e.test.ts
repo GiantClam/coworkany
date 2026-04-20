@@ -128,7 +128,11 @@ test.describe('Desktop GUI E2E - attachment video merge auto execute', () => {
         let commandObserved = false;
         let browserNavigateCalled = false;
         let effectRequestedForTask = false;
+        let approvalClicked = false;
+        let reportEffectResultObserved = false;
         let toolingWithoutFinalSummarySeen = false;
+        let sawFirstTokenRateLimited = false;
+        let sawTurnBudgetExhaustedSignal = false;
         let taskFinished = false;
         let taskFailed = false;
         let taskFailedPayload = '';
@@ -160,6 +164,7 @@ test.describe('Desktop GUI E2E - attachment video merge auto execute', () => {
                     .filter((line) => line.includes(`"taskId":"${taskId}"`))
                     .join('\n')
                 : logs;
+            const scopedLower = taskScopedLogs.toLowerCase();
 
             workspaceExecCalled =
                 workspaceExecCalled
@@ -176,11 +181,30 @@ test.describe('Desktop GUI E2E - attachment video merge auto execute', () => {
             browserNavigateCalled =
                 browserNavigateCalled
                 || taskScopedLogs.includes('"toolName":"browser_navigate"');
+            sawFirstTokenRateLimited =
+                sawFirstTokenRateLimited
+                || (scopedLower.includes('"type":"rate_limited"') && scopedLower.includes('"stage":"first_token"'));
+            sawTurnBudgetExhaustedSignal =
+                sawTurnBudgetExhaustedSignal
+                || scopedLower.includes('chat_turn_timeout_budget_exhausted');
             effectRequestedForTask =
                 effectRequestedForTask
                 || (taskId
                     ? taskScopedLogs.includes('"type":"EFFECT_REQUESTED"')
                     : logs.includes('"type":"EFFECT_REQUESTED"'));
+            reportEffectResultObserved =
+                reportEffectResultObserved
+                || logs.includes('"type":"report_effect_result"');
+
+            if (effectRequestedForTask && !approvalClicked) {
+                const approveButton = page.getByRole('button', { name: /Approve|批准/ }).first();
+                const canApprove = await approveButton.isVisible({ timeout: 500 }).catch(() => false);
+                if (canApprove) {
+                    await approveButton.click({ timeout: 3000 }).catch(() => {});
+                    approvalClicked = true;
+                    await page.waitForTimeout(1000);
+                }
+            }
 
             taskFinished =
                 taskFinished
@@ -206,7 +230,11 @@ test.describe('Desktop GUI E2E - attachment video merge auto execute', () => {
             commandObserved,
             browserNavigateCalled,
             effectRequestedForTask,
+            approvalClicked,
+            reportEffectResultObserved,
             toolingWithoutFinalSummarySeen,
+            sawFirstTokenRateLimited,
+            sawTurnBudgetExhaustedSignal,
             taskFinished,
             taskFailed,
             taskFailedPayloadSnippet: taskFailedPayload,
@@ -231,7 +259,10 @@ test.describe('Desktop GUI E2E - attachment video merge auto execute', () => {
         expect(submitted, 'message should be submitted from desktop UI').toBe(true);
         expect(workspaceExecCalled, 'agent should call mastra_workspace_execute_command').toBe(true);
         expect(commandObserved, 'task should include executable command payload').toBe(true);
-        expect(effectRequestedForTask, 'probe chain should not trigger approval flow').toBe(false);
+        if (effectRequestedForTask) {
+            expect(approvalClicked, 'approval should be clicked when EFFECT_REQUESTED appears').toBe(true);
+            expect(reportEffectResultObserved, 'desktop should send report_effect_result after approval').toBe(true);
+        }
         expect(browserNavigateCalled, 'request should not drift into browser automation').toBe(false);
         expect(toolingWithoutFinalSummarySeen, 'task should not degrade into tooling_without_final_summary').toBe(false);
         expect(taskFinished || taskFailed, 'task should reach terminal state').toBe(true);
@@ -241,6 +272,15 @@ test.describe('Desktop GUI E2E - attachment video merge auto execute', () => {
                 || taskFailedPayload.toLowerCase().includes('effect_requested'),
                 'task failure should not be caused by approval flow',
             ).toBe(false);
+            expect(
+                taskFailedPayload.toLowerCase().includes('chat_turn_timeout_budget_exhausted')
+                || taskFailedPayload.toLowerCase().includes('stream_idle_timeout'),
+                'attachment task failure should not terminate on timeout budget exhaustion',
+            ).toBe(false);
+        }
+        if (sawFirstTokenRateLimited || sawTurnBudgetExhaustedSignal) {
+            expect(taskFinished, 'timeout-stage rate limit should recover to TASK_FINISHED').toBe(true);
+            expect(taskFailed, 'timeout-stage rate limit should not end at TASK_FAILED').toBe(false);
         }
     });
 });

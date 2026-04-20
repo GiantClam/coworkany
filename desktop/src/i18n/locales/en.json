@@ -247,6 +247,7 @@
     "pendingWaitingForModel": "Sent. Thinking...",
     "pendingUsingTool": "Message sent. Running {{tool}}...",
     "pendingRetrying": "Rate limited. Retrying automatically...",
+    "awaitingApprovalRetryBlocked": "This task is waiting for approval. Please approve or deny the authorization card to continue.",
     "stalledSuspended": "No response for a while. Task paused — retry or continue when ready.",
     "failureNeedsConfigTitle": "Provider configuration required",
     "failureNeedsConfigDesc": "Model provider is unavailable or misconfigured. Update provider settings and retry.",

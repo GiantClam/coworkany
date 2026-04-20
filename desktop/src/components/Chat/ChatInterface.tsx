@@ -33,6 +33,12 @@ import {
 } from './collaborationMessage';
 import { isConversationTurnLocked, TURN_LOCK_IDLE_GRACE_MS } from './turnTaking';
 import { formatTaskFailureDetails, getTaskFailureUiDescriptor } from '../../lib/taskFailureUi';
+import {
+    getLatestPendingEffectRequestId,
+    hasPendingEffectApproval,
+    isSuspendedForApproval,
+} from '../../lib/taskRetryPolicy';
+import { invokeConfirmEffectCommand } from '../../lib/effectApprovalCommands';
 import type { TaskEvent, TaskSession } from '../../types';
 import { TaskListView } from '../jarvis/TaskListView';
 import {
@@ -42,6 +48,8 @@ import {
 
 const STATUS_FINISH_DISPLAY_GRACE_MS = 2000;
 const RUNNING_STALL_WATCHDOG_MS = 180_000;
+const RETRY_APPROVAL_TRANSITION_TIMEOUT_MS = 1800;
+const RETRY_APPROVAL_TRANSITION_POLL_MS = 120;
 
 const SkillsViewLazy = lazy(async () => {
     const mod = await import('../Skills/SkillsView');
@@ -179,6 +187,31 @@ function getInterruptedRecoveryCopy(
         title: session.failure.error || 'Task interrupted by app restart',
         description: 'Task interrupted, but the saved context is still available. Resume the task to continue from the saved context.',
     };
+}
+
+async function waitForRetryApprovalTransition(
+    taskId: string,
+    requestId: string,
+    timeoutMs: number = RETRY_APPROVAL_TRANSITION_TIMEOUT_MS,
+): Promise<boolean> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        const current = useTaskEventStore.getState().getSession(taskId);
+        if (!current) {
+            return false;
+        }
+        const pendingRequestId = getLatestPendingEffectRequestId(current);
+        if (pendingRequestId !== requestId) {
+            return true;
+        }
+        if (current.status === 'running') {
+            return true;
+        }
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, RETRY_APPROVAL_TRANSITION_POLL_MS);
+        });
+    }
+    return false;
 }
 
 function hasAssistantResponseAfterLatestUser(
@@ -1268,10 +1301,42 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeSession) {
             return false;
         }
-        if (!allowWhenNotFailed && (activeSession.status !== 'failed' && activeSession.status !== 'suspended')) {
+        const activeTaskId = activeSession.taskId;
+        const sessionAtRetryStart = useTaskEventStore.getState().getSession(activeTaskId) ?? activeSession;
+        const pendingApprovalRequestId = getLatestPendingEffectRequestId(sessionAtRetryStart);
+        if (pendingApprovalRequestId) {
+            try {
+                await invokeConfirmEffectCommand(invoke, {
+                    requestId: pendingApprovalRequestId,
+                    remember: false,
+                });
+                const resumedViaApproval = await waitForRetryApprovalTransition(activeTaskId, pendingApprovalRequestId);
+                if (resumedViaApproval) {
+                    setWorkspaceError(null);
+                    return true;
+                }
+                console.warn(
+                    '[ChatInterface] Retry approval produced no transition; falling back to resend',
+                    { taskId: activeTaskId, requestId: pendingApprovalRequestId },
+                );
+            } catch (error) {
+                console.warn('[ChatInterface] Retry approval fast-path failed, falling back to resend', error);
+            }
+        }
+        const sessionBeforeResend = useTaskEventStore.getState().getSession(activeTaskId) ?? activeSession;
+        if (isSuspendedForApproval(sessionBeforeResend) || hasPendingEffectApproval(sessionBeforeResend)) {
+            setWorkspaceError(t('chat.awaitingApprovalRetryBlocked', {
+                defaultValue: 'This task is waiting for approval. Please approve or deny the authorization card to continue.',
+            }));
             return false;
         }
-        const latestUserMessage = [...activeSession.messages]
+        if (
+            !allowWhenNotFailed
+            && (sessionBeforeResend.status !== 'failed' && sessionBeforeResend.status !== 'suspended')
+        ) {
+            return false;
+        }
+        const latestUserMessage = [...sessionBeforeResend.messages]
             .reverse()
             .find((message) => (
                 message.role === 'user'

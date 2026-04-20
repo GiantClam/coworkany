@@ -23,6 +23,7 @@ import {
     invokeConfirmEffectCommand,
     invokeDenyEffectCommand,
 } from '../../../lib/effectApprovalCommands';
+import { hasPendingEffectApproval } from '../../../lib/taskRetryPolicy';
 
 // ============================================================================
 // Main Timeline Component
@@ -260,6 +261,10 @@ const TimelineComponent: React.FC<TimelineProps> = ({
         ),
         [optimisticUserEntry, pendingLabel, session, timelineItems],
     );
+    const disableAssistantRetry = React.useMemo(
+        () => hasPendingEffectApproval(session),
+        [session],
+    );
     const turnRoundViewModel = React.useMemo(
         () => buildTimelineTurnRoundViewModel(displayItems),
         [displayItems],
@@ -298,7 +303,10 @@ const TimelineComponent: React.FC<TimelineProps> = ({
                 isRunning={Boolean(pendingStatus)}
                 onReloadMessage={onAssistantUiRetry}
             >
-                <LazyAssistantUiThreadView onApprovalDecision={handleAssistantUiApprovalDecision} />
+                <LazyAssistantUiThreadView
+                    onApprovalDecision={handleAssistantUiApprovalDecision}
+                    disableReloadAction={disableAssistantRetry}
+                />
             </LazyAssistantUiRuntimeBridge>
         </React.Suspense>
     );

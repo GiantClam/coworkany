@@ -64,6 +64,10 @@ type RunContext = {
     traceId: string;
     traceSampled: boolean;
     executionMode: 'stream' | 'network';
+    forcedRouteMode?: 'chat' | 'task';
+    forcePostAssistantCompletion?: boolean;
+    requiredOutputPaths?: string[];
+    originalMessage?: string;
 };
 
 type TimeoutStage = 'dns' | 'connect' | 'ttfb' | 'first_token' | 'last_token' | 'unknown';
@@ -2784,6 +2788,9 @@ async function forwardStream(
         deadlineAt?: number;
         requiredOutputPaths?: string[];
         originalMessage?: string;
+        approvalResumeBeforeNarrative?: boolean;
+        preNarrativeIdleTimeoutMs?: number;
+        preNarrativeProgressTimeoutMs?: number;
     },
 ): Promise<{
     assistantText: string;
@@ -2994,6 +3001,20 @@ async function forwardStream(
         },
         )
         : idleTimeoutMs;
+    const preNarrativeIdleTimeoutOverrideMs = (() => {
+        const raw = toOptionalFiniteNumber(options?.preNarrativeIdleTimeoutMs);
+        if (raw === null) {
+            return null;
+        }
+        return Math.max(1_000, Math.floor(raw));
+    })();
+    const preNarrativeProgressTimeoutOverrideMs = (() => {
+        const raw = toOptionalFiniteNumber(options?.preNarrativeProgressTimeoutMs);
+        if (raw === null) {
+            return null;
+        }
+        return Math.max(1_000, Math.floor(raw));
+    })();
     if (process.env.COWORKANY_LOG_STREAM_TIMEOUT_CONFIG === '1') {
         console.info('[coworkany-stream-timeout-config]', JSON.stringify({
             runId,
@@ -3030,8 +3051,8 @@ async function forwardStream(
     let lastMirroredFinalSynthesisNarrative: string | null = null;
     let sawToolingAfterAssistantText = false;
     let sawThinkingAfterAssistantText = false;
-    let sawManualApprovalBeforeNarrative = false;
-    let approvalRequiredBeforeAssistantNarrative = false;
+    let sawManualApprovalBeforeNarrative = options?.approvalResumeBeforeNarrative === true;
+    let approvalRequiredBeforeAssistantNarrative = options?.approvalResumeBeforeNarrative === true;
     let firstRequiredOutputMissingAt: number | null = (
         isTaskTurn && requiredOutputPaths.length > 0
             ? streamStartedAt
@@ -3349,9 +3370,15 @@ async function forwardStream(
                 )
                     ? Math.max(baseIdleTimeoutMs, taskPreNarrativeIdleTimeoutMs)
                     : baseIdleTimeoutMs;
-                const boundedIdleTimeoutMs = (hasAssistantTextDelta && !sawToolingAfterAssistantText)
-                    ? Math.max(withPreNarrativeIdleTimeoutMs, postAssistantIdleCompleteMs)
+                const effectivePreNarrativeIdleTimeoutMs = (
+                    !hasAssistantTextDelta
+                    && preNarrativeIdleTimeoutOverrideMs !== null
+                )
+                    ? Math.min(withPreNarrativeIdleTimeoutMs, preNarrativeIdleTimeoutOverrideMs)
                     : withPreNarrativeIdleTimeoutMs;
+                const boundedIdleTimeoutMs = (hasAssistantTextDelta && !sawToolingAfterAssistantText)
+                    ? Math.max(effectivePreNarrativeIdleTimeoutMs, postAssistantIdleCompleteMs)
+                    : effectivePreNarrativeIdleTimeoutMs;
                 const effectiveIdleTimeoutMs = remainingBudgetMs !== null
                     ? Math.max(1_000, Math.min(boundedIdleTimeoutMs, remainingBudgetMs))
                     : boundedIdleTimeoutMs;
@@ -3752,9 +3779,15 @@ async function forwardStream(
             )
                 ? Math.max(progressTimeoutMs, taskPreNarrativeProgressTimeoutMs)
                 : progressTimeoutMs;
-            if (Date.now() - lastProgressAt >= effectiveProgressTimeoutMs) {
+            const boundedProgressTimeoutMs = (
+                !hasAssistantTextDelta
+                && preNarrativeProgressTimeoutOverrideMs !== null
+            )
+                ? Math.min(effectiveProgressTimeoutMs, preNarrativeProgressTimeoutOverrideMs)
+                : effectiveProgressTimeoutMs;
+            if (Date.now() - lastProgressAt >= boundedProgressTimeoutMs) {
                 await closeIteratorSafely();
-                throw new Error(`stream_progress_timeout:${effectiveProgressTimeoutMs};ignored_chunks:${ignoredChunkCount}`);
+                throw new Error(`stream_progress_timeout:${boundedProgressTimeoutMs};ignored_chunks:${ignoredChunkCount}`);
             }
         }
     }
@@ -4179,9 +4212,12 @@ export async function handleUserMessage(
         networkReason: networkDecision.reason,
         multiAgentSignalScore: networkDecision.signal.weightedScore,
     }));
-    // Hard-disable non-streaming generate fallback globally:
-    // do not switch routes to non-streaming fallback on stream stalls.
-    const allowGenerateFallback = false;
+    const useTaskLatencyProfile = options?.forcedRouteMode === 'task';
+    // Task-mode fallback is enabled by default from desktop runtime env wiring.
+    // Keep chat-mode fallback disabled unless explicitly opted-in in code.
+    const allowGenerateFallback = useTaskLatencyProfile
+        ? resolveBooleanFromEnv('COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK', false)
+        : false;
     const defaultRequireToolApproval = (
         forcePostAssistantCompletion
         || shouldRouteTaskToResearcher
@@ -4264,7 +4300,6 @@ export async function handleUserMessage(
         },
     };
 
-    const useTaskLatencyProfile = options?.forcedRouteMode === 'task';
     const useTaskCapabilityLatencyProfile = (
         useTaskLatencyProfile
         && requiredCompletionCapabilities.length > 0
@@ -5160,6 +5195,20 @@ export async function handleUserMessage(
                 }),
                 turnId: options?.turnId,
             });
+            if (allowGenerateFallback && options?.forcedRouteMode === 'task') {
+                const fallbackResult = await runGenerateFallback(
+                    'chat_startup_timeout_budget_exhausted',
+                    attempt + 1,
+                    forwardRetryCount + 1,
+                    {
+                        force: true,
+                        includeStartupBudget: false,
+                    },
+                );
+                if (fallbackResult) {
+                    return fallbackResult;
+                }
+            }
             sendToDesktop({
                 type: 'error',
                 runId,
@@ -5186,6 +5235,20 @@ export async function handleUserMessage(
                 }),
                 turnId: options?.turnId,
             });
+            if (allowGenerateFallback && options?.forcedRouteMode === 'task') {
+                const fallbackResult = await runGenerateFallback(
+                    'chat_turn_timeout_budget_exhausted',
+                    attempt + 1,
+                    forwardRetryCount + 1,
+                    {
+                        force: true,
+                        includeStartupBudget: false,
+                    },
+                );
+                if (fallbackResult) {
+                    return fallbackResult;
+                }
+            }
             sendToDesktop({
                 type: 'error',
                 runId,
@@ -5373,6 +5436,10 @@ export async function handleUserMessage(
             traceId: telemetry.traceId,
             traceSampled: telemetry.sampled,
             executionMode: useAgentNetworkExecution ? 'network' : 'stream',
+            forcedRouteMode: options?.forcedRouteMode,
+            forcePostAssistantCompletion: options?.forcePostAssistantCompletion,
+            requiredOutputPaths,
+            originalMessage: normalizedMessage,
         });
         let emittedAssistantText = false;
         let emittedAssistantCharCount = 0;
@@ -6082,6 +6149,22 @@ export async function handleApprovalResponse(
 ): Promise<void> {
     const debugAutoApproval = process.env.COWORKANY_DEBUG_AUTO_APPROVAL === '1';
     const noSnapshotRunPattern = /\bNo snapshot found for this workflow run\b/i;
+    const approvalResumeIdleTimeoutMs = resolvePositiveIntFromEnvBounded(
+        'COWORKANY_MASTRA_APPROVAL_RESUME_IDLE_TIMEOUT_MS',
+        15_000,
+        {
+            min: 1_000,
+            max: 120_000,
+        },
+    );
+    const approvalResumeProgressTimeoutMs = resolvePositiveIntFromEnvBounded(
+        'COWORKANY_MASTRA_APPROVAL_RESUME_PROGRESS_TIMEOUT_MS',
+        15_000,
+        {
+            min: 1_000,
+            max: 120_000,
+        },
+    );
     const resolveFallbackRunIdsForTask = (taskId: string, attemptedRunId: string): string[] => {
         const candidates: string[] = [];
         for (const [cachedRunId, context] of Array.from(runContextById.entries()).reverse()) {
@@ -6108,8 +6191,21 @@ export async function handleApprovalResponse(
             tags: string[];
         };
         executionMode: 'stream' | 'network';
+        forwardOptions: {
+            forcePostAssistantCompletion?: boolean;
+            chatTurn?: boolean;
+            routeMode?: 'chat' | 'task';
+            requiredOutputPaths?: string[];
+            originalMessage?: string;
+            approvalResumeBeforeNarrative: boolean;
+            preNarrativeIdleTimeoutMs: number;
+            preNarrativeProgressTimeoutMs: number;
+        };
     } => {
         const context = runContextById.get(approvalRunId);
+        const routeMode = context?.forcedRouteMode;
+        const forcePostAssistantCompletion = context?.forcePostAssistantCompletion === true;
+        const chatTurn = forcePostAssistantCompletion && routeMode !== 'task';
         return {
             runId: approvalRunId,
             toolCallId,
@@ -6143,6 +6239,16 @@ export async function handleApprovalResponse(
                 }
                 : undefined,
             executionMode: context?.executionMode ?? 'stream',
+            forwardOptions: {
+                forcePostAssistantCompletion,
+                chatTurn,
+                routeMode,
+                requiredOutputPaths: context?.requiredOutputPaths,
+                originalMessage: context?.originalMessage,
+                approvalResumeBeforeNarrative: approved,
+                preNarrativeIdleTimeoutMs: approvalResumeIdleTimeoutMs,
+                preNarrativeProgressTimeoutMs: approvalResumeProgressTimeoutMs,
+            },
         };
     };
     let effectiveRunId = runId;
@@ -6221,9 +6327,8 @@ export async function handleApprovalResponse(
         });
     }
     try {
-        await forwardStream(stream, sendWithRunContextCleanup(effectiveRunId, sendToDesktop), {
-            originalMessage: undefined,
-        });
+        const forwardOptions = buildApprovalStartOptions(effectiveRunId).forwardOptions;
+        await forwardStream(stream, sendWithRunContextCleanup(effectiveRunId, sendToDesktop), forwardOptions);
         if (debugAutoApproval) {
             console.warn('[streaming][approval] stream completed', {
                 runId: effectiveRunId,

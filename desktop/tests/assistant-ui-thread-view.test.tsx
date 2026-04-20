@@ -38,6 +38,28 @@ function makeRounds(): TimelineTurnRound[] {
     ];
 }
 
+function makeReloadRounds(): TimelineTurnRound[] {
+    return [
+        {
+            id: 'round-reload-1',
+            userMessage: {
+                type: 'user_message',
+                id: 'user-reload-1',
+                content: 'retry this answer',
+                timestamp: '2026-03-31T08:20:00.000Z',
+            },
+            assistantTurn: {
+                type: 'assistant_turn',
+                id: 'assistant-reload-1',
+                timestamp: '2026-03-31T08:20:01.000Z',
+                lead: 'Here is the response content.',
+                steps: [],
+                messages: ['Additional details.'],
+            },
+        },
+    ];
+}
+
 function makeEventRounds(assistantMessageId: string, events: string[]): TimelineTurnRound[] {
     return [
         {
@@ -214,7 +236,7 @@ describe('AssistantUiThreadView', () => {
             <I18nextProvider i18n={i18n}>
                 <AssistantUiRuntimeBridge
                     sessionId="task-reload-1"
-                    rounds={makeRounds()}
+                    rounds={makeReloadRounds()}
                     onReloadMessage={(parentId) => {
                         reloadCalls.push(parentId);
                     }}
@@ -240,6 +262,54 @@ describe('AssistantUiThreadView', () => {
             });
         });
 
-        expect(reloadCalls).toEqual(['user-approval-1']);
+        expect(reloadCalls).toEqual(['user-reload-1']);
+    });
+
+    test('hides assistant message retry action when approval is pending', async () => {
+        const i18n = await createTestI18n();
+
+        const renderer = create(
+            <I18nextProvider i18n={i18n}>
+                <AssistantUiRuntimeBridge
+                    sessionId="task-approval-no-retry-1"
+                    rounds={makeRounds()}
+                >
+                    <AssistantUiThreadView />
+                </AssistantUiRuntimeBridge>
+            </I18nextProvider>
+        );
+
+        await act(async () => {});
+
+        const retryButton = renderer.root.findAllByType('button').find((button) => (
+            button.props['aria-label'] === 'Retry'
+            || button.props.title === 'Retry'
+        ));
+
+        expect(retryButton).toBeUndefined();
+    });
+
+    test('hides assistant message retry action when disableReloadAction is true', async () => {
+        const i18n = await createTestI18n();
+
+        const renderer = create(
+            <I18nextProvider i18n={i18n}>
+                <AssistantUiRuntimeBridge
+                    sessionId="task-reload-disabled-1"
+                    rounds={makeReloadRounds()}
+                >
+                    <AssistantUiThreadView disableReloadAction />
+                </AssistantUiRuntimeBridge>
+            </I18nextProvider>
+        );
+
+        await act(async () => {});
+
+        const retryButton = renderer.root.findAllByType('button').find((button) => (
+            button.props['aria-label'] === 'Retry'
+            || button.props.title === 'Retry'
+        ));
+
+        expect(retryButton).toBeUndefined();
     });
 });
