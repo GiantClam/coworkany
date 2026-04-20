@@ -62,6 +62,9 @@ export type TaskFinishedPayload = {
 
 export type TaskFailedPayload = {
     error?: string;
+    errorCode?: string;
+    failureClass?: string;
+    recoverable?: boolean;
     suggestion?: string;
     turnId?: string;
 };

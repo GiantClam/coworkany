@@ -228,6 +228,108 @@ describe('mastra bridge mapping', () => {
         });
     });
 
+    test('marks workspace execute command result as error when stderr-like output reports ffmpeg encoder failure', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-result',
+            payload: {
+                name: 'mastra_workspace_execute_command',
+                toolCallId: 'call-cmd-ffmpeg',
+                result: [
+                    '[libx264 @ 0x714c99180] width not divisible by 2 (1x1)',
+                    '[vost#0:0/libx264 @ 0x715044000] Error while opening encoder - maybe incorrect parameters',
+                ].join('\n'),
+            },
+        }, 'run-9b');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-9b',
+            toolCallId: 'call-cmd-ffmpeg',
+            toolName: 'mastra_workspace_execute_command',
+            result: [
+                '[libx264 @ 0x714c99180] width not divisible by 2 (1x1)',
+                '[vost#0:0/libx264 @ 0x715044000] Error while opening encoder - maybe incorrect parameters',
+            ].join('\n'),
+            isError: true,
+        });
+    });
+
+    test('marks workspace execute command result as error when non-zero exitCode is returned', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-result',
+            payload: {
+                name: 'mastra_workspace_execute_command',
+                toolCallId: 'call-cmd-exit',
+                result: {
+                    stdout: '',
+                    stderr: 'ffmpeg failed',
+                    exitCode: 1,
+                },
+            },
+        }, 'run-9c');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-9c',
+            toolCallId: 'call-cmd-exit',
+            toolName: 'mastra_workspace_execute_command',
+            result: {
+                stdout: '',
+                stderr: 'ffmpeg failed',
+                exitCode: 1,
+            },
+            isError: true,
+        });
+    });
+
+    test('marks workspace execute command result as error even when success=true but stderr-like output reports failure', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-result',
+            payload: {
+                name: 'mastra_workspace_execute_command',
+                toolCallId: 'call-cmd-success-flagged',
+                success: true,
+                result: 'Error opening input file slideshow_input.txt\nExit code: 254',
+            },
+        }, 'run-9d');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-9d',
+            toolCallId: 'call-cmd-success-flagged',
+            toolName: 'mastra_workspace_execute_command',
+            result: 'Error opening input file slideshow_input.txt\nExit code: 254',
+            isError: true,
+        });
+    });
+
+    test('marks workspace execute command result as error when failure text is nested in stdout payload fields', () => {
+        const event = mapMastraChunkToDesktopEvent({
+            type: 'tool-result',
+            payload: {
+                name: 'mastra_workspace_execute_command',
+                toolCallId: 'call-cmd-stdout-failure',
+                success: true,
+                result: {
+                    stdout: 'Error opening input file slideshow_input.txt\nExit code: 254',
+                    stderr: '',
+                },
+            },
+        }, 'run-9e');
+
+        expect(event).toEqual({
+            type: 'tool_result',
+            runId: 'run-9e',
+            toolCallId: 'call-cmd-stdout-failure',
+            toolName: 'mastra_workspace_execute_command',
+            result: {
+                stdout: 'Error opening input file slideshow_input.txt\nExit code: 254',
+                stderr: '',
+            },
+            isError: true,
+        });
+    });
+
     test('maps tool-output-error chunks as failed tool_result events', () => {
         const event = mapMastraChunkToDesktopEvent({
             type: 'tool-output-error',

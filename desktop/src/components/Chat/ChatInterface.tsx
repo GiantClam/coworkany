@@ -32,7 +32,7 @@ import {
     ROUTE_TASK_TOKEN,
 } from './collaborationMessage';
 import { isConversationTurnLocked, TURN_LOCK_IDLE_GRACE_MS } from './turnTaking';
-import { getTaskFailureUiDescriptor } from '../../lib/taskFailureUi';
+import { formatTaskFailureDetails, getTaskFailureUiDescriptor } from '../../lib/taskFailureUi';
 import type { TaskEvent, TaskSession } from '../../types';
 import { TaskListView } from '../jarvis/TaskListView';
 import {
@@ -664,6 +664,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         () => getTaskFailureUiDescriptor(activeSession),
         [activeSession],
     );
+    const activeFailureDescription = useMemo(() => {
+        if (!activeFailureDescriptor) {
+            return '';
+        }
+        const fallback = t(activeFailureDescriptor.descriptionKey, {
+            defaultValue: activeFailureDescriptor.descriptionDefault,
+        });
+        return formatTaskFailureDetails(activeSession?.failure, {
+            fallbackDescription: fallback,
+            includePrefix: true,
+        });
+    }, [activeFailureDescriptor, activeSession?.failure, t]);
 
     useEffect(() => {
         if (!activeSession || activeSession.isDraft) {
@@ -1487,12 +1499,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {t(activeFailureDescriptor.titleKey, { defaultValue: activeFailureDescriptor.titleDefault })}
                         </strong>
                         <span className="chat-recovery-banner__description">
-                            {activeSession.failure?.error
-                                ? `Task failed: ${activeSession.failure.error}`
-                                : (
-                                    activeSession.failure?.suggestion
-                                    || t(activeFailureDescriptor.descriptionKey, { defaultValue: activeFailureDescriptor.descriptionDefault })
-                                )}
+                            {activeFailureDescription}
                         </span>
                     </div>
                     <button

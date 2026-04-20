@@ -160,4 +160,36 @@ describe('taskEventToCanonicalStreamEvents', () => {
             },
         });
     });
+
+    test('maps TASK_FAILED to canonical error with readable diagnostics', () => {
+        const canonicalEvents = taskEventToCanonicalStreamEvents(
+            makeEvent('TASK_FAILED', {
+                error: 'Approval resume failed: runId missing',
+                errorCode: 'E_APPROVAL_RESUME_FAILED',
+                failureClass: 'retryable',
+                recoverable: true,
+                suggestion: 'Retry the task, then approve again if required.',
+            }),
+        );
+
+        expect(canonicalEvents).toHaveLength(1);
+        expect(canonicalEvents[0]).toMatchObject({
+            type: 'canonical_message',
+            payload: {
+                role: 'runtime',
+                sourceEventType: 'TASK_FAILED',
+                parts: [
+                    {
+                        type: 'error',
+                        message: 'Approval resume failed: runId missing',
+                        suggestion: [
+                            'Retry the task, then approve again if required.',
+                            'Error code: E_APPROVAL_RESUME_FAILED',
+                            'Failure class: retryable',
+                        ].join('\n'),
+                    },
+                ],
+            },
+        });
+    });
 });

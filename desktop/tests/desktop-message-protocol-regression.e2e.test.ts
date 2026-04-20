@@ -677,9 +677,42 @@ test.describe('desktop message protocol regression', () => {
         await input.fill('早上3点关机');
         await input.press('Enter');
 
+        const approveButton = page.getByRole('button', { name: /^Approve$|^批准$/ }).first();
+        let manualApprovalClicked = false;
+        let sawApprovalGrant = false;
+        let sawConfirmInvoke = false;
+        const approvalWaitStart = Date.now();
+        while (Date.now() - approvalWaitStart < 90_000) {
+            const logs = tauriLogs.getRawSinceBaseline();
+            if (logs.includes('invoke_confirm_effect requestId=')) {
+                sawConfirmInvoke = true;
+            }
+            if (
+                logs.includes('"type":"report_effect_result"')
+                || logs.includes('"type":"report_effect_result_response"')
+                || logs.includes('"type":"request_effect_response"')
+                || logs.includes('"approved":true')
+            ) {
+                sawApprovalGrant = true;
+            }
+            const approveVisible = await approveButton.isVisible().catch(() => false);
+            if (approveVisible) {
+                await approveButton.click();
+                manualApprovalClicked = true;
+                break;
+            }
+            if (sawApprovalGrant) {
+                break;
+            }
+            await page.waitForTimeout(1000);
+        }
+        expect(
+            manualApprovalClicked || sawApprovalGrant,
+            'approval step should either show Approve button or auto-report approved effect result',
+        ).toBe(true);
+
         const start = Date.now();
         let sawShellApprovalRequest = false;
-        let sawApprovalGrant = false;
         let sawExecutionAfterApproval = false;
 
         while (Date.now() - start < 150_000) {
@@ -692,7 +725,12 @@ test.describe('desktop message protocol regression', () => {
             ) {
                 sawShellApprovalRequest = true;
             }
+            if (logs.includes('invoke_confirm_effect requestId=')) {
+                sawConfirmInvoke = true;
+            }
             const approvalSignalIndex = Math.max(
+                logs.lastIndexOf('"type":"report_effect_result"'),
+                logs.lastIndexOf('"type":"report_effect_result_response"'),
                 logs.lastIndexOf('"type":"request_effect_response"'),
                 logs.lastIndexOf('"approved":true'),
             );
@@ -717,7 +755,7 @@ test.describe('desktop message protocol regression', () => {
                     sawExecutionAfterApproval = true;
                 }
             }
-            if (sawShellApprovalRequest && sawApprovalGrant && sawExecutionAfterApproval) {
+            if (sawShellApprovalRequest && sawConfirmInvoke && sawApprovalGrant && sawExecutionAfterApproval) {
                 break;
             }
         }
@@ -726,7 +764,10 @@ test.describe('desktop message protocol regression', () => {
         const startTaskCount = (logs.match(/start_task command received/g) ?? []).length;
 
         expect(sawShellApprovalRequest, 'task should request shell authorization through request_effect before executing the command').toBe(true);
-        expect(sawApprovalGrant, 'after the authorization request, desktop should send an approved request_effect_response').toBe(true);
+        if (manualApprovalClicked) {
+            expect(sawConfirmInvoke, 'approval-resume path should invoke confirm_effect after clicking Approve').toBe(true);
+        }
+        expect(sawApprovalGrant, 'after the authorization request, desktop should report an approved effect result').toBe(true);
         expect(sawExecutionAfterApproval, 'after user approval, execution should resume in the same task').toBe(true);
         expect(startTaskCount, 'approval-resume should continue in the same task session instead of starting a new task').toBe(1);
     });

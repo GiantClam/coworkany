@@ -114,6 +114,19 @@ function asStringArray(value: unknown): string[] {
     return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
 }
 
+function appendUniqueLine(lines: string[], value: string | undefined): void {
+    if (!value) {
+        return;
+    }
+    const normalized = value.trim();
+    if (!normalized) {
+        return;
+    }
+    if (!lines.includes(normalized)) {
+        lines.push(normalized);
+    }
+}
+
 function toRole(value: unknown): CanonicalMessageRole {
     return value === 'user' || value === 'assistant' || value === 'system' || value === 'runtime'
         ? value
@@ -434,10 +447,27 @@ function eventToCanonicalMessage(event: TaskEvent): CanonicalTaskMessage | undef
         case 'TASK_FAILED': {
             const data = payload as TaskFailedPayload;
             const message = baseMessage(event, 'runtime');
+            const errorText = asString(data.error);
+            const errorCode = asString((payload as Record<string, unknown>).errorCode);
+            const failureClass = asString((payload as Record<string, unknown>).failureClass);
+            const recoverable = typeof (payload as Record<string, unknown>).recoverable === 'boolean'
+                ? Boolean((payload as Record<string, unknown>).recoverable)
+                : undefined;
+            const suggestionLines: string[] = [];
+            appendUniqueLine(suggestionLines, asString(data.suggestion));
+            if (errorCode) {
+                appendUniqueLine(suggestionLines, `Error code: ${errorCode}`);
+            }
+            if (failureClass) {
+                appendUniqueLine(suggestionLines, `Failure class: ${failureClass}`);
+            }
+            if (recoverable === true && !asString(data.suggestion)) {
+                appendUniqueLine(suggestionLines, 'This task can be retried from the current state.');
+            }
             message.parts.push({
                 type: 'error',
-                message: data.error ?? 'Task failed',
-                suggestion: data.suggestion,
+                message: errorText ?? (errorCode ? `Task failed (${errorCode})` : 'Task failed'),
+                suggestion: suggestionLines.length > 0 ? suggestionLines.join('\n') : undefined,
             });
             return message;
         }

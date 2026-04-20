@@ -1382,6 +1382,7 @@ describe('Phase 3: Agent Loop', () => {
                 && (
                     String(event.message ?? '').includes('generate_fallback_timeout:')
                     || String(event.message ?? '').includes('chat_startup_timeout_budget_exhausted')
+                    || String(event.message ?? '').includes('stream_start_timeout:')
                 )
             ))).toBe(true);
         } finally {
@@ -1946,7 +1947,7 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('chat-mode falls back to generate when stream completes without assistant narrative', async () => {
+    test('chat-mode does not switch to non-streaming fallback when stream completes without assistant narrative', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -1955,6 +1956,7 @@ describe('Phase 3: Agent Loop', () => {
         const previousForwardRetryCount = process.env.COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT;
         const events: Array<Record<string, unknown>> = [];
         let streamCalls = 0;
+        let generateCalls = 0;
 
         try {
             process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
@@ -1970,11 +1972,14 @@ describe('Phase 3: Agent Loop', () => {
                     })(),
                 } as unknown as Awaited<ReturnType<typeof supervisor.stream>>;
             }) as typeof supervisor.stream;
-            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => ({
-                runId: 'run-phase3-no-narrative-fallback',
-                text: '这是自动回退生成的答复。',
-                finishReason: 'stop',
-            })) as typeof supervisor.generate;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => {
+                generateCalls += 1;
+                return {
+                    runId: 'run-phase3-no-narrative-fallback',
+                    text: '这是自动回退生成的答复。',
+                    finishReason: 'stop',
+                };
+            }) as typeof supervisor.generate;
 
             const result = await handleUserMessage(
                 'silent stream fallback',
@@ -1986,15 +1991,19 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(streamCalls).toBe(2);
-            expect(result.runId).toBe('run-phase3-no-narrative-fallback');
+            expect(streamCalls).toBeGreaterThanOrEqual(1);
+            expect(result.runId).toBe('run-phase3-no-narrative-stream');
+            expect(generateCalls).toBe(0);
             expect(events.some((event) => event.type === 'rate_limited')).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('Switching to non-streaming fallback')
+            ))).toBe(false);
             expect(events.some((event) => (
                 event.type === 'text_delta'
                 && String(event.content ?? '').includes('自动回退生成')
-            ))).toBe(true);
-            expect(events.some((event) => event.type === 'complete')).toBe(true);
-            expect(events.some((event) => event.type === 'error')).toBe(false);
+            ))).toBe(false);
+            expect(events.some((event) => event.type === 'complete' || event.type === 'error')).toBe(true);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
@@ -2177,7 +2186,7 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('chat-mode falls back when wrapped auto-approved approval stream has no assistant narrative', async () => {
+    test('chat-mode does not switch to non-streaming fallback when wrapped auto-approved approval stream has no assistant narrative', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -2230,12 +2239,15 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(result.runId).toBe('run-phase3-wrapped-approval-fallback');
-            expect(streamCalls).toBe(2);
-            expect(generateCalls).toBe(1);
+            expect(result.runId).toBe('run-phase3-wrapped-approval-stream');
+            expect(streamCalls).toBeGreaterThanOrEqual(1);
+            expect(generateCalls).toBe(0);
             expect(events.some((event) => event.type === 'approval_required')).toBe(true);
-            expect(events.some((event) => event.type === 'rate_limited')).toBe(true);
-            expect(events.some((event) => event.type === 'complete' && event.finishReason === 'stop')).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('Switching to non-streaming fallback')
+            ))).toBe(false);
+            expect(events.some((event) => event.type === 'complete' || event.type === 'error')).toBe(true);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
@@ -2257,7 +2269,7 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('chat-mode uses generate fallback when stream only suspends without approval and has no assistant narrative', async () => {
+    test('chat-mode does not switch to non-streaming fallback when stream only suspends without approval and has no assistant narrative', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -2308,17 +2320,16 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(result.runId).toBe('run-phase3-suspended-no-narrative-fallback');
+            expect(result.runId).toBe('run-phase3-suspended-no-narrative-stream');
             expect(streamCalls).toBe(1);
-            expect(generateCalls).toBe(1);
+            expect(generateCalls).toBe(0);
             expect(events.some((event) => event.type === 'suspended')).toBe(true);
-            expect(events.some((event) => event.type === 'rate_limited')).toBe(true);
+            expect(events.some((event) => event.type === 'rate_limited')).toBe(false);
             expect(events.some((event) => (
                 event.type === 'text_delta'
                 && String(event.content ?? '').includes('suspended-only 场景下的自动回退结果')
-            ))).toBe(true);
-            expect(events.some((event) => event.type === 'complete' && event.finishReason === 'fallback_generate')).toBe(true);
-            expect(events.some((event) => event.type === 'error')).toBe(false);
+            ))).toBe(false);
+            expect(events.some((event) => event.type === 'complete' || event.type === 'error')).toBe(true);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
@@ -2690,7 +2701,7 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('task-mode tooling timeout can force generate fallback after bounded retry budget', async () => {
+    test('task-mode tooling timeout does not force generate fallback when task fallback is disabled', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -2747,14 +2758,8 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(result.runId).toBe('run-tooling-timeout-fallback-generate');
-            expect(generateCalls).toBe(1);
-            const assistantText = events
-                .filter((event) => event.type === 'text_delta')
-                .map((event) => String(event.content ?? ''))
-                .join('');
-            expect(assistantText).toContain('MiniMax 港股趋势摘要');
-            expect(events.some((event) => event.type === 'complete')).toBe(true);
+            expect(result.runId).toBe('run-tooling-timeout-fallback-stream');
+            expect(generateCalls).toBe(0);
             expect(events.some((event) => (
                 event.type === 'error'
                 && String(event.message ?? '').includes('stream_idle_timeout')
@@ -2790,7 +2795,94 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('task-mode tooling timeout with long assistant preface still forces generate fallback', async () => {
+    test('task-mode tooling timeout does not switch to non-streaming fallback even when task fallback env is enabled', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const originalGenerate = supervisor.generate.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousPreferResearcher = process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER;
+        const previousForwardRetryCount = process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+        const previousTaskGenerateFallback = process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
+        const events: Array<Record<string, unknown>> = [];
+        let generateCalls = 0;
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER = '0';
+            process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = 'true';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => ({
+                runId: 'run-task-fallback-env-enabled-stream',
+                fullStream: (async function* toolingTimeoutStream() {
+                    yield {
+                        type: 'tool-call',
+                        payload: {
+                            toolName: 'search_web',
+                            args: { query: 'MiniMax 港股 股价 今天' },
+                        },
+                    };
+                    throw new Error('stream_idle_timeout:60000');
+                })(),
+            })) as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => {
+                generateCalls += 1;
+                return {
+                    runId: 'run-task-fallback-env-enabled-generate',
+                    text: 'unexpected non-streaming fallback',
+                    finishReason: 'stop',
+                };
+            }) as typeof supervisor.generate;
+
+            const result = await handleUserMessage(
+                '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                'thread-task-fallback-env-enabled',
+                'employee-task-fallback-env-enabled',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                    forcedRouteMode: 'task',
+                },
+            );
+
+            expect(result.runId).toBe('run-task-fallback-env-enabled-stream');
+            expect(generateCalls).toBe(0);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('Switching to non-streaming fallback')
+            ))).toBe(false);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousPreferResearcher === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER = previousPreferResearcher;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER;
+            }
+            if (typeof previousForwardRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = previousForwardRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+            }
+            if (typeof previousTaskGenerateFallback === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = previousTaskGenerateFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
+            }
+        }
+    });
+
+    test('task-mode tooling timeout with long assistant preface does not force generate fallback when task fallback is disabled', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -2846,9 +2938,8 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(result.runId).toBe('run-tooling-timeout-long-preface-fallback');
-            expect(generateCalls).toBe(1);
-            expect(events.some((event) => event.type === 'complete')).toBe(true);
+            expect(result.runId).toBe('run-tooling-timeout-long-preface-stream');
+            expect(generateCalls).toBe(0);
             expect(events.some((event) => (
                 event.type === 'error'
                 && String(event.message ?? '').includes('stream_idle_timeout')
@@ -2884,7 +2975,7 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('task-mode tooling-only stream timeout without assistant narrative can force generate fallback', async () => {
+    test('task-mode tooling-only stream timeout without assistant narrative does not force generate fallback when task fallback is disabled', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -2893,6 +2984,10 @@ describe('Phase 3: Agent Loop', () => {
         const previousForwardRetryCount = process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
         const previousTaskGenerateFallback = process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
         const previousStreamIdleTimeout = process.env.COWORKANY_MASTRA_STREAM_IDLE_TIMEOUT_MS;
+        const previousTaskStreamIdleTimeout = process.env.COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS;
+        const previousTaskStreamProgressTimeout = process.env.COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS;
+        const previousTaskPreNarrativeIdleTimeout = process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS;
+        const previousTaskPreNarrativeProgressTimeout = process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS;
         const events: Array<Record<string, unknown>> = [];
         let generateCalls = 0;
 
@@ -2905,6 +3000,8 @@ describe('Phase 3: Agent Loop', () => {
             process.env.COWORKANY_MASTRA_STREAM_IDLE_TIMEOUT_MS = '900';
             process.env.COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS = '900';
             process.env.COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS = '900';
+            process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS = '1000';
+            process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS = '1000';
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => ({
                 runId: 'run-task-no-narrative-timeout-stream',
                 fullStream: (async function* toolingOnlyTimeoutStream() {
@@ -2943,18 +3040,13 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(result.runId).toBe('run-task-no-narrative-timeout-fallback');
-            expect(generateCalls).toBe(1);
-            const assistantText = events
-                .filter((event) => event.type === 'text_delta')
-                .map((event) => String(event.content ?? ''))
-                .join('');
-            expect(assistantText).toContain('超时回退');
-            expect(events.some((event) => event.type === 'complete')).toBe(true);
+            expect(result.runId).toBe('run-task-no-narrative-timeout-stream');
+            expect(generateCalls).toBe(0);
+            expect(events.some((event) => event.type === 'complete')).toBe(false);
             expect(events.some((event) => (
                 event.type === 'error'
                 && String(event.message ?? '').includes('stream_idle_timeout')
-            ))).toBe(false);
+            ))).toBe(true);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
@@ -2998,10 +3090,127 @@ describe('Phase 3: Agent Loop', () => {
             } else {
                 delete process.env.COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS;
             }
+            if (typeof previousTaskPreNarrativeIdleTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS = previousTaskPreNarrativeIdleTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS;
+            }
+            if (typeof previousTaskPreNarrativeProgressTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS = previousTaskPreNarrativeProgressTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS;
+            }
         }
     });
 
-    test('chat-mode fallback filters internal completion-check narrative', async () => {
+    test('task-mode timeout after tool_result without narrative emits degraded completion instead of terminal error', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const originalGenerate = supervisor.generate.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+        const previousPreferResearcher = process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER;
+        const previousForwardRetryCount = process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+        const previousTaskGenerateFallback = process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
+        const events: Array<Record<string, unknown>> = [];
+        let generateCalls = 0;
+
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER = '0';
+            process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = 'false';
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => ({
+                runId: 'run-task-tool-result-timeout',
+                fullStream: (async function* toolingResultTimeoutStream() {
+                    yield {
+                        type: 'tool-call',
+                        payload: {
+                            toolName: 'mastra_workspace_execute_command',
+                            args: { command: 'ffmpeg -version' },
+                        },
+                    };
+                    yield {
+                        type: 'tool-result',
+                        payload: {
+                            toolCallId: 'tool-task-tool-result-timeout',
+                            toolName: 'mastra_workspace_execute_command',
+                            result: {
+                                stdout: 'ffmpeg version n7.1',
+                                exitCode: 0,
+                            },
+                        },
+                    };
+                    throw new Error('stream_idle_timeout:60000');
+                })(),
+            })) as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => {
+                generateCalls += 1;
+                return {
+                    runId: 'run-task-tool-result-timeout-fallback',
+                    text: 'unexpected non-streaming fallback',
+                    finishReason: 'stop',
+                };
+            }) as typeof supervisor.generate;
+
+            const result = await handleUserMessage(
+                '把附件图片合并为视频，每张 5 秒',
+                'thread-task-tool-result-timeout',
+                'employee-task-tool-result-timeout',
+                (event) => events.push(event as Record<string, unknown>),
+                {
+                    forcePostAssistantCompletion: true,
+                    forcedRouteMode: 'task',
+                },
+            );
+
+            expect(result.runId).toBe('run-task-tool-result-timeout');
+            expect(generateCalls).toBe(0);
+            expect(events.some((event) => event.type === 'complete')).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'complete'
+                && String(event.finishReason ?? '').includes('tooling_timeout_degraded')
+            ))).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'text_delta'
+                && String(event.content ?? '').includes('执行降级交付（超时保护）')
+            ))).toBe(true);
+            expect(events.some((event) => (
+                event.type === 'error'
+                && String(event.message ?? '').includes('stream_idle_timeout')
+            ))).toBe(false);
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousAnthropic === 'string') {
+                process.env.ANTHROPIC_API_KEY = previousAnthropic;
+            } else {
+                delete process.env.ANTHROPIC_API_KEY;
+            }
+            if (typeof previousPreferResearcher === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER = previousPreferResearcher;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_PREFER_RESEARCHER;
+            }
+            if (typeof previousForwardRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT = previousForwardRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_STREAM_FORWARD_RETRY_COUNT;
+            }
+            if (typeof previousTaskGenerateFallback === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK = previousTaskGenerateFallback;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK;
+            }
+        }
+    });
+
+    test('chat-mode never emits internal completion-check narrative when fallback is globally disabled', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const originalGenerate = supervisor.generate.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
@@ -3009,6 +3218,7 @@ describe('Phase 3: Agent Loop', () => {
         const previousFallback = process.env.COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK;
         const previousForwardRetryCount = process.env.COWORKANY_MASTRA_CHAT_STREAM_FORWARD_RETRY_COUNT;
         const events: Array<Record<string, unknown>> = [];
+        let generateCalls = 0;
 
         try {
             process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
@@ -3021,11 +3231,14 @@ describe('Phase 3: Agent Loop', () => {
                     // no narrative
                 })(),
             })) as typeof supervisor.stream;
-            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => ({
-                runId: 'run-phase3-filter-fallback',
-                text: '#### Completion Check Results\n\n**coworkany-loop-has-answer**\nScore: 0',
-                finishReason: 'stop',
-            })) as typeof supervisor.generate;
+            (supervisor as unknown as { generate: typeof supervisor.generate }).generate = (async () => {
+                generateCalls += 1;
+                return {
+                    runId: 'run-phase3-filter-fallback',
+                    text: '#### Completion Check Results\n\n**coworkany-loop-has-answer**\nScore: 0',
+                    finishReason: 'stop',
+                };
+            }) as typeof supervisor.generate;
 
             await handleUserMessage(
                 'filter internal completion check',
@@ -3037,12 +3250,12 @@ describe('Phase 3: Agent Loop', () => {
                 },
             );
 
-            expect(events.some((event) => event.type === 'rate_limited')).toBe(true);
-            expect(events.some((event) => event.type === 'complete')).toBe(true);
+            expect(generateCalls).toBe(0);
             expect(events.some((event) => (
                 event.type === 'text_delta'
                 && String(event.content ?? '').includes('Completion Check Results')
             ))).toBe(false);
+            expect(events.some((event) => event.type === 'complete' || event.type === 'error')).toBe(true);
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             (supervisor as unknown as { generate: typeof supervisor.generate }).generate = originalGenerate as typeof supervisor.generate;

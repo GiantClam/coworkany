@@ -69,6 +69,9 @@ export interface MastraChunkLike {
 
 const AGENT_EXECUTION_EVENT_PREFIX = 'agent-execution-event-';
 const DATA_EVENT_PREFIX = 'data-';
+const COMMAND_EXECUTION_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|exec_shell|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/iu;
+const COMMAND_FAILURE_TEXT_PATTERN = /\b(command not found|no such file or directory|permission denied|operation not permitted|segmentation fault|fatal error|traceback \(most recent call last\)|error while opening encoder|invalid argument|failed to open|cannot open|unable to (?:open|find)|width not divisible by 2)\b/iu;
+const COMMAND_EXIT_CODE_PATTERN = /\bexit\s*code\s*[:=]\s*([1-9][0-9]*)\b/iu;
 
 function toRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -333,20 +336,153 @@ function resolveToolResultValue(data: Record<string, unknown>): unknown {
     return data;
 }
 
-function resolveToolResultErrorFlag(data: Record<string, unknown>): boolean {
+function toFiniteNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number.parseInt(value.trim(), 10);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    return null;
+}
+
+function collectCommandFailureTextCandidates(
+    value: unknown,
+    depth = 0,
+    sink: string[] = [],
+): string[] {
+    if (depth > 5 || value == null) {
+        return sink;
+    }
+    if (typeof value === 'string') {
+        const normalized = normalizeText(value);
+        if (normalized && !sink.includes(normalized)) {
+            sink.push(normalized);
+        }
+        return sink;
+    }
+    const record = toRecord(value);
+    if (!record) {
+        return sink;
+    }
+    const directTextKeys = [
+        'stderr',
+        'stdout',
+        'output',
+        'message',
+        'detail',
+        'text',
+        'error',
+        'reason',
+        'summary',
+    ];
+    for (const key of directTextKeys) {
+        const candidate = record[key];
+        if (typeof candidate === 'string') {
+            const normalized = normalizeText(candidate);
+            if (normalized && !sink.includes(normalized)) {
+                sink.push(normalized);
+            }
+            continue;
+        }
+        if (candidate && typeof candidate === 'object') {
+            collectCommandFailureTextCandidates(candidate, depth + 1, sink);
+        }
+    }
+    const nestedKeys = ['result', 'response', 'payload', 'data'];
+    for (const key of nestedKeys) {
+        const nested = record[key];
+        if (nested && typeof nested === 'object') {
+            collectCommandFailureTextCandidates(nested, depth + 1, sink);
+        }
+    }
+    return sink;
+}
+
+function isLikelyCommandExecutionFailure(input: {
+    data: Record<string, unknown>;
+    toolName?: string;
+}): boolean {
+    if (!input.toolName || !COMMAND_EXECUTION_TOOL_PATTERN.test(input.toolName)) {
+        return false;
+    }
+
+    const topLevelExitCode = toFiniteNumber(input.data.exitCode ?? input.data.exit_code);
+    if (topLevelExitCode !== null && topLevelExitCode !== 0) {
+        return true;
+    }
+
+    const resultValue = resolveToolResultValue(input.data);
+    const resultRecord = toRecord(resultValue);
+    if (resultRecord) {
+        const resultExitCode = toFiniteNumber(resultRecord.exitCode ?? resultRecord.exit_code);
+        if (resultExitCode !== null && resultExitCode !== 0) {
+            return true;
+        }
+        const resultStatusCode = toFiniteNumber(resultRecord.statusCode ?? resultRecord.status_code);
+        if (resultStatusCode !== null && resultStatusCode >= 400) {
+            return true;
+        }
+        if (resultRecord.success === false || resultRecord.ok === false) {
+            return true;
+        }
+        const stderr = normalizeText(resultRecord.stderr);
+        if (stderr && (COMMAND_FAILURE_TEXT_PATTERN.test(stderr) || COMMAND_EXIT_CODE_PATTERN.test(stderr))) {
+            return true;
+        }
+        const textCandidates = collectCommandFailureTextCandidates(resultRecord);
+        if (textCandidates.some((candidate) => (
+            COMMAND_FAILURE_TEXT_PATTERN.test(candidate) || COMMAND_EXIT_CODE_PATTERN.test(candidate)
+        ))) {
+            return true;
+        }
+        const errorMessage = extractErrorMessage(resultRecord.error);
+        if (errorMessage && COMMAND_FAILURE_TEXT_PATTERN.test(errorMessage)) {
+            return true;
+        }
+    }
+
+    if (typeof resultValue === 'string') {
+        return COMMAND_FAILURE_TEXT_PATTERN.test(resultValue) || COMMAND_EXIT_CODE_PATTERN.test(resultValue);
+    }
+
+    return false;
+}
+
+function resolveToolResultErrorFlag(data: Record<string, unknown>, toolName?: string): boolean {
+    const likelyCommandFailure = isLikelyCommandExecutionFailure({
+        data,
+        toolName,
+    });
     if (data.isError === true || data.error === true) {
         return true;
     }
     const successValue = data.success;
     if (typeof successValue === 'boolean') {
-        return !successValue;
+        if (!successValue) {
+            return true;
+        }
+        if (likelyCommandFailure) {
+            return true;
+        }
     }
     const status = normalizeText(data.status)?.toLowerCase();
     if (status) {
-        return status === 'error' || status === 'failed' || status === 'failure';
+        if (status === 'error' || status === 'failed' || status === 'failure') {
+            return true;
+        }
+        if (likelyCommandFailure) {
+            return true;
+        }
     }
     const errorMessage = extractErrorMessage(data.error);
-    return Boolean(errorMessage);
+    if (errorMessage) {
+        return true;
+    }
+    return likelyCommandFailure;
 }
 function appendUniqueText(target: string[], value: unknown): void {
     const normalized = normalizeText(value);
@@ -660,7 +796,7 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
                 toolCallId,
                 toolName,
                 result: resolveToolResultValue(data),
-                isError: resolveToolResultErrorFlag(data),
+                isError: resolveToolResultErrorFlag(data, toolName),
             };
         }
         case 'tool-output-available':
@@ -682,7 +818,7 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
                     : resolveToolResultValue(data),
                 isError: normalizedChunk.type === 'tool-output-error'
                     ? true
-                    : resolveToolResultErrorFlag(data),
+                    : resolveToolResultErrorFlag(data, toolName),
             };
         }
         case 'finish':

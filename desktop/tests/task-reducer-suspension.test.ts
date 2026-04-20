@@ -41,7 +41,7 @@ describe('task reducer suspension handling', () => {
 
         const next = applyTaskEvent(makeSession(), event);
 
-        expect(next.status).toBe('idle');
+        expect(next.status).toBe('suspended');
         expect(next.suspension?.reason).toBe('authentication_required');
         expect(next.messages).toHaveLength(1);
         expect(next.messages[0]?.content).toBe('Please log in to continue.');
@@ -63,7 +63,7 @@ describe('task reducer suspension handling', () => {
             payload: event.payload,
         }));
 
-        expect(replayed.status).toBe('idle');
+        expect(replayed.status).toBe('suspended');
         expect(replayed.suspension?.reason).toBe('authentication_required');
         expect(replayed.messages).toHaveLength(1);
     });

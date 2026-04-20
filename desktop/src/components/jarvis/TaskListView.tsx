@@ -10,6 +10,7 @@ import { getVoiceSettings } from '../../lib/configStore';
 import { isTauri } from '../../lib/tauri';
 import { useWorkspace } from '../../hooks/useWorkspace';
 import { useTaskEventStore, type TaskSession } from '../../stores/useTaskEventStore';
+import { formatTaskFailureDetails, getTaskFailureUiDescriptor } from '../../lib/taskFailureUi';
 import type { TaskCardItem, TaskStatus } from '../../types';
 import './TaskListView.css';
 
@@ -114,7 +115,19 @@ function deriveUserPrompt(session: TaskSession): string {
 }
 
 function deriveResult(session: TaskSession): string {
-    if ((session.status === 'finished' || session.status === 'failed') && session.summary?.trim().length) {
+    if (session.status === 'failed') {
+        const failureDescriptor = getTaskFailureUiDescriptor(session);
+        const fallbackDescription = failureDescriptor
+            ? failureDescriptor.descriptionDefault
+            : 'Execution failed unexpectedly.';
+        const readableFailure = formatTaskFailureDetails(session.failure, {
+            fallbackDescription,
+            includePrefix: false,
+        });
+        return compactText(readableFailure, 260);
+    }
+
+    if (session.status === 'finished' && session.summary?.trim().length) {
         return compactText(session.summary, 260);
     }
 

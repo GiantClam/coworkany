@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createMastraEntrypointProcessor, deriveHostControlShellCommand } from '../src/mastra/entrypoint';
+import {
+    createMastraEntrypointProcessor,
+    deriveHostControlShellCommand,
+    type TaskMessageExecutionDelegateInput,
+    type TaskMessageExecutionDelegateResult,
+} from '../src/mastra/entrypoint';
 import type { DesktopEvent } from '../src/ipc/bridge';
 import { MastraRemoteSessionStore } from '../src/mastra/remoteSessionStore';
 import type { TaskRuntimeState } from '../src/mastra/taskRuntimeState';
@@ -188,6 +193,9 @@ function createHarness(overrides?: {
         reason: string;
         ruleId: string;
     };
+    onExecuteTaskMessage?: (
+        input: TaskMessageExecutionDelegateInput,
+    ) => Promise<TaskMessageExecutionDelegateResult>;
     remoteSessionStore?: ConstructorParameters<typeof createMastraEntrypointProcessor>[0]['remoteSessionStore'];
     remoteSessionGovernancePolicy?: ConstructorParameters<typeof createMastraEntrypointProcessor>[0]['remoteSessionGovernancePolicy'];
 }) {
@@ -460,6 +468,7 @@ function createHarness(overrides?: {
         remoteSessionGovernancePolicy: overrides?.remoteSessionGovernancePolicy,
         policyGateResponseTimeoutMs: overrides?.policyGateResponseTimeoutMs,
         policyGateTimeoutRetryCount: overrides?.policyGateTimeoutRetryCount,
+        executeTaskMessage: overrides?.onExecuteTaskMessage,
         warmupChatRuntime: overrides?.onWarmupChatRuntime,
     });
 
@@ -1162,6 +1171,97 @@ describe('mastra entrypoint processor', () => {
 
         expect(harness.userMessageCalls).toHaveLength(1);
         expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+    });
+
+    test('start_task workflow path rejects workflow success without required command evidence', async () => {
+        const harness = createHarness({
+            onExecuteTaskMessage: async (input) => {
+                await input.emitDesktopEvent({
+                    type: 'text_delta',
+                    runId: 'run-workflow-plan-only',
+                    role: 'assistant',
+                    content: '好的，我先给你执行计划，然后开始处理。',
+                    turnId: input.turnId,
+                });
+                await input.emitDesktopEvent({
+                    type: 'complete',
+                    runId: 'run-workflow-plan-only',
+                    finishReason: 'workflow:success',
+                    turnId: input.turnId,
+                });
+                return { executionPath: 'workflow' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-workflow-plan-only',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-workflow-plan-only',
+                title: 'workflow plan only',
+                userQuery: '[Resolved attachments] - /tmp/a.png - /tmp/b.png 把附件图片合并为一个视频，每张图片播放 5s',
+                config: {
+                    executionPath: 'workflow',
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        const payload = toRecord(failed?.payload);
+        expect(toString(payload.errorCode)).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+        const missingCapabilities = Array.isArray(payload.missingCapabilities)
+            ? payload.missingCapabilities.filter((item): item is string => typeof item === 'string')
+            : [];
+        expect(missingCapabilities).toContain('command_execution');
+    });
+
+    test('start_task workflow path rehydrates completion capabilities when complete event turnId drifts', async () => {
+        const harness = createHarness({
+            onExecuteTaskMessage: async (input) => {
+                const driftTurnId = `${input.turnId}-drift`;
+                await input.emitDesktopEvent({
+                    type: 'text_delta',
+                    runId: 'run-workflow-plan-only-drift',
+                    role: 'assistant',
+                    content: '我先说明执行计划，然后马上执行。',
+                    turnId: driftTurnId,
+                });
+                await input.emitDesktopEvent({
+                    type: 'complete',
+                    runId: 'run-workflow-plan-only-drift',
+                    finishReason: 'workflow:success',
+                    turnId: driftTurnId,
+                });
+                return { executionPath: 'workflow' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-workflow-plan-only-drift',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-workflow-plan-only-drift',
+                title: 'workflow plan only drift',
+                userQuery: '[Resolved attachments] - /tmp/a.png - /tmp/b.png 把这几张图弄成一个短片，每张停5秒',
+                config: {
+                    executionPath: 'workflow',
+                    maxRetries: 0,
+                },
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        const payload = toRecord(failed?.payload);
+        expect(toString(payload.errorCode)).toBe('E_PROTOCOL_MISSING_TOOL_EVIDENCE');
+        const missingCapabilities = Array.isArray(payload.missingCapabilities)
+            ? payload.missingCapabilities.filter((item): item is string => typeof item === 'string')
+            : [];
+        expect(missingCapabilities).toContain('command_execution');
     });
 
     test('send_task_message auto-retries when task turn has no required tool evidence', async () => {
@@ -2039,6 +2139,37 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).not.toContain('web_research');
     });
 
+    test('start_task routes single-line resolved attachments with absolute staged paths to command_execution', async () => {
+        const attachmentPaths = [
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2025-10-17 22.01.27.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-01-06 15.34.56.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-04-06 21.01.29.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-04-03 09.25.43.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-01-17 11.30.46.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-01-17 11.30.35.png',
+        ];
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-start-direct-attachment-video-merge-absolute-staged-paths',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-direct-attachment-video-merge-absolute-staged-paths',
+                title: 'direct attachment video merge absolute staged paths',
+                userQuery: `[Resolved attachments] - ${attachmentPaths.join(' - ')} 把附件图片合并为一个视频，每张图片播放 5s`,
+                config: {
+                    executionPath: 'direct',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.requireToolEvidenceForCompletion).toBe(true);
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).toContain('command_execution');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).not.toContain('browser_automation');
+        expect(harness.userMessageCalls[0]?.options?.requiredCompletionCapabilities).not.toContain('web_research');
+    });
+
     test('start_task keeps task deadline budget fixed across recovery attempts for direct market route', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (input, emit) => {
@@ -2163,6 +2294,123 @@ describe('mastra entrypoint processor', () => {
         expect((sendResponse?.payload as Record<string, unknown>)?.queuePosition).toBe(0);
         const textDelta = harness.outgoing.find((message) => message.type === 'TEXT_DELTA');
         expect((textDelta?.payload as Record<string, unknown>)?.turnId).toBe('cmd-followup');
+    });
+
+    test('send_task_message keeps task route continuity for existing task thread without explicit route token', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-followup-continuity-task',
+                    conversationThreadId: 'thread-followup-continuity-task',
+                    title: 'followup continuity task',
+                    workspacePath: '/tmp/ws-followup-continuity-task',
+                    createdAt: '2026-04-18T00:00:00.000Z',
+                    status: 'running',
+                    resourceId: 'employee-task-followup-continuity-task',
+                    executionPath: 'direct',
+                    lastUserMessage: '把附件图片合并为一个视频，每张图片播放 5s',
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-followup-continuity-task',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-followup-continuity-task',
+                content: '继续执行，完成后告诉我结果',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.threadId).toBe('thread-followup-continuity-task');
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+    });
+
+    test('send_task_message preserves chat continuity when previous turn contract mode is chat', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-followup-continuity-chat',
+                    conversationThreadId: 'thread-followup-continuity-chat',
+                    title: 'followup continuity chat',
+                    workspacePath: '/tmp/ws-followup-continuity-chat',
+                    createdAt: '2026-04-18T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-followup-continuity-chat',
+                    executionPath: 'direct',
+                    turnContract: {
+                        hash: 'contract-chat-1',
+                        mode: 'chat',
+                        domain: 'general',
+                        route: 'direct',
+                        messageFingerprint: 'chat-fingerprint-1',
+                        requiredCapabilities: [],
+                        createdAt: '2026-04-18T00:00:00.000Z',
+                    },
+                    lastUserMessage: '给我写一段简短周报',
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-followup-continuity-chat',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-followup-continuity-chat',
+                content: '再简化一点，保留两句话',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.threadId).toBe('thread-followup-continuity-chat');
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('chat');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBe(true);
+    });
+
+    test('send_task_message allows explicit route token to override task continuity', async () => {
+        const harness = createHarness({
+            initialTaskStates: [
+                {
+                    taskId: 'task-followup-explicit-chat-override',
+                    conversationThreadId: 'thread-followup-explicit-chat-override',
+                    title: 'followup explicit chat override',
+                    workspacePath: '/tmp/ws-followup-explicit-chat-override',
+                    createdAt: '2026-04-18T00:00:00.000Z',
+                    status: 'idle',
+                    resourceId: 'employee-task-followup-explicit-chat-override',
+                    executionPath: 'direct',
+                    turnContract: {
+                        hash: 'contract-task-1',
+                        mode: 'task',
+                        domain: 'general',
+                        route: 'direct',
+                        messageFingerprint: 'task-fingerprint-1',
+                        requiredCapabilities: ['command_execution'],
+                        createdAt: '2026-04-18T00:00:00.000Z',
+                    },
+                    lastUserMessage: '把附件图片转成 png',
+                },
+            ],
+        });
+
+        await harness.process({
+            id: 'cmd-followup-explicit-chat-override',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-followup-explicit-chat-override',
+                content: '__route_chat__\n只做文字总结，不要执行。',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.threadId).toBe('thread-followup-explicit-chat-override');
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('chat');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBe(true);
     });
 
     test('send_task_message inherits resolved attachment paths for contextual follow-up references', async () => {
@@ -3589,6 +3837,44 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
+    test('send_task_message auto-approves read-only workspace list_files tool without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-workspace-list-files',
+                    toolCallId: 'tool-safe-workspace-list-files',
+                    toolName: 'mastra_workspace_list_files',
+                    args: {
+                        path: '.coworkany/attachments/staged',
+                        maxDepth: 3,
+                        showHidden: true,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-workspace-list-files' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-workspace-list-files',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-workspace-list-files',
+                content: '检查附件目录中的图片文件',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-workspace-list-files',
+            toolCallId: 'tool-safe-workspace-list-files',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
     test('send_task_message auto-approves browser_navigate for market web_research tasks without EFFECT_REQUESTED', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -4696,6 +4982,194 @@ describe('mastra entrypoint processor', () => {
         expect(assistantText).toContain('上游检索流在输出正文前中断');
     });
 
+    test('send_task_message retries failed command step when retryable timeout is thrown after tooling progress without explicit error event', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '30';
+        let attempt = 0;
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    attempt += 1;
+                    if (attempt === 1) {
+                        emit({
+                            type: 'tool_call',
+                            runId: 'run-tool-timeout-thrown',
+                            toolName: 'mastra_workspace_execute_command',
+                            args: {
+                                command: 'ffmpeg -y -f concat -safe 0 -i image_list.txt merged.mp4',
+                            },
+                        });
+                        emit({
+                            type: 'tool_result',
+                            runId: 'run-tool-timeout-thrown',
+                            toolCallId: 'tool-tool-timeout-thrown',
+                            toolName: 'mastra_workspace_execute_command',
+                            result: '[libx264] width not divisible by 2 (1x1)\nError while opening encoder',
+                        });
+                        throw new Error('Error: stream_idle_timeout:60000');
+                    }
+                    emit({
+                        type: 'tool_call',
+                        runId: 'run-tool-timeout-thrown-retry',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: {
+                            command: 'ffmpeg -y -framerate 1/5 -i frame-%02d.png merged.mp4',
+                        },
+                    });
+                    emit({
+                        type: 'tool_result',
+                        runId: 'run-tool-timeout-thrown-retry',
+                        toolCallId: 'tool-tool-timeout-thrown-retry',
+                        toolName: 'mastra_workspace_execute_command',
+                        result: {
+                            stdout: 'video created successfully',
+                            exitCode: 0,
+                        },
+                    });
+                    emit({
+                        type: 'text_delta',
+                        runId: 'run-tool-timeout-thrown-retry',
+                        role: 'assistant',
+                        content: '已修复参数并完成合成。',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-tool-timeout-thrown-retry',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-tool-timeout-thrown-retry' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-tool-timeout-thrown',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-tool-timeout-thrown',
+                    content: '把附件图片合并为视频，每张 5 秒',
+                    config: {
+                        maxRetries: 1,
+                    },
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 250);
+            });
+
+            const retryEvent = harness.outgoing.find((message) => message.type === 'RATE_LIMITED');
+            const retryPayload = toRecord(retryEvent?.payload);
+            const retryMessage = toString(retryPayload.message);
+
+            expect(retryEvent).toBeDefined();
+            expect(retryMessage).toContain('仅重试失败步骤');
+            expect(harness.userMessageCalls.length).toBe(2);
+            expect(harness.userMessageCalls[1]?.message).toContain('[CoworkAny Retry Execution Contract]');
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('send_task_message schedules failed-step retry when timeout follows explicit command failure event', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '30';
+        let attempt = 0;
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    attempt += 1;
+                    if (attempt === 1) {
+                        emit({
+                            type: 'tool_call',
+                            runId: 'run-timeout-explicit-error',
+                            toolName: 'mastra_workspace_execute_command',
+                            args: {
+                                command: 'ffmpeg -y -f concat -safe 0 -i .coworkany/attachments/staged/slideshow_input.txt',
+                            },
+                        });
+                        emit({
+                            type: 'tool_result',
+                            runId: 'run-timeout-explicit-error',
+                            toolCallId: 'tool-timeout-explicit-error',
+                            toolName: 'mastra_workspace_execute_command',
+                            result: 'Error opening input file .coworkany/attachments/staged/slideshow_input.txt\nExit code: 254',
+                        });
+                        emit({
+                            type: 'error',
+                            runId: 'run-timeout-explicit-error',
+                            message: 'Error: stream_idle_timeout:60000',
+                        });
+                        return { runId: 'run-timeout-explicit-error' };
+                    }
+                    emit({
+                        type: 'tool_call',
+                        runId: 'run-timeout-explicit-error-retry',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: {
+                            command: 'ffmpeg -y -f concat -safe 0 -i .coworkany/attachments/staged/slideshow_input.txt -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 output.mp4',
+                        },
+                    });
+                    emit({
+                        type: 'tool_result',
+                        runId: 'run-timeout-explicit-error-retry',
+                        toolCallId: 'tool-timeout-explicit-error-retry',
+                        toolName: 'mastra_workspace_execute_command',
+                        result: {
+                            stdout: 'slideshow generated',
+                            exitCode: 0,
+                        },
+                    });
+                    emit({
+                        type: 'text_delta',
+                        runId: 'run-timeout-explicit-error-retry',
+                        role: 'assistant',
+                        content: '已修复失败命令并完成视频生成。',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-timeout-explicit-error-retry',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-timeout-explicit-error-retry' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-timeout-explicit-error',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-timeout-explicit-error',
+                    content: '把附件图片合并为一个视频，每张图片播放 5s',
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 250);
+            });
+
+            const retryEvent = harness.outgoing.find((message) => message.type === 'RATE_LIMITED');
+            const retryPayload = toRecord(retryEvent?.payload);
+            const retryMessage = toString(retryPayload.message);
+
+            expect(retryEvent).toBeDefined();
+            expect(retryMessage).toContain('仅重试失败步骤');
+            expect(harness.userMessageCalls.length).toBe(2);
+            expect(harness.userMessageCalls[1]?.message).toContain('[CoworkAny Retry Execution Contract]');
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
     test('send_task_message tolerates complete-before-approval race and still resumes auto-approved agent tool', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -4984,6 +5458,168 @@ describe('mastra entrypoint processor', () => {
         expect(payload.error).toBe('approval_request_not_found');
     });
 
+    test('legacy request_effect_response approval command resumes pending approval', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-legacy-approval',
+                    toolCallId: 'tool-legacy-approval',
+                    toolName: 'bash_approval',
+                    args: { command: 'echo legacy-approval' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-legacy-approval' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-legacy-approval-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-legacy-approval',
+                userQuery: 'legacy approval response compatibility',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-legacy-approval-response',
+            type: 'request_effect_response',
+            payload: {
+                response: {
+                    requestId,
+                    approved: true,
+                    denialReason: null,
+                    approvalType: 'once',
+                },
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-legacy-approval',
+            toolCallId: 'tool-legacy-approval',
+            approved: true,
+        });
+
+        const response = harness.outgoing.find(
+            (message) => message.type === 'report_effect_result_response'
+                && message.commandId === 'cmd-legacy-approval-response',
+        );
+        expect(response).toBeDefined();
+        expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+    });
+
+    test('report_effect_result resumes approval when pending request has empty runId', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: '',
+                    toolCallId: 'tool-empty-run-id',
+                    toolName: 'bash_approval',
+                    args: { command: 'echo ok' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-empty-id-parent' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-empty-runid-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-empty-runid',
+                userQuery: 'needs approval',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-empty-runid-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
+                success: true,
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: '',
+            toolCallId: 'tool-empty-run-id',
+            approved: true,
+        });
+        const response = harness.outgoing.find((message) => message.type === 'report_effect_result_response');
+        const payload = (response?.payload as Record<string, unknown>) ?? {};
+        expect(payload.success).toBe(true);
+    });
+
+    test('report_effect_result acknowledges immediately before delayed approval-resume stream completion', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-delayed-resume',
+                    toolCallId: 'tool-delayed-resume',
+                    toolName: 'bash_approval',
+                    args: { command: 'echo delayed' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-delayed-resume' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                await new Promise<void>((resolve) => setTimeout(resolve, 15));
+                emit({
+                    type: 'complete',
+                    runId: 'run-delayed-resume',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-delayed-resume-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-delayed-resume',
+                userQuery: 'needs approval',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-delayed-resume-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
+                success: true,
+            },
+        });
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+        const responseIndex = harness.outgoing.findIndex((message) =>
+            message.type === 'report_effect_result_response' && message.commandId === 'cmd-delayed-resume-report',
+        );
+        const finishedIndex = harness.outgoing.findIndex((message) =>
+            message.type === 'TASK_FINISHED' && message.taskId === 'task-delayed-resume',
+        );
+        expect(responseIndex).toBeGreaterThanOrEqual(0);
+        expect(finishedIndex).toBeGreaterThanOrEqual(0);
+        expect(responseIndex).toBeLessThan(finishedIndex);
+    });
+
     test('cancel_task clears pending approvals for the task to prevent stale approval resume', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -5037,7 +5673,7 @@ describe('mastra entrypoint processor', () => {
         expect(payload.error).toBe('approval_request_not_found');
     });
 
-    test('terminal completion clears pending approvals for the task', async () => {
+    test('terminal completion while waiting approval does not clear pending approvals', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -5066,6 +5702,7 @@ describe('mastra entrypoint processor', () => {
             },
         });
 
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
         const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
         const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
         expect(typeof requestId).toBe('string');
@@ -5079,12 +5716,14 @@ describe('mastra entrypoint processor', () => {
             },
         });
 
-        expect(harness.approvalCalls.length).toBe(0);
+        expect(harness.approvalCalls.length).toBe(1);
         const response = harness.outgoing.find((message) => message.type === 'report_effect_result_response');
         expect(response).toBeDefined();
         const payload = response?.payload as Record<string, unknown>;
-        expect(payload.success).toBe(false);
-        expect(payload.error).toBe('approval_request_not_found');
+        expect(payload.success).toBe(true);
+        expect(payload.error).toBeUndefined();
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
     test('clear_task_history clears pending approvals for the task', async () => {

@@ -605,6 +605,16 @@ function buildStagePlan(repositoryRoot: string, options: CliOptions): StageDefin
         });
     };
 
+    const addDesktopE2ERuntimeLifecycleStage = (): void => {
+        stages.push({
+            id: 'desktop-e2e-runtime-lifecycle',
+            label: 'Desktop E2E Runtime Lifecycle',
+            cwd: desktopDir,
+            command: bin('npm'),
+            args: ['run', 'test:e2e:runtime-lifecycle'],
+        });
+    };
+
     if (options.mode === 'pr') {
         if (includesSubset(options.subset, ['sidecar'])) {
             addPrSidecarStages();
@@ -614,6 +624,7 @@ function buildStagePlan(repositoryRoot: string, options: CliOptions): StageDefin
         }
         if (includesSubset(options.subset, ['desktop-e2e'])) {
             addDesktopE2EStage('tier1');
+            addDesktopE2ERuntimeLifecycleStage();
         }
         return stages;
     }
@@ -630,6 +641,9 @@ function buildStagePlan(repositoryRoot: string, options: CliOptions): StageDefin
         }
         if (includesSubset(options.subset, ['desktop-e2e', 'nightly-tier3'])) {
             addDesktopE2EStage('tier3');
+        }
+        if (includesSubset(options.subset, ['desktop-e2e'])) {
+            addDesktopE2ERuntimeLifecycleStage();
         }
         stages.push({
             id: 'sidecar-real-model-smoke',

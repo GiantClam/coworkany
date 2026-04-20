@@ -778,7 +778,14 @@ export const searchWebTool = createTool({
     description: 'Search the web and return top results with links and snippets.',
     inputSchema: searchInputSchema,
     outputSchema: searchOutputSchema,
-    execute: async ({ query, max_results, recency_days }) => runWebSearch({ query, max_results, recency_days }),
+    execute: async (rawInput) => {
+        const input = searchInputSchema.parse(rawInput);
+        return runWebSearch({
+            query: input.query,
+            max_results: input.max_results,
+            recency_days: input.recency_days,
+        });
+    },
 });
 
 export const crawlUrlTool = createTool({
@@ -786,10 +793,13 @@ export const crawlUrlTool = createTool({
     description: 'Fetch a web page and return extracted readable text.',
     inputSchema: crawlInputSchema,
     outputSchema: crawlOutputSchema,
-    execute: async ({ url, max_chars }) => runCrawlUrl({
-        url,
-        maxChars: max_chars,
-    }),
+    execute: async (rawInput) => {
+        const input = crawlInputSchema.parse(rawInput);
+        return runCrawlUrl({
+            url: input.url,
+            maxChars: input.max_chars,
+        });
+    },
 });
 
 export const extractContentTool = createTool({
@@ -797,9 +807,12 @@ export const extractContentTool = createTool({
     description: 'Extract readable text content from HTML or a URL.',
     inputSchema: extractInputSchema,
     outputSchema: extractOutputSchema,
-    execute: async ({ url, html, max_chars }) => runExtractContent({
-        url,
-        html,
-        maxChars: max_chars,
-    }),
+    execute: async (rawInput) => {
+        const input = extractInputSchema.parse(rawInput);
+        return runExtractContent({
+            url: input.url,
+            html: input.html,
+            maxChars: input.max_chars,
+        });
+    },
 });

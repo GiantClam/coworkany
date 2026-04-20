@@ -10,10 +10,132 @@ export interface ExecuteTaskInput {
     frozen: FrozenWorkRequest;
     executionPlan: ExecutionPlan;
     executionQuery: string;
+    requiredCapabilities?: string[];
+}
+
+export interface ExecuteTaskToolEvidence {
+    toolCallCount: number;
+    commandToolCallCount: number;
+    toolNames: string[];
 }
 export interface ExecuteTaskOutput {
     result: string;
     completed: boolean;
+    toolEvidence: ExecuteTaskToolEvidence;
+}
+
+const COMMAND_EXECUTION_CAPABILITY = 'command_execution';
+const COMMAND_EXECUTION_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/i;
+const MAX_TOOL_EVIDENCE_SCAN_DEPTH = 8;
+const MAX_TOOL_EVIDENCE_SCAN_ITEMS = 512;
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+    return value as Record<string, unknown>;
+}
+
+function normalizeRequiredCapabilities(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => item.length > 0);
+}
+
+function extractToolNameFromUnknown(value: unknown): string | null {
+    const record = toRecord(value);
+    if (!record) {
+        return null;
+    }
+    const directCandidates = [
+        record.toolName,
+        record.tool_name,
+        record.tool,
+        record.name,
+    ];
+    for (const candidate of directCandidates) {
+        if (typeof candidate === 'string' && candidate.trim().length > 0) {
+            return candidate.trim();
+        }
+    }
+    const functionRecord = toRecord(record.function);
+    if (functionRecord && typeof functionRecord.name === 'string' && functionRecord.name.trim().length > 0) {
+        return functionRecord.name.trim();
+    }
+    return null;
+}
+
+function collectToolNamesFromUnknown(input: {
+    value: unknown;
+    target: Set<string>;
+}): void {
+    const queue: Array<{ value: unknown; depth: number }> = [{
+        value: input.value,
+        depth: 0,
+    }];
+    const seen = new Set<object>();
+    let scanned = 0;
+
+    while (queue.length > 0 && scanned < MAX_TOOL_EVIDENCE_SCAN_ITEMS) {
+        const current = queue.shift();
+        if (!current) {
+            continue;
+        }
+        if (current.depth > MAX_TOOL_EVIDENCE_SCAN_DEPTH) {
+            continue;
+        }
+        scanned += 1;
+
+        if (Array.isArray(current.value)) {
+            for (const item of current.value) {
+                queue.push({
+                    value: item,
+                    depth: current.depth + 1,
+                });
+            }
+            continue;
+        }
+
+        const record = toRecord(current.value);
+        if (!record) {
+            continue;
+        }
+        if (seen.has(record)) {
+            continue;
+        }
+        seen.add(record);
+
+        const toolName = extractToolNameFromUnknown(record);
+        if (toolName) {
+            input.target.add(toolName);
+        }
+        for (const key of ['toolCalls', 'tool_calls', 'toolCall', 'tool_call', 'steps', 'messages', 'response', 'output']) {
+            if (key in record) {
+                queue.push({
+                    value: record[key],
+                    depth: current.depth + 1,
+                });
+            }
+        }
+    }
+}
+
+function buildToolEvidence(toolNames: Set<string>): ExecuteTaskToolEvidence {
+    const normalized = Array.from(new Set(
+        [...toolNames]
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+    ));
+    const commandToolCallCount = normalized.filter((name) => COMMAND_EXECUTION_TOOL_PATTERN.test(name)).length;
+    return {
+        toolCallCount: normalized.length,
+        commandToolCallCount,
+        toolNames: normalized,
+    };
 }
 
 function readBoundedInt(name: string, fallback: number, min: number, max: number): number {
@@ -46,6 +168,11 @@ export async function executeFrozenTask(input: {
         return {
             result: 'Execution cancelled by approval gate.',
             completed: false,
+            toolEvidence: {
+                toolCallCount: 0,
+                commandToolCallCount: 0,
+                toolNames: [],
+            },
         };
     }
     const threadId = `control-plane-${input.task.frozen.id}`;
@@ -81,11 +208,19 @@ export async function executeFrozenTask(input: {
         100,
         10_000,
     );
+    const requiredCapabilities = new Set(normalizeRequiredCapabilities(input.task.requiredCapabilities));
+    const requiresCommandExecutionEvidence = requiredCapabilities.has(COMMAND_EXECUTION_CAPABILITY);
     let output: Awaited<ReturnType<Agent['generate']>> | null = null;
     let lastError: unknown;
+    let toolEvidence: ExecuteTaskToolEvidence = {
+        toolCallCount: 0,
+        commandToolCallCount: 0,
+        toolNames: [],
+    };
     for (let attempt = 0; attempt <= executeStepRetryCount; attempt += 1) {
         const abortController = new AbortController();
         let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        const observedToolNames = new Set<string>();
         try {
             const generateOptions = {
                 memory: {
@@ -104,6 +239,16 @@ export async function executeFrozenTask(input: {
                 toolCallConcurrency: 1,
                 maxSteps: 8,
                 signal: abortController.signal,
+                onIterationComplete: (iteration: unknown) => {
+                    const iterationRecord = toRecord(iteration);
+                    if (iterationRecord?.toolCalls) {
+                        collectToolNamesFromUnknown({
+                            value: iterationRecord.toolCalls,
+                            target: observedToolNames,
+                        });
+                    }
+                    return undefined;
+                },
             } as Record<string, unknown>;
             output = await Promise.race([
                 (
@@ -119,6 +264,29 @@ export async function executeFrozenTask(input: {
                     }, executeStepTimeoutMs);
                 }),
             ]);
+            collectToolNamesFromUnknown({
+                value: output,
+                target: observedToolNames,
+            });
+            toolEvidence = buildToolEvidence(observedToolNames);
+            if (requiredCapabilities.size > 0) {
+                const hasAnyRequiredToolEvidence = toolEvidence.toolCallCount > 0;
+                const hasRequiredCommandEvidence = !requiresCommandExecutionEvidence
+                    || toolEvidence.commandToolCallCount > 0;
+                if (!hasAnyRequiredToolEvidence || !hasRequiredCommandEvidence) {
+                    const missingLabel = requiresCommandExecutionEvidence
+                        ? COMMAND_EXECUTION_CAPABILITY
+                        : [...requiredCapabilities].join(',');
+                    const evidenceError = new Error(`workflow_missing_required_tool_evidence:${missingLabel}`);
+                    lastError = evidenceError;
+                    const canRetry = attempt < executeStepRetryCount;
+                    if (!canRetry) {
+                        throw evidenceError;
+                    }
+                    await delay(executeStepRetryDelayMs * (attempt + 1));
+                    continue;
+                }
+            }
             break;
         } catch (error) {
             lastError = error;
@@ -140,5 +308,6 @@ export async function executeFrozenTask(input: {
     return {
         result: output.text,
         completed: output.finishReason !== 'error',
+        toolEvidence,
     };
 }

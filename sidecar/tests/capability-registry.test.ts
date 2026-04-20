@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
     detectTaskIntentDomain,
+    normalizeResolvedAttachmentsMessage,
     resolveTaskCapabilityRequirements,
 } from '../src/mastra/capabilityRegistry';
 
@@ -195,6 +196,57 @@ describe('capabilityRegistry', () => {
         expect(detectTaskIntentDomain(message)).toBe('general');
         expect(requirements).toContain('command_execution');
         expect(requirements).not.toContain('browser_automation');
+    });
+
+    test('normalizes single-line resolved attachment blocks before capability inference', () => {
+        const message = '[Resolved attachments] - /tmp/截屏2025-10-17 22.01.27.png - /tmp/截屏2026-04-06 21.01.29.png 把附件图片合并为一个视频，每张图片播放 5s';
+        const normalized = normalizeResolvedAttachmentsMessage(message);
+        const requirements = resolveTaskCapabilityRequirements({
+            message,
+            workspacePath: process.cwd(),
+        });
+        expect(normalized).toContain('[Resolved attachments]\n- /tmp/截屏2025-10-17 22.01.27.png');
+        expect(detectTaskIntentDomain(message)).toBe('general');
+        expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('browser_automation');
+    });
+
+    test('normalizes and infers capabilities for single-line resolved attachments with absolute staged paths', () => {
+        const attachmentPaths = [
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2025-10-17 22.01.27.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-01-06 15.34.56.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-04-06 21.01.29.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-04-03 09.25.43.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-01-17 11.30.46.png',
+            '/Users/beihuang/Library/Application Support/com.coworkany.desktop/workspaces/workspace/.coworkany/attachments/staged/-截屏2026-01-17 11.30.35.png',
+        ];
+        const message = `[Resolved attachments] - ${attachmentPaths.join(' - ')} 把附件图片合并为一个视频，每张图片播放 5s`;
+        const normalized = normalizeResolvedAttachmentsMessage(message);
+        const requirements = resolveTaskCapabilityRequirements({
+            message,
+            workspacePath: process.cwd(),
+        });
+        expect(normalized).toContain('[Resolved attachments]');
+        for (const attachmentPath of attachmentPaths) {
+            expect(normalized).toContain(`- ${attachmentPath}`);
+        }
+        expect(detectTaskIntentDomain(message)).toBe('general');
+        expect(requirements).toContain('command_execution');
+        expect(requirements).not.toContain('browser_automation');
+    });
+
+    test('infers command_execution for colloquial attachment slideshow intent', () => {
+        const requirements = resolveTaskCapabilityRequirements({
+            message: [
+                '[Resolved attachments]',
+                '- /tmp/a.png',
+                '- /tmp/b.png',
+                '',
+                '把这几张图弄成一个短片，每张停5秒',
+            ].join('\n'),
+            workspacePath: process.cwd(),
+        });
+        expect(requirements).toContain('command_execution');
     });
 
     test('does not infer artifact_write for command-output wording with script paths', () => {

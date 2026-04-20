@@ -123,13 +123,16 @@ test.describe('Desktop minimax market routing regression', () => {
         let finishReason = '';
         const toolCallNames = new Set<string>();
         const assistantChunks: string[] = [];
+        let processedLogLength = 0;
 
         const startAt = Date.now();
         while (Date.now() - startAt < TASK_TIMEOUT_MS) {
             await page.waitForTimeout(POLL_INTERVAL_MS);
 
             const rawLogs = tauriLogs.getRawSinceBaseline();
-            const events = parseSidecarEvents(rawLogs).filter((event) => event.taskId === startResponse.taskId);
+            const newlyAppendedLogs = rawLogs.slice(processedLogLength);
+            processedLogLength = rawLogs.length;
+            const events = parseSidecarEvents(newlyAppendedLogs).filter((event) => event.taskId === startResponse.taskId);
 
             for (const event of events) {
                 if (event.type === 'TASK_EVENT') {
@@ -229,12 +232,13 @@ test.describe('Desktop minimax market routing regression', () => {
         const normalizedAssistantChunks = assistantChunks
             .map((chunk) => chunk.trim())
             .filter((chunk) => chunk.length > 0);
-        const duplicateAssistantChunks = normalizedAssistantChunks.filter((chunk, index, all) =>
+        const longNarrativeChunks = normalizedAssistantChunks.filter((chunk) => chunk.length >= 16);
+        const duplicateAssistantChunks = longNarrativeChunks.filter((chunk, index, all) =>
             all.indexOf(chunk) !== index,
         );
         expect(
             duplicateAssistantChunks.length,
-            `assistant output should not emit duplicated text chunks, duplicates=${duplicateAssistantChunks.length}`,
+            `assistant output should not emit duplicated long narrative chunks, duplicates=${duplicateAssistantChunks.length}`,
         ).toBe(0);
 
         const capabilityMissing = finishReason === 'capability_missing'

@@ -34,17 +34,65 @@ const ARTIFACT_WRITE_NEGATION_PATTERN = /(不要|别|无需|不需要|不用|禁
 const HOST_CONTROL_COMMAND_INTENT_PATTERN = /\b(shutdown|reboot|poweroff|halt|empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin))\b|关机|重启|清空(?:回收站|垃圾桶)/iu;
 const COMMAND_EXECUTION_NEGATION_PATTERN = /(不要|别|无需|不需要|不用|禁止|请勿).{0,10}(运行|执行).{0,10}(命令|脚本|工具)|\bdo\s+not\s+(run|execute)\s+(?:any\s+)?(?:commands?|scripts?|tools?)\b/iu;
 const RESOLVED_ATTACHMENTS_MARKER_PATTERN = /\[Resolved attachments\]/iu;
-const ATTACHMENT_DERIVATIVE_INTENT_PATTERN = /(?:\b(convert|conversion|transcode|re-?encode|compress|decompress|zip|unzip|resize|crop|rotate|flip|watermark|denoise|enhance|optimi[sz]e|merge|split|extract(?:\s+frames?)?|thumbnail|export(?:\s+as)?|transform)\b|转(?:换|成|为)|改成|变成|另存为|导出(?:为)?|压缩|解压|缩放|裁剪|旋转|翻转|加水印|去噪|增强|优化|合并|拆分|提取(?:帧|页面)|生成(?:缩略图))/iu;
+const ATTACHMENT_DERIVATIVE_INTENT_PATTERN = /(?:\b(convert|conversion|transcode|re-?encode|compress|decompress|zip|unzip|resize|crop|rotate|flip|watermark|denoise|enhance|optimi[sz]e|merge|split|extract(?:\s+frames?)?|thumbnail|export(?:\s+as)?|transform|compose|stitch|concat(?:enate)?|slideshow|montage)\b|转(?:换|成|为)|改成|变成|另存为|导出(?:为)?|压缩|解压|缩放|裁剪|旋转|翻转|加水印|去噪|增强|优化|合并|合成|拼成|拼接|拆分|提取(?:帧|页面)|生成(?:缩略图)?|制作|做成|弄成)/iu;
 const EXPLICIT_COMMAND_EXECUTION_TOKEN_PATTERN = /\b(run[_\s-]?command|execute(?:\s+command)?|terminal|shell|bash|zsh|powershell|cmd|npm\s+run|pnpm\s+run|yarn\s+run|bun\s+run|node\s+\S+|python(?:3)?\s+\S+)\b|执行命令|运行命令|终端|命令行/iu;
 const WORKSPACE_PATH_REFERENCE_PATTERN = /\bworkspace[\\/][^\s"'`]+/giu;
 const STRUCTURED_WORKSPACE_IO_PATTERN = /\b(?:input|output)\s*:\s*`?workspace[\\/]/iu;
 const EXPLICIT_EXTERNAL_WEB_SIGNAL_PATTERN = /\b(web|internet|online|search_web|crawl|latest|current|today|real[-\s]?time|news|weather|forecast|price|quote|ticker|stock|market|exchange\s*rate)\b|网页|网站|互联网|在线|最新|当前|今天|实时|新闻|天气|预报|价格|报价|股票|行情|汇率/iu;
 const ATTACHMENT_REFERENCE_PATTERN = /\b(?:attachment|attachments|attached)\b|附件/iu;
+const ATTACHMENT_MEDIA_TARGET_PATTERN = /\b(video|image|images|picture|pictures|photo|photos|screenshot|screenshots|gif|png|jpe?g|webp|heic|pdf|mp4|mov|avi|mkv|audio|voice|wav|mp3)\b|视频|图片|照片|截图|附件|文件|音频|语音|动图|png|jpg|jpeg|webp|heic|pdf|mp4|mov|avi|mkv|wav|mp3/iu;
+const ATTACHMENT_MEDIA_COMPOSE_HINT_PATTERN = /(?:每(?:张|个|段|帧).{0,8}(?:秒|s|sec|secs|second|seconds))|(?:幻灯片|短片|影片|slideshow|montage|timelapse)|(?:时长|duration|帧率|fps)/iu;
 const IMAGE_BASE64_BLOCK_PATTERN = /<image_base64>[\s\S]*?<\/image_base64>/giu;
 const ATTACHED_IMAGE_MARKER_LINE_PATTERN = /^\s*\[Attached image:[^\n]*\]\s*$/gimu;
 const RESOLVED_ATTACHMENTS_HEADER_PATTERN = /^\s*\[Resolved attachments\]\s*$/iu;
 const RESOLVED_ATTACHMENT_LIST_ITEM_PATTERN = /^\s*-\s+(?:\/|~\/|[A-Za-z]:\\|[A-Za-z0-9._-]+[\\/]).+/u;
 const RESOLVED_ATTACHMENT_PATH_LINE_PATTERN = /^\s*(?:\/|~\/|[A-Za-z]:\\|[A-Za-z0-9._-]+[\\/]).+/u;
+const RESOLVED_ATTACHMENT_INLINE_PATH_PATTERN = /(?:\/|~\/|[A-Za-z]:\\)[^\n\r]*?\.(?:png|jpe?g|webp|heic|gif|bmp|tiff|pdf|mp4|mov|avi|mkv)/giu;
+const RESOLVED_ATTACHMENT_TRAILING_SEPARATOR_PATTERN = /^(?:\s*[-–—,:;|]\s*)+/u;
+
+export function normalizeResolvedAttachmentsMessage(message: string): string {
+    if (!RESOLVED_ATTACHMENTS_MARKER_PATTERN.test(message)) {
+        return message;
+    }
+    const markerMatch = RESOLVED_ATTACHMENTS_MARKER_PATTERN.exec(message);
+    if (!markerMatch || typeof markerMatch.index !== 'number') {
+        return message;
+    }
+    const markerStart = markerMatch.index;
+    const markerEnd = markerStart + markerMatch[0].length;
+    const prefix = message.slice(0, markerStart).trim();
+    const suffix = message.slice(markerEnd);
+    const attachmentMatches = Array.from(suffix.matchAll(RESOLVED_ATTACHMENT_INLINE_PATH_PATTERN));
+    if (attachmentMatches.length === 0) {
+        return message;
+    }
+
+    const attachmentLines = attachmentMatches
+        .map((match) => match[0].trim())
+        .filter((value) => value.length > 0)
+        .map((value) => `- ${value}`);
+    if (attachmentLines.length === 0) {
+        return message;
+    }
+
+    const lastAttachment = attachmentMatches[attachmentMatches.length - 1];
+    const lastAttachmentEnd = (lastAttachment.index ?? 0) + lastAttachment[0].length;
+    const trailingInstruction = suffix
+        .slice(lastAttachmentEnd)
+        .replace(RESOLVED_ATTACHMENT_TRAILING_SEPARATOR_PATTERN, '')
+        .trim();
+
+    const normalized: string[] = [];
+    if (prefix.length > 0) {
+        normalized.push(prefix);
+    }
+    normalized.push('[Resolved attachments]');
+    normalized.push(...attachmentLines);
+    if (trailingInstruction.length > 0) {
+        normalized.push('', trailingInstruction);
+    }
+    return normalized.join('\n');
+}
 
 function isLikelyLocalWorkspaceTask(message: string): boolean {
     return CODE_OR_WORKSPACE_TASK_PATTERN.test(message)
@@ -56,7 +104,8 @@ function sanitizeTaskIntentMessage(message: string): string {
     if (!message.trim()) {
         return '';
     }
-    const withoutBase64 = message
+    const normalizedMessage = normalizeResolvedAttachmentsMessage(message);
+    const withoutBase64 = normalizedMessage
         .replace(IMAGE_BASE64_BLOCK_PATTERN, ' ')
         .replace(ATTACHED_IMAGE_MARKER_LINE_PATTERN, '');
     const lines = withoutBase64.split(/\r?\n/u);
@@ -86,7 +135,7 @@ function sanitizeTaskIntentMessage(message: string): string {
 }
 
 export function normalizeTaskMessageFingerprint(message: string): string {
-    const collapsed = message.trim().replace(/\s+/g, ' ');
+    const collapsed = normalizeResolvedAttachmentsMessage(message).trim().replace(/\s+/g, ' ');
     return collapsed.length > 0 ? collapsed : message;
 }
 
@@ -125,7 +174,8 @@ export function resolveTaskCapabilityRequirements(input: {
     message: string;
     workspacePath: string;
 }): TaskCapabilityRequirement[] {
-    const intentMessage = sanitizeTaskIntentMessage(input.message);
+    const normalizedMessage = normalizeResolvedAttachmentsMessage(input.message);
+    const intentMessage = sanitizeTaskIntentMessage(normalizedMessage);
     const requirements = new Set<TaskCapabilityRequirement>();
     const hasGenericExternalLookupSignal = GENERIC_WEB_LOOKUP_PATTERN.test(intentMessage);
     const likelyLocalWorkspaceTask = isLikelyLocalWorkspaceTask(intentMessage);
@@ -135,11 +185,17 @@ export function resolveTaskCapabilityRequirements(input: {
     });
     const hasFilesystemMutationSignal = FILESYSTEM_MUTATION_INTENT_PATTERN.test(intentMessage)
         || (FILESYSTEM_MUTATION_VERB_PATTERN.test(intentMessage) && PATH_LIKE_TOKEN_PATTERN.test(intentMessage));
-    const hasResolvedAttachmentContext = RESOLVED_ATTACHMENTS_MARKER_PATTERN.test(input.message);
+    const hasResolvedAttachmentContext = RESOLVED_ATTACHMENTS_MARKER_PATTERN.test(normalizedMessage);
     const hasAttachmentDerivativeIntent = (
+        (
+            hasResolvedAttachmentContext
+            || ATTACHMENT_REFERENCE_PATTERN.test(intentMessage)
+        ) && ATTACHMENT_DERIVATIVE_INTENT_PATTERN.test(intentMessage)
+    ) || (
         hasResolvedAttachmentContext
-        || ATTACHMENT_REFERENCE_PATTERN.test(intentMessage)
-    ) && ATTACHMENT_DERIVATIVE_INTENT_PATTERN.test(intentMessage);
+        && ATTACHMENT_MEDIA_TARGET_PATTERN.test(intentMessage)
+        && ATTACHMENT_MEDIA_COMPOSE_HINT_PATTERN.test(intentMessage)
+    );
     const hasFilesystemReadIntentSignal = FILESYSTEM_READ_INTENT_PATTERN.test(intentMessage);
     const hasGenericLocalHostOperationSignal = isLocalHostOperationIntent(intentMessage);
     const commandExecutionExplicitlyForbidden = COMMAND_EXECUTION_NEGATION_PATTERN.test(intentMessage);
@@ -169,7 +225,7 @@ export function resolveTaskCapabilityRequirements(input: {
     const workspacePathReferenceCount = (intentMessage.match(WORKSPACE_PATH_REFERENCE_PATTERN) ?? []).length;
     const hasStrongWorkspaceArtifactSignal = (
         workspacePathReferenceCount >= 2
-        || STRUCTURED_WORKSPACE_IO_PATTERN.test(input.message)
+        || STRUCTURED_WORKSPACE_IO_PATTERN.test(normalizedMessage)
     );
     const domain = detectTaskIntentDomain(intentMessage);
     const shouldSuppressImplicitWebResearch = (

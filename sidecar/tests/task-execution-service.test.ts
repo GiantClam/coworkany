@@ -8,6 +8,11 @@ const ENV_KEYS = [
     'ANTHROPIC_API_KEY',
     'COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT',
     'COWORKANY_TASK_EXECUTION_DEFAULT',
+    'COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED',
+    'COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED',
+    'COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT',
+    'COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS',
+    'COWORKANY_MASTRA_TASK_STAGE_CHECKPOINT_MAX_RECORDS',
     'COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS',
     'COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT',
     'COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS',
@@ -33,23 +38,29 @@ function restoreEnv(snapshot: Record<string, string | undefined>): void {
 }
 
 const originalGetWorkflow = mastra.getWorkflow.bind(mastra);
+const originalGetAgent = mastra.getAgent.bind(mastra);
 
 afterEach(() => {
     (mastra as unknown as { getWorkflow: typeof mastra.getWorkflow }).getWorkflow = originalGetWorkflow;
+    (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = originalGetAgent;
 });
 
 function createInput(input: {
     runDirect: () => Promise<void>;
     events: Array<Record<string, unknown>>;
+    executionOptions?: TaskMessageExecutionDelegateInput['executionOptions'];
+    message?: string;
+    taskId?: string;
+    turnId?: string;
 }): TaskMessageExecutionDelegateInput {
     return {
-        taskId: 'task-1',
-        turnId: 'turn-1',
-        message: '请执行任务',
+        taskId: input.taskId ?? 'task-1',
+        turnId: input.turnId ?? 'turn-1',
+        message: input.message ?? '请执行任务',
         resourceId: 'resource-1',
         preferredThreadId: 'thread-1',
         workspacePath: process.cwd(),
-        executionOptions: {
+        executionOptions: input.executionOptions ?? {
             executionPath: 'workflow',
         },
         runDirect: input.runDirect,
@@ -69,6 +80,7 @@ describe('taskExecutionService', () => {
             process.env.ANTHROPIC_API_KEY = 'test-key';
             process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
             process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'false';
             process.env.COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS = '500';
             process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '1';
             process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS = '100';
@@ -108,6 +120,7 @@ describe('taskExecutionService', () => {
             process.env.ANTHROPIC_API_KEY = 'test-key';
             process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
             process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'false';
             process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '0';
 
             (mastra as unknown as { getWorkflow: typeof mastra.getWorkflow }).getWorkflow = (() => ({
@@ -144,6 +157,7 @@ describe('taskExecutionService', () => {
             process.env.ANTHROPIC_API_KEY = 'test-key';
             process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
             process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'false';
             process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '0';
 
             (mastra as unknown as { getWorkflow: typeof mastra.getWorkflow }).getWorkflow = (() => ({
@@ -183,6 +197,7 @@ describe('taskExecutionService', () => {
             process.env.ANTHROPIC_API_KEY = 'test-key';
             process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
             process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'false';
 
             (mastra as unknown as { getWorkflow: typeof mastra.getWorkflow }).getWorkflow = (() => ({
                 createRun: async () => ({
@@ -230,6 +245,7 @@ describe('taskExecutionService', () => {
             process.env.ANTHROPIC_API_KEY = 'test-key';
             process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
             process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'false';
 
             (mastra as unknown as { getWorkflow: typeof mastra.getWorkflow }).getWorkflow = (() => ({
                 createRun: async () => ({
@@ -261,6 +277,230 @@ describe('taskExecutionService', () => {
                 .map((event) => String(event.content ?? ''));
             expect(assistantTexts.some((text) => text.includes('Seeded from user request'))).toBe(false);
             expect(events.some((event) => event.type === 'error')).toBe(false);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('staged control-plane retries only failed execute step and avoids direct fallback', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        let generateCalls = 0;
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '1';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS = '10';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS = '10';
+            process.env.COWORKANY_MASTRA_TASK_STAGE_CHECKPOINT_MAX_RECORDS = '20';
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async () => {
+                    generateCalls += 1;
+                    if (generateCalls === 1) {
+                        throw new Error('stream_idle_timeout:1200');
+                    }
+                    return {
+                        text: 'staged retry ok',
+                        finishReason: 'stop',
+                    };
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+            }));
+
+            expect(result.executionPath).toBe('workflow');
+            expect(runDirectCalls).toBe(0);
+            expect(generateCalls).toBe(2);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('execute-task')
+            ))).toBe(true);
+            expect(events.some((event) => event.type === 'complete')).toBe(true);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('direct command task runs through staged workflow and only retries failed execute step', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        let generateCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'direct';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '1';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS = '10';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS = '10';
+            process.env.COWORKANY_MASTRA_TASK_STAGE_CHECKPOINT_MAX_RECORDS = '20';
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async (_prompt: string, options?: Record<string, unknown>) => {
+                    generateCalls += 1;
+                    if (generateCalls === 1) {
+                        throw new Error('stream_idle_timeout:1200');
+                    }
+                    const onIterationComplete = typeof options?.onIterationComplete === 'function'
+                        ? options.onIterationComplete as (payload: Record<string, unknown>) => unknown
+                        : null;
+                    onIterationComplete?.({
+                        iteration: 1,
+                        toolCalls: [{
+                            toolName: 'mastra_workspace_execute_command',
+                        }],
+                        text: 'executing command',
+                        isFinal: false,
+                    });
+                    return {
+                        text: 'direct staged retry ok',
+                        finishReason: 'stop',
+                    };
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+                taskId: 'task-direct-command-staged',
+                turnId: 'turn-direct-command-staged',
+                message: '[Resolved attachments] - /tmp/a.png - /tmp/b.png 合并成视频，每张 5s',
+                executionOptions: {
+                    executionPath: 'direct',
+                    forcedRouteMode: 'task',
+                    requireToolEvidenceForCompletion: true,
+                    requiredCompletionCapabilities: ['command_execution'],
+                },
+            }));
+
+            expect(result.executionPath).toBe('direct');
+            expect(runDirectCalls).toBe(0);
+            expect(generateCalls).toBe(2);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('execute-task')
+            ))).toBe(true);
+            expect(events.some((event) => event.type === 'complete')).toBe(true);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('direct command staged path falls back to direct when execute step has no required tool evidence', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        let generateCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'direct';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS = '10';
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async () => {
+                    generateCalls += 1;
+                    return {
+                        text: '我先说明下执行计划，然后开始执行。',
+                        finishReason: 'stop',
+                    };
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+                taskId: 'task-direct-command-no-tool-evidence',
+                turnId: 'turn-direct-command-no-tool-evidence',
+                message: '[Resolved attachments] - /tmp/a.png - /tmp/b.png 合并成视频，每张 5s',
+                executionOptions: {
+                    executionPath: 'direct',
+                    forcedRouteMode: 'task',
+                    requireToolEvidenceForCompletion: true,
+                    requiredCompletionCapabilities: ['command_execution'],
+                },
+            }));
+
+            expect(result.executionPath).toBe('workflow_fallback');
+            expect(runDirectCalls).toBe(1);
+            expect(generateCalls).toBe(1);
+            expect(events.some((event) => event.type === 'complete')).toBe(false);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('direct command task keeps runDirect path when staged-direct flag is disabled', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        let generateCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'direct';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED = 'false';
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async () => {
+                    generateCalls += 1;
+                    return {
+                        text: 'unexpected',
+                        finishReason: 'stop',
+                    };
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+                taskId: 'task-direct-command-direct',
+                turnId: 'turn-direct-command-direct',
+                message: '合并附件视频',
+                executionOptions: {
+                    executionPath: 'direct',
+                    forcedRouteMode: 'task',
+                    requireToolEvidenceForCompletion: true,
+                    requiredCompletionCapabilities: ['command_execution'],
+                },
+            }));
+
+            expect(result.executionPath).toBe('direct');
+            expect(runDirectCalls).toBe(1);
+            expect(generateCalls).toBe(0);
+            expect(events.length).toBe(0);
         } finally {
             restoreEnv(envSnapshot);
         }

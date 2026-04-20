@@ -2827,7 +2827,7 @@ async function forwardStream(
         })
         : (
             isTaskTurn
-                ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS', 30_000, {
+                ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS', 60_000, {
                     min: 1,
                     max: 120_000,
                 })
@@ -2843,7 +2843,7 @@ async function forwardStream(
         })
         : (
             isTaskTurn
-                ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS', 20_000, {
+                ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS', 45_000, {
                     min: 1,
                     max: 120_000,
                 })
@@ -2852,7 +2852,19 @@ async function forwardStream(
                     max: 90_000,
                 })
         );
-const postAssistantIdleCompleteMs = isChatTurn
+    const taskPreNarrativeIdleTimeoutMs = isTaskTurn
+        ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS', 120_000, {
+            min: 1_000,
+            max: 180_000,
+        })
+        : idleTimeoutMs;
+    const taskPreNarrativeProgressTimeoutMs = isTaskTurn
+        ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS', 120_000, {
+            min: 1_000,
+            max: 180_000,
+        })
+        : progressTimeoutMs;
+    const postAssistantIdleCompleteMs = isChatTurn
         ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_CHAT_POST_ASSISTANT_IDLE_COMPLETE_MS', 12_000, {
             min: 1,
             max: 120_000,
@@ -2944,7 +2956,7 @@ const postAssistantIdleCompleteMs = isChatTurn
                 })
         );
     const taskNoNarrativeToolingMaxMs = isTaskTurn
-        ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS', 90_000, {
+        ? resolvePositiveIntFromEnvBounded('COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS', 150_000, {
             min: 1,
             max: 240_000,
         })
@@ -2993,6 +3005,8 @@ const postAssistantIdleCompleteMs = isChatTurn
             postAssistantMaxCompleteMs,
             postAssistantHardMaxCompleteMs,
             taskPostAssistantHardMaxCompleteMs,
+            taskPreNarrativeIdleTimeoutMs,
+            taskPreNarrativeProgressTimeoutMs,
             maxDurationMs,
             absoluteStreamTimeoutMs,
             taskRequiredOutputMissingMaxMs,
@@ -3303,7 +3317,9 @@ const postAssistantIdleCompleteMs = isChatTurn
         const effectiveMaxDurationMs = remainingBudgetMs !== null
             ? Math.min(maxDurationMs, remainingBudgetMs)
             : maxDurationMs;
-        const maxDurationAnchorAt = hasAssistantTextDelta ? lastVisibleProgressAt : streamStartedAt;
+        const maxDurationAnchorAt = hasAssistantTextDelta
+            ? lastVisibleProgressAt
+            : (isTaskTurn ? lastProgressAt : streamStartedAt);
         if (Date.now() - maxDurationAnchorAt >= effectiveMaxDurationMs) {
             await closeIteratorSafely();
             flushBufferedAssistantDelta(true);
@@ -3327,9 +3343,15 @@ const postAssistantIdleCompleteMs = isChatTurn
                 const baseIdleTimeoutMs = (isTaskTurn && requiredOutputPaths.length > 0)
                     ? taskRequiredOutputIdleTimeoutMs
                     : idleTimeoutMs;
-                const boundedIdleTimeoutMs = (hasAssistantTextDelta && !sawToolingAfterAssistantText)
-                    ? Math.max(baseIdleTimeoutMs, postAssistantIdleCompleteMs)
+                const withPreNarrativeIdleTimeoutMs = (
+                    isTaskTurn
+                    && !hasAssistantTextDelta
+                )
+                    ? Math.max(baseIdleTimeoutMs, taskPreNarrativeIdleTimeoutMs)
                     : baseIdleTimeoutMs;
+                const boundedIdleTimeoutMs = (hasAssistantTextDelta && !sawToolingAfterAssistantText)
+                    ? Math.max(withPreNarrativeIdleTimeoutMs, postAssistantIdleCompleteMs)
+                    : withPreNarrativeIdleTimeoutMs;
                 const effectiveIdleTimeoutMs = remainingBudgetMs !== null
                     ? Math.max(1_000, Math.min(boundedIdleTimeoutMs, remainingBudgetMs))
                     : boundedIdleTimeoutMs;
@@ -3724,9 +3746,15 @@ const postAssistantIdleCompleteMs = isChatTurn
             }
         } else {
             ignoredChunkCount += 1;
-            if (Date.now() - lastProgressAt >= progressTimeoutMs) {
+            const effectiveProgressTimeoutMs = (
+                isTaskTurn
+                && !hasAssistantTextDelta
+            )
+                ? Math.max(progressTimeoutMs, taskPreNarrativeProgressTimeoutMs)
+                : progressTimeoutMs;
+            if (Date.now() - lastProgressAt >= effectiveProgressTimeoutMs) {
                 await closeIteratorSafely();
-                throw new Error(`stream_progress_timeout:${progressTimeoutMs};ignored_chunks:${ignoredChunkCount}`);
+                throw new Error(`stream_progress_timeout:${effectiveProgressTimeoutMs};ignored_chunks:${ignoredChunkCount}`);
             }
         }
     }
@@ -4151,11 +4179,9 @@ export async function handleUserMessage(
         networkReason: networkDecision.reason,
         multiAgentSignalScore: networkDecision.signal.weightedScore,
     }));
-    const enableGenerateFallbackForTaskRoute = resolveBooleanFromEnv(
-        'COWORKANY_MASTRA_TASK_ENABLE_GENERATE_FALLBACK',
-        false,
-    );
-    const allowGenerateFallback = !isTaskRoute || enableGenerateFallbackForTaskRoute;
+    // Hard-disable non-streaming generate fallback globally:
+    // do not switch routes to non-streaming fallback on stream stalls.
+    const allowGenerateFallback = false;
     const defaultRequireToolApproval = (
         forcePostAssistantCompletion
         || shouldRouteTaskToResearcher
@@ -4317,11 +4343,10 @@ export async function handleUserMessage(
         ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_STREAM_START_TIMEOUT_MS', 12_000)
         : (
             useTaskCapabilityLatencyProfile
-                ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_TASK_STREAM_START_TIMEOUT_MS', 12_000)
+                ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_TASK_STREAM_START_TIMEOUT_MS', 20_000)
                 : undefined
         );
 
-    const fallbackToGenerateOnStartTimeout = resolveBooleanFromEnv('COWORKANY_MASTRA_ENABLE_GENERATE_FALLBACK', true);
     const generateFallbackTimeoutMs = useChatLatencyProfile
         ? resolvePositiveIntFromEnv('COWORKANY_MASTRA_CHAT_GENERATE_FALLBACK_TIMEOUT_MS', 30_000)
         : (
@@ -4511,7 +4536,7 @@ export async function handleUserMessage(
             disableTools?: boolean;
         },
     ): Promise<{ runId: string } | null> => {
-        if (!fallbackToGenerateOnStartTimeout && fallbackOptions?.force !== true) {
+        if (!allowGenerateFallback) {
             return null;
         }
         emitRateLimited({
@@ -5086,6 +5111,7 @@ export async function handleUserMessage(
     );
     if (
         options?.forcedRouteMode === 'task'
+        && allowGenerateFallback
         && enableHighOutputDirectFallback
         && requiredOutputPaths.length >= highOutputPathThreshold
         && requiredOutputPaths.some((candidate) => path.extname(candidate).toLowerCase() === '.py')
@@ -5252,7 +5278,7 @@ export async function handleUserMessage(
             const startupNoNarrativeError = isNoAssistantNarrativeCompletionError(error);
             const transientStartError = isTransientStartError(error);
             const shouldAttemptFallback = (
-                (fallbackToGenerateOnStartTimeout && transientStartError)
+                transientStartError
                 || startupNoNarrativeError
             ) && allowGenerateFallback;
             if (debugStreamRecovery) {
@@ -5262,7 +5288,7 @@ export async function handleUserMessage(
                     attempt,
                     startupNoNarrativeError,
                     transientStartError,
-                    fallbackEnabled: fallbackToGenerateOnStartTimeout,
+                    fallbackEnabled: allowGenerateFallback,
                     shouldAttemptFallback,
                     error: error instanceof Error ? error.message : String(error),
                 });
@@ -5738,6 +5764,8 @@ export async function handleUserMessage(
             ) || canRetryNoNarrative || canRetryTaskToolingInterruption || canRetryTaskToolingNoNarrative || canRetryRequiredOutputTimeout;
             const shouldTryGenerateFallback = !emittedAssistantText && isRetryableForwardError(error);
             const shouldForceTaskNoNarrativeTimeoutFallback = (
+                allowGenerateFallback
+                &&
                 options?.forcedRouteMode === 'task'
                 && emittedAssistantText === false
                 && isStreamExecutionTimeoutError(error)
@@ -5745,6 +5773,8 @@ export async function handleUserMessage(
                 && !isStartupBudgetTimeoutError(error)
             );
             const shouldForceTaskToolingTimeoutFallback = (
+                allowGenerateFallback
+                &&
                 options?.forcedRouteMode === 'task'
                 && emittedToolingProgress
                 && likelyAssistantPrefaceBeforeToolingFailure
@@ -5768,6 +5798,20 @@ export async function handleUserMessage(
                 && missingRequiredOutputPathsAfterTimeout.length > 0
                 && (emittedAssistantText || emittedToolingProgress)
             );
+            const canFinalizeToolResultTimeoutByDegradedSummary = (
+                options?.forcedRouteMode === 'task'
+                && emittedAssistantText === false
+                && emittedToolingProgress
+                && observedToolResultCount > 0
+                && missingRequiredOutputPathsAfterTimeout.length === 0
+                && (
+                    isStreamExecutionTimeoutAfterTooling
+                    || isMissingTerminalAfterTooling
+                    || isSnapshotLossAfterTooling
+                )
+                && !isTurnBudgetTimeoutError(error)
+                && !isStartupBudgetTimeoutError(error)
+            );
             if (debugStreamRecovery) {
                 console.warn('[streaming][stream-error]', {
                     runId: stream.runId,
@@ -5788,7 +5832,8 @@ export async function handleUserMessage(
                     startupBudgetClosedByStreamProgress,
                     emittedAnyStreamEvent,
                     canFinalizeRequiredOutputTimeoutByMaterialization,
-                    fallbackEnabled: fallbackToGenerateOnStartTimeout,
+                    canFinalizeToolResultTimeoutByDegradedSummary,
+                    fallbackEnabled: allowGenerateFallback,
                     error: error instanceof Error ? error.message : String(error),
                 });
             }
@@ -5906,6 +5951,68 @@ export async function handleUserMessage(
                 });
                 await delay(forwardRetryDelayMs * attempt);
                 continue;
+            }
+            if (canFinalizeToolResultTimeoutByDegradedSummary) {
+                const degradedSummary = buildEmergencyTaskFallbackSummary({
+                    reason: String(error),
+                });
+                if (degradedSummary) {
+                    sendToDesktop({
+                        type: 'text_delta',
+                        runId: stream.runId,
+                        role: 'assistant',
+                        content: degradedSummary,
+                        turnId: options?.turnId,
+                    });
+                    const updated = contextCompressionStore.recordAssistantTurn({
+                        taskId,
+                        threadId,
+                        resourceId,
+                        workspacePath: options?.workspacePath,
+                        content: degradedSummary,
+                        turnId: options?.turnId,
+                    });
+                    options?.onPostCompact?.({
+                        taskId,
+                        threadId,
+                        resourceId,
+                        workspacePath: options?.workspacePath,
+                        microSummary: updated.microSummary,
+                        structuredSummary: updated.structuredSummary,
+                        recalledMemoryFiles: recalledTopicMemories.map((entry) => entry.relativePath),
+                    });
+                    await finalizeTaskWorkspaceArtifacts(degradedSummary);
+                    emitLlmTimingLog({
+                        taskId,
+                        threadId,
+                        turnId: options?.turnId,
+                        modelId,
+                        provider: modelProvider,
+                        phase: 'stream',
+                        outcome: 'success',
+                        attempt: attempt + 1,
+                        maxAttempts: forwardRetryCount + 1,
+                        assistantChars: degradedSummary.length,
+                        finishReason: 'tooling_timeout_degraded',
+                        error,
+                        timings: buildTimingSnapshot({
+                            startedAt: attemptStartedAt,
+                            streamReadyAt,
+                            firstTokenAt: null,
+                            lastTokenAt: null,
+                        }),
+                        proxyBefore: proxySnapshotBeforeDisable,
+                        proxyAfter: proxySnapshotAfterDisable,
+                    });
+                    deferredTaskCompleteEvent = null;
+                    sendToDesktop({
+                        type: 'complete',
+                        runId: stream.runId,
+                        finishReason: 'tooling_timeout_degraded',
+                        turnId: options?.turnId,
+                    });
+                    return { runId: stream.runId };
+                }
             }
             if (shouldTryGenerateFallbackForAttempt) {
                 if (debugStreamRecovery) {

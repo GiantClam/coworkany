@@ -184,6 +184,12 @@ type TaskTurnCommandRecoveryHint = {
     stderrSnippet?: string;
     toolName?: string;
 };
+type TaskTurnCommandFailureInfo = {
+    failedCommand?: string;
+    stderrSnippet?: string;
+    exitCode?: number;
+    toolName?: string;
+};
 type TaskTurnTerminalType = 'complete' | 'error' | 'tripwire';
 type TaskTurnEventState = {
     assistantNarrativeSeen: boolean;
@@ -203,6 +209,8 @@ type TaskTurnEventState = {
     lastAssistantChunkFingerprint?: string;
     lastCommandInvocation?: string;
     latestCommandRecoveryHint?: TaskTurnCommandRecoveryHint;
+    latestCommandFailureInfo?: TaskTurnCommandFailureInfo;
+    commandFailureNarrativeEmitted?: boolean;
     terminal?: TaskTurnTerminalType;
     updatedAtMs: number;
 };
@@ -466,6 +474,13 @@ const VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN = /\b(voice_speak|tts|text[-_\s]?to[-_\
 const FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN = /\b(list_dir|view_file|read_file|mastra_workspace_list_files|mastra_workspace_read_file|mastra_workspace_file_stat)\b/iu;
 const COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/iu;
 const COMMAND_NOT_FOUND_RESULT_PATTERN = /\b(command not found|not recognized as an internal or external command|is not recognized)\b/iu;
+const COMMAND_EXECUTION_FAILURE_RESULT_PATTERN = /\b(no such file or directory|permission denied|operation not permitted|error opening input|impossible to open|error while opening encoder|failed to open|unable to (?:open|find)|invalid argument|width not divisible by 2)\b/iu;
+const COMMAND_RESULT_EXIT_CODE_PATTERN = /\bexit\s*code\s*[:=]\s*(-?\d+)\b/iu;
+const DUPLICATED_PATH_SEGMENT_MARKER_PATTERN = /(^|\/)([^/]+(?:\/[^/]+){0,4})\/\2(\/|$)/u;
+const QUOTED_PATH_CANDIDATE_PATTERN = /["']([^"'\n]*[\\/][^"'\n]*)["']/gu;
+const UNQUOTED_PATH_CANDIDATE_PATTERN = /(?:^|[\s(])((?:\/|\.\/|\.\.\/)[^\s"'`]+(?:[\\/][^\s"'`]+)+)/gu;
+const COMMAND_OPEN_INPUT_FAILURE_PATTERN = /\b(impossible to open|error opening input|error opening input file|no such file or directory)\b/iu;
+const COMMAND_OPEN_INPUT_FILE_PATH_PATTERN = /\berror opening input file\s+([^\n\r]+)/iu;
 const ARTIFACT_WRITE_EVIDENCE_TOOL_PATTERN = /\b(write_to_file|replace_file_content|append_to_file|move_file|copy_file|create_file|apply_patch|patch_file|mastra_workspace_apply_patch|mastra_workspace_write_file|mastra_workspace_replace_file_content)\b/iu;
 const RETRY_EXECUTION_CONTRACT_MARKER = '[CoworkAny Retry Execution Contract]';
 function normalizeStringList(values: string[]): string[] {
@@ -531,11 +546,15 @@ function buildMissingToolEvidenceRetryMessage(input: {
     }
     const lines: string[] = [
         RETRY_EXECUTION_CONTRACT_MARKER,
-        `- Previous attempt ended with "${input.source}" but lacked required tool evidence. You MUST execute required tools before final completion.`,
+        input.source === 'error'
+            ? '- Previous attempt ended with "error" after a failed command/tooling step. Retry only that failed step, then continue from saved artifacts.'
+            : `- Previous attempt ended with "${input.source}" but lacked required tool evidence. You MUST execute required tools before final completion.`,
         '- Do not return refusal-only or disclaimer-only text in this retry.',
     ];
     if (required.includes(COMMAND_EXECUTION_CAPABILITY)) {
         lines.push('- You MUST execute at least one local command tool call relevant to the user request.');
+        lines.push('- Execute in persisted steps and keep each intermediate artifact on disk before moving to the next step.');
+        lines.push('- On retry, do not restart the whole workflow; rerun only the failed command step and then continue.');
         lines.push('- If first command fails, run a recovery loop: inspect tool error -> choose alternative command -> retry execution -> report final result.');
         lines.push('- For command-not-found/unsupported errors, prefer this order: alternative_commands/suggested_fix/command_recovery from tool result -> probe_commands (or command -v/which/where/Get-Command) -> --help/man -> retry.');
         lines.push('- Do not conclude "cannot execute" without at least one concrete recovery retry.');
@@ -634,6 +653,260 @@ function extractCommandFromToolArgs(args: unknown): string | null {
     return null;
 }
 
+function extractCommandOptionPath(command: string, option: string): string | null {
+    const escapedOption = option.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const pattern = new RegExp(`(?:^|\\s)${escapedOption}\\s+(?:"([^"]+)"|'([^']+)'|([^\\s]+))`, 'u');
+    const match = pattern.exec(command);
+    const captured = match?.[1] ?? match?.[2] ?? match?.[3] ?? '';
+    const normalized = captured.trim();
+    return normalized.length > 0 ? normalized : null;
+}
+
+function collapseConsecutiveDuplicatePathSegments(pathValue: string): string {
+    const normalized = pathValue.replace(/\\/gu, '/').replace(/\/+/gu, '/');
+    const isAbsolute = normalized.startsWith('/');
+    const segments = normalized
+        .split('/')
+        .filter((segment) => segment.length > 0);
+    if (segments.length < 2) {
+        return normalized;
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (let start = 0; start < segments.length - 1; start += 1) {
+            const maxWindow = Math.floor((segments.length - start) / 2);
+            for (let size = maxWindow; size >= 1; size -= 1) {
+                const left = segments.slice(start, start + size);
+                const right = segments.slice(start + size, start + 2 * size);
+                if (left.length === right.length && left.every((segment, index) => segment === right[index])) {
+                    segments.splice(start + size, size);
+                    changed = true;
+                    break;
+                }
+            }
+            if (changed) {
+                break;
+            }
+        }
+    }
+
+    const collapsed = segments.join('/');
+    return isAbsolute ? `/${collapsed}` : collapsed;
+}
+
+function hasConsecutiveDuplicatePathSegments(pathValue: string): boolean {
+    const collapsed = collapseConsecutiveDuplicatePathSegments(pathValue);
+    const normalizedOriginal = pathValue.replace(/\\/gu, '/').replace(/\/+/gu, '/');
+    return collapsed !== normalizedOriginal && DUPLICATED_PATH_SEGMENT_MARKER_PATTERN.test(normalizedOriginal);
+}
+
+function extractPathCandidatesFromText(text: string): string[] {
+    const candidates: string[] = [];
+    const pushCandidate = (value: string): void => {
+        const normalized = value.trim().replace(/\\/gu, '/');
+        if (normalized.length === 0) {
+            return;
+        }
+        if (!normalized.includes('/')) {
+            return;
+        }
+        if (!candidates.includes(normalized)) {
+            candidates.push(normalized);
+        }
+    };
+    for (const match of text.matchAll(QUOTED_PATH_CANDIDATE_PATTERN)) {
+        const candidate = match[1];
+        if (candidate) {
+            pushCandidate(candidate);
+        }
+    }
+    for (const match of text.matchAll(UNQUOTED_PATH_CANDIDATE_PATTERN)) {
+        const candidate = match[1];
+        if (candidate) {
+            pushCandidate(candidate);
+        }
+    }
+    return candidates;
+}
+
+function collectCommandDiagnosticTextCandidates(
+    value: unknown,
+    depth = 0,
+    sink: string[] = [],
+): string[] {
+    if (depth > 5 || value == null) {
+        return sink;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim();
+        if (normalized.length > 0 && !sink.includes(normalized)) {
+            sink.push(normalized);
+        }
+        return sink;
+    }
+    const record = toOptionalRecord(value);
+    if (!record) {
+        return sink;
+    }
+    const directTextKeys = [
+        'stderr',
+        'stdout',
+        'output',
+        'text',
+        'message',
+        'detail',
+        'error',
+        'reason',
+        'summary',
+    ];
+    for (const key of directTextKeys) {
+        const candidate = record[key];
+        if (typeof candidate === 'string') {
+            const normalized = candidate.trim();
+            if (normalized.length > 0 && !sink.includes(normalized)) {
+                sink.push(normalized);
+            }
+            continue;
+        }
+        if (candidate && typeof candidate === 'object') {
+            collectCommandDiagnosticTextCandidates(candidate, depth + 1, sink);
+        }
+    }
+    const nestedKeys = ['result', 'response', 'payload', 'data'];
+    for (const key of nestedKeys) {
+        const nested = record[key];
+        if (nested && typeof nested === 'object') {
+            collectCommandDiagnosticTextCandidates(nested, depth + 1, sink);
+        }
+    }
+    return sink;
+}
+
+function resolveCommandDiagnosticTextFromToolResult(result: unknown): string {
+    if (typeof result === 'string') {
+        return result;
+    }
+    const candidates = collectCommandDiagnosticTextCandidates(result);
+    if (candidates.length === 0) {
+        return '';
+    }
+    return candidates.join('\n');
+}
+
+function extractInputFilePathFromFailureText(text: string): string | null {
+    const match = COMMAND_OPEN_INPUT_FILE_PATH_PATTERN.exec(text);
+    if (!match?.[1]) {
+        return null;
+    }
+    const normalized = match[1]
+        .trim()
+        .replace(/^['"]|['"]$/gu, '')
+        .replace(/[.,;:]+$/gu, '')
+        .trim();
+    return normalized.length > 0 ? normalized : null;
+}
+
+function buildInputManifestDuplicatePathRecoveryHint(input: {
+    command: string;
+    stderr: string;
+    toolName: string;
+}): TaskTurnCommandRecoveryHint | null {
+    const normalizedCommand = input.command.trim();
+    if (normalizedCommand.length === 0) {
+        return null;
+    }
+    const manifestPath = extractCommandOptionPath(normalizedCommand, '-i')
+        ?? extractInputFilePathFromFailureText(input.stderr);
+    if (!manifestPath) {
+        return null;
+    }
+    const normalizedStderr = input.stderr.replace(/\\/gu, '/').trim();
+    const duplicatePathSample = extractPathCandidatesFromText(normalizedStderr)
+        .find((candidate) => hasConsecutiveDuplicatePathSegments(candidate));
+    const hasOpenInputFailure = COMMAND_OPEN_INPUT_FAILURE_PATTERN.test(input.stderr);
+    if (!duplicatePathSample || !hasOpenInputFailure) {
+        return null;
+    }
+    const serializedManifestPath = JSON.stringify(manifestPath);
+    const normalizeManifestCommand = [
+        'python3 - <<\'PY\'',
+        'import pathlib',
+        `manifest_path = pathlib.Path(${serializedManifestPath})`,
+        'if not manifest_path.exists():',
+        '    raise SystemExit(f"input manifest not found: {manifest_path}")',
+        '',
+        'def collapse(path_value: str) -> str:',
+        '    normalized = path_value.replace("\\\\", "/")',
+        '    is_abs = normalized.startswith("/")',
+        '    segments = [segment for segment in normalized.split("/") if segment not in ("", ".")]',
+        '    changed = True',
+        '    while changed:',
+        '        changed = False',
+        '        segment_count = len(segments)',
+        '        for start in range(0, max(segment_count - 1, 0)):',
+        '            max_window = (segment_count - start) // 2',
+        '            for size in range(max_window, 0, -1):',
+        '                if segments[start:start+size] == segments[start+size:start+2*size]:',
+        '                    segments = segments[:start+size] + segments[start+2*size:]',
+        '                    changed = True',
+        '                    break',
+        '            if changed:',
+        '                break',
+        '    collapsed = "/".join(segments)',
+        '    return f"/{collapsed}" if is_abs else collapsed',
+        '',
+        'fixed_lines = []',
+        'workspace_root = pathlib.Path.cwd()',
+        'for raw in manifest_path.read_text(encoding=\'utf-8\').splitlines():',
+        '    if raw.startswith("file \'") and raw.endswith("\'"):',
+        '        path_token = raw[6:-1]',
+        '        normalized_path = collapse(path_token)',
+        '        candidate = pathlib.Path(normalized_path)',
+        '        if not candidate.is_absolute():',
+        '            workspace_candidate = (workspace_root / candidate).resolve()',
+        '            manifest_candidate = (manifest_path.parent / candidate).resolve()',
+        '            if workspace_candidate.exists():',
+        '                candidate = workspace_candidate',
+        '            elif manifest_candidate.exists():',
+        '                candidate = manifest_candidate',
+            '            else:',
+        '                candidate = workspace_candidate',
+        '        fixed_lines.append(f"file \'{candidate.resolve().as_posix()}\'")',
+        '    else:',
+        '        fixed_lines.append(raw)',
+        'manifest_path.write_text("\\n".join(fixed_lines) + "\\n", encoding=\'utf-8\')',
+        'print(f"normalized manifest paths: {manifest_path}")',
+        'PY',
+    ].join('\n');
+    const verifyManifestPathsCommand = [
+        'python3 - <<\'PY\'',
+        'import pathlib',
+        `manifest_path = pathlib.Path(${serializedManifestPath})`,
+        'missing = []',
+        'for raw in manifest_path.read_text(encoding=\'utf-8\').splitlines():',
+        '    if not raw.startswith("file \'") or not raw.endswith("\'"):',
+        '        continue',
+        '    path_value = pathlib.Path(raw[6:-1])',
+        '    if not path_value.exists():',
+        '        missing.append(str(path_value))',
+        'print(f"checked {manifest_path}, missing={len(missing)}")',
+        'if missing:',
+        '    print("\\n".join(missing[:10]))',
+        '    raise SystemExit(1)',
+        'PY',
+    ].join('\n');
+    return {
+        failedCommand: normalizedCommand,
+        retryCommands: [`${normalizeManifestCommand}\n${normalizedCommand}`],
+        probeCommands: [verifyManifestPathsCommand],
+        suggestedFix: 'Input manifest contains duplicated path segments. Normalize manifest entries to valid absolute paths, verify referenced files, then rerun only this failed step.',
+        stderrSnippet: input.stderr.trim().replace(/\s+/gu, ' ').slice(0, 320),
+        toolName: input.toolName,
+    };
+}
+
 function resolveCommandRecoveryHintFromToolResult(input: {
     toolName: string;
     result: unknown;
@@ -650,8 +923,16 @@ function resolveCommandRecoveryHintFromToolResult(input: {
         return null;
     }
     const stderrFromRecord = getString(resultRecord?.stderr) ?? '';
-    const stderrFromStringResult = typeof input.result === 'string' ? input.result : '';
-    const stderr = stderrFromRecord.trim().length > 0 ? stderrFromRecord : stderrFromStringResult;
+    const diagnosticText = resolveCommandDiagnosticTextFromToolResult(input.result);
+    const stderr = stderrFromRecord.trim().length > 0 ? stderrFromRecord : diagnosticText;
+    const manifestDuplicatePathHint = buildInputManifestDuplicatePathRecoveryHint({
+        command,
+        stderr,
+        toolName: normalizedToolName,
+    });
+    if (manifestDuplicatePathHint) {
+        return manifestDuplicatePathHint;
+    }
     const errorType = getString(resultRecord?.error_type)?.toLowerCase() ?? '';
     const exitCode = (
         typeof resultRecord?.exitCode === 'number'
@@ -702,6 +983,106 @@ function resolveCommandRecoveryHintFromToolResult(input: {
         stderrSnippet: stderr.trim().slice(0, 240),
         toolName: normalizedToolName,
     };
+}
+
+function resolveCommandExitCodeFromResult(
+    resultRecord: Record<string, unknown> | null | undefined,
+    stderr: string,
+): number | undefined {
+    if (typeof resultRecord?.exitCode === 'number' && Number.isFinite(resultRecord.exitCode)) {
+        return Math.trunc(resultRecord.exitCode);
+    }
+    if (typeof resultRecord?.exit_code === 'number' && Number.isFinite(resultRecord.exit_code)) {
+        return Math.trunc(resultRecord.exit_code);
+    }
+    const match = COMMAND_RESULT_EXIT_CODE_PATTERN.exec(stderr);
+    if (!match?.[1]) {
+        return undefined;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function resolveCommandFailureInfoFromToolResult(input: {
+    toolName: string;
+    result: unknown;
+    fallbackCommand?: string;
+    isError?: boolean;
+}): TaskTurnCommandFailureInfo | null {
+    const normalizedToolName = input.toolName.trim().toLowerCase();
+    if (!COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN.test(normalizedToolName)) {
+        return null;
+    }
+    const resultRecord = toOptionalRecord(input.result);
+    const explicitCommand = getString(resultRecord?.command);
+    const failedCommand = explicitCommand?.trim() || input.fallbackCommand?.trim() || undefined;
+    const stderrFromRecord = getString(resultRecord?.stderr) ?? getString(resultRecord?.error) ?? '';
+    const diagnosticText = resolveCommandDiagnosticTextFromToolResult(input.result);
+    const stderr = stderrFromRecord.trim().length > 0 ? stderrFromRecord : diagnosticText;
+    const exitCode = resolveCommandExitCodeFromResult(resultRecord, stderr);
+    const hasFailureSignal = (
+        input.isError === true
+        || isToolResultExplicitlyErrored(input.result)
+        || (typeof exitCode === 'number' && exitCode !== 0)
+        || COMMAND_EXECUTION_FAILURE_RESULT_PATTERN.test(stderr)
+        || COMMAND_RESULT_EXIT_CODE_PATTERN.test(stderr)
+    );
+    if (!hasFailureSignal) {
+        return null;
+    }
+    const normalizedSnippet = stderr.trim().replace(/\s+/gu, ' ').slice(0, 320);
+    return {
+        failedCommand,
+        stderrSnippet: normalizedSnippet.length > 0 ? normalizedSnippet : undefined,
+        exitCode,
+        toolName: normalizedToolName,
+    };
+}
+
+function appendCommandFailureContextToFailureMessage(input: {
+    message: string;
+    commandFailure?: TaskTurnCommandFailureInfo;
+}): string {
+    const normalizedMessage = input.message.trim();
+    if (!input.commandFailure) {
+        return normalizedMessage;
+    }
+    const segments: string[] = [];
+    if (input.commandFailure.failedCommand) {
+        segments.push(`command=${input.commandFailure.failedCommand}`);
+    }
+    if (typeof input.commandFailure.exitCode === 'number') {
+        segments.push(`exitCode=${input.commandFailure.exitCode}`);
+    }
+    if (input.commandFailure.stderrSnippet) {
+        segments.push(`stderr=${input.commandFailure.stderrSnippet}`);
+    }
+    if (segments.length === 0) {
+        return normalizedMessage;
+    }
+    const context = segments.join('; ');
+    return normalizedMessage.includes(context)
+        ? normalizedMessage
+        : `${normalizedMessage} [command_failure: ${context}]`;
+}
+
+function buildCommandFailureReadableDelta(input: {
+    commandFailure: TaskTurnCommandFailureInfo;
+}): string {
+    const lines: string[] = [
+        '已定位到失败步骤：命令执行阶段报错。',
+    ];
+    if (input.commandFailure.failedCommand) {
+        lines.push(`失败命令：${input.commandFailure.failedCommand}`);
+    }
+    if (typeof input.commandFailure.exitCode === 'number') {
+        lines.push(`退出码：${input.commandFailure.exitCode}`);
+    }
+    if (input.commandFailure.stderrSnippet) {
+        lines.push(`错误信息：${input.commandFailure.stderrSnippet}`);
+    }
+    lines.push('建议：仅重试当前失败步骤（无需重跑整个任务），修正该命令后继续后续步骤。');
+    return lines.join('\n');
 }
 
 export function deriveHostControlShellCommand(message: string): string {
@@ -1307,6 +1688,48 @@ function getString(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+function normalizeLegacyApprovalResultCommand(command: ProtocolCommand): ProtocolCommand {
+    if (command.type !== 'request_effect_response') {
+        return command;
+    }
+
+    const payload = toRecord(command.payload);
+    const hasForwardMetadata = Boolean(getString(payload.taskId) || getString(payload.effectType));
+    if (hasForwardMetadata) {
+        return command;
+    }
+
+    const directRequestId = getString(payload.requestId);
+    const directSuccess = payload.success;
+    if (directRequestId && typeof directSuccess === 'boolean') {
+        return {
+            ...command,
+            type: 'report_effect_result',
+            payload,
+        };
+    }
+
+    const nestedResponse = toOptionalRecord(payload.response);
+    const nestedRequestId = nestedResponse ? getString(nestedResponse.requestId) : null;
+    const nestedApproved = nestedResponse?.approved;
+    if (!nestedRequestId || typeof nestedApproved !== 'boolean') {
+        return command;
+    }
+    const confirmedNestedResponse = nestedResponse!;
+
+    return {
+        ...command,
+        type: 'report_effect_result',
+        payload: {
+            ...payload,
+            requestId: nestedRequestId,
+            success: nestedApproved,
+            reason: getString(payload.reason) ?? getString(confirmedNestedResponse.denialReason) ?? undefined,
+            approvalType: payload.approvalType ?? confirmedNestedResponse.approvalType,
+        },
+    };
+}
+
 function sanitizeLegacyPlannedOutputPath(value: string): string {
     const trimmed = value.trim();
     if (LEGACY_LEAKED_PLANNED_OUTPUT_PATTERN.test(trimmed)) {
@@ -1500,6 +1923,7 @@ function isRetryableRuntimeStreamError(message: string): boolean {
 function normalizeTaskFailureMessage(
     message: string,
     classification: RuntimeFailureClassification,
+    commandFailure?: TaskTurnCommandFailureInfo,
 ): string {
     const normalizedMessage = message.trim().length > 0
         ? message
@@ -1517,12 +1941,21 @@ function normalizeTaskFailureMessage(
         return null;
     })();
     if (!codeHint) {
-        return normalizedMessage;
+        return appendCommandFailureContextToFailureMessage({
+            message: normalizedMessage,
+            commandFailure,
+        });
     }
     if (normalizedMessage.toLowerCase().includes(codeHint)) {
-        return normalizedMessage;
+        return appendCommandFailureContextToFailureMessage({
+            message: normalizedMessage,
+            commandFailure,
+        });
     }
-    return `${normalizedMessage} [${codeHint}]`;
+    return appendCommandFailureContextToFailureMessage({
+        message: `${normalizedMessage} [${codeHint}]`,
+        commandFailure,
+    });
 }
 
 function isWorkflowSnapshotMissingError(message: string): boolean {
@@ -1733,6 +2166,14 @@ const AUTO_APPROVE_TOOLS = new Set([
     'updateWorkingMemory',
 ]);
 const WORKSPACE_EXECUTE_COMMAND_TOOL = 'mastra_workspace_execute_command';
+const READ_ONLY_WORKSPACE_TOOLS = new Set([
+    'mastra_workspace_list_files',
+    'mastra_workspace_read_file',
+    'mastra_workspace_file_stat',
+    'list_dir',
+    'view_file',
+    'read_file',
+]);
 const WEB_RESEARCH_CAPABILITY = 'web_research';
 const FILESYSTEM_READ_CAPABILITY = 'filesystem_read';
 const VOICE_OUTPUT_CAPABILITY = 'voice_output';
@@ -1992,7 +2433,11 @@ function shouldAutoApproveTool(input: {
     requiredCompletionCapabilities?: string[];
 }): boolean {
     const event = input.event;
+    const normalizedToolName = event.toolName.trim().toLowerCase();
     if (AUTO_APPROVE_TOOLS.has(event.toolName) || isDelegatedAgentToolName(event.toolName)) {
+        return true;
+    }
+    if (READ_ONLY_WORKSPACE_TOOLS.has(normalizedToolName)) {
         return true;
     }
     const requiredCompletionCapabilities = normalizeStringList(input.requiredCompletionCapabilities ?? [])
@@ -2064,6 +2509,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const latestRunIdByTaskId = new Map<string, string>();
     const latestCommandInvocationByTaskId = new Map<string, string>();
     const latestCommandRecoveryHintByTaskId = new Map<string, TaskTurnCommandRecoveryHint>();
+    const latestCommandFailureInfoByTaskId = new Map<string, TaskTurnCommandFailureInfo>();
     const autoApprovalInFlightByTaskId = new Map<string, Set<string>>();
     const autoApprovalCompletedByTaskId = new Map<string, Set<string>>();
     const taskMessageDedupByTaskId = new Map<string, TaskMessageDedupState>();
@@ -2161,6 +2607,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             observedToolNames: [],
             requireToolEvidenceForCompletion: false,
             requiredCompletionCapabilities: [],
+            commandFailureNarrativeEmitted: false,
             updatedAtMs: nowMs,
         };
         taskTurnEventStates.set(key, created);
@@ -2373,6 +2820,41 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             updatedAtMs: nowMs,
         });
     };
+    const markTaskTurnCommandFailureInfo = (input: {
+        key: string;
+        taskId?: string;
+        info: TaskTurnCommandFailureInfo;
+    }): void => {
+        if (input.taskId && input.taskId.trim().length > 0) {
+            latestCommandFailureInfoByTaskId.set(input.taskId, input.info);
+        }
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(input.key, nowMs);
+        taskTurnEventStates.set(input.key, {
+            ...state,
+            latestCommandFailureInfo: input.info,
+            updatedAtMs: nowMs,
+        });
+    };
+    const markTaskTurnCommandFailureNarrativeEmitted = (key: string): void => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const state = getTaskTurnEventState(key, nowMs);
+        if (state.commandFailureNarrativeEmitted) {
+            return;
+        }
+        taskTurnEventStates.set(key, {
+            ...state,
+            commandFailureNarrativeEmitted: true,
+            updatedAtMs: nowMs,
+        });
+    };
+    const hasTaskTurnCommandFailureNarrativeEmitted = (key: string): boolean => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        return getTaskTurnEventState(key, nowMs).commandFailureNarrativeEmitted === true;
+    };
     const getTaskTurnCommandRecoveryHint = (
         key: string,
         taskId?: string,
@@ -2385,6 +2867,21 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         }
         if (taskId && taskId.trim().length > 0) {
             return latestCommandRecoveryHintByTaskId.get(taskId);
+        }
+        return undefined;
+    };
+    const getTaskTurnCommandFailureInfo = (
+        key: string,
+        taskId?: string,
+    ): TaskTurnCommandFailureInfo | undefined => {
+        const nowMs = Date.now();
+        pruneTaskTurnEventStates(nowMs);
+        const perTurn = getTaskTurnEventState(key, nowMs).latestCommandFailureInfo;
+        if (perTurn) {
+            return perTurn;
+        }
+        if (taskId && taskId.trim().length > 0) {
+            return latestCommandFailureInfoByTaskId.get(taskId);
         }
         return undefined;
     };
@@ -2540,6 +3037,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             observedToolNames: [],
             primaryNarrativeRunId: undefined,
             lastAssistantChunkFingerprint: undefined,
+            commandFailureNarrativeEmitted: false,
             terminal: undefined,
             updatedAtMs: nowMs,
         });
@@ -3758,6 +4256,26 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         command: recoveryHint.failedCommand,
                     });
                 }
+                const commandFailureInfo = resolveCommandFailureInfoFromToolResult({
+                    toolName: event.toolName,
+                    result: event.result,
+                    fallbackCommand,
+                    isError: event.isError === true,
+                });
+                if (commandFailureInfo) {
+                    markTaskTurnCommandFailureInfo({
+                        key: turnEventStateKey,
+                        taskId,
+                        info: commandFailureInfo,
+                    });
+                    if (commandFailureInfo.failedCommand) {
+                        markTaskTurnCommandInvocation({
+                            key: turnEventStateKey,
+                            taskId,
+                            command: commandFailureInfo.failedCommand,
+                        });
+                    }
+                }
             }
             markTaskTurnToolEvidence({
                 key: turnEventStateKey,
@@ -3841,6 +4359,38 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     turnId,
                 },
             });
+        };
+        const suppressTerminalWhileAwaitingApproval = (input: {
+            terminalType: 'complete' | 'error' | 'tripwire';
+            detail?: string;
+        }): boolean => {
+            if (!hasPendingApprovalForTask(taskId)) {
+                return false;
+            }
+            const currentState = taskStates.get(taskId);
+            upsertTaskState(taskId, {
+                status: 'suspended',
+                suspended: true,
+                suspensionReason: 'approval_required',
+                checkpoint: currentState?.checkpoint ?? {
+                    id: `checkpoint:approval-required:${createId()}`,
+                    label: 'Awaiting user approval',
+                    at: getNowIso(),
+                    metadata: {
+                        reason: 'approval_required',
+                    },
+                },
+            });
+            if (isAutoApprovalDebugEnabled()) {
+                console.warn('[MastraEntrypoint] Suppressing terminal event while awaiting approval', {
+                    taskId,
+                    terminalType: input.terminalType,
+                    detail: input.detail ?? null,
+                    turnId: turnId ?? null,
+                    runId: event.runId ?? null,
+                });
+            }
+            return true;
         };
         const emitSupplementalTaskSummaryIfNeeded = (): void => {
             const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
@@ -4264,6 +4814,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'complete') {
+            if (suppressTerminalWhileAwaitingApproval({
+                terminalType: 'complete',
+                detail: event.finishReason,
+            })) {
+                return;
+            }
             const hasAutoApprovalInFlight = (autoApprovalInFlightByTaskId.get(taskId)?.size ?? 0) > 0;
             if (!hasTaskTurnAssistantNarrative(turnEventStateKey) && hasAutoApprovalInFlight) {
                 if (isAutoApprovalDebugEnabled()) {
@@ -4275,6 +4831,35 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     });
                 }
                 return;
+            }
+            if (!hasTaskTurnToolEvidenceRequirement(turnEventStateKey)) {
+                const taskState = taskStates.get(taskId);
+                const routeModeForTurn = getTaskTurnRouteMode(turnEventStateKey)
+                    ?? taskState?.turnContract?.mode;
+                if (routeModeForTurn === 'task') {
+                    const fallbackMessage = typeof taskState?.lastUserMessage === 'string'
+                        ? taskState.lastUserMessage
+                        : '';
+                    const fallbackRequiredCapabilities = fallbackMessage.trim().length > 0
+                        ? deriveCompletionCapabilitiesFromMessage({
+                            message: fallbackMessage,
+                            workspacePath: taskState?.workspacePath,
+                        })
+                        : [];
+                    if (fallbackRequiredCapabilities.length > 0) {
+                        setTaskTurnCompletionRequirement({
+                            key: turnEventStateKey,
+                            requireToolEvidence: true,
+                            requiredCompletionCapabilities: normalizeStringList(fallbackRequiredCapabilities),
+                            turnContractHash: taskState?.turnContract?.hash,
+                            turnContractDomain: taskState?.turnContract?.domain,
+                            routeMode: 'task',
+                            executionPath: taskState?.executionPath === 'direct'
+                                ? 'direct'
+                                : 'workflow',
+                        });
+                    }
+                }
             }
             if (hasTaskTurnToolEvidenceRequirement(turnEventStateKey) && !hasTaskTurnSatisfiedCompletionEvidence(turnEventStateKey)) {
                 emitMissingToolEvidenceFailure('complete');
@@ -4320,6 +4905,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'error') {
+            if (suppressTerminalWhileAwaitingApproval({
+                terminalType: 'error',
+                detail: event.message,
+            })) {
+                return;
+            }
             const currentTaskRunId = latestRunIdByTaskId.get(taskId);
             if (
                 !hasTaskTurnAssistantNarrative(turnEventStateKey)
@@ -4416,12 +5007,64 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
                 return;
             }
+            const commandFailureInfo = getTaskTurnCommandFailureInfo(turnEventStateKey, taskId);
+            const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+            if (
+                commandFailureInfo
+                && isRetryableRuntimeStreamError(event.message)
+                && runMissingToolEvidenceAutoRetry
+                && runMissingToolEvidenceAutoRetry({
+                    taskId,
+                    turnEventStateKey,
+                    turnId,
+                    traceId,
+                    requiredCapabilities: requiredCapabilities.length > 0
+                        ? requiredCapabilities
+                        : [COMMAND_EXECUTION_CAPABILITY],
+                    source: 'error',
+                    runId: event.runId,
+                })
+            ) {
+                return;
+            }
             if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'error')) {
                 return;
             }
             markTaskTurnTerminalEvent(turnEventStateKey, 'error');
             const classification = classifyRuntimeErrorMessage(event.message);
-            const normalizedFailureMessage = normalizeTaskFailureMessage(event.message, classification);
+            const normalizedFailureMessage = normalizeTaskFailureMessage(
+                event.message,
+                classification,
+                commandFailureInfo,
+            );
+            const failureSuggestion = commandFailureInfo
+                ? `${classification.suggestion} Last failed step: retry only the failed command step instead of restarting the full task.`
+                : classification.suggestion;
+            if (
+                commandFailureInfo
+                && isRetryableRuntimeStreamError(event.message)
+                && !hasTaskTurnCommandFailureNarrativeEmitted(turnEventStateKey)
+            ) {
+                const readableDelta = buildCommandFailureReadableDelta({
+                    commandFailure: commandFailureInfo,
+                });
+                appendTranscript(taskId, 'assistant', readableDelta);
+                markTaskTurnAssistantNarrative({
+                    key: turnEventStateKey,
+                    content: readableDelta,
+                });
+                markTaskTurnCommandFailureNarrativeEmitted(turnEventStateKey);
+                emit({
+                    type: 'TEXT_DELTA',
+                    taskId,
+                    payload: {
+                        delta: readableDelta,
+                        role: 'assistant',
+                        traceId,
+                        turnId,
+                    },
+                });
+            }
             clearPendingApprovalsForTask(taskId);
             const existingRetry = taskStates.get(taskId)?.retry;
             upsertTaskState(taskId, {
@@ -4453,7 +5096,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     error: normalizedFailureMessage,
                     errorCode: classification.errorCode,
                     recoverable: classification.recoverable,
-                    suggestion: classification.suggestion,
+                    suggestion: failureSuggestion,
                     failureClass: classification.failureClass,
                     traceId,
                     turnId,
@@ -4462,6 +5105,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             return;
         }
         if (event.type === 'tripwire') {
+            if (suppressTerminalWhileAwaitingApproval({
+                terminalType: 'tripwire',
+                detail: event.reason,
+            })) {
+                return;
+            }
             if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'tripwire')) {
                 return;
             }
@@ -4870,11 +5519,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             raw: unknown,
             emit: (message: OutgoingMessage) => void,
         ): Promise<void> => {
-            const command = toProtocolCommand(raw);
-            if (!command || !command.type) {
+            const parsedCommand = toProtocolCommand(raw);
+            if (!parsedCommand || !parsedCommand.type) {
                 emit({ type: 'error', message: 'invalid_command' });
                 return;
             }
+            const command = normalizeLegacyApprovalResultCommand(parsedCommand) as ProtocolCommand & { type: string };
             if (command.type.endsWith('_response')) {
                 resolvePendingForwardResponse(command);
                 return;
@@ -4953,21 +5603,18 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     },
                 });
             };
-            const runUserMessageWithThreadRecovery = async (input: {
+            const primeTaskTurnCompletionContract = (input: {
                 taskId: string;
                 turnId: string;
                 message: string;
-                resourceId: string;
-                preferredThreadId: string;
                 workspacePath?: string;
                 executionOptions?: UserMessageExecutionOptions;
-            }): Promise<void> => {
-                const isToolingProgressEvent = (event: DesktopEvent): boolean => (
-                    event.type === 'tool_call'
-                    || event.type === 'approval_required'
-                    || event.type === 'tool_result'
-                    || event.type === 'suspended'
-                );
+                logContract?: boolean;
+            }): {
+                turnEventStateKey: string;
+                requiredCompletionCapabilities: string[];
+                requireToolEvidenceForCompletion: boolean;
+            } => {
                 const turnEventStateKey = buildTaskTurnEventStateKey({
                     taskId: input.taskId,
                     turnId: input.turnId,
@@ -4992,15 +5639,48 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         ? 'workflow'
                         : 'direct',
                 });
-                console.info('[coworkany-task-turn-contract]', JSON.stringify({
+                if (input.logContract === true) {
+                    console.info('[coworkany-task-turn-contract]', JSON.stringify({
+                        taskId: input.taskId,
+                        turnId: input.turnId,
+                        routeMode: input.executionOptions?.forcedRouteMode ?? null,
+                        executionPath: input.executionOptions?.executionPath ?? null,
+                        domain: input.executionOptions?.turnContractDomain ?? null,
+                        requiredCapabilities: requiredCompletionCapabilities,
+                        contractHash: input.executionOptions?.turnContractHash ?? null,
+                    }));
+                }
+                return {
+                    turnEventStateKey,
+                    requiredCompletionCapabilities,
+                    requireToolEvidenceForCompletion,
+                };
+            };
+            const runUserMessageWithThreadRecovery = async (input: {
+                taskId: string;
+                turnId: string;
+                message: string;
+                resourceId: string;
+                preferredThreadId: string;
+                workspacePath?: string;
+                executionOptions?: UserMessageExecutionOptions;
+            }): Promise<void> => {
+                const isToolingProgressEvent = (event: DesktopEvent): boolean => (
+                    event.type === 'tool_call'
+                    || event.type === 'approval_required'
+                    || event.type === 'tool_result'
+                    || event.type === 'suspended'
+                );
+                const {
+                    turnEventStateKey,
+                    requiredCompletionCapabilities,
+                } = primeTaskTurnCompletionContract({
                     taskId: input.taskId,
                     turnId: input.turnId,
-                    routeMode: input.executionOptions?.forcedRouteMode ?? null,
-                    executionPath: input.executionOptions?.executionPath ?? null,
-                    domain: input.executionOptions?.turnContractDomain ?? null,
-                    requiredCapabilities: requiredCompletionCapabilities,
-                    contractHash: input.executionOptions?.turnContractHash ?? null,
-                }));
+                    message: input.message,
+                    workspacePath: input.workspacePath,
+                    executionOptions: input.executionOptions,
+                });
                 const useChatLatencyProfile = input.executionOptions?.forcePostAssistantCompletion === true
                     && input.executionOptions?.forcedRouteMode !== 'task';
                 const useTaskLatencyProfile = input.executionOptions?.forcedRouteMode === 'task'
@@ -5044,6 +5724,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     && event.content.trim().length > 0
                 );
                 const emitFalseCompletionFailure = (event: Extract<DesktopEvent, { type: 'complete' }>): void => {
+                    if (hasPendingApprovalForTask(input.taskId)) {
+                        return;
+                    }
                     if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'error')) {
                         return;
                     }
@@ -5085,6 +5768,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     });
                 };
                 const emitMissingTerminalFailure = async (reason: string): Promise<void> => {
+                    if (hasPendingApprovalForTask(input.taskId)) {
+                        return;
+                    }
+                    if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
+                        return;
+                    }
                     const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
                     const missingCapabilities = getTaskTurnMissingRequiredCompletionCapabilities(turnEventStateKey);
                     if (
@@ -5272,6 +5961,27 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     hasToolingProgress
                     || getTaskTurnObservedToolNames(turnEventStateKey).length > 0
                 );
+                const tryScheduleCommandFailureStepRetry = (runId?: string): boolean => {
+                    if (!runMissingToolEvidenceAutoRetry) {
+                        return false;
+                    }
+                    const commandFailureInfo = getTaskTurnCommandFailureInfo(turnEventStateKey, input.taskId);
+                    if (!commandFailureInfo) {
+                        return false;
+                    }
+                    const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+                    return runMissingToolEvidenceAutoRetry({
+                        taskId: input.taskId,
+                        turnEventStateKey,
+                        turnId: input.turnId,
+                        traceId: null,
+                        requiredCapabilities: requiredCapabilities.length > 0
+                            ? requiredCapabilities
+                            : [COMMAND_EXECUTION_CAPABILITY],
+                        source: 'error',
+                        runId,
+                    });
+                };
                 const enqueueEmitDesktopEvent = (event: DesktopEvent): void => {
                     pendingEmitChain = pendingEmitChain
                         .then(async () => {
@@ -5376,12 +6086,33 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     return hasTaskTurnTerminalEvent(turnEventStateKey);
                 };
                 const emitNoNarrativeDegradedCompletion = async (reason: string): Promise<void> => {
+                    if (hasPendingApprovalForTask(input.taskId)) {
+                        return;
+                    }
+                    if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
+                        return;
+                    }
                     const clippedOriginalRequest = input.message.trim().slice(0, 2400);
-                    const degradedSummary = [
+                    const commandFailureInfo = getTaskTurnCommandFailureInfo(turnEventStateKey, input.taskId);
+                    const degradedLines = [
                         '上游检索流在输出正文前中断，暂未产出完整分析结果。',
                         '为避免界面继续卡住，我先结束本轮；你可以直接点击重试，或把请求拆成单标的重试。',
                         `原始请求：${clippedOriginalRequest}`,
-                    ].join('\n');
+                    ];
+                    if (commandFailureInfo) {
+                        degradedLines.push('检测到失败步骤：命令执行阶段报错。');
+                        if (commandFailureInfo.failedCommand) {
+                            degradedLines.push(`失败命令：${commandFailureInfo.failedCommand}`);
+                        }
+                        if (typeof commandFailureInfo.exitCode === 'number') {
+                            degradedLines.push(`退出码：${commandFailureInfo.exitCode}`);
+                        }
+                        if (commandFailureInfo.stderrSnippet) {
+                            degradedLines.push(`错误信息：${commandFailureInfo.stderrSnippet}`);
+                        }
+                        degradedLines.push('建议：仅重试当前失败步骤（无需重跑整个任务）。');
+                    }
+                    const degradedSummary = degradedLines.join('\n');
                     const syntheticRunId = `synthetic-degraded-${createId()}`;
                     enqueueEmitDesktopEvent({
                         type: 'text_delta',
@@ -5544,18 +6275,10 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         }
                         if (!hasAssistantNarrative && event.type === 'complete') {
                             if (awaitingUserApproval) {
-                                const finishReason = String(event.finishReason ?? '').trim().toLowerCase();
-                                // Stream exhaustion while waiting approval is not a real terminal state.
-                                // Record a provisional completion and wait for report_effect_result
-                                // (or auto-approval resume) before deciding false completion.
-                                if (finishReason === 'stream_exhausted') {
-                                    pendingNoNarrativeCompleteEvent = event;
-                                    pendingNoNarrativeCompleteHadProgress = hasToolingProgress;
-                                    return;
-                                }
-                                // For explicit terminal reasons (for example "stop"), preserve existing
-                                // behavior and clear pending approvals through the normal complete path.
-                                enqueueEmitDesktopEvent(event);
+                                // Completion before approval can be provisional regardless of finish reason.
+                                // Wait for report_effect_result / resume before deciding terminal outcome.
+                                pendingNoNarrativeCompleteEvent = event;
+                                pendingNoNarrativeCompleteHadProgress = hasToolingProgress;
                                 return;
                             }
                             pendingNoNarrativeCompleteEvent = event;
@@ -5564,6 +6287,26 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         }
                         enqueueEmitDesktopEvent(event);
                     });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    const retryableStreamError = isRetryableRuntimeStreamError(message);
+                    const hasRecoverableToolingProgress = (
+                        !hasAssistantNarrative
+                        && hasToolingEvidenceForTurn()
+                    );
+                    const hasRecoverableAutoApprovalProgress = (
+                        !hasAssistantNarrative
+                        && (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask())
+                    );
+                    if (!retryableStreamError || (!hasRecoverableToolingProgress && !hasRecoverableAutoApprovalProgress)) {
+                        throw error;
+                    }
+                    if (hasRecoverableToolingProgress) {
+                        sawRetryableNoNarrativeErrorAfterToolingProgress = true;
+                    }
+                    if (hasRecoverableAutoApprovalProgress) {
+                        sawRetryableNoNarrativeErrorDuringAutoApproval = true;
+                    }
                 } finally {
                     stopTaskExecutionHeartbeat();
                 }
@@ -5630,6 +6373,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     }
                     if (pendingNoNarrativeCompleteHadProgress) {
                         if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
+                            if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
+                                pendingNoNarrativeCompleteEvent = null;
+                                pendingNoNarrativeCompleteHadProgress = false;
+                                return;
+                            }
                             await emitNoNarrativeDegradedCompletion('missing_terminal_after_late_tooling_progress');
                             pendingNoNarrativeCompleteEvent = null;
                             pendingNoNarrativeCompleteHadProgress = false;
@@ -5814,6 +6562,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         return;
                     }
                     if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
+                        if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
+                            return;
+                        }
                         await emitNoNarrativeDegradedCompletion('missing_terminal_after_tooling_progress');
                         return;
                     }
@@ -5830,6 +6581,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 workspacePath?: string;
                 executionOptions?: UserMessageExecutionOptions;
             }): Promise<TaskRuntimeExecutionPath> => {
+                primeTaskTurnCompletionContract({
+                    taskId: input.taskId,
+                    turnId: input.turnId,
+                    message: input.message,
+                    workspacePath: input.workspacePath,
+                    executionOptions: input.executionOptions,
+                    logContract: true,
+                });
                 const shouldFailUnsupportedDatabaseRequest = DATABASE_OPERATION_PATTERN.test(input.message);
                 if (shouldFailUnsupportedDatabaseRequest) {
                     await emitDesktopEvent(input.taskId, {
@@ -5978,6 +6737,14 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 const requiredCapabilitiesForTurn = getTaskTurnRequiredCompletionCapabilities(
                     retryInput.turnEventStateKey,
                 );
+                const commandRecoveryHint = getTaskTurnCommandRecoveryHint(
+                    retryInput.turnEventStateKey,
+                    retryInput.taskId,
+                );
+                const commandFailureInfo = getTaskTurnCommandFailureInfo(
+                    retryInput.turnEventStateKey,
+                    retryInput.taskId,
+                );
                 const retryFloorCapabilities = missingCapabilitiesForTurn.length > 0
                     ? missingCapabilitiesForTurn
                     : retryInput.requiredCapabilities;
@@ -5992,9 +6759,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     && hasActionableProgressSignal
                     && hasAnyRequiredCapability
                     && !attemptedRetryFloorCapability;
+                const hasCommandFailureSignal = Boolean(commandFailureInfo || commandRecoveryHint);
+                const canApplyErrorRecoveryFloor = retryInput.source === 'error'
+                    && retryInput.requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY)
+                    && hasCommandFailureSignal;
                 const implicitRetryFloor = canApplyProtocolSafetyFloor
                     ? resolveMissingToolEvidenceRetryFloor(retryFloorCapabilities)
-                    : 0;
+                    : (canApplyErrorRecoveryFloor ? 1 : 0);
                 const configuredRetryCapFromState = existingState.retry?.maxAttempts;
                 const configuredMaxAttempts = configuredRetryCapFromState === 0
                     ? implicitRetryFloor
@@ -6014,16 +6785,18 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     return false;
                 }
                 const retryDelayMs = resolveMissingToolEvidenceAutoRetryDelayMs();
-                const commandRecoveryHint = getTaskTurnCommandRecoveryHint(
-                    retryInput.turnEventStateKey,
-                    retryInput.taskId,
-                );
                 const retryMessage = buildMissingToolEvidenceRetryMessage({
                     message: baseRetryMessage,
                     requiredCapabilities: retryInput.requiredCapabilities,
                     source: retryInput.source,
                     commandRecoveryHint,
                 });
+                const retryReason = retryInput.source === 'error'
+                    ? 'retryable_command_failure'
+                    : 'complete_without_required_tool_evidence';
+                const retryStatusMessage = retryInput.source === 'error'
+                    ? `命令步骤失败，正在仅重试失败步骤 (${nextAttempts}/${maxAttempts})...`
+                    : `缺少工具证据，正在自动重试 (${nextAttempts}/${maxAttempts})...`;
                 const updatedState = upsertTaskState(retryInput.taskId, {
                     status: 'retrying',
                     suspended: false,
@@ -6033,7 +6806,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         attempts: nextAttempts,
                         maxAttempts,
                         lastRetryAt: getNowIso(),
-                        lastError: 'complete_without_required_tool_evidence',
+                        lastError: retryReason,
                     },
                 });
                 resetTaskTurnAttemptStreamState(retryInput.turnEventStateKey);
@@ -6043,11 +6816,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     type: 'RATE_LIMITED',
                     taskId: retryInput.taskId,
                     payload: {
-                        message: `缺少工具证据，正在自动重试 (${nextAttempts}/${maxAttempts})...`,
+                        message: retryStatusMessage,
                         attempt: nextAttempts,
                         maxRetries: maxAttempts,
                         retryAfterMs: retryDelayMs,
-                        error: 'complete_without_required_tool_evidence',
+                        error: retryReason,
                         stage: 'unknown',
                         requiredCapabilities: retryInput.requiredCapabilities,
                         source: retryInput.source,
@@ -6797,6 +7570,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 emitInvalidPayload,
                 emitFor,
                 emitCurrent,
+                emitTaskEvent: (taskId, type, payload) => {
+                    emit({
+                        type,
+                        taskId,
+                        payload,
+                    });
+                },
             })) {
                 return;
             }

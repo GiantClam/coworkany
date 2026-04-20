@@ -285,10 +285,26 @@ pub async fn confirm_effect(
     };
 
     let Some(pending) = pending else {
-        return Err(format!(
-            "No pending confirmation found for {}",
+        warn!(
+            "No policy pending confirmation found for {}; forwarding best-effort approval to sidecar",
             input.request_id
-        ));
+        );
+        let response = EffectResponse {
+            request_id: input.request_id.clone(),
+            timestamp: Utc::now().to_rfc3339(),
+            approved: true,
+            approval_type: if input.remember {
+                Some(ConfirmationPolicy::Session)
+            } else {
+                None
+            },
+            expires_at: None,
+            denial_reason: None,
+            denial_code: None,
+            modified_scope: None,
+        };
+        forward_effect_response_to_sidecar(&sidecar_state, &response)?;
+        return Ok(response);
     };
 
     // Build response
@@ -304,9 +320,7 @@ pub async fn confirm_effect(
         let _ = audit.log(AuditEvent::confirmed(&pending.request, input.remember));
     }
 
-    if let Err(e) = forward_effect_response_to_sidecar(&sidecar_state, &response) {
-        warn!("Failed to forward effect-confirmed to sidecar: {}", e);
-    }
+    forward_effect_response_to_sidecar(&sidecar_state, &response)?;
 
     Ok(response)
 }
@@ -392,10 +406,22 @@ pub async fn deny_effect(
     };
 
     let Some(pending) = pending else {
-        return Err(format!(
-            "No pending confirmation found for {}",
+        warn!(
+            "No policy pending confirmation found for {}; forwarding best-effort denial to sidecar",
             input.request_id
-        ));
+        );
+        let response = EffectResponse {
+            request_id: input.request_id.clone(),
+            timestamp: Utc::now().to_rfc3339(),
+            approved: false,
+            approval_type: None,
+            expires_at: None,
+            denial_reason: input.reason.clone().or(Some("user_denied".to_string())),
+            denial_code: Some("user_denied".to_string()),
+            modified_scope: None,
+        };
+        forward_effect_response_to_sidecar(&sidecar_state, &response)?;
+        return Ok(response);
     };
 
     let response = EffectResponse {
@@ -418,9 +444,7 @@ pub async fn deny_effect(
         ));
     }
 
-    if let Err(e) = forward_effect_response_to_sidecar(&sidecar_state, &response) {
-        warn!("Failed to forward effect-denied to sidecar: {}", e);
-    }
+    forward_effect_response_to_sidecar(&sidecar_state, &response)?;
 
     Ok(response)
 }

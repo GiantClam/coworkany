@@ -44,6 +44,7 @@ type PersistedRecord = {
 };
 
 const STORE_RELATIVE_PATH = path.join('.coworkany', 'mcp-servers.json');
+const STORE_FILE_NAME = 'mcp-servers.json';
 
 function normalizeServerId(value: string): string {
     return value.trim().toLowerCase();
@@ -145,8 +146,8 @@ export class McpServerSecurityStore {
     private readonly entries = new Map<string, McpServerDefinition>();
     private updatedAt = new Date(0).toISOString();
 
-    constructor(workspaceRoot: string) {
-        this.storePath = path.join(workspaceRoot, STORE_RELATIVE_PATH);
+    constructor(rootPath: string) {
+        this.storePath = resolveMcpServerStorePath(rootPath);
         this.reload();
     }
 
@@ -323,6 +324,17 @@ export class McpServerSecurityStore {
             console.warn('[McpServerSecurityStore] Failed to save store:', error);
         }
     }
+}
+
+export function resolveMcpServerStorePath(rootPath: string): string {
+    const normalizedRootPath = rootPath.trim();
+    if (normalizedRootPath.length === 0) {
+        return STORE_RELATIVE_PATH;
+    }
+    if (path.basename(normalizedRootPath) === '.coworkany') {
+        return path.join(normalizedRootPath, STORE_FILE_NAME);
+    }
+    return path.join(normalizedRootPath, STORE_RELATIVE_PATH);
 }
 
 export function toMastraServerMap(snapshot: McpServerSecuritySnapshot): Record<string, {

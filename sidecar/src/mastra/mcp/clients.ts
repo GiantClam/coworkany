@@ -2,6 +2,7 @@ import type { Tool } from '@mastra/core/tools';
 import { MCPClient } from '@mastra/mcp';
 import { jsonSchemaToZod } from '@mastra/schema-compat/json-to-zod';
 import { z } from 'zod/v4';
+import { resolveRuntimeAppDataRoot } from '../../config/runtimeConfig';
 import {
     createMcpConnectionManager,
     type McpClientLike,
@@ -14,7 +15,7 @@ import {
 } from './security';
 
 const MCP_ENABLED = process.env.COWORKANY_ENABLE_MCP === '1';
-const WORKSPACE_ROOT = process.cwd();
+const MCP_STORE_ROOT = resolveRuntimeAppDataRoot({ cwd: process.cwd() });
 const MCP_CLIENT_TIMEOUT_MS = (() => {
     const raw = Number.parseInt(process.env.COWORKANY_MCP_SERVER_TIMEOUT_MS ?? '', 10);
     if (!Number.isFinite(raw)) {
@@ -43,7 +44,7 @@ const MCP_EMPTY_TOOLSET_RECOVERY_INTERVAL_MS = (() => {
     }
     return Math.min(60_000, Math.max(500, Math.floor(raw)));
 })();
-const mcpServerSecurityStore = new McpServerSecurityStore(WORKSPACE_ROOT);
+const mcpServerSecurityStore = new McpServerSecurityStore(MCP_STORE_ROOT);
 let currentSecuritySnapshot = mcpServerSecurityStore.buildSnapshot();
 let currentSecuritySignature = currentSecuritySnapshot.signature;
 let mcpClientInstanceCounter = 0;
@@ -82,6 +83,14 @@ function isSkippableMcpServerFailure(error: unknown): boolean {
         || text.includes('not found - get https://registry.npmjs.org/')
         || text.includes('mcp_client_connect_failed')
         || text.includes('mcp_client_get_toolsets_failed');
+}
+
+function isNonRecoverableMcpServerFailure(error: unknown): boolean {
+    const text = String(error ?? '').toLowerCase();
+    return text.includes('could not determine executable to run')
+        || text.includes('command not found')
+        || text.includes('enoent')
+        || text.includes('not found - get https://registry.npmjs.org/');
 }
 
 function isServerQuarantined(serverId: string): boolean {
@@ -151,6 +160,7 @@ async function maybeAutoDisableUnhealthyServer(error: unknown): Promise<void> {
     if (!serverId) {
         return;
     }
+    const isNonRecoverableFailure = isNonRecoverableMcpServerFailure(error);
     const isSkippableFailure = isSkippableMcpServerFailure(error);
     if (isSkippableFailure) {
         const newlyQuarantined = quarantineServer(serverId, error);
@@ -170,7 +180,8 @@ async function maybeAutoDisableUnhealthyServer(error: unknown): Promise<void> {
 
     const nextFailures = (mcpServerFailureCounts.get(serverId) ?? 0) + 1;
     mcpServerFailureCounts.set(serverId, nextFailures);
-    if (nextFailures < MCP_AUTO_DISABLE_FAILURE_THRESHOLD) {
+    const failureThreshold = isNonRecoverableFailure ? 1 : MCP_AUTO_DISABLE_FAILURE_THRESHOLD;
+    if (nextFailures < failureThreshold) {
         return;
     }
 
@@ -185,7 +196,8 @@ async function maybeAutoDisableUnhealthyServer(error: unknown): Promise<void> {
     console.warn('[Mastra MCP] auto-disabled unhealthy workspace MCP server', {
         serverId,
         failures: nextFailures,
-        threshold: MCP_AUTO_DISABLE_FAILURE_THRESHOLD,
+        threshold: failureThreshold,
+        immediate: isNonRecoverableFailure,
     });
     await mcpConnectionManager.forceReconnect();
 }

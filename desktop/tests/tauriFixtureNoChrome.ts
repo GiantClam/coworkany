@@ -806,6 +806,19 @@ class DarwinBrowserHarness {
         const requestId = String(args.requestId ?? '');
         const remember = Boolean(args.remember);
         this.logs.push(`invoke_confirm_effect requestId=${requestId} remember=${remember}\n`);
+        if (requestId && this.sidecarProc?.stdin) {
+            const approvalCommand: SidecarEvent = {
+                id: randomUUID(),
+                timestamp: new Date().toISOString(),
+                type: 'report_effect_result',
+                payload: {
+                    requestId,
+                    success: true,
+                },
+            };
+            this.logs.push(`Sending to sidecar: ${JSON.stringify(approvalCommand)}\n`);
+            this.sidecarProc.stdin.write(`${JSON.stringify(approvalCommand)}\n`);
+        }
         return {
             success: true,
             payload: {
@@ -827,6 +840,20 @@ class DarwinBrowserHarness {
         const requestId = String(args.requestId ?? '');
         const reason = typeof args.reason === 'string' ? args.reason : undefined;
         this.logs.push(`invoke_deny_effect requestId=${requestId} reason=${reason ?? ''}\n`);
+        if (requestId && this.sidecarProc?.stdin) {
+            const approvalCommand: SidecarEvent = {
+                id: randomUUID(),
+                timestamp: new Date().toISOString(),
+                type: 'report_effect_result',
+                payload: {
+                    requestId,
+                    success: false,
+                    reason,
+                },
+            };
+            this.logs.push(`Sending to sidecar: ${JSON.stringify(approvalCommand)}\n`);
+            this.sidecarProc.stdin.write(`${JSON.stringify(approvalCommand)}\n`);
+        }
         return {
             success: true,
             payload: {

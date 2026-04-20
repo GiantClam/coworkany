@@ -5,6 +5,7 @@
  */
 
 import type { TaskSession, TaskEvent, PlanStep, TaskStatus } from '../../../types';
+import { formatTaskFailureDetails, normalizeTaskFailureErrorMessage } from '../../../lib/taskFailureUi';
 
 function isTaskMode(value: unknown): value is NonNullable<TaskSession['taskMode']> {
     return value === 'chat'
@@ -801,9 +802,13 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
 
         case 'TASK_FAILED':
         {
+            const normalizedError = normalizeTaskFailureErrorMessage(
+                typeof payload.error === 'string' ? payload.error : 'Unknown error',
+            ) || 'Unknown error';
             const nextFailure = {
-                error: (payload.error as string) ?? 'Unknown error',
+                error: normalizedError,
                 errorCode: typeof payload.errorCode === 'string' ? payload.errorCode : undefined,
+                failureClass: typeof payload.failureClass === 'string' ? payload.failureClass : undefined,
                 recoverable: payload.recoverable === true,
                 suggestion: typeof payload.suggestion === 'string' ? payload.suggestion.trim() : undefined,
             };
@@ -812,10 +817,10 @@ export function applyTaskEvent(session: TaskSession, event: TaskEvent): TaskSess
                 : undefined;
             const assistantMessageId = turnId ? `task-failed:${turnId}` : `${event.id}:assistant`;
             const isDuplicateFailureEvent = session.messages.some((message) => message.id === assistantMessageId);
-            const failureMessage = [
-                `Task failed: ${nextFailure.error}`,
-                nextFailure.suggestion ?? null,
-            ].filter(Boolean).join('\n');
+            const failureMessage = formatTaskFailureDetails(nextFailure, {
+                fallbackDescription: 'Execution failed unexpectedly.',
+                includePrefix: true,
+            });
             const nextSession: TaskSession = {
                 ...session,
                 status: 'failed',

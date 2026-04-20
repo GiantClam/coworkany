@@ -6,7 +6,7 @@
 //! - Reads TaskEvent JSON lines from stdout and emits to frontend
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
@@ -1057,6 +1057,9 @@ impl SidecarManager {
     }
 
     fn is_likely_error_stderr_line(line: &str) -> bool {
+        if line.trim_start().starts_with("at ") {
+            return false;
+        }
         line.contains("[ERR]")
             || line.contains("[ERROR]")
             || line.to_ascii_lowercase().contains("error")
@@ -1069,15 +1072,119 @@ impl SidecarManager {
             || lower.contains("mcp_client_get_toolsets_failed")
             || lower.contains("failed to connect to mcp server")
             || lower.contains("failed to list toolsets from server")
+            || lower.contains("mcpclient errored connecting to mcp server")
             || lower.contains("mcp error -32000")
             || lower.contains("connection closed")
             || lower.contains("npm error code e404")
             || lower.contains("npm error 404")
             || lower.contains("not found - get https://registry.npmjs.org/")
             || lower.contains("could not determine executable to run")
+            || lower.contains("a complete log of this run can be found in:")
+            || lower.contains("@modelcontextprotocol/sdk/src/")
+            || lower.contains("at function.fromerror")
+    }
+
+    fn trim_error_text_for_log(value: &str) -> String {
+        let normalized = value.replace("\\n", "\n");
+        let lines: Vec<&str> = normalized
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if lines.is_empty() {
+            return String::new();
+        }
+        if let Some(first_meaningful) = lines.iter().find(|line| !line.starts_with("at ")) {
+            return first_meaningful
+                .trim_start_matches("Error:")
+                .trim()
+                .to_string();
+        }
+        lines[0].trim().to_string()
+    }
+
+    fn parse_structured_stderr_payload(line: &str) -> Option<Value> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let start = trimmed.find('{')?;
+        let end = trimmed.rfind('}')?;
+        if end <= start {
+            return None;
+        }
+        let candidate = &trimmed[start..=end];
+        let variants = [candidate, candidate.trim_matches('\''), candidate.trim_matches('"')];
+        for entry in variants {
+            if let Ok(parsed) = serde_json::from_str::<Value>(entry) {
+                if parsed.is_object() {
+                    return Some(parsed);
+                }
+            }
+        }
+        None
+    }
+
+    fn summarize_structured_stderr_payload(payload: &Value) -> Option<String> {
+        let object = payload.as_object()?;
+        let code = object
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let message = object
+            .get("message")
+            .and_then(Value::as_str)
+            .map(Self::trim_error_text_for_log)
+            .unwrap_or_default();
+        let cause_message = object
+            .get("cause")
+            .and_then(Value::as_object)
+            .and_then(|cause| cause.get("message"))
+            .and_then(Value::as_str)
+            .map(Self::trim_error_text_for_log)
+            .unwrap_or_default();
+        let server_name = object
+            .get("details")
+            .and_then(Value::as_object)
+            .and_then(|details| {
+                details
+                    .get("serverName")
+                    .or_else(|| details.get("name"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::trim)
+            .unwrap_or("");
+        let mut parts: Vec<String> = Vec::new();
+        if !code.is_empty() {
+            parts.push(code.to_string());
+        }
+        if !message.is_empty() {
+            parts.push(message);
+        }
+        if !cause_message.is_empty() {
+            parts.push(format!("cause: {}", cause_message));
+        }
+        if !server_name.is_empty() {
+            parts.push(format!("server: {}", server_name));
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(parts.join(" | "))
+    }
+
+    fn render_sidecar_stderr_line_for_log(line: &str) -> String {
+        if let Some(payload) = Self::parse_structured_stderr_payload(line) {
+            if let Some(summary) = Self::summarize_structured_stderr_payload(&payload) {
+                return summary;
+            }
+        }
+        line.to_string()
     }
 
     fn log_sidecar_stderr_line(line: &str, category: SidecarStderrCategory) {
+        let rendered_line = Self::render_sidecar_stderr_line_for_log(line);
         match category {
             SidecarStderrCategory::Heartbeat
             | SidecarStderrCategory::LlmConfig
@@ -1085,19 +1192,19 @@ impl SidecarManager {
                 debug!(
                     "Sidecar[{}] {}",
                     Self::sidecar_stderr_category_label(category),
-                    line
+                    rendered_line
                 );
             }
             SidecarStderrCategory::RoutineInfo => {
-                info!("Sidecar {}", line);
+                info!("Sidecar {}", rendered_line);
             }
             SidecarStderrCategory::Important => {
                 if Self::is_likely_error_stderr_line(line)
                     && !Self::is_expected_mcp_warning_stderr_line(line)
                 {
-                    error!("Sidecar {}", line);
+                    error!("Sidecar {}", rendered_line);
                 } else {
-                    warn!("Sidecar {}", line);
+                    warn!("Sidecar {}", rendered_line);
                 }
             }
         }
@@ -1676,15 +1783,33 @@ impl SidecarManager {
         );
         let task_stream_progress_timeout_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS"],
-            20_000,
+            45_000,
             1_000,
             120_000,
         );
         let task_stream_idle_timeout_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS"],
-            30_000,
+            60_000,
             2_000,
             120_000,
+        );
+        let task_pre_narrative_progress_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS"],
+            120_000,
+            1_000,
+            180_000,
+        );
+        let task_pre_narrative_idle_timeout_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS"],
+            120_000,
+            1_000,
+            180_000,
+        );
+        let task_no_narrative_tooling_max_ms = Self::resolve_bounded_env_usize(
+            &["COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS"],
+            150_000,
+            1_000,
+            240_000,
         );
         let task_workflow_timeout_ms = Self::resolve_bounded_env_usize(
             &["COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"],
@@ -1804,6 +1929,18 @@ impl SidecarManager {
                 task_stream_idle_timeout_ms.to_string(),
             )
             .env(
+                "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS",
+                task_pre_narrative_progress_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS",
+                task_pre_narrative_idle_timeout_ms.to_string(),
+            )
+            .env(
+                "COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS",
+                task_no_narrative_tooling_max_ms.to_string(),
+            )
+            .env(
                 "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
                 task_workflow_timeout_ms.to_string(),
             )
@@ -1829,7 +1966,7 @@ impl SidecarManager {
             );
 
         info!(
-            "Sidecar chat runtime configured: guardrails={} output_guardrails={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} stream_progress_timeout_ms={} stream_idle_timeout_ms={} post_assistant_max_ms={} post_assistant_idle_complete_ms={} mcp_toolsets_timeout_ms={} mcp_server_timeout_ms={} task_turn_timeout_ms={} task_startup_budget_ms={} task_stream_progress_timeout_ms={} task_stream_idle_timeout_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
+            "Sidecar chat runtime configured: guardrails={} output_guardrails={} start_retry={}x{}ms start_timeout_ms={} forward_retry={}x{}ms startup_budget_ms={} generate_fallback_timeout_ms={} turn_timeout_ms={} stream_max_ms={} stream_progress_timeout_ms={} stream_idle_timeout_ms={} post_assistant_max_ms={} post_assistant_idle_complete_ms={} mcp_toolsets_timeout_ms={} mcp_server_timeout_ms={} task_turn_timeout_ms={} task_startup_budget_ms={} task_stream_progress_timeout_ms={} task_stream_idle_timeout_ms={} task_pre_narrative_progress_timeout_ms={} task_pre_narrative_idle_timeout_ms={} task_no_narrative_tooling_max_ms={} task_workflow_timeout_ms={} task_workflow_retry={}x{}ms task_execute_step_timeout_ms={} task_execute_step_retry={}x{}ms",
             guardrails,
             output_guardrails,
             start_retry_count,
@@ -1851,6 +1988,9 @@ impl SidecarManager {
             task_startup_budget_ms,
             task_stream_progress_timeout_ms,
             task_stream_idle_timeout_ms,
+            task_pre_narrative_progress_timeout_ms,
+            task_pre_narrative_idle_timeout_ms,
+            task_no_narrative_tooling_max_ms,
             task_workflow_timeout_ms,
             task_workflow_retry_count,
             task_workflow_retry_delay_ms,
@@ -3514,11 +3654,14 @@ pub fn forward_effect_response_to_sidecar(
     manager
         .send_raw_command(json!({
             "id": Uuid::new_v4().to_string(),
-            "type": "request_effect_response",
+            "type": "report_effect_result",
             "commandId": Uuid::new_v4().to_string(),
             "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "response": response
+                "requestId": response.request_id.clone(),
+                "success": response.approved,
+                "reason": response.denial_reason.clone(),
+                "approvalType": response.approval_type.clone(),
             }
         }))
         .map_err(|e| e.to_string())
@@ -3725,6 +3868,9 @@ mod tests {
             "COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS",
             "COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
@@ -3820,11 +3966,23 @@ mod tests {
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS"),
-            Some(&"20000".to_string())
+            Some(&"45000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS"),
-            Some(&"30000".to_string())
+            Some(&"60000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS"),
+            Some(&"120000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS"),
+            Some(&"120000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS"),
+            Some(&"150000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"),
@@ -3880,6 +4038,9 @@ mod tests {
             "COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS",
             "COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS",
+            "COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT",
             "COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS",
@@ -3917,6 +4078,12 @@ mod tests {
         std::env::set_var("COWORKANY_MASTRA_TASK_STARTUP_BUDGET_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_TASK_STREAM_PROGRESS_TIMEOUT_MS", "999999");
         std::env::set_var("COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS", "1");
+        std::env::set_var(
+            "COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS",
+            "999999",
+        );
+        std::env::set_var("COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS", "1");
+        std::env::set_var("COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS", "999999");
         std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS", "1");
         std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT", "99");
         std::env::set_var("COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS", "1");
@@ -4015,6 +4182,18 @@ mod tests {
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_STREAM_IDLE_TIMEOUT_MS"),
             Some(&"2000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_PRE_NARRATIVE_PROGRESS_TIMEOUT_MS"),
+            Some(&"180000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_PRE_NARRATIVE_IDLE_TIMEOUT_MS"),
+            Some(&"1000".to_string())
+        );
+        assert_eq!(
+            envs.get("COWORKANY_MASTRA_TASK_NO_NARRATIVE_TOOLING_MAX_MS"),
+            Some(&"240000".to_string())
         );
         assert_eq!(
             envs.get("COWORKANY_MASTRA_TASK_WORKFLOW_TIMEOUT_MS"),
@@ -4394,6 +4573,15 @@ mod tests {
         assert!(SidecarManager::is_expected_mcp_warning_stderr_line(
             "{\"code\":\"MCP_CLIENT_GET_TOOLSETS_FAILED\",\"message\":\"Failed to list toolsets from server\"}"
         ));
+        assert!(SidecarManager::is_expected_mcp_warning_stderr_line(
+            "MCPClient errored connecting to MCP server: {"
+        ));
+        assert!(SidecarManager::is_expected_mcp_warning_stderr_line(
+            "npm error A complete log of this run can be found in: /tmp/npm-debug.log"
+        ));
+        assert!(!SidecarManager::is_likely_error_stderr_line(
+            "    at Function.fromError (/path/to/@modelcontextprotocol/sdk/src/types.ts:2316:16)"
+        ));
     }
 
     #[test]
@@ -4404,5 +4592,23 @@ mod tests {
         assert!(!SidecarManager::is_expected_mcp_warning_stderr_line(
             "Unhandled panic: failed to bind rpc socket"
         ));
+    }
+
+    #[test]
+    fn structured_stderr_json_is_rendered_as_readable_summary() {
+        let raw = r#"error: '{"message":"Failed to connect to MCP server e2e-user-server: McpError: MCP error -32000: Connection closed\n    at Function.fromError (...)","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"e2e-user-server"},"cause":{"message":"MCP error -32000: Connection closed"}}'"#;
+        let rendered = SidecarManager::render_sidecar_stderr_line_for_log(raw);
+        assert!(rendered.contains("MCP_CLIENT_CONNECT_FAILED"));
+        assert!(rendered.contains("Failed to connect to MCP server e2e-user-server"));
+        assert!(rendered.contains("cause: MCP error -32000: Connection closed"));
+        assert!(rendered.contains("server: e2e-user-server"));
+        assert!(!rendered.contains("at Function.fromError"));
+    }
+
+    #[test]
+    fn plain_stderr_lines_are_kept_when_no_structured_payload_exists() {
+        let raw = "Unhandled panic: failed to bind rpc socket";
+        let rendered = SidecarManager::render_sidecar_stderr_line_for_log(raw);
+        assert_eq!(rendered, raw);
     }
 }

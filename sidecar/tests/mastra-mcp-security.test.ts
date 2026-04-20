@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { McpServerSecurityStore, toMastraServerMap } from '../src/mastra/mcp/security';
+import {
+    McpServerSecurityStore,
+    resolveMcpServerStorePath,
+    toMastraServerMap,
+} from '../src/mastra/mcp/security';
 
 const tempDirs: string[] = [];
 
@@ -76,5 +80,26 @@ describe('mastra mcp security store', () => {
         const persisted = snapshot.servers.find((server) => server.id === 'persisted-server');
         expect(persisted).toBeDefined();
         expect(persisted?.scope).toBe('project');
+    });
+
+    test('uses app-data root directly when the provided path already ends with .coworkany', () => {
+        const workspaceRoot = createTempWorkspace('coworkany-mcp-security-app-data-');
+        const appDataDir = path.join(workspaceRoot, '.coworkany');
+        const store = new McpServerSecurityStore(appDataDir);
+
+        const result = store.upsert({
+            id: 'app-data-server',
+            command: 'node',
+            args: ['server.js'],
+            scope: 'project',
+            enabled: true,
+        });
+        expect(result.success).toBe(true);
+
+        const expectedStorePath = path.join(appDataDir, 'mcp-servers.json');
+        const legacyNestedPath = path.join(appDataDir, '.coworkany', 'mcp-servers.json');
+        expect(resolveMcpServerStorePath(appDataDir)).toBe(expectedStorePath);
+        expect(fs.existsSync(expectedStorePath)).toBe(true);
+        expect(fs.existsSync(legacyNestedPath)).toBe(false);
     });
 });

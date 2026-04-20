@@ -6,6 +6,7 @@ import {
     buildTaskMessageDispatchKey,
     buildTaskTurnContract,
     formatTaskCapabilityRequirement,
+    normalizeResolvedAttachmentsMessage,
     resolveTaskCapabilityRequirements as resolveTaskCapabilityRequirementsFromRegistry,
     type TaskCapabilityRequirement,
 } from './capabilityRegistry';
@@ -261,7 +262,8 @@ function extractResolvedAttachmentBlock(message: string | undefined): string | n
     if (typeof message !== 'string' || message.trim().length === 0) {
         return null;
     }
-    const lines = message.split(/\r?\n/u);
+    const normalizedMessage = normalizeResolvedAttachmentsMessage(message);
+    const lines = normalizedMessage.split(/\r?\n/u);
     const attachmentLines: string[] = [];
     let inAttachmentBlock = false;
     for (const line of lines) {
@@ -866,6 +868,49 @@ function resolveStartTaskIntentRoute(input: {
     };
 }
 
+const TASK_ROUTE_CONTINUITY_STATUSES = new Set<TaskRuntimeState['status']>([
+    'running',
+    'retrying',
+    'suspended',
+    'interrupted',
+    'scheduled',
+]);
+
+function resolveFollowupRouteMode(input: {
+    commandType: StartOrSendCommandType;
+    routedForcedRouteMode: 'chat' | 'task' | null;
+    previousState?: TaskRuntimeState;
+}): 'chat' | 'task' | undefined {
+    if (
+        (input.commandType !== 'send_task_message' && input.commandType !== 'send_subagent_message')
+        || input.routedForcedRouteMode !== null
+    ) {
+        return undefined;
+    }
+    if (input.commandType === 'send_subagent_message') {
+        return 'task';
+    }
+    const previousState = input.previousState;
+    if (!previousState) {
+        // Keep existing first-turn behavior for direct follow-up commands without state.
+        return 'chat';
+    }
+    if (previousState.turnContract?.mode === 'task') {
+        return 'task';
+    }
+    if (previousState.turnContract?.mode === 'chat') {
+        return 'chat';
+    }
+    if (previousState.executionPath === 'workflow' || previousState.executionPath === 'workflow_fallback') {
+        return 'task';
+    }
+    if (TASK_ROUTE_CONTINUITY_STATUSES.has(previousState.status)) {
+        return 'task';
+    }
+    // Legacy task states may miss turnContract metadata; keep follow-up in task lane by default.
+    return 'task';
+}
+
 export async function handleStartOrSendTaskCommand(
     input: HandleStartOrSendTaskCommandInput,
 ): Promise<boolean> {
@@ -896,7 +941,8 @@ export async function handleStartOrSendTaskCommand(
                 ? (previousState?.lastUserMessage ?? '')
                 : rawMessage
         );
-    if (!message || message.trim().length === 0) {
+    const normalizedMessage = normalizeResolvedAttachmentsMessage(message);
+    if (!normalizedMessage || normalizedMessage.trim().length === 0) {
         input.emitCurrentInvalidPayload({ taskId });
         return true;
     }
@@ -911,13 +957,13 @@ export async function handleStartOrSendTaskCommand(
         : [];
     const effectiveMessage = isFollowupCommand
         ? inheritResolvedAttachmentsForFollowup({
-            message,
+            message: normalizedMessage,
             previousMessages: [
                 previousState?.lastUserMessage,
                 ...followupHistoryMessages,
             ],
         })
-        : message;
+        : normalizedMessage;
     const taskCommandGuard = await runGuardPipeline<undefined>([
         () => {
             const taskCommandDecision = input.applyPolicyDecision({
@@ -943,7 +989,7 @@ export async function handleStartOrSendTaskCommand(
         return true;
     }
     const appendUserTranscript = (): void => {
-        input.appendTranscript(taskId, 'user', message);
+        input.appendTranscript(taskId, 'user', normalizedMessage);
     };
     const workspacePath = input.getString(input.toRecord(payload.context).workspacePath) ?? process.cwd();
     const inferredCapabilityRequirements = resolveTaskCapabilityRequirements({
@@ -970,19 +1016,17 @@ export async function handleStartOrSendTaskCommand(
     )
         ? 'direct'
         : inheritedExecutionPath;
+    const followupRouteMode = resolveFollowupRouteMode({
+        commandType,
+        routedForcedRouteMode: routedMessage.forcedRouteMode,
+        previousState,
+    });
     let resolvedExecutionPath = configuredExecutionPath ?? defaultExecutionPath;
     let resolvedForcedRouteMode = routedMessage.forcedRouteMode ?? (
         commandType === 'start_task'
             ? (resolvedExecutionPath === 'direct' ? 'chat' : 'task')
-            : undefined
+            : followupRouteMode
     );
-    if (
-        isFollowupCommand
-        && routedMessage.forcedRouteMode == null
-        && resolvedExecutionPath === 'direct'
-    ) {
-        resolvedForcedRouteMode = 'chat';
-    }
     const hasExplicitToolingRuntimeConfig = (
         (explicitEnabledSkills?.length ?? 0) > 0
         || (explicitEnabledToolpacks?.length ?? 0) > 0
