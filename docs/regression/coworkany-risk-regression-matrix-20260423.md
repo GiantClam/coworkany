@@ -14,6 +14,7 @@ Map manual acceptance risk scenarios to deterministic automated regression suite
 | 任务异常终止/挂死 | `mastra-entrypoint.test.ts` (`delegated task executor hangs ... TASK_FAILED`) |
 | 思考深度不足（输出过短） | `mastra-entrypoint.test.ts` (`emits supplemental summary when task narrative is too short ...`) |
 | 远程会话治理链条 | `entrypoint-remote-session-*.test.ts` + `additional-commands-full-chain.e2e.test.ts` remote-governance cases |
+| Desktop 交互反馈（重试/配置动作/pending 状态） | `desktop/tests/task-retry-policy.test.ts` + `desktop/tests/task-failure-ui.test.ts` + `desktop/tests/pending-task-status.test.ts` |
 
 ## Canonical Gate Command
 
@@ -22,6 +23,8 @@ Run from `sidecar/`:
 ```bash
 npm run test:risk:acceptance
 ```
+
+This command is fixture-driven (`sidecar/tests/fixtures/risk-regression-suites.json`) and includes desktop replay coverage.
 
 ## Guardrail
 

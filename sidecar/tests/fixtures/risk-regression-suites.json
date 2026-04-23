@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "generatedAt": "2026-04-23",
+  "suites": [
+    {
+      "name": "tls-runtime-classification",
+      "cwd": ".",
+      "args": [
+        "test",
+        "tests/runtime-error-classifier.test.ts",
+        "tests/task-execution-service.test.ts",
+        "tests/runtime-llm-env-seed.test.ts",
+        "--test-name-pattern",
+        "classifies certificate chain failures as configuration-required TLS trust errors|keeps workflow failure for persistent TLS trust error without retries or direct fallback|seeds insecure TLS env when active provider enables allowInsecureTls"
+      ],
+      "minPass": 3,
+      "acceptanceRisks": [
+        "tls_connectivity",
+        "tls_runtime_classification"
+      ]
+    },
+    {
+      "name": "task-lifecycle-and-retry-guardrails",
+      "cwd": ".",
+      "args": [
+        "test",
+        "tests/mastra-entrypoint.test.ts",
+        "--test-name-pattern",
+        "start_task emits TASK_FAILED when delegated task executor hangs past watchdog timeout|start_task classifies TLS certificate trust failures as configuration-required errors|approval_required maps to EFFECT_REQUESTED and report_effect_result resumes run|send_task_message auto-retries when task turn has no required tool evidence|send_task_message auto-retries workflow missing tool evidence error for command execution tasks|retry_task recovers complete-before-approval race without duplicate assistant reply|recover_tasks auto mode resumes/retries recoverable tasks and skips approval suspended tasks|send_task_message emits supplemental summary when task narrative is too short after required tool evidence"
+      ],
+      "minPass": 8,
+      "acceptanceRisks": [
+        "approval_chain_interruption",
+        "retry_blocked",
+        "abnormal_termination",
+        "shallow_reasoning_output"
+      ]
+    },
+    {
+      "name": "tool-call-fallback-and-timeout",
+      "cwd": ".",
+      "args": [
+        "test",
+        "tests/phase2-tools.test.ts",
+        "tests/execute-task-step.test.ts",
+        "--test-name-pattern",
+        "bash tool executes safe command|bash tool returns non-zero for failed command|bash tool returns command recovery hints for missing commands|bash tool timeout returns quickly|deterministic fallback generates attachment video when model never emits command tool evidence"
+      ],
+      "minPass": 5,
+      "acceptanceRisks": [
+        "tool_call_failures",
+        "timeout_recovery"
+      ]
+    },
+    {
+      "name": "remote-session-full-chain-governance",
+      "cwd": ".",
+      "args": [
+        "test",
+        "tests/additional-commands-full-chain.e2e.test.ts",
+        "--test-name-pattern",
+        "remote session bind \\+ channel event injection roundtrip through main flow|remote session governance policy enforces managed tenant requirement in full chain|remote session governance policy can enforce managed endpoint requirement in full chain|managed channel command governance enforces tenant context in full chain|recover_tasks dry-run is reachable in full stdio chain"
+      ],
+      "minPass": 5,
+      "acceptanceRisks": [
+        "session_governance_chain"
+      ]
+    },
+    {
+      "name": "desktop-manual-acceptance-replay",
+      "cwd": "../desktop",
+      "args": [
+        "test",
+        "tests/task-retry-policy.test.ts",
+        "tests/task-failure-ui.test.ts",
+        "tests/pending-task-status.test.ts",
+        "--test-name-pattern",
+        "approval-suspended session without pending effect request is not pending-approval-blocked|routes provider TLS trust failures to configuration action|shows retrying when rate limited before assistant text"
+      ],
+      "minPass": 3,
+      "acceptanceRisks": [
+        "desktop_retry_path",
+        "desktop_tls_failure_actionability",
+        "desktop_pending_status_feedback"
+      ]
+    }
+  ]
+}

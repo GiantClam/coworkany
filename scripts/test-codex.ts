@@ -539,11 +539,25 @@ function buildStagePlan(repositoryRoot: string, options: CliOptions): StageDefin
     const addPrSidecarStages = (): void => {
         stages.push(
             {
+                id: 'sidecar-lint',
+                label: 'Sidecar Lint',
+                cwd: sidecarDir,
+                command: bin('npm'),
+                args: ['run', 'lint'],
+            },
+            {
                 id: 'sidecar-typecheck',
                 label: 'Sidecar Typecheck',
                 cwd: sidecarDir,
                 command: bin('npm'),
                 args: ['run', 'typecheck'],
+            },
+            {
+                id: 'sidecar-risk-acceptance',
+                label: 'Sidecar + Desktop Manual-Acceptance Risk Replay',
+                cwd: sidecarDir,
+                command: bin('npm'),
+                args: ['run', 'test:risk:acceptance'],
             },
             {
                 id: 'sidecar-ci',
@@ -578,6 +592,13 @@ function buildStagePlan(repositoryRoot: string, options: CliOptions): StageDefin
 
     const addPrDesktopStages = (): void => {
         stages.push(
+            {
+                id: 'desktop-lint',
+                label: 'Desktop Lint',
+                cwd: desktopDir,
+                command: bin('npm'),
+                args: ['run', 'lint'],
+            },
             {
                 id: 'desktop-typecheck',
                 label: 'Desktop Typecheck',

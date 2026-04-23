@@ -1,71 +1,71 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Run high-risk regression suites and fail fast when filtered tests accidentally
  * match zero cases (a common false-green failure mode with name-pattern runs).
  */
-const suites = [
-    {
-        name: 'tls-runtime-classification',
-        args: [
-            'test',
-            'tests/runtime-error-classifier.test.ts',
-            'tests/task-execution-service.test.ts',
-            'tests/runtime-llm-env-seed.test.ts',
-            '--test-name-pattern',
-            'classifies certificate chain failures as configuration-required TLS trust errors'
-            + '|keeps workflow failure for persistent TLS trust error without retries or direct fallback'
-            + '|seeds insecure TLS env when active provider enables allowInsecureTls',
-        ],
-        minPass: 3,
-    },
-    {
-        name: 'task-lifecycle-and-retry-guardrails',
-        args: [
-            'test',
-            'tests/mastra-entrypoint.test.ts',
-            '--test-name-pattern',
-            'start_task emits TASK_FAILED when delegated task executor hangs past watchdog timeout'
-            + '|start_task classifies TLS certificate trust failures as configuration-required errors'
-            + '|approval_required maps to EFFECT_REQUESTED and report_effect_result resumes run'
-            + '|send_task_message auto-retries when task turn has no required tool evidence'
-            + '|send_task_message auto-retries workflow missing tool evidence error for command execution tasks'
-            + '|retry_task recovers complete-before-approval race without duplicate assistant reply'
-            + '|recover_tasks auto mode resumes/retries recoverable tasks and skips approval suspended tasks'
-            + '|send_task_message emits supplemental summary when task narrative is too short after required tool evidence',
-        ],
-        minPass: 8,
-    },
-    {
-        name: 'tool-call-fallback-and-timeout',
-        args: [
-            'test',
-            'tests/phase2-tools.test.ts',
-            'tests/execute-task-step.test.ts',
-            '--test-name-pattern',
-            'bash tool executes safe command'
-            + '|bash tool returns non-zero for failed command'
-            + '|bash tool returns command recovery hints for missing commands'
-            + '|bash tool timeout returns quickly'
-            + '|deterministic fallback generates attachment video when model never emits command tool evidence',
-        ],
-        minPass: 5,
-    },
-    {
-        name: 'remote-session-full-chain-governance',
-        args: [
-            'test',
-            'tests/additional-commands-full-chain.e2e.test.ts',
-            '--test-name-pattern',
-            'remote session bind \\+ channel event injection roundtrip through main flow'
-            + '|remote session governance policy enforces managed tenant requirement in full chain'
-            + '|remote session governance policy can enforce managed endpoint requirement in full chain'
-            + '|managed channel command governance enforces tenant context in full chain'
-            + '|recover_tasks dry-run is reachable in full stdio chain',
-        ],
-        minPass: 5,
-    },
-];
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SUITE_FIXTURE_PATH = path.resolve(SCRIPT_DIR, '../tests/fixtures/risk-regression-suites.json');
+
+/**
+ * @typedef {{
+ *   name: string;
+ *   cwd?: string;
+ *   args: string[];
+ *   minPass: number;
+ * }} RiskSuite
+ */
+
+/**
+ * @param {string[]} argv
+ * @returns {{suiteFilter: Set<string>}}
+ */
+function parseArgs(argv) {
+    const suiteFilter = new Set();
+    for (let index = 0; index < argv.length; index += 1) {
+        const arg = argv[index];
+        if (arg === '--suite') {
+            const value = (argv[index + 1] ?? '').trim();
+            if (!value) {
+                throw new Error('Missing value for --suite');
+            }
+            suiteFilter.add(value);
+            index += 1;
+            continue;
+        }
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+    return { suiteFilter };
+}
+
+/**
+ * @returns {RiskSuite[]}
+ */
+function loadSuites() {
+    const raw = fs.readFileSync(SUITE_FIXTURE_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const suites = Array.isArray(parsed?.suites) ? parsed.suites : [];
+    return suites.map((suite, index) => {
+        const name = typeof suite?.name === 'string' ? suite.name.trim() : '';
+        const cwd = typeof suite?.cwd === 'string' ? suite.cwd.trim() : '.';
+        const minPass = Number.isFinite(suite?.minPass) ? Math.max(1, Math.floor(suite.minPass)) : 1;
+        const args = Array.isArray(suite?.args)
+            ? suite.args.filter((value) => typeof value === 'string' && value.length > 0)
+            : [];
+        if (!name || args.length === 0) {
+            throw new Error(`Invalid suite fixture at index ${index}`);
+        }
+        return {
+            name,
+            cwd,
+            minPass,
+            args,
+        };
+    });
+}
 
 function extractPassCount(output) {
     const matches = Array.from(output.matchAll(/(\d+)\s+pass\b/g));
@@ -75,12 +75,23 @@ function extractPassCount(output) {
     return Number.parseInt(matches[matches.length - 1][1], 10);
 }
 
+const { suiteFilter } = parseArgs(process.argv.slice(2));
+const suites = loadSuites().filter((suite) => (
+    suiteFilter.size === 0 || suiteFilter.has(suite.name)
+));
+
+if (suites.length === 0) {
+    console.error('[risk-regression] no suites matched the current filter.');
+    process.exit(1);
+}
+
 for (const suite of suites) {
+    const suiteCwd = path.resolve(process.cwd(), suite.cwd ?? '.');
     console.log(`\n=== Risk Regression: ${suite.name} ===`);
-    console.log(`bun ${suite.args.join(' ')}`);
+    console.log(`(cwd=${suiteCwd}) bun ${suite.args.join(' ')}`);
 
     const result = spawnSync('bun', suite.args, {
-        cwd: process.cwd(),
+        cwd: suiteCwd,
         encoding: 'utf8',
     });
 

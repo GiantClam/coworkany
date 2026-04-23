@@ -38,10 +38,9 @@
 ## 回归执行命令
 
 ```bash
-cd sidecar && bun test tests/mastra-entrypoint.test.ts -t "TLS certificate trust failures|defaults to two auto-retries|approval-suspended task"
-cd sidecar && bun test tests/runtime-error-classifier.test.ts tests/runtime-llm-env-seed.test.ts
-cd desktop && bun test tests/task-retry-policy.test.ts tests/task-failure-ui.test.ts
-cd desktop/src-tauri && cargo test apply_llm_env_enables_insecure_tls_when_profile_requests_it --quiet
+cd sidecar && npm run test:risk:acceptance
+cd sidecar && npm run test:risk:desktop-replay
+cd sidecar && npm run test:runtime:lifecycle
 ```
 
 ## 通过判定
