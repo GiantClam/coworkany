@@ -61,6 +61,55 @@ describe('task failure UI formatter', () => {
         expect(descriptor?.descriptionDefault).toContain('did not execute required tools');
     });
 
+    test('routes provider TLS trust failures to configuration action', () => {
+        const descriptor = getTaskFailureUiDescriptor({
+            status: 'failed',
+            suspension: null,
+            failure: {
+                error: 'unable to get issuer certificate',
+                errorCode: 'PROVIDER_TLS_TRUST_FAILURE',
+                recoverable: true,
+                suggestion: 'Enable allowInsecureTls for trusted internal endpoints only.',
+            },
+        });
+
+        expect(descriptor?.category).toBe('configuration_required');
+        expect(descriptor?.action).toBe('settings');
+    });
+
+    test('prefers failureClass=configuration_required even when error text is generic', () => {
+        const descriptor = getTaskFailureUiDescriptor({
+            status: 'failed',
+            suspension: null,
+            failure: {
+                error: 'provider failed',
+                errorCode: 'MASTRA_RUNTIME_ERROR',
+                failureClass: 'configuration_required',
+                recoverable: true,
+                suggestion: '',
+            },
+        });
+
+        expect(descriptor?.category).toBe('configuration_required');
+        expect(descriptor?.action).toBe('settings');
+    });
+
+    test('prefers failureClass=retryable when error code is absent', () => {
+        const descriptor = getTaskFailureUiDescriptor({
+            status: 'failed',
+            suspension: null,
+            failure: {
+                error: 'temporary upstream issue',
+                failureClass: 'retryable',
+                recoverable: true,
+                suggestion: '',
+            },
+        });
+
+        expect(descriptor?.category).toBe('retryable');
+        expect(descriptor?.action).toBe('retry');
+    });
+
     test('normalizes structured escaped JSON errors into readable text', () => {
         const raw = String.raw`'{"message":"Failed to connect to MCP server e2e-user-server: McpError: MCP error -32000: Connection closed\n    at Function.fromError (...)","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"e2e-user-server"},"cause":{"message":"MCP error -32000: Connection closed"}}'`;
         const text = normalizeTaskFailureErrorMessage(raw);

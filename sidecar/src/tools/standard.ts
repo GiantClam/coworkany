@@ -7,6 +7,13 @@ import {
     type CommandRecoveryHints,
 } from '../utils/commandAlternatives';
 import { checkCommand } from './commandSandbox';
+import {
+    appendSudoFailureHint,
+    buildSudoExecutionPlan,
+    buildSudoFailureSuggestion,
+    hasSudoFailure,
+} from './sudoExecution';
+import { createVisibleTerminalMirrorSession } from './visibleTerminalMirror';
 import { voiceSpeakTool } from './core/voice';
 export type ToolEffect =
     | 'filesystem:read'
@@ -219,6 +226,15 @@ function pickAutomaticRetryCommand(input: {
 function analyzeCommandError(stderr: string, exitCode?: number, command?: string): CommandErrorAnalysis | null {
     const lowerStderr = stderr.toLowerCase();
     const alternatives = command ? getAlternativeCommands(command) : [];
+    if (hasSudoFailure(stderr)) {
+        return {
+            type: 'permission',
+            suggestion: buildSudoFailureSuggestion({
+                command: command ?? 'sudo command',
+                usesPassword: false,
+            }),
+        };
+    }
     if (exitCode === 9009) {
         const baseCmd = command?.trim().split(/\s+/)[0] || 'command';
         const recoveryHints = buildCommandRecoveryHints({
@@ -540,10 +556,11 @@ const runCommand: ToolDefinition = {
     },
     handler: async (args: { command: string; cwd?: string; timeout_ms?: number }, context) => {
         const safetyCheck = checkCommand(args.command);
+        const sudoPlan = buildSudoExecutionPlan(args.command);
         if (!safetyCheck.allowed) {
             return `⛔ COMMAND BLOCKED: ${safetyCheck.reason}\n\nThe command "${args.command}" was blocked because it matches a dangerous pattern (risk: ${safetyCheck.riskLevel}).\n\nIf this command is absolutely necessary, you must execute it manually in your terminal.`;
         }
-        if (safetyCheck.needsInteraction) {
+        if (safetyCheck.needsInteraction && !sudoPlan.isSudoCommand) {
             const cwd = args.cwd
                 ? path.resolve(context.workspacePath, args.cwd)
                 : context.workspacePath;
@@ -591,6 +608,10 @@ const runCommand: ToolDefinition = {
             : context.workspacePath;
         const timeout = args.timeout_ms || 30000;
         const startTime = Date.now();
+        const terminalMirror = createVisibleTerminalMirrorSession({
+            workspacePath: cwd,
+            command: args.command,
+        });
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
@@ -603,6 +624,14 @@ const runCommand: ToolDefinition = {
                     return;
                 }
                 settled = true;
+                terminalMirror?.close({
+                    exitCode: typeof result.exit_code === 'number'
+                        ? result.exit_code
+                        : undefined,
+                    reason: typeof result.error === 'string'
+                        ? result.error
+                        : undefined,
+                });
                 clearTimeout(timer);
                 disposeCancellation?.();
                 resolve(result);
@@ -629,11 +658,16 @@ const runCommand: ToolDefinition = {
                 if (activeChild) {
                     terminateChildProcessTree(activeChild);
                 }
+                const timeoutStderr = appendSudoFailureHint({
+                    command: sudoPlan.commandToRun,
+                    stderr: stderr.trim(),
+                    usesPassword: sudoPlan.usesPassword,
+                });
                 finalize({
                     command: args.command,
                     error: 'Command timed out',
                     stdout: stdout.trim(),
-                    stderr: stderr.trim(),
+                    stderr: timeoutStderr,
                     exit_code: -1,
                     execution_time_ms: Date.now() - startTime,
                     error_type: 'timeout' as const,
@@ -644,9 +678,22 @@ const runCommand: ToolDefinition = {
                 });
             }, timeout);
 
-            const runAttempt = (attemptCommand: string, isAutoRetry: boolean): void => {
+            const runAttempt = (
+                attemptCommand: string,
+                isAutoRetry: boolean,
+                attemptStdinData?: string,
+                attemptUsesSudoPassword = false,
+            ): void => {
                 if (settled) {
                     return;
+                }
+                terminalMirror?.note(
+                    isAutoRetry
+                        ? `running retry command: ${attemptCommand}`
+                        : `running command: ${attemptCommand}`,
+                );
+                if (!isAutoRetry && sudoPlan.transformed && sudoPlan.commandToRun !== args.command) {
+                    terminalMirror?.note(`rewritten sudo command: ${sudoPlan.commandToRun}`);
                 }
                 const child = spawn(attemptCommand, {
                     shell: true,
@@ -655,34 +702,60 @@ const runCommand: ToolDefinition = {
                         ...process.env,
                         PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE ?? '1',
                     },
-                    stdio: ['ignore', 'pipe', 'pipe'],
+                    stdio: [attemptStdinData ? 'pipe' : 'ignore', 'pipe', 'pipe'],
                     detached: process.platform !== 'win32',
                 });
                 activeChild = child;
+                if (attemptStdinData && child.stdin) {
+                    try {
+                        child.stdin.end(attemptStdinData);
+                    } catch {
+                    }
+                }
+                if (!child.stdout || !child.stderr) {
+                    finalize({
+                        command: args.command,
+                        error: 'Command stream initialization failed',
+                        exit_code: -1,
+                        execution_time_ms: Date.now() - startTime,
+                        error_type: 'runtime' as const,
+                        retry_command: retryCommand,
+                        attempts: attemptRecords,
+                        safety_warning: safetyWarning || undefined,
+                    });
+                    return;
+                }
                 let attemptStdout = '';
                 let attemptStderr = '';
                 child.stdout.on('data', (data) => {
                     const chunk = data.toString();
                     stdout += chunk;
                     attemptStdout += chunk;
+                    terminalMirror?.appendStdout(chunk);
                 });
                 child.stderr.on('data', (data) => {
                     const chunk = data.toString();
                     stderr += chunk;
                     attemptStderr += chunk;
+                    terminalMirror?.appendStderr(chunk);
                 });
                 child.on('close', (code, signal) => {
                     if (settled) return;
+                    const normalizedAttemptStderr = appendSudoFailureHint({
+                        command: attemptCommand,
+                        stderr: attemptStderr.trim(),
+                        usesPassword: attemptUsesSudoPassword,
+                    });
                     attemptRecords.push({
                         command: attemptCommand,
                         exit_code: code,
                         stdout: attemptStdout.trim(),
-                        stderr: attemptStderr.trim(),
+                        stderr: normalizedAttemptStderr,
                         signal: signal ?? undefined,
                     });
                     const executionTime = Date.now() - startTime;
                     const attemptErrorAnalysis = code !== 0
-                        ? analyzeCommandError(attemptStderr, code ?? undefined, attemptCommand)
+                        ? analyzeCommandError(normalizedAttemptStderr, code ?? undefined, attemptCommand)
                         : null;
                     if (!isAutoRetry && code !== 0 && attemptErrorAnalysis?.type === 'not_found') {
                         const fallback = pickAutomaticRetryCommand({
@@ -700,7 +773,11 @@ const runCommand: ToolDefinition = {
                         command: args.command,
                         exit_code: code,
                         stdout: stdout.trim(),
-                        stderr: stderr.trim(),
+                        stderr: appendSudoFailureHint({
+                            command: attemptCommand,
+                            stderr: stderr.trim(),
+                            usesPassword: attemptUsesSudoPassword,
+                        }),
                         execution_time_ms: executionTime,
                         retry_command: retryCommand,
                         attempts: attemptRecords,
@@ -731,12 +808,21 @@ const runCommand: ToolDefinition = {
                     finalize(result);
                 });
                 child.on('error', (err) => {
-                    const attemptErrorAnalysis = analyzeCommandError(err.message, -1, attemptCommand);
+                    const normalizedAttemptStderr = appendSudoFailureHint({
+                        command: attemptCommand,
+                        stderr: attemptStderr.trim(),
+                        usesPassword: attemptUsesSudoPassword,
+                    });
+                    const attemptErrorAnalysis = analyzeCommandError(
+                        `${normalizedAttemptStderr}\n${err.message}`.trim(),
+                        -1,
+                        attemptCommand,
+                    );
                     attemptRecords.push({
                         command: attemptCommand,
                         exit_code: -1,
                         stdout: attemptStdout.trim(),
-                        stderr: attemptStderr.trim(),
+                        stderr: normalizedAttemptStderr,
                         error: err.message,
                     });
                     finalize({
@@ -756,7 +842,12 @@ const runCommand: ToolDefinition = {
                 });
             };
 
-            runAttempt(args.command, false);
+            runAttempt(
+                sudoPlan.commandToRun,
+                false,
+                sudoPlan.stdinData,
+                sudoPlan.usesPassword,
+            );
         });
     },
 };

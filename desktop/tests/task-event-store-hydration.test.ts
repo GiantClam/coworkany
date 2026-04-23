@@ -228,8 +228,11 @@ describe('task event store hydration', () => {
         expect(session?.status).toBe('idle');
         expect(session?.currentUserAction?.id).toBe('req-1');
         expect(session?.currentUserAction?.blocking).toBe(true);
-        expect(session?.events.some((event) => event.type === 'EFFECT_DENIED')).toBe(true);
+        expect(session?.events.some((event) => event.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(session?.events.some((event) => event.type === 'EFFECT_DENIED')).toBe(false);
+        expect(session?.effects.some((effect) => effect.requestId === 'req-1')).toBe(false);
         expect(session?.events.some((event) => event.type === 'TASK_USER_ACTION_REQUIRED')).toBe(true);
+        expect(session?.events.some((event) => event.id === 'ipc-effect-1-awaiting-confirmation')).toBe(true);
     });
 
     test('request_effect_response uses payload.taskId instead of active task fallback', () => {
@@ -255,7 +258,8 @@ describe('task event store hydration', () => {
         const active = useTaskEventStore.getState().getSession('task-active');
         const target = useTaskEventStore.getState().getSession('task-target');
         expect(active?.events.some((event) => event.id === 'ipc-effect-2')).toBe(false);
-        expect(target?.events.some((event) => event.id === 'ipc-effect-2')).toBe(true);
+        expect(target?.events.some((event) => event.id === 'ipc-effect-2')).toBe(false);
+        expect(target?.events.some((event) => event.id === 'ipc-effect-2-awaiting-confirmation')).toBe(true);
         expect(target?.currentUserAction?.id).toBe('req-2');
     });
 
@@ -280,7 +284,8 @@ describe('task event store hydration', () => {
         const created = useTaskEventStore.getState().getSession('task-late-bound');
         const active = useTaskEventStore.getState().getSession('task-active');
         expect(created).toBeDefined();
-        expect(created?.events.some((event) => event.id === 'ipc-effect-3')).toBe(true);
+        expect(created?.events.some((event) => event.id === 'ipc-effect-3')).toBe(false);
+        expect(created?.events.some((event) => event.id === 'ipc-effect-3-awaiting-confirmation')).toBe(true);
         expect(created?.currentUserAction?.id).toBe('req-3');
         expect(active).toBeUndefined();
     });

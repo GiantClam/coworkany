@@ -35,7 +35,6 @@ import { isConversationTurnLocked, TURN_LOCK_IDLE_GRACE_MS } from './turnTaking'
 import { formatTaskFailureDetails, getTaskFailureUiDescriptor } from '../../lib/taskFailureUi';
 import {
     getLatestPendingEffectRequestId,
-    hasPendingEffectApproval,
     isSuspendedForApproval,
 } from '../../lib/taskRetryPolicy';
 import { invokeConfirmEffectCommand } from '../../lib/effectApprovalCommands';
@@ -1324,11 +1323,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         const sessionBeforeResend = useTaskEventStore.getState().getSession(activeTaskId) ?? activeSession;
-        if (isSuspendedForApproval(sessionBeforeResend) || hasPendingEffectApproval(sessionBeforeResend)) {
+        const pendingApprovalRequestIdBeforeResend = getLatestPendingEffectRequestId(sessionBeforeResend);
+        if (pendingApprovalRequestIdBeforeResend) {
             setWorkspaceError(t('chat.awaitingApprovalRetryBlocked', {
                 defaultValue: 'This task is waiting for approval. Please approve or deny the authorization card to continue.',
             }));
             return false;
+        }
+        if (isSuspendedForApproval(sessionBeforeResend)) {
+            console.warn(
+                '[ChatInterface] Retry fallback detected suspended approval state without pending request; continuing with resend',
+                { taskId: activeTaskId },
+            );
         }
         if (
             !allowWhenNotFailed

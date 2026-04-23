@@ -188,6 +188,47 @@ describe('taskExecutionService', () => {
         }
     });
 
+    test('keeps workflow failure for persistent TLS trust error without retries or direct fallback', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'workflow';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'false';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '5';
+
+            (mastra as unknown as { getWorkflow: typeof mastra.getWorkflow }).getWorkflow = (() => ({
+                createRun: async () => ({
+                    start: async () => ({
+                        status: 'failed',
+                        result: 'unable to get issuer certificate',
+                    }),
+                }),
+            })) as typeof mastra.getWorkflow;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+            }));
+
+            expect(result.executionPath).toBe('workflow');
+            expect(runDirectCalls).toBe(0);
+            expect(events.some((event) => event.type === 'rate_limited')).toBe(false);
+            expect(events.some((event) => (
+                event.type === 'error'
+                && String(event.message ?? '').includes('unable to get issuer certificate')
+            ))).toBe(true);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
     test('prefers terminal workflow result and ignores seeded research summary text', async () => {
         const envSnapshot = snapshotEnv();
         let runDirectCalls = 0;
@@ -405,7 +446,58 @@ describe('taskExecutionService', () => {
         }
     });
 
-    test('direct command staged path falls back to direct when execute step has no required tool evidence', async () => {
+    test('direct command staged path does not fallback to direct on retryable execute-task failure', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        let generateCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'direct';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_DELAY_MS = '10';
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async () => {
+                    generateCalls += 1;
+                    throw new Error('stream_idle_timeout:1200');
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            await expect(service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+                taskId: 'task-direct-command-timeout-no-fallback',
+                turnId: 'turn-direct-command-timeout-no-fallback',
+                message: '[Resolved attachments] - /tmp/a.png - /tmp/b.png 合并成视频，每张 5s',
+                executionOptions: {
+                    executionPath: 'direct',
+                    forcedRouteMode: 'task',
+                    requireToolEvidenceForCompletion: true,
+                    requiredCompletionCapabilities: ['command_execution'],
+                },
+            }))).rejects.toThrow('stream_idle_timeout:1200');
+
+            expect(runDirectCalls).toBe(0);
+            expect(generateCalls).toBe(1);
+            expect(events.some((event) => (
+                event.type === 'rate_limited'
+                && String(event.message ?? '').includes('execute-task')
+            ))).toBe(false);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('direct command staged path does not fall back to direct when required command evidence is missing', async () => {
         const envSnapshot = snapshotEnv();
         let runDirectCalls = 0;
         let generateCalls = 0;
@@ -432,7 +524,7 @@ describe('taskExecutionService', () => {
             })) as typeof mastra.getAgent;
 
             const service = createMastraTaskExecutionService();
-            const result = await service.executeTaskMessage(createInput({
+            await expect(service.executeTaskMessage(createInput({
                 runDirect: async () => {
                     runDirectCalls += 1;
                 },
@@ -446,12 +538,62 @@ describe('taskExecutionService', () => {
                     requireToolEvidenceForCompletion: true,
                     requiredCompletionCapabilities: ['command_execution'],
                 },
-            }));
+            }))).rejects.toThrow('workflow_missing_required_tool_evidence:command_execution');
 
-            expect(result.executionPath).toBe('workflow_fallback');
-            expect(runDirectCalls).toBe(1);
+            expect(runDirectCalls).toBe(0);
             expect(generateCalls).toBe(1);
             expect(events.some((event) => event.type === 'complete')).toBe(false);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('host-control direct command keeps runDirect path even when staged-direct flag is enabled', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        let generateCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'direct';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED = 'true';
+            process.env.COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_COUNT = '0';
+            process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = '0';
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async () => {
+                    generateCalls += 1;
+                    return {
+                        text: 'unexpected',
+                        finishReason: 'stop',
+                    };
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+                taskId: 'task-host-control-direct',
+                turnId: 'turn-host-control-direct',
+                message: '设置电脑一分钟后关机',
+                executionOptions: {
+                    executionPath: 'direct',
+                    forcedRouteMode: 'task',
+                    requireToolEvidenceForCompletion: true,
+                    requiredCompletionCapabilities: ['command_execution'],
+                },
+            }));
+
+            expect(result.executionPath).toBe('direct');
+            expect(runDirectCalls).toBe(1);
+            expect(generateCalls).toBe(0);
+            expect(events.length).toBe(0);
         } finally {
             restoreEnv(envSnapshot);
         }
@@ -489,6 +631,55 @@ describe('taskExecutionService', () => {
                 taskId: 'task-direct-command-direct',
                 turnId: 'turn-direct-command-direct',
                 message: '合并附件视频',
+                executionOptions: {
+                    executionPath: 'direct',
+                    forcedRouteMode: 'task',
+                    requireToolEvidenceForCompletion: true,
+                    requiredCompletionCapabilities: ['command_execution'],
+                },
+            }));
+
+            expect(result.executionPath).toBe('direct');
+            expect(runDirectCalls).toBe(1);
+            expect(generateCalls).toBe(0);
+            expect(events.length).toBe(0);
+        } finally {
+            restoreEnv(envSnapshot);
+        }
+    });
+
+    test('direct command task keeps runDirect path when staged-direct flag is unset (default off)', async () => {
+        const envSnapshot = snapshotEnv();
+        let runDirectCalls = 0;
+        let generateCalls = 0;
+        const events: Array<Record<string, unknown>> = [];
+        try {
+            process.env.COWORKANY_MODEL = 'anthropic/claude-sonnet-4-5';
+            process.env.ANTHROPIC_API_KEY = 'test-key';
+            process.env.COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT = 'true';
+            process.env.COWORKANY_TASK_EXECUTION_DEFAULT = 'direct';
+            process.env.COWORKANY_MASTRA_TASK_STAGED_CHECKPOINT_RETRY_ENABLED = 'true';
+            delete process.env.COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED;
+
+            (mastra as unknown as { getAgent: typeof mastra.getAgent }).getAgent = (() => ({
+                generate: async () => {
+                    generateCalls += 1;
+                    return {
+                        text: 'unexpected',
+                        finishReason: 'stop',
+                    };
+                },
+            })) as typeof mastra.getAgent;
+
+            const service = createMastraTaskExecutionService();
+            const result = await service.executeTaskMessage(createInput({
+                runDirect: async () => {
+                    runDirectCalls += 1;
+                },
+                events,
+                taskId: 'task-direct-command-default-direct',
+                turnId: 'turn-direct-command-default-direct',
+                message: '设置电脑一分钟后关机',
                 executionOptions: {
                     executionPath: 'direct',
                     forcedRouteMode: 'task',

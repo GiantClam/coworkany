@@ -58,6 +58,27 @@ describe('run_command cancellation', () => {
         expect(alternatives.some((candidate) => candidate.startsWith('python3 '))).toBe(true);
     });
 
+    test('does not short-circuit sudo commands into opened_in_terminal guidance', async () => {
+        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        if (!runCommand) {
+            throw new Error('run_command tool not found');
+        }
+
+        const result = await runCommand.handler(
+            {
+                command: 'sudo shutdown -h +1',
+                timeout_ms: 5000,
+            },
+            {
+                workspacePath: process.cwd(),
+                taskId: 'task-command-sudo-non-interactive',
+            }
+        ) as Record<string, unknown>;
+
+        expect(result.status).not.toBe('opened_in_terminal');
+        expect(typeof result.exit_code).toBe('number');
+    });
+
     test('kills the running command when task cancellation is requested', async () => {
         const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
         if (!runCommand) {

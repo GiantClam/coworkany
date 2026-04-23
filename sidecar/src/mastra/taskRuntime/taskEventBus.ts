@@ -1,4 +1,9 @@
 import { randomUUID } from 'crypto';
+import {
+    createInitialTaskProtocolStateSnapshot,
+    reduceTaskProtocolState,
+    type TaskProtocolStateSnapshot,
+} from './taskProtocolStateMachine';
 
 type TaskEventPayload = Record<string, unknown>;
 
@@ -19,23 +24,6 @@ type BusDeps = {
     emit: (event: TaskEventEnvelope) => void;
 };
 
-type TaskProtocolState = {
-    pendingBlockingAction: boolean;
-    terminal: 'none' | 'finished' | 'failed';
-};
-
-const TERMINAL_CONFLICT_ERROR_PAYLOAD: TaskEventPayload = {
-    error: 'task_finished_while_user_action_pending',
-    errorCode: 'E_PROTOCOL_TERMINAL_CONFLICT',
-    recoverable: true,
-};
-
-const INVALID_TRANSITION_ERROR_PAYLOAD: TaskEventPayload = {
-    error: 'invalid_task_protocol_transition',
-    errorCode: 'E_PROTOCOL_INVALID_TRANSITION',
-    recoverable: false,
-};
-
 function clonePayload(payload: TaskEventPayload): TaskEventPayload {
     return { ...payload };
 }
@@ -43,7 +31,7 @@ function clonePayload(payload: TaskEventPayload): TaskEventPayload {
 export class TaskEventBus {
     private readonly emitEvent: (event: TaskEventEnvelope) => void;
     private readonly nextSequenceByTaskId = new Map<string, number>();
-    private readonly protocolStateByTaskId = new Map<string, TaskProtocolState>();
+    private readonly protocolStateByTaskId = new Map<string, TaskProtocolStateSnapshot>();
 
     constructor(deps: BusDeps) {
         this.emitEvent = deps.emit;
@@ -102,38 +90,16 @@ export class TaskEventBus {
         options?: EmitOptions,
     ): void {
         const state = this.getOrCreateTaskState(taskId);
-        let nextType = type;
-        let nextPayload = clonePayload(payload);
+        const reduction = reduceTaskProtocolState(state, {
+            type,
+            payload,
+        });
+        const nextType = reduction.violation?.rewriteType ?? type;
+        const nextPayload = reduction.violation
+            ? clonePayload(reduction.violation.payload)
+            : clonePayload(payload);
 
-        if (nextType === 'TASK_USER_ACTION_REQUIRED') {
-            if (state.terminal !== 'none') {
-                nextType = 'TASK_FAILED';
-                nextPayload = clonePayload(INVALID_TRANSITION_ERROR_PAYLOAD);
-                state.pendingBlockingAction = false;
-                state.terminal = 'failed';
-            } else if (nextPayload.blocking === true) {
-                state.pendingBlockingAction = true;
-            }
-        } else if (nextType === 'TASK_STATUS') {
-            if (nextPayload.status === 'running') {
-                state.pendingBlockingAction = false;
-            }
-        } else if (nextType === 'TASK_FINISHED') {
-            if (state.pendingBlockingAction) {
-                nextType = 'TASK_FAILED';
-                nextPayload = clonePayload(TERMINAL_CONFLICT_ERROR_PAYLOAD);
-                state.pendingBlockingAction = false;
-                state.terminal = 'failed';
-            } else {
-                state.pendingBlockingAction = false;
-                state.terminal = 'finished';
-            }
-        } else if (nextType === 'TASK_FAILED') {
-            state.pendingBlockingAction = false;
-            state.terminal = 'failed';
-        }
-
-        this.protocolStateByTaskId.set(taskId, state);
+        this.protocolStateByTaskId.set(taskId, reduction.nextState);
         const sequence = this.allocateSequence(taskId, options?.sequence);
         this.emitEvent({
             id: randomUUID(),
@@ -145,11 +111,8 @@ export class TaskEventBus {
         });
     }
 
-    private getOrCreateTaskState(taskId: string): TaskProtocolState {
-        return this.protocolStateByTaskId.get(taskId) ?? {
-            pendingBlockingAction: false,
-            terminal: 'none',
-        };
+    private getOrCreateTaskState(taskId: string): TaskProtocolStateSnapshot {
+        return this.protocolStateByTaskId.get(taskId) ?? createInitialTaskProtocolStateSnapshot();
     }
 
     private allocateSequence(taskId: string, forcedSequence?: number): number {

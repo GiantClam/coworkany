@@ -136,4 +136,30 @@ test.describe('shell authorization desktop regression', () => {
         await expect(page.getByRole('button', { name: /^Approve$|^批准$/ })).toBeVisible();
         await expect(page.getByRole('button', { name: /Deny|拒绝/ })).toBeVisible();
     });
+
+    test('chinese shutdown phrasing keeps pending shell approval visible', async ({ page, tauriLogs }) => {
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(15000);
+
+        const input = await findChatInput(page);
+        tauriLogs.setBaseline();
+
+        await input.fill('设置电脑一分钟后关机');
+        await input.press('Enter');
+
+        await expect.poll(async () => {
+            const logs = tauriLogs.getRawSinceBaseline();
+            return (
+                logs.includes('"type":"request_effect"')
+                && logs.includes('"effectType":"shell:write"')
+                && logs.includes('"toolName":"run_command"')
+                && logs.includes('"command":"sudo shutdown -h +1"')
+            );
+        }, {
+            timeout: 120_000,
+            message: 'chinese relative-time shutdown phrasing should trigger shell approval request with delayed command',
+        }).toBe(true);
+
+        await expect(page.getByText(/Approvals|审批/)).toBeVisible({ timeout: 30_000 });
+    });
 });

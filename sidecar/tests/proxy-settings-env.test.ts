@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { applyProxySettingsToProcessEnv } from '../src/utils/proxy';
 
 const MANAGED_ENV_KEYS = [
+    'COWORKANY_INTERNAL_UPSTREAM_URL',
+    'COWORKANY_PROXY_CONFIGURED_URL',
+    'COWORKANY_PROXY_TRANSPORT_URL',
     'COWORKANY_PROXY_URL',
     'HTTPS_PROXY',
     'https_proxy',

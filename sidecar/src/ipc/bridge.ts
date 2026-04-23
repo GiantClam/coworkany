@@ -834,6 +834,15 @@ export function mapMastraChunkToDesktopEvent(chunk: MastraChunkLike, runId?: str
         case 'step-finish':
             return null;
         case 'error': {
+            if (process.env.COWORKANY_PROXY_DEBUG === '1') {
+                console.info('[coworkany-bridge-error-chunk-debug]', {
+                    runId,
+                    chunkType: normalizedChunk.type ?? null,
+                    chunk,
+                    data,
+                    nestedError: data.error ?? null,
+                });
+            }
             const message = extractErrorMessage(data.error)
                 ?? extractErrorMessage(data.message)
                 ?? extractErrorMessage(data)

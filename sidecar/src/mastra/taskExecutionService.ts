@@ -31,6 +31,7 @@ const DEFAULT_WORKFLOW_BACKOFF_MAX_MS = 15_000;
 const DEFAULT_WORKFLOW_JITTER_RATIO = 0.2;
 const DEFAULT_STAGED_CHECKPOINT_RETENTION = 120;
 const COMMAND_EXECUTION_CAPABILITY = 'command_execution';
+const HOST_CONTROL_COMMAND_INTENT_PATTERN = /\b(shutdown|reboot|poweroff|halt)\b|关机|重启/iu;
 const INTERNAL_WORKFLOW_RESULT_PATTERNS = [
     /^Seeded from user request:/i,
     /^Task completed via workflow runtime\.?$/i,
@@ -541,6 +542,11 @@ function isRetryableWorkflowError(error: unknown): boolean {
         .test(message);
 }
 
+function isPersistentTlsTrustFailureMessage(message: string): boolean {
+    return /(?:unable to get issuer certificate|unable to verify (?:the first|leaf) certificate|self[-\s]?signed certificate|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+|network socket disconnected before secure tls connection was established)/i
+        .test(message);
+}
+
 function resolveWorkflowRetryPolicy(): WorkflowRetryPolicy {
     const retryDelayMs = readBoundedInt(
         'COWORKANY_MASTRA_TASK_WORKFLOW_RETRY_DELAY_MS',
@@ -739,10 +745,26 @@ function shouldUseStagedWorkflowForDirectCommandTask(input: TaskMessageExecution
     if (input.executionOptions?.forcedRouteMode !== 'task') {
         return false;
     }
+    // Host-control intents (shutdown/reboot) must stay on direct lane.
+    // The staged path depends on model-level tool invocation and can repeatedly
+    // fail with missing command-execution evidence before any tool call occurs.
+    if (HOST_CONTROL_COMMAND_INTENT_PATTERN.test(input.message)) {
+        return false;
+    }
     const requiredCapabilities = normalizeRequiredCapabilities(
         input.executionOptions?.requiredCompletionCapabilities,
     );
     return requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY);
+}
+
+function shouldDisableWorkflowFallbackToDirect(input: TaskMessageExecutionDelegateInput): boolean {
+    if (input.executionOptions?.forcedRouteMode !== 'task') {
+        return false;
+    }
+    const requiredCapabilities = normalizeRequiredCapabilities(
+        input.executionOptions?.requiredCompletionCapabilities,
+    );
+    return requiredCapabilities.length > 0;
 }
 
 async function runWithStagedWorkflow(input: TaskMessageExecutionDelegateInput): Promise<TaskRuntimeExecutionPath> {
@@ -1103,6 +1125,7 @@ async function runWithStagedWorkflow(input: TaskMessageExecutionDelegateInput): 
                     frozen: frozenContract.frozen,
                     executionPlan: frozenContract.executionPlan,
                     executionQuery: frozenContract.executionQuery,
+                    originalMessage: input.message,
                     requiredCapabilities: requiredCompletionCapabilities,
                 },
                 workspacePath,
@@ -1110,13 +1133,30 @@ async function runWithStagedWorkflow(input: TaskMessageExecutionDelegateInput): 
         });
         recordStageRun('execute-task', executeRun);
         const executed = executeRun.value;
-        for (const toolName of executed.toolEvidence.toolNames.slice(0, 12)) {
+        const syntheticToolNames = executed.toolEvidence.toolNames.slice(0, 12);
+        for (const [index, toolName] of syntheticToolNames.entries()) {
+            const syntheticToolCallId = `control-plane:${input.taskId}:${input.turnId ?? 'turn'}:${index}`;
             await input.emitDesktopEvent({
                 type: 'tool_call',
                 runId,
                 toolName,
                 args: {
                     synthetic: true,
+                    source: 'control_plane_execute_task',
+                    observedToolCallCount: executed.toolEvidence.toolCallCount,
+                    observedCommandToolCallCount: executed.toolEvidence.commandToolCallCount,
+                },
+                traceId,
+                turnId: input.turnId,
+            });
+            await input.emitDesktopEvent({
+                type: 'tool_result',
+                runId,
+                toolCallId: syntheticToolCallId,
+                toolName,
+                result: {
+                    synthetic: true,
+                    success: true,
                     source: 'control_plane_execute_task',
                     observedToolCallCount: executed.toolEvidence.toolCallCount,
                     observedCommandToolCallCount: executed.toolEvidence.commandToolCallCount,
@@ -1387,7 +1427,9 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
             if (status === 'failed' || status === 'tripwire') {
                 const failureMessage = pickWorkflowResultText(result) ?? `control_plane_failed:${status}`;
                 const failureClassification = classifyRuntimeErrorMessage(failureMessage);
+                const persistentTlsTrustFailure = isPersistentTlsTrustFailureMessage(failureMessage);
                 const canRetry = failureClassification.failureClass === 'retryable'
+                    && !persistentTlsTrustFailure
                     && attempt < workflowRetryCount;
                 if (canRetry) {
                     const retryDelayMs = resolveWorkflowRetryDelayMs({
@@ -1412,7 +1454,7 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
                     await delay(retryDelayMs);
                     continue;
                 }
-                if (failureClassification.failureClass === 'retryable') {
+                if (failureClassification.failureClass === 'retryable' && !persistentTlsTrustFailure) {
                     throw new Error(`workflow_retryable_failure:${failureMessage}`);
                 }
                 const snapshot = contextCompressionStore.recordAssistantTurn({
@@ -1476,7 +1518,10 @@ async function runWithWorkflow(input: TaskMessageExecutionDelegateInput): Promis
             });
             return 'workflow';
         } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const persistentTlsTrustFailure = isPersistentTlsTrustFailureMessage(message);
             const canRetry = isRetryableWorkflowError(error)
+                && !persistentTlsTrustFailure
                 && attempt < workflowRetryCount;
             if (!canRetry) {
                 throw error;
@@ -1517,7 +1562,7 @@ export function createMastraTaskExecutionService(): {
     );
     const directCommandStagedExecutionEnabled = readFlag(
         'COWORKANY_MASTRA_TASK_DIRECT_COMMAND_STAGED_EXECUTION_ENABLED',
-        true,
+        false,
     );
     const workflowFallbackToDirect = readFlag(
         'COWORKANY_WORKFLOW_EXECUTION_FALLBACK_TO_DIRECT',
@@ -1525,6 +1570,7 @@ export function createMastraTaskExecutionService(): {
     );
     return {
         executeTaskMessage: async (input): Promise<TaskMessageExecutionDelegateResult> => {
+            const disableWorkflowFallbackToDirect = shouldDisableWorkflowFallbackToDirect(input);
             const mode = resolveExecutionMode(input);
             if (mode === 'direct') {
                 const shouldUseStagedWorkflow = (
@@ -1547,7 +1593,7 @@ export function createMastraTaskExecutionService(): {
                     });
                     return { executionPath: 'direct' };
                 } catch (error) {
-                    if (!workflowFallbackToDirect) {
+                    if (!workflowFallbackToDirect || disableWorkflowFallbackToDirect) {
                         throw error;
                     }
                     await input.runDirect();
@@ -1560,7 +1606,7 @@ export function createMastraTaskExecutionService(): {
                     : await runWithWorkflow(input);
                 return { executionPath };
             } catch (error) {
-                if (!workflowFallbackToDirect) {
+                if (!workflowFallbackToDirect || disableWorkflowFallbackToDirect) {
                     throw error;
                 }
                 await input.runDirect();

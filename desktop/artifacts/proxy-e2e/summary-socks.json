@@ -1,0 +1,44 @@
+{
+  "query": "请用一句中文回复“代理链路验证中”，不要调用工具。",
+  "expectedProxyUrl": "socks5://127.0.0.1:1080",
+  "expectedEndpoint": "socks5://127.0.0.1:1080",
+  "submitted": true,
+  "llmTimingPayload": {
+    "event": "llm_timing",
+    "taskId": "16a51053-f4e7-4f93-81e6-430db2108e1c",
+    "threadId": "16a51053-f4e7-4f93-81e6-430db2108e1c",
+    "turnId": "03cb0c67-55d6-414a-ad26-f404b8e77804",
+    "modelId": "openai/gpt-5.3-codex",
+    "provider": "openai",
+    "phase": "stream",
+    "outcome": "success",
+    "attempt": 1,
+    "maxAttempts": 6,
+    "assistantChars": 0,
+    "finishReason": "error",
+    "error": null,
+    "timings": {
+      "elapsedMs": 3506,
+      "dnsMs": null,
+      "connectMs": null,
+      "ttfbMs": 3461,
+      "firstTokenMs": null,
+      "lastTokenMs": null
+    },
+    "proxy": {
+      "before": {
+        "enabled": true,
+        "source": "config",
+        "endpoint": "socks5://127.0.0.1:1080",
+        "noProxy": "localhost,127.0.0.1,::1"
+      },
+      "after": {
+        "enabled": true,
+        "source": "config",
+        "endpoint": "socks5://127.0.0.1:1080",
+        "noProxy": "localhost,127.0.0.1,::1"
+      }
+    },
+    "timestamp": "2026-04-20T11:17:27.087Z"
+  }
+}

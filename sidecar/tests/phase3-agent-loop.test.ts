@@ -570,6 +570,40 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
+    test('tool-first policy keeps workspace command tool when command_execution capability is required', () => {
+        const originalPolicy = process.env.COWORKANY_MASTRA_TOOL_FIRST;
+        process.env.COWORKANY_MASTRA_TOOL_FIRST = '1';
+        try {
+            const rawToolsets = {
+                workspace: {
+                    mastra_workspace_execute_command: { id: 'mastra_workspace_execute_command' },
+                    search_web: { id: 'search_web', description: 'Search public web sources' },
+                },
+            } as unknown as Awaited<ReturnType<typeof buildToolsetsForMessageAttempt>>;
+            const firstAttempt = buildToolsetsForMessageAttempt(
+                rawToolsets,
+                '设置电脑一分钟后关机',
+                0,
+                {
+                    requiredCompletionCapabilities: ['command_execution'],
+                    isTaskRoute: true,
+                },
+            ) as Record<string, Record<string, unknown>>;
+            expect(
+                Object.prototype.hasOwnProperty.call(firstAttempt.workspace, 'mastra_workspace_execute_command'),
+            ).toBe(true);
+            expect(
+                Object.prototype.hasOwnProperty.call(firstAttempt.workspace, 'search_web'),
+            ).toBe(false);
+        } finally {
+            if (typeof originalPolicy === 'string') {
+                process.env.COWORKANY_MASTRA_TOOL_FIRST = originalPolicy;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TOOL_FIRST;
+            }
+        }
+    });
+
     test('toolset builder prioritizes explicitly enabled toolpacks when present', () => {
         const rawToolsets = {
             finance_pack: {
@@ -1182,12 +1216,21 @@ describe('Phase 3: Agent Loop', () => {
         }
     });
 
-    test('handleUserMessage emits compact llm_timing metrics with proxy before/after snapshot', async () => {
+    test('handleUserMessage keeps proxy enabled and normalizes env before streaming', async () => {
         const originalStream = supervisor.stream.bind(supervisor);
         const previousModel = process.env.COWORKANY_MODEL;
         const previousOpenAi = process.env.OPENAI_API_KEY;
         const previousProvider = process.env.COWORKANY_LLM_CONFIG_PROVIDER;
         const previousProxy = process.env.COWORKANY_PROXY_URL;
+        const previousInternalUpstream = process.env.COWORKANY_INTERNAL_UPSTREAM_URL;
+        const previousConfiguredProxy = process.env.COWORKANY_PROXY_CONFIGURED_URL;
+        const previousTransportProxy = process.env.COWORKANY_PROXY_TRANSPORT_URL;
+        const previousHttpsProxy = process.env.HTTPS_PROXY;
+        const previousHttpProxy = process.env.HTTP_PROXY;
+        const previousAllProxy = process.env.ALL_PROXY;
+        const previousGlobalHttpsProxy = process.env.GLOBAL_AGENT_HTTPS_PROXY;
+        const previousGlobalHttpProxy = process.env.GLOBAL_AGENT_HTTP_PROXY;
+        const previousNodeUseEnvProxy = process.env.NODE_USE_ENV_PROXY;
         const originalConsoleInfo = console.info;
         const metricLines: string[] = [];
 
@@ -1196,6 +1239,15 @@ describe('Phase 3: Agent Loop', () => {
             process.env.OPENAI_API_KEY = 'test-key';
             process.env.COWORKANY_LLM_CONFIG_PROVIDER = 'aiberm';
             process.env.COWORKANY_PROXY_URL = 'http://127.0.0.1:7890';
+            delete process.env.COWORKANY_INTERNAL_UPSTREAM_URL;
+            delete process.env.COWORKANY_PROXY_CONFIGURED_URL;
+            delete process.env.COWORKANY_PROXY_TRANSPORT_URL;
+            delete process.env.HTTPS_PROXY;
+            delete process.env.HTTP_PROXY;
+            delete process.env.ALL_PROXY;
+            delete process.env.GLOBAL_AGENT_HTTPS_PROXY;
+            delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+            process.env.NODE_USE_ENV_PROXY = '0';
             console.info = (...args: unknown[]) => {
                 metricLines.push(args.map((arg) => String(arg)).join(' '));
             };
@@ -1241,7 +1293,16 @@ describe('Phase 3: Agent Loop', () => {
             expect(payload.outcome).toBe('success');
             expect(typeof payload.timings?.firstTokenMs).toBe('number');
             expect(payload.proxy?.before?.enabled).toBe(true);
-            expect(payload.proxy?.after?.enabled).toBe(false);
+            expect(payload.proxy?.after?.enabled).toBe(true);
+            expect(process.env.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+            expect(process.env.HTTP_PROXY).toBe('http://127.0.0.1:7890');
+            expect(process.env.ALL_PROXY).toBe('http://127.0.0.1:7890');
+            expect(process.env.GLOBAL_AGENT_HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+            expect(process.env.GLOBAL_AGENT_HTTP_PROXY).toBe('http://127.0.0.1:7890');
+            expect(process.env.COWORKANY_INTERNAL_UPSTREAM_URL).toBe('http://127.0.0.1:7890');
+            expect(process.env.COWORKANY_PROXY_CONFIGURED_URL).toBeUndefined();
+            expect(process.env.COWORKANY_PROXY_TRANSPORT_URL).toBe('http://127.0.0.1:7890');
+            expect(process.env.NODE_USE_ENV_PROXY).toBe('1');
         } finally {
             (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
             console.info = originalConsoleInfo;
@@ -1264,6 +1325,198 @@ describe('Phase 3: Agent Loop', () => {
                 process.env.COWORKANY_PROXY_URL = previousProxy;
             } else {
                 delete process.env.COWORKANY_PROXY_URL;
+            }
+            if (typeof previousInternalUpstream === 'string') {
+                process.env.COWORKANY_INTERNAL_UPSTREAM_URL = previousInternalUpstream;
+            } else {
+                delete process.env.COWORKANY_INTERNAL_UPSTREAM_URL;
+            }
+            if (typeof previousConfiguredProxy === 'string') {
+                process.env.COWORKANY_PROXY_CONFIGURED_URL = previousConfiguredProxy;
+            } else {
+                delete process.env.COWORKANY_PROXY_CONFIGURED_URL;
+            }
+            if (typeof previousTransportProxy === 'string') {
+                process.env.COWORKANY_PROXY_TRANSPORT_URL = previousTransportProxy;
+            } else {
+                delete process.env.COWORKANY_PROXY_TRANSPORT_URL;
+            }
+            if (typeof previousHttpsProxy === 'string') {
+                process.env.HTTPS_PROXY = previousHttpsProxy;
+            } else {
+                delete process.env.HTTPS_PROXY;
+            }
+            if (typeof previousHttpProxy === 'string') {
+                process.env.HTTP_PROXY = previousHttpProxy;
+            } else {
+                delete process.env.HTTP_PROXY;
+            }
+            if (typeof previousAllProxy === 'string') {
+                process.env.ALL_PROXY = previousAllProxy;
+            } else {
+                delete process.env.ALL_PROXY;
+            }
+            if (typeof previousGlobalHttpsProxy === 'string') {
+                process.env.GLOBAL_AGENT_HTTPS_PROXY = previousGlobalHttpsProxy;
+            } else {
+                delete process.env.GLOBAL_AGENT_HTTPS_PROXY;
+            }
+            if (typeof previousGlobalHttpProxy === 'string') {
+                process.env.GLOBAL_AGENT_HTTP_PROXY = previousGlobalHttpProxy;
+            } else {
+                delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+            }
+            if (typeof previousNodeUseEnvProxy === 'string') {
+                process.env.NODE_USE_ENV_PROXY = previousNodeUseEnvProxy;
+            } else {
+                delete process.env.NODE_USE_ENV_PROXY;
+            }
+        }
+    });
+
+    test('handleUserMessage keeps socks proxy endpoint available for LLM path', async () => {
+        const originalStream = supervisor.stream.bind(supervisor);
+        const previousModel = process.env.COWORKANY_MODEL;
+        const previousOpenAi = process.env.OPENAI_API_KEY;
+        const previousProvider = process.env.COWORKANY_LLM_CONFIG_PROVIDER;
+        const previousProxy = process.env.COWORKANY_PROXY_URL;
+        const previousInternalUpstream = process.env.COWORKANY_INTERNAL_UPSTREAM_URL;
+        const previousConfiguredProxy = process.env.COWORKANY_PROXY_CONFIGURED_URL;
+        const previousTransportProxy = process.env.COWORKANY_PROXY_TRANSPORT_URL;
+        const previousHttpsProxy = process.env.HTTPS_PROXY;
+        const previousHttpProxy = process.env.HTTP_PROXY;
+        const previousAllProxy = process.env.ALL_PROXY;
+        const previousGlobalHttpsProxy = process.env.GLOBAL_AGENT_HTTPS_PROXY;
+        const previousGlobalHttpProxy = process.env.GLOBAL_AGENT_HTTP_PROXY;
+        const previousNodeUseEnvProxy = process.env.NODE_USE_ENV_PROXY;
+        const originalConsoleInfo = console.info;
+        const metricLines: string[] = [];
+
+        try {
+            process.env.COWORKANY_MODEL = 'aiberm/gpt-5.3-codex';
+            process.env.OPENAI_API_KEY = 'test-key';
+            process.env.COWORKANY_LLM_CONFIG_PROVIDER = 'aiberm';
+            process.env.COWORKANY_PROXY_URL = 'socks5://127.0.0.1:1080';
+            delete process.env.COWORKANY_INTERNAL_UPSTREAM_URL;
+            delete process.env.COWORKANY_PROXY_CONFIGURED_URL;
+            delete process.env.COWORKANY_PROXY_TRANSPORT_URL;
+            delete process.env.HTTPS_PROXY;
+            delete process.env.HTTP_PROXY;
+            delete process.env.ALL_PROXY;
+            delete process.env.GLOBAL_AGENT_HTTPS_PROXY;
+            delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+            process.env.NODE_USE_ENV_PROXY = '0';
+            console.info = (...args: unknown[]) => {
+                metricLines.push(args.map((arg) => String(arg)).join(' '));
+            };
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = (async () => ({
+                runId: 'run-phase3-socks-proxy',
+                fullStream: (async function* () {
+                    yield {
+                        type: 'text-delta',
+                        payload: { text: 'socks proxy ok' },
+                    };
+                })(),
+            })) as typeof supervisor.stream;
+
+            const result = await handleUserMessage(
+                'socks proxy metrics',
+                'thread-socks-proxy',
+                'employee-socks-proxy',
+                () => undefined,
+                {
+                    forcePostAssistantCompletion: true,
+                },
+            );
+
+            expect(result.runId).toBe('run-phase3-socks-proxy');
+            expect(process.env.COWORKANY_INTERNAL_UPSTREAM_URL).toBe('socks5://127.0.0.1:1080');
+            expect(process.env.COWORKANY_PROXY_CONFIGURED_URL).toBeUndefined();
+            expect(process.env.COWORKANY_PROXY_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+            expect(process.env.COWORKANY_PROXY_TRANSPORT_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+            expect(process.env.COWORKANY_PROXY_URL).toBe(process.env.COWORKANY_PROXY_TRANSPORT_URL);
+            expect(process.env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+            expect(process.env.HTTP_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+            expect(process.env.ALL_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+            expect(process.env.GLOBAL_AGENT_HTTPS_PROXY).toBe(process.env.HTTPS_PROXY);
+            expect(process.env.GLOBAL_AGENT_HTTP_PROXY).toBe(process.env.HTTPS_PROXY);
+            expect(process.env.NODE_USE_ENV_PROXY).toBe('1');
+            const metricLine = metricLines.find((line) => line.includes('[coworkany-metrics]'));
+            expect(typeof metricLine).toBe('string');
+            const serialized = String(metricLine).replace(/^[\s\S]*?\[coworkany-metrics\]\s*/, '');
+            const payload = JSON.parse(serialized) as {
+                proxy?: {
+                    after?: { endpoint?: string | null };
+                };
+            };
+            expect(payload.proxy?.after?.endpoint).toBe('socks5://127.0.0.1:1080');
+        } finally {
+            (supervisor as unknown as { stream: typeof supervisor.stream }).stream = originalStream as typeof supervisor.stream;
+            console.info = originalConsoleInfo;
+            if (typeof previousModel === 'string') {
+                process.env.COWORKANY_MODEL = previousModel;
+            } else {
+                delete process.env.COWORKANY_MODEL;
+            }
+            if (typeof previousOpenAi === 'string') {
+                process.env.OPENAI_API_KEY = previousOpenAi;
+            } else {
+                delete process.env.OPENAI_API_KEY;
+            }
+            if (typeof previousProvider === 'string') {
+                process.env.COWORKANY_LLM_CONFIG_PROVIDER = previousProvider;
+            } else {
+                delete process.env.COWORKANY_LLM_CONFIG_PROVIDER;
+            }
+            if (typeof previousProxy === 'string') {
+                process.env.COWORKANY_PROXY_URL = previousProxy;
+            } else {
+                delete process.env.COWORKANY_PROXY_URL;
+            }
+            if (typeof previousInternalUpstream === 'string') {
+                process.env.COWORKANY_INTERNAL_UPSTREAM_URL = previousInternalUpstream;
+            } else {
+                delete process.env.COWORKANY_INTERNAL_UPSTREAM_URL;
+            }
+            if (typeof previousConfiguredProxy === 'string') {
+                process.env.COWORKANY_PROXY_CONFIGURED_URL = previousConfiguredProxy;
+            } else {
+                delete process.env.COWORKANY_PROXY_CONFIGURED_URL;
+            }
+            if (typeof previousTransportProxy === 'string') {
+                process.env.COWORKANY_PROXY_TRANSPORT_URL = previousTransportProxy;
+            } else {
+                delete process.env.COWORKANY_PROXY_TRANSPORT_URL;
+            }
+            if (typeof previousHttpsProxy === 'string') {
+                process.env.HTTPS_PROXY = previousHttpsProxy;
+            } else {
+                delete process.env.HTTPS_PROXY;
+            }
+            if (typeof previousHttpProxy === 'string') {
+                process.env.HTTP_PROXY = previousHttpProxy;
+            } else {
+                delete process.env.HTTP_PROXY;
+            }
+            if (typeof previousAllProxy === 'string') {
+                process.env.ALL_PROXY = previousAllProxy;
+            } else {
+                delete process.env.ALL_PROXY;
+            }
+            if (typeof previousGlobalHttpsProxy === 'string') {
+                process.env.GLOBAL_AGENT_HTTPS_PROXY = previousGlobalHttpsProxy;
+            } else {
+                delete process.env.GLOBAL_AGENT_HTTPS_PROXY;
+            }
+            if (typeof previousGlobalHttpProxy === 'string') {
+                process.env.GLOBAL_AGENT_HTTP_PROXY = previousGlobalHttpProxy;
+            } else {
+                delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+            }
+            if (typeof previousNodeUseEnvProxy === 'string') {
+                process.env.NODE_USE_ENV_PROXY = previousNodeUseEnvProxy;
+            } else {
+                delete process.env.NODE_USE_ENV_PROXY;
             }
         }
     });

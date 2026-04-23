@@ -761,26 +761,34 @@ export const useTaskEventStore = create<TaskEventStoreState>()(
                     const taskId = explicitTaskId ?? state.activeTaskId ?? 'global';
                     const existingSession = state.sessions.get(taskId);
                     if (existingSession || explicitTaskId) {
-                        const effectEvent: TaskEvent = {
-                            id: response.commandId,
-                            taskId,
-                            timestamp: response.timestamp,
-                            sequence: (existingSession?.events.length ?? 0) + 1,
-                            type: approved ? 'EFFECT_APPROVED' : 'EFFECT_DENIED',
-                            payload: { response: effectResponse },
-                        };
-                        if (hasSeenEvent(taskId, effectEvent.id, existingSession)) {
-                            return { pendingResponses };
-                        }
-
                         const sessions = new Map(state.sessions);
                         const baseSession = existingSession ?? createEmptySession(taskId);
-                        let updated = applyEvent(baseSession, effectEvent);
+                        let updated = baseSession;
                         sessions.set(taskId, updated);
 
-                        rememberEvent(taskId, effectEvent.id, updated);
+                        const awaitingConfirmation = !approved && denialReason === 'awaiting_confirmation';
 
-                        if (!approved && denialReason === 'awaiting_confirmation') {
+                        if (awaitingConfirmation) {
+                            // EFFECT_REQUESTED cards are emitted by sidecar runtime events.
+                            // Keep IPC handling focused on status transitions to avoid duplicate approval cards.
+                        } else {
+                            const effectEvent: TaskEvent = {
+                                id: response.commandId,
+                                taskId,
+                                timestamp: response.timestamp,
+                                sequence: updated.events.length + 1,
+                                type: approved ? 'EFFECT_APPROVED' : 'EFFECT_DENIED',
+                                payload: { response: effectResponse },
+                            };
+                            if (hasSeenEvent(taskId, effectEvent.id, updated)) {
+                                return { pendingResponses };
+                            }
+                            updated = applyEvent(updated, effectEvent);
+                            sessions.set(taskId, updated);
+                            rememberEvent(taskId, effectEvent.id, updated);
+                        }
+
+                        if (awaitingConfirmation) {
                             const waitingEvent: TaskEvent = {
                                 id: `${response.commandId}-awaiting-confirmation`,
                                 taskId,

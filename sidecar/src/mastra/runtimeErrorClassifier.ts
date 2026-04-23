@@ -29,6 +29,7 @@ const TIMEOUT_PATTERNS: RegExp[] = [
     /generate_fallback_timeout/i,
     /stream_(?:start|idle|progress)_timeout/i,
     /stream_max_duration_timeout/i,
+    /delegated_task_execution_timeout/i,
     /stream_exhausted_without_assistant_text/i,
     /complete_without_assistant_text/i,
     /missing_terminal_after_tooling_progress/i,
@@ -40,15 +41,20 @@ const TIMEOUT_PATTERNS: RegExp[] = [
     /\betimedout\b/i,
 ];
 
+const TLS_TRUST_FAILURE_PATTERNS: RegExp[] = [
+    /unable to get issuer certificate/i,
+    /unable to verify (?:the first|leaf) certificate/i,
+    /self[-\s]?signed certificate/i,
+    /UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+/i,
+];
+
 const TEMPORARY_UNAVAILABLE_PATTERNS: RegExp[] = [
     /\b429\b/,
     /rate.?limit|too many requests/i,
     /temporar(?:y|ily).*(unavailable|error)?/i,
     /econnreset|enotfound|network error/i,
-    /unable to get issuer certificate/i,
-    /unable to verify (?:the first|leaf) certificate/i,
-    /self[-\s]?signed certificate/i,
-    /UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+/i,
+    /cannot connect to api/i,
+    /network socket disconnected before secure tls connection was established/i,
     /No snapshot found for this workflow run/i,
 ];
 
@@ -79,6 +85,15 @@ export function classifyRuntimeErrorMessage(message: string): RuntimeFailureClas
             recoverable: true,
             suggestion: 'Model response timed out. Retry in a moment, or switch provider in LLM Settings.',
             failureClass: 'retryable',
+        };
+    }
+
+    if (TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized))) {
+        return {
+            errorCode: 'PROVIDER_TLS_TRUST_FAILURE',
+            recoverable: true,
+            suggestion: 'TLS certificate validation failed. Configure provider CA trust or enable "Allow insecure TLS" in LLM Settings for trusted internal endpoints.',
+            failureClass: 'configuration_required',
         };
     }
 

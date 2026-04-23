@@ -6,10 +6,14 @@ import {
     type CommandRecoveryHints,
 } from '../../utils/commandAlternatives';
 import { checkCommand } from '../../tools/commandSandbox';
+import {
+    appendSudoFailureHint,
+    buildSudoExecutionPlan,
+} from '../../tools/sudoExecution';
+import { createVisibleTerminalMirrorSession } from '../../tools/visibleTerminalMirror';
 export const DANGEROUS_PATTERNS: RegExp[] = [
     /\brm\s+-rf\s+\/?\s*$/i,
     /\brm\s+-rf\s+~\//i,
-    /\bsudo\b/i,
     /\bmkfs\b/i,
     /\bdd\s+if=/i,
     />\s*\/dev\//i,
@@ -17,6 +21,7 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
     /\bchmod\s+777\b/i,
 ];
 export const APPROVAL_PATTERNS: RegExp[] = [
+    /\bsudo\b/i,
     /\brm\s+-r(f)?\b/i,
     /\bmv\b/i,
     /\bcp\s+-r\b/i,
@@ -126,45 +131,90 @@ function pickAutomaticRetryCommand(input: {
 
 async function executeSingleShellCommand(input: {
     command: string;
+    stdinData?: string;
+    usesSudoPassword?: boolean;
+    displayCommand?: string;
     workdir?: string;
     timeout: number;
 }): Promise<BashExecutionResult> {
+    const cwd = input.workdir || process.cwd();
+    const terminalMirror = createVisibleTerminalMirrorSession({
+        workspacePath: cwd,
+        command: input.displayCommand ?? input.command,
+    });
     return await new Promise<BashExecutionResult>((resolve) => {
         const child = spawn(input.command, {
-            cwd: input.workdir || process.cwd(),
+            cwd,
             env: {
                 ...process.env,
                 LANG: 'en_US.UTF-8',
                 PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE ?? '1',
             },
             shell: true,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: [input.stdinData ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         });
         let stdout = '';
         let stderr = '';
         let settled = false;
+        if (input.stdinData && child.stdin) {
+            try {
+                child.stdin.end(input.stdinData);
+            } catch {
+            }
+        }
         const finish = (result: BashExecutionResult): void => {
             if (settled) {
                 return;
             }
             settled = true;
+            terminalMirror?.close({
+                exitCode: result.exitCode,
+                reason: result.reason,
+            });
             resolve(result);
         };
+        terminalMirror?.note(`running command: ${input.command}`);
+        if (input.displayCommand && input.displayCommand !== input.command) {
+            terminalMirror?.note(`rewritten sudo command: ${input.command}`);
+        }
         const timer = setTimeout(() => {
             child.kill('SIGTERM');
             finish({
                 stdout,
-                stderr: stderr || `Command timed out after ${input.timeout}ms`,
+                stderr: appendSudoFailureHint({
+                    command: input.command,
+                    stderr: stderr || `Command timed out after ${input.timeout}ms`,
+                    usesPassword: input.usesSudoPassword === true,
+                }),
                 exitCode: 124,
                 rejected: false,
                 reason: 'timeout',
             });
         }, input.timeout);
+        if (!child.stdout || !child.stderr) {
+            clearTimeout(timer);
+            finish({
+                stdout,
+                stderr: appendSudoFailureHint({
+                    command: input.command,
+                    stderr: 'Command stream initialization failed',
+                    usesPassword: input.usesSudoPassword === true,
+                }),
+                exitCode: 1,
+                rejected: false,
+                reason: 'spawn_error',
+            });
+            return;
+        }
         child.stdout.on('data', (chunk: Buffer | string) => {
-            stdout += chunk.toString();
+            const text = chunk.toString();
+            stdout += text;
+            terminalMirror?.appendStdout(text);
         });
         child.stderr.on('data', (chunk: Buffer | string) => {
-            stderr += chunk.toString();
+            const text = chunk.toString();
+            stderr += text;
+            terminalMirror?.appendStderr(text);
         });
         child.on('error', (error) => {
             clearTimeout(timer);
@@ -180,7 +230,11 @@ async function executeSingleShellCommand(input: {
             clearTimeout(timer);
             finish({
                 stdout,
-                stderr,
+                stderr: appendSudoFailureHint({
+                    command: input.command,
+                    stderr,
+                    usesPassword: input.usesSudoPassword === true,
+                }),
                 exitCode: code ?? 1,
                 rejected: false,
             });
@@ -195,14 +249,18 @@ async function executeShellCommand(input: {
 }): Promise<BashExecutionResult> {
     const timeoutMs = Math.max(100, input.timeout ?? 30_000);
     const startedAt = Date.now();
+    const sudoPlan = buildSudoExecutionPlan(input.command);
     const firstAttemptRaw = await executeSingleShellCommand({
-        command: input.command,
+        command: sudoPlan.commandToRun,
+        stdinData: sudoPlan.stdinData,
+        usesSudoPassword: sudoPlan.usesPassword,
+        displayCommand: input.command,
         workdir: input.workdir,
         timeout: timeoutMs,
     });
-    const firstAttempt = attachCommandRecoveryHints(input.command, firstAttemptRaw);
+    const firstAttempt = attachCommandRecoveryHints(sudoPlan.commandToRun, firstAttemptRaw);
     const attempts: BashExecutionResult['attempts'] = [{
-        command: input.command,
+        command: sudoPlan.commandToRun,
         exitCode: firstAttempt.exitCode,
         stdout: firstAttempt.stdout,
         stderr: firstAttempt.stderr,

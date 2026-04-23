@@ -419,23 +419,36 @@ class DarwinBrowserHarness {
                 typeof config.proxy === 'object'
                 && config.proxy !== null
             ) ? config.proxy as Record<string, unknown> : null;
-            if (existingProxy && existingProxy.enabled === true && typeof existingProxy.url === 'string' && existingProxy.url.trim().length > 0) {
-                const existingBypassRaw = typeof existingProxy.bypass === 'string'
-                    ? existingProxy.bypass
-                    : '';
-                const requiredBypassEntries = ['localhost', '127.0.0.1', '::1'];
-                const mergedBypass = Array.from(
+            const existingBypassRaw = typeof existingProxy?.bypass === 'string'
+                ? existingProxy.bypass
+                : '';
+            const requiredBypassEntries = ['localhost', '127.0.0.1', '::1'];
+            const buildMergedBypass = (raw: string): string => (
+                Array.from(
                     new Set(
-                        `${existingBypassRaw},${requiredBypassEntries.join(',')}`
+                        `${raw},${requiredBypassEntries.join(',')}`
                             .split(',')
                             .map((item) => item.trim())
                             .filter((item) => item.length > 0),
                     ),
-                );
+                ).join(',')
+            );
+            if (existingProxy && existingProxy.enabled === true && typeof existingProxy.url === 'string' && existingProxy.url.trim().length > 0) {
                 config.proxy = {
                     ...existingProxy,
-                    bypass: mergedBypass.join(','),
+                    bypass: buildMergedBypass(existingBypassRaw),
                 };
+            }
+            const forcedProxyUrl = process.env.COWORKANY_TEST_PROXY_URL?.trim();
+            if (forcedProxyUrl && forcedProxyUrl.length > 0) {
+                const forcedBypass = process.env.COWORKANY_TEST_PROXY_BYPASS?.trim() || existingBypassRaw;
+                config.proxy = {
+                    ...(existingProxy ?? {}),
+                    enabled: true,
+                    url: forcedProxyUrl,
+                    bypass: buildMergedBypass(forcedBypass),
+                };
+                this.logs.push(`[Fixture-NoChrome] Isolated proxy override applied: ${forcedProxyUrl}\n`);
             }
 
             const explicitServiceUrl = process.env.COWORKANY_TEST_BROWSER_USE_SERVICE_URL?.trim();
@@ -524,10 +537,19 @@ class DarwinBrowserHarness {
         const disableBrowserCdp = process.env.COWORKANY_DISABLE_BROWSER_CDP
             ?? (this.isSharedChromeCdpEnabled() ? 'false' : 'true');
         const llmEnv = this.buildLlmRuntimeEnvFromConfig();
+        const proxyEnv = this.buildProxyRuntimeEnvFromConfig();
+        const sidecarBaseEnv: NodeJS.ProcessEnv = { ...process.env };
+        const preservedProxyEnvKeys = new Set(['COWORKANY_PROXY_DEBUG']);
+        for (const key of Object.keys(sidecarBaseEnv)) {
+            if ((/proxy/i.test(key) || key === 'NODE_USE_ENV_PROXY') && !preservedProxyEnvKeys.has(key)) {
+                delete sidecarBaseEnv[key];
+            }
+        }
         this.sidecarProc = childProcess.spawn('bun', ['run', 'src/main.ts'], {
             cwd: this.sidecarDir,
             env: {
-                ...process.env,
+                ...sidecarBaseEnv,
+                ...proxyEnv,
                 COWORKANY_APP_DATA_DIR: this.appDataDir,
                 COWORKANY_ENABLE_MCP: process.env.COWORKANY_ENABLE_MCP ?? '1',
                 COWORKANY_DISABLE_BROWSER_CDP: disableBrowserCdp,
@@ -732,6 +754,67 @@ class DarwinBrowserHarness {
         const modelProvider = provider === 'aiberm' ? 'openai' : provider;
         env.COWORKANY_MODEL = this.normalizeModelId(modelProvider, model);
         this.logs.push(`[Fixture-NoChrome] LLM env seeded from llm-config: provider=${provider} runtime_model_provider=${modelProvider} model=${model}\n`);
+        return env;
+    }
+
+    private buildProxyRuntimeEnvFromConfig(): Record<string, string> {
+        const config = this.readLlmConfig();
+        const proxyRecord = (
+            typeof config.proxy === 'object'
+            && config.proxy !== null
+        ) ? config.proxy as Record<string, unknown> : null;
+
+        const readString = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+        const firstNonEmpty = (values: Array<string | undefined>): string => {
+            for (const value of values) {
+                const normalized = typeof value === 'string' ? value.trim() : '';
+                if (normalized.length > 0) {
+                    return normalized;
+                }
+            }
+            return '';
+        };
+
+        const configProxyEnabled = proxyRecord?.enabled === true;
+        const configProxyUrl = readString(proxyRecord?.url);
+        const configProxyBypass = readString(proxyRecord?.bypass);
+
+        const envProxyUrl = firstNonEmpty([
+            process.env.COWORKANY_PROXY_URL,
+            process.env.HTTPS_PROXY,
+            process.env.https_proxy,
+            process.env.ALL_PROXY,
+            process.env.all_proxy,
+            process.env.HTTP_PROXY,
+            process.env.http_proxy,
+            process.env.GLOBAL_AGENT_HTTPS_PROXY,
+            process.env.GLOBAL_AGENT_HTTP_PROXY,
+        ]);
+
+        const proxyUrl = configProxyEnabled && configProxyUrl.length > 0
+            ? configProxyUrl
+            : envProxyUrl;
+        const proxySource = configProxyEnabled && configProxyUrl.length > 0 ? 'config' : 'env';
+        const noProxy = firstNonEmpty([
+            configProxyBypass,
+            process.env.NO_PROXY,
+            process.env.no_proxy,
+            'localhost,127.0.0.1,::1',
+        ]);
+
+        const env: Record<string, string> = {
+            NO_PROXY: noProxy,
+            no_proxy: noProxy,
+        };
+        if (proxyUrl.length > 0) {
+            // Do not pre-seed standard *_PROXY keys at process startup.
+            // Bun may cache startup proxy protocol and reject socks even if later normalized to HTTP bridge.
+            env.COWORKANY_PROXY_URL = proxyUrl;
+            env.COWORKANY_PROXY_SOURCE = proxySource;
+            env.NODE_USE_ENV_PROXY = '1';
+            this.logs.push(`[Fixture-NoChrome] Proxy env seeded from ${proxySource}: ${proxyUrl}\n`);
+        }
+
         return env;
     }
 

@@ -39,11 +39,13 @@ describe('Phase 2: Tool System', () => {
 
     test('dangerous command detection works', () => {
         expect(isDangerousCommand('rm -rf /')).toBe(true);
-        expect(isDangerousCommand('sudo rm -rf /tmp/a')).toBe(true);
+        expect(isDangerousCommand('rm -rf ~/tmp')).toBe(true);
+        expect(isDangerousCommand('sudo shutdown -h +1')).toBe(false);
         expect(isDangerousCommand('echo safe')).toBe(false);
     });
 
     test('approval command detection works', () => {
+        expect(needsApprovalForCommand('sudo shutdown -h +1')).toBe(true);
         expect(needsApprovalForCommand('rm -r ./tmp')).toBe(true);
         expect(needsApprovalForCommand('brew install ffmpeg')).toBe(true);
         expect(needsApprovalForCommand('git status')).toBe(false);

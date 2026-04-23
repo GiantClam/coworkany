@@ -143,6 +143,18 @@ export async function handleTaskControlCommands(
             });
             return true;
         }
+        const awaitingUserConfirmation = commandType === 'request_effect_response'
+            && !success
+            && input.getString(normalizedPayload.reason) === 'awaiting_confirmation';
+        if (awaitingUserConfirmation) {
+            input.emitFor('report_effect_result_response', {
+                success: true,
+                requestId,
+                awaitingUserConfirmation: true,
+                resumeDispatched: false,
+            });
+            return true;
+        }
         input.pendingApprovals.delete(requestId);
         const approvalDecision = input.applyPolicyDecision({
             requestId,
@@ -184,12 +196,14 @@ export async function handleTaskControlCommands(
                 ruleId: approvalDecision.ruleId,
             },
         });
-        void input.handleApprovalResponse({
-            runId: pending.runId ?? '',
-            toolCallId: pending.toolCallId,
-            approved: approvedForRuntime,
-            taskId: pending.taskId,
-        }).catch((error) => {
+        try {
+            await input.handleApprovalResponse({
+                runId: pending.runId ?? '',
+                toolCallId: pending.toolCallId,
+                approved: approvedForRuntime,
+                taskId: pending.taskId,
+            });
+        } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             input.appendTranscript(
                 pending.taskId,
@@ -215,7 +229,7 @@ export async function handleTaskControlCommands(
                 recoverable: true,
                 suggestion: 'Retry the task, then approve again if required.',
             });
-        });
+        }
         return true;
     }
 

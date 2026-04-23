@@ -196,10 +196,12 @@ impl PolicyConfig {
     pub fn default_config() -> Self {
         let mut default_policies = HashMap::new();
         default_policies.insert(EffectType::FilesystemRead, ConfirmationPolicy::Never);
-        default_policies.insert(EffectType::FilesystemWrite, ConfirmationPolicy::Once);
-        default_policies.insert(EffectType::ShellRead, ConfirmationPolicy::Once);
-        default_policies.insert(EffectType::ShellWrite, ConfirmationPolicy::Once);
-        default_policies.insert(EffectType::NetworkOutbound, ConfirmationPolicy::Once);
+        // Lower audit friction: keep first-use confirmation but reuse approval
+        // within the current desktop session for common operational effects.
+        default_policies.insert(EffectType::FilesystemWrite, ConfirmationPolicy::Session);
+        default_policies.insert(EffectType::ShellRead, ConfirmationPolicy::Session);
+        default_policies.insert(EffectType::ShellWrite, ConfirmationPolicy::Session);
+        default_policies.insert(EffectType::NetworkOutbound, ConfirmationPolicy::Session);
         default_policies.insert(EffectType::SecretsRead, ConfirmationPolicy::Always);
         default_policies.insert(EffectType::ScreenCapture, ConfirmationPolicy::Always);
         default_policies.insert(EffectType::UiControl, ConfirmationPolicy::Always);

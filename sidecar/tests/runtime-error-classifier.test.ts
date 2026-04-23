@@ -37,6 +37,22 @@ describe('runtimeErrorClassifier', () => {
         expect(classified.failureClass).toBe('retryable');
     });
 
+    test('classifies TLS socket disconnect as temporary provider/runtime unavailability', () => {
+        const classified = classifyRuntimeErrorMessage(
+            'Cannot connect to API: Client network socket disconnected before secure TLS connection was established',
+        );
+        expect(classified.errorCode).toBe('PROVIDER_TEMPORARILY_UNAVAILABLE');
+        expect(classified.recoverable).toBe(true);
+        expect(classified.failureClass).toBe('retryable');
+    });
+
+    test('classifies certificate chain failures as configuration-required TLS trust errors', () => {
+        const classified = classifyRuntimeErrorMessage('unable to get issuer certificate');
+        expect(classified.errorCode).toBe('PROVIDER_TLS_TRUST_FAILURE');
+        expect(classified.recoverable).toBe(true);
+        expect(classified.failureClass).toBe('configuration_required');
+    });
+
     test('classifies insufficient quota as blocked quota exceeded', () => {
         const classified = classifyRuntimeErrorMessage('insufficient_user_quota');
         expect(classified.errorCode).toBe('PROVIDER_QUOTA_EXCEEDED');

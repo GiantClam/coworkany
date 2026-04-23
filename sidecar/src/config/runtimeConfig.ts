@@ -141,6 +141,31 @@ function pickConfigString(value: unknown): string | undefined {
     return normalized ?? undefined;
 }
 
+function pickConfigBoolean(value: unknown): boolean | undefined {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+        return true;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+        return false;
+    }
+    return undefined;
+}
+
+function applyInsecureTlsEnv(values: Record<string, string>, allowInsecureTls: boolean | undefined): void {
+    if (allowInsecureTls !== true) {
+        return;
+    }
+    values.COWORKANY_ALLOW_INSECURE_TLS = '1';
+    values.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 function pickFromEnv(
     env: NodeJS.ProcessEnv,
     keys: string[],
@@ -315,9 +340,11 @@ function resolveRuntimeLlmEnvValuesFromConfig(config: RuntimeLlmConfig): {
         const anthropic = pickLlmSection(config, activeProfile, 'anthropic');
         const apiKey = toNonEmpty(anthropic.apiKey);
         const model = toNonEmpty(anthropic.model);
+        const allowInsecureTls = pickConfigBoolean(anthropic.allowInsecureTls ?? anthropic.allow_insecure_tls);
         if (apiKey) {
             values.ANTHROPIC_API_KEY = apiKey;
         }
+        applyInsecureTlsEnv(values, allowInsecureTls);
         modelId = withModelPrefix('anthropic', model);
         if (modelId) {
             values.COWORKANY_MODEL = modelId;
@@ -335,6 +362,8 @@ function resolveRuntimeLlmEnvValuesFromConfig(config: RuntimeLlmConfig): {
         values.COWORKANY_LLM_CUSTOM_API_FORMAT = apiFormat;
         const apiKey = toNonEmpty(custom.apiKey);
         const model = toNonEmpty(custom.model);
+        const allowInsecureTls = pickConfigBoolean(custom.allowInsecureTls ?? custom.allow_insecure_tls);
+        applyInsecureTlsEnv(values, allowInsecureTls);
         if (apiFormat === 'anthropic') {
             if (apiKey) {
                 values.ANTHROPIC_API_KEY = apiKey;
@@ -372,12 +401,14 @@ function resolveRuntimeLlmEnvValuesFromConfig(config: RuntimeLlmConfig): {
         const apiKey = toNonEmpty(openai.apiKey);
         const baseUrl = normalizeOpenAiBaseUrl(toNonEmpty(openai.baseUrl));
         const model = toNonEmpty(openai.model);
+        const allowInsecureTls = pickConfigBoolean(openai.allowInsecureTls ?? openai.allow_insecure_tls);
         if (apiKey) {
             values.OPENAI_API_KEY = apiKey;
         }
         if (baseUrl) {
             values.OPENAI_BASE_URL = baseUrl;
         }
+        applyInsecureTlsEnv(values, allowInsecureTls);
         modelId = withModelPrefix(provider === 'openai' ? 'openai' : provider, model);
         if (modelId) {
             values.COWORKANY_MODEL = modelId;

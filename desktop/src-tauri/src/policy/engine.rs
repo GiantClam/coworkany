@@ -2,6 +2,7 @@ use super::types::{
     ConfirmationPolicy, EffectRequest, EffectResponse, EffectScope, EffectType, PolicyConfig,
 };
 use chrono::Utc;
+use serde_json::Value;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -68,8 +69,18 @@ impl PolicyEngine {
             .cloned()
             .unwrap_or(ConfirmationPolicy::Always);
 
+        if let Some(shell_policy) = self.resolve_shell_write_policy(request) {
+            // Lower generic audit friction for shell commands:
+            // - low-risk shell writes auto-approve
+            // - high-risk shell writes still require confirmation
+            // - host-control shutdown/reboot remains explicitly auto-approved
+            policy = shell_policy;
+        }
+
         if self.requires_host_folder_confirmation(request) {
-            policy = ConfirmationPolicy::Once;
+            // Keep a guardrail for host-folder reads, but lower repeated prompts
+            // by allowing session-scoped approval reuse.
+            policy = ConfirmationPolicy::Session;
         }
 
         let modified_scope = self.apply_allowlists(request);
@@ -189,6 +200,121 @@ impl PolicyEngine {
             .map(PathBuf::from)
             .any(|workspace| target.starts_with(&workspace))
     }
+
+    fn resolve_shell_write_policy(&self, request: &EffectRequest) -> Option<ConfirmationPolicy> {
+        if request.effect_type != EffectType::ShellWrite {
+            return None;
+        }
+
+        let commands = self.extract_shell_command_candidates(request);
+        if commands.is_empty() {
+            return Some(ConfirmationPolicy::Never);
+        }
+
+        let has_host_control = commands
+            .iter()
+            .any(|command| Self::contains_host_control_command(command));
+        if has_host_control {
+            return Some(ConfirmationPolicy::Never);
+        }
+
+        let has_high_risk_shell = commands
+            .iter()
+            .any(|command| Self::contains_high_risk_shell_pattern(command));
+        if has_high_risk_shell {
+            return Some(ConfirmationPolicy::Session);
+        }
+
+        Some(ConfirmationPolicy::Never)
+    }
+
+    fn extract_shell_command_candidates(&self, request: &EffectRequest) -> Vec<String> {
+        let mut candidates = Vec::new();
+
+        if let Some(command) = &request.payload.command {
+            candidates.push(command.clone());
+            if let Ok(value) = serde_json::from_str::<Value>(command) {
+                if let Some(nested_command) = value.get("command").and_then(Value::as_str) {
+                    candidates.push(nested_command.to_string());
+                }
+                if let Some(nested_args) = value.get("args").and_then(Value::as_array) {
+                    let joined = nested_args
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !joined.is_empty() {
+                        candidates.push(joined);
+                    }
+                }
+            }
+        }
+
+        if let Some(args) = &request.payload.args {
+            let joined = args.join(" ");
+            if !joined.is_empty() {
+                candidates.push(joined);
+            }
+        }
+
+        candidates
+    }
+
+    fn contains_host_control_command(command: &str) -> bool {
+        let tokens: Vec<String> = command
+            .to_ascii_lowercase()
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_string)
+            .collect();
+
+        let is_host_control_token = |token: &str| {
+            token == "shutdown" || token == "reboot" || token == "poweroff" || token == "halt"
+        };
+
+        for (index, token) in tokens.iter().enumerate() {
+            if is_host_control_token(token) {
+                return true;
+            }
+            if token == "sudo" {
+                if let Some(next_token) = tokens.get(index + 1) {
+                    if is_host_control_token(next_token) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn contains_high_risk_shell_pattern(command: &str) -> bool {
+        let normalized = command.to_ascii_lowercase();
+        let contains_any = |patterns: &[&str]| patterns.iter().any(|pattern| normalized.contains(pattern));
+
+        if (normalized.contains("rm ") || normalized.contains(" rmdir "))
+            && (normalized.contains(" -rf")
+                || normalized.contains(" --recursive")
+                || normalized.contains(" --force"))
+        {
+            return true;
+        }
+        if normalized.contains("mkfs")
+            || (normalized.contains("dd ") && normalized.contains("of=/dev/"))
+        {
+            return true;
+        }
+        if contains_any(&[
+            "killall",
+            "kill -9 1",
+            "visudo",
+            " passwd",
+        ]) {
+            return true;
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +360,34 @@ mod tests {
         }
     }
 
+    fn make_shell_request(command: &str, tool_name: &str) -> EffectRequest {
+        EffectRequest {
+            id: "request-shell-1".to_string(),
+            timestamp: "2026-03-19T00:00:00Z".to_string(),
+            effect_type: EffectType::ShellWrite,
+            source: EffectSource::Agent,
+            source_id: None,
+            payload: EffectPayload {
+                path: None,
+                content: None,
+                operation: None,
+                command: Some(command.to_string()),
+                args: None,
+                cwd: Some("/tmp".to_string()),
+                url: None,
+                method: None,
+                headers: None,
+                description: Some("test shell".to_string()),
+            },
+            context: Some(EffectContext {
+                task_id: Some("task-shell-1".to_string()),
+                tool_name: Some(tool_name.to_string()),
+                reasoning: Some("test shell command".to_string()),
+            }),
+            scope: None,
+        }
+    }
+
     #[test]
     fn host_folder_read_requires_confirmation() {
         let engine = PolicyEngine::new(PolicyConfig::default_config());
@@ -244,7 +398,7 @@ mod tests {
 
         match outcome.decision {
             PolicyDecision::RequiresUserConfirmation { policy, .. } => {
-                assert_eq!(policy, ConfirmationPolicy::Once);
+                assert_eq!(policy, ConfirmationPolicy::Session);
             }
             _ => panic!("expected host folder read to require confirmation"),
         }
@@ -263,6 +417,58 @@ mod tests {
                 assert_eq!(approval_type, ConfirmationPolicy::Never);
             }
             _ => panic!("expected workspace read to remain auto approved"),
+        }
+    }
+
+    #[test]
+    fn shutdown_command_is_auto_approved() {
+        let engine = PolicyEngine::new(PolicyConfig::default_config());
+        let outcome = engine.evaluate(&make_shell_request("sudo shutdown -h +1", "run_command"));
+
+        match outcome.decision {
+            PolicyDecision::Approved { approval_type, .. } => {
+                assert_eq!(approval_type, ConfirmationPolicy::Never);
+            }
+            _ => panic!("expected shutdown shell command to be auto approved"),
+        }
+    }
+
+    #[test]
+    fn low_risk_shell_command_is_auto_approved() {
+        let engine = PolicyEngine::new(PolicyConfig::default_config());
+        let outcome = engine.evaluate(&make_shell_request("git status", "run_command"));
+
+        match outcome.decision {
+            PolicyDecision::Approved { approval_type, .. } => {
+                assert_eq!(approval_type, ConfirmationPolicy::Never);
+            }
+            _ => panic!("expected low-risk shell command to be auto approved"),
+        }
+    }
+
+    #[test]
+    fn sudo_install_command_is_auto_approved() {
+        let engine = PolicyEngine::new(PolicyConfig::default_config());
+        let outcome = engine.evaluate(&make_shell_request("sudo apt install foo", "run_command"));
+
+        match outcome.decision {
+            PolicyDecision::Approved { approval_type, .. } => {
+                assert_eq!(approval_type, ConfirmationPolicy::Never);
+            }
+            _ => panic!("expected sudo install shell command to be auto approved"),
+        }
+    }
+
+    #[test]
+    fn destructive_shell_command_still_requires_confirmation() {
+        let engine = PolicyEngine::new(PolicyConfig::default_config());
+        let outcome = engine.evaluate(&make_shell_request("rm -rf /tmp/demo", "run_command"));
+
+        match outcome.decision {
+            PolicyDecision::RequiresUserConfirmation { policy, .. } => {
+                assert_eq!(policy, ConfirmationPolicy::Session);
+            }
+            _ => panic!("expected destructive shell command to require confirmation"),
         }
     }
 }

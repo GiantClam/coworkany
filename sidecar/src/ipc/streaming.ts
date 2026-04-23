@@ -14,6 +14,10 @@ import { createTaskRequestContext } from '../mastra/requestContext';
 import { createTelemetryRunContext } from '../mastra/telemetry';
 import { resolveRuntimeModelConfigWithPreferredModel } from '../mastra/model/runtimeModel';
 import {
+    ensureProxyEnvForLlmPath,
+    getProxyRuntimeStateSnapshot,
+} from '../mastra/proxyRuntime';
+import {
     isBusinessDecisionSupportQuery,
     isCurrentDateTimeQuery,
     MARKET_QUERY_PATTERN,
@@ -530,7 +534,10 @@ export function buildToolsetsForMessageAttempt(
         return baseToolsets;
     }
 
-    const sanitizedToolsets = stripWorkspaceExecuteCommandTool(baseToolsets);
+    const keepWorkspaceExecuteCommand = requiredCompletionCapabilities.includes('command_execution');
+    const sanitizedToolsets = keepWorkspaceExecuteCommand
+        ? baseToolsets
+        : stripWorkspaceExecuteCommandTool(baseToolsets);
     const capabilityFilteredToolsets = requiredCompletionCapabilities.includes('web_research')
         ? sanitizedToolsets
         : stripGenericWebLookupTools(sanitizedToolsets);
@@ -723,57 +730,6 @@ export function hasWeatherInformationTool(toolsets: DynamicToolsets): boolean {
         }
     }
     return false;
-}
-
-function shouldDisableProxyForConfiguredLlmProvider(
-    env: Record<string, string | undefined> = process.env,
-): boolean {
-    const keepProxyRaw = env.COWORKANY_KEEP_PROXY_FOR_OPENAI_COMPAT?.trim().toLowerCase();
-    const keepProxy = keepProxyRaw === '1'
-        || keepProxyRaw === 'true'
-        || keepProxyRaw === 'yes'
-        || keepProxyRaw === 'on';
-    if (keepProxy) {
-        return false;
-    }
-    const configuredProvider = env.COWORKANY_LLM_CONFIG_PROVIDER?.trim().toLowerCase();
-    if (!configuredProvider) {
-        const modelProvider = env.COWORKANY_MODEL?.split('/')[0]?.trim().toLowerCase();
-        if (!modelProvider) {
-            return false;
-        }
-        return modelProvider === 'openai'
-            || OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(modelProvider);
-    }
-    if (configuredProvider === 'custom') {
-        const customApiFormat = env.COWORKANY_LLM_CUSTOM_API_FORMAT?.trim().toLowerCase();
-        return customApiFormat !== 'anthropic';
-    }
-    return OPENAI_COMPATIBLE_PROFILE_PROVIDERS.has(configuredProvider);
-}
-
-function disableProxyEnvForLlmPath(
-    env: Record<string, string | undefined> = process.env,
-): void {
-    if (!shouldDisableProxyForConfiguredLlmProvider(env)) {
-        return;
-    }
-    const keys = [
-        'COWORKANY_PROXY_URL',
-        'HTTPS_PROXY',
-        'https_proxy',
-        'HTTP_PROXY',
-        'http_proxy',
-        'ALL_PROXY',
-        'all_proxy',
-        'GLOBAL_AGENT_HTTPS_PROXY',
-        'GLOBAL_AGENT_HTTP_PROXY',
-        'COWORKANY_PROXY_SOURCE',
-    ];
-    for (const key of keys) {
-        delete env[key];
-    }
-    env.NODE_USE_ENV_PROXY = '0';
 }
 
 export function resolveMissingApiKeyForModel(
@@ -2447,7 +2403,7 @@ function sanitizeProxyEndpoint(raw: string | undefined): string | null {
     if (trimmed.length === 0) {
         return null;
     }
-    const candidate = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
     try {
         const parsed = new URL(candidate);
         const port = parsed.port ? `:${parsed.port}` : '';
@@ -2460,7 +2416,9 @@ function sanitizeProxyEndpoint(raw: string | undefined): string | null {
 function getProxyRuntimeSnapshot(
     env: Record<string, string | undefined> = process.env,
 ): ProxyRuntimeSnapshot {
-    const proxyUrl = env.COWORKANY_PROXY_URL
+    const runtimeProxy = getProxyRuntimeStateSnapshot(env);
+    const configuredProxyUrl = runtimeProxy.configuredProxyUrl;
+    const transportProxyUrl = runtimeProxy.transportProxyUrl
         || env.HTTPS_PROXY
         || env.https_proxy
         || env.HTTP_PROXY
@@ -2469,12 +2427,19 @@ function getProxyRuntimeSnapshot(
         || env.all_proxy
         || env.GLOBAL_AGENT_HTTPS_PROXY
         || env.GLOBAL_AGENT_HTTP_PROXY;
-    const source = env.COWORKANY_PROXY_SOURCE?.trim() || (proxyUrl ? 'env' : null);
+    const source = env.COWORKANY_PROXY_SOURCE?.trim() || (configuredProxyUrl || transportProxyUrl ? 'env' : null);
     const noProxy = (env.NO_PROXY || env.no_proxy || '').trim();
     return {
-        enabled: typeof proxyUrl === 'string' && proxyUrl.trim().length > 0,
+        enabled: (
+            (typeof configuredProxyUrl === 'string' && configuredProxyUrl.trim().length > 0)
+            || (typeof transportProxyUrl === 'string' && transportProxyUrl.trim().length > 0)
+        ),
         source,
-        endpoint: sanitizeProxyEndpoint(proxyUrl),
+        endpoint: sanitizeProxyEndpoint(
+            typeof configuredProxyUrl === 'string' && configuredProxyUrl.trim().length > 0
+                ? configuredProxyUrl
+                : transportProxyUrl,
+        ),
         noProxy: noProxy.length > 0 ? noProxy : null,
     };
 }
@@ -3897,9 +3862,9 @@ export async function handleUserMessage(
         onPostCompact?: (payload: CompactHookPayload) => void;
     },
 ): Promise<{ runId: string }> {
-    const proxySnapshotBeforeDisable = getProxyRuntimeSnapshot();
-    disableProxyEnvForLlmPath();
-    const proxySnapshotAfterDisable = getProxyRuntimeSnapshot();
+    const proxySnapshotBeforeNormalization = getProxyRuntimeSnapshot();
+    await ensureProxyEnvForLlmPath();
+    const proxySnapshotAfterNormalization = getProxyRuntimeSnapshot();
     const taskId = options?.taskId ?? threadId;
     const normalizedMessage = message.trim();
     contextCompressionStore.recordUserTurn({
@@ -4893,8 +4858,8 @@ export async function handleUserMessage(
                         firstTokenAt: generatedText.length > 0 ? Date.now() : null,
                         lastTokenAt: generatedText.length > 0 ? Date.now() : null,
                     }),
-                    proxyBefore: proxySnapshotBeforeDisable,
-                    proxyAfter: proxySnapshotAfterDisable,
+                    proxyBefore: proxySnapshotBeforeNormalization,
+                    proxyAfter: proxySnapshotAfterNormalization,
                 });
                 sendToDesktop({
                     type: 'error',
@@ -4922,8 +4887,8 @@ export async function handleUserMessage(
                     firstTokenAt: generatedText.length > 0 ? Date.now() : null,
                     lastTokenAt: generatedText.length > 0 ? Date.now() : null,
                 }),
-                proxyBefore: proxySnapshotBeforeDisable,
-                proxyAfter: proxySnapshotAfterDisable,
+                proxyBefore: proxySnapshotBeforeNormalization,
+                proxyAfter: proxySnapshotAfterNormalization,
             });
             sendToDesktop({
                 type: 'complete',
@@ -5024,8 +4989,8 @@ export async function handleUserMessage(
                             firstTokenAt: Date.now(),
                             lastTokenAt: Date.now(),
                         }),
-                        proxyBefore: proxySnapshotBeforeDisable,
-                        proxyAfter: proxySnapshotAfterDisable,
+                        proxyBefore: proxySnapshotBeforeNormalization,
+                        proxyAfter: proxySnapshotAfterNormalization,
                     });
                     sendToDesktop({
                         type: 'error',
@@ -5054,8 +5019,8 @@ export async function handleUserMessage(
                         firstTokenAt: Date.now(),
                         lastTokenAt: Date.now(),
                     }),
-                    proxyBefore: proxySnapshotBeforeDisable,
-                    proxyAfter: proxySnapshotAfterDisable,
+                    proxyBefore: proxySnapshotBeforeNormalization,
+                    proxyAfter: proxySnapshotAfterNormalization,
                 });
                 sendToDesktop({
                     type: 'complete',
@@ -5084,8 +5049,8 @@ export async function handleUserMessage(
                     firstTokenAt: null,
                     lastTokenAt: null,
                 }),
-                proxyBefore: proxySnapshotBeforeDisable,
-                proxyAfter: proxySnapshotAfterDisable,
+                proxyBefore: proxySnapshotBeforeNormalization,
+                proxyAfter: proxySnapshotAfterNormalization,
             });
             sendToDesktop({
                 type: 'error',
@@ -5394,8 +5359,8 @@ export async function handleUserMessage(
                     firstTokenAt: null,
                     lastTokenAt: null,
                 }),
-                proxyBefore: proxySnapshotBeforeDisable,
-                proxyAfter: proxySnapshotAfterDisable,
+                proxyBefore: proxySnapshotBeforeNormalization,
+                proxyAfter: proxySnapshotAfterNormalization,
             });
             emitRateLimited({
                 runId,
@@ -5524,8 +5489,8 @@ export async function handleUserMessage(
                     assistantChars: 0,
                     finishReason: forwarded.finishReason ?? 'approval_pending_before_assistant_narrative',
                     timings: forwarded.timings,
-                    proxyBefore: proxySnapshotBeforeDisable,
-                    proxyAfter: proxySnapshotAfterDisable,
+                    proxyBefore: proxySnapshotBeforeNormalization,
+                    proxyAfter: proxySnapshotAfterNormalization,
                 });
                 flushDeferredTaskCompleteEvent();
                 return { runId: stream.runId };
@@ -5752,8 +5717,8 @@ export async function handleUserMessage(
                 assistantChars: forwarded.assistantText.length,
                 finishReason: forwarded.finishReason,
                 timings: forwarded.timings,
-                proxyBefore: proxySnapshotBeforeDisable,
-                proxyAfter: proxySnapshotAfterDisable,
+                proxyBefore: proxySnapshotBeforeNormalization,
+                proxyAfter: proxySnapshotAfterNormalization,
             });
             flushDeferredTaskCompleteEvent();
             return { runId: stream.runId };
@@ -5960,8 +5925,8 @@ export async function handleUserMessage(
                                     firstTokenAt: null,
                                     lastTokenAt: null,
                                 }),
-                                proxyBefore: proxySnapshotBeforeDisable,
-                                proxyAfter: proxySnapshotAfterDisable,
+                                proxyBefore: proxySnapshotBeforeNormalization,
+                                proxyAfter: proxySnapshotAfterNormalization,
                             });
                             if (deferredTaskCompleteEvent) {
                                 flushDeferredTaskCompleteEvent();
@@ -6068,8 +6033,8 @@ export async function handleUserMessage(
                             firstTokenAt: null,
                             lastTokenAt: null,
                         }),
-                        proxyBefore: proxySnapshotBeforeDisable,
-                        proxyAfter: proxySnapshotAfterDisable,
+                        proxyBefore: proxySnapshotBeforeNormalization,
+                        proxyAfter: proxySnapshotAfterNormalization,
                     });
                     deferredTaskCompleteEvent = null;
                     sendToDesktop({
@@ -6125,9 +6090,31 @@ export async function handleUserMessage(
                     firstTokenAt: null,
                     lastTokenAt: null,
                 }),
-                proxyBefore: proxySnapshotBeforeDisable,
-                proxyAfter: proxySnapshotAfterDisable,
+                proxyBefore: proxySnapshotBeforeNormalization,
+                proxyAfter: proxySnapshotAfterNormalization,
             });
+            if (process.env.COWORKANY_PROXY_DEBUG === '1') {
+                const debugError = error as {
+                    name?: unknown;
+                    message?: unknown;
+                    stack?: unknown;
+                    cause?: unknown;
+                };
+                const proxyRuntimeSnapshot = getProxyRuntimeStateSnapshot(process.env);
+                console.info('[coworkany-stream-error-debug]', {
+                    name: typeof debugError?.name === 'string' ? debugError.name : null,
+                    message: typeof debugError?.message === 'string' ? debugError.message : String(error),
+                    stack: typeof debugError?.stack === 'string' ? debugError.stack : null,
+                    cause: debugError?.cause ?? null,
+                    proxyEnv: {
+                        configured: proxyRuntimeSnapshot.configuredProxyUrl,
+                        transport: proxyRuntimeSnapshot.transportProxyUrl,
+                        active: process.env.COWORKANY_PROXY_URL ?? null,
+                        httpsProxy: process.env.HTTPS_PROXY ?? null,
+                        allProxy: process.env.ALL_PROXY ?? null,
+                    },
+                });
+            }
             sendToDesktop({
                 type: 'error',
                 runId: stream.runId,
@@ -6149,21 +6136,22 @@ export async function handleApprovalResponse(
 ): Promise<void> {
     const debugAutoApproval = process.env.COWORKANY_DEBUG_AUTO_APPROVAL === '1';
     const noSnapshotRunPattern = /\bNo snapshot found for this workflow run\b/i;
-    const approvalResumeIdleTimeoutMs = resolvePositiveIntFromEnvBounded(
+    const resolveOptionalApprovalResumeTimeoutMs = (name: string): number | undefined => {
+        if (!hasExplicitEnv(name)) {
+            return undefined;
+        }
+        const raw = process.env[name];
+        const parsed = Number.parseInt(raw ?? '', 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            return undefined;
+        }
+        return Math.min(120_000, Math.max(1_000, Math.floor(parsed)));
+    };
+    const approvalResumeIdleTimeoutMs = resolveOptionalApprovalResumeTimeoutMs(
         'COWORKANY_MASTRA_APPROVAL_RESUME_IDLE_TIMEOUT_MS',
-        15_000,
-        {
-            min: 1_000,
-            max: 120_000,
-        },
     );
-    const approvalResumeProgressTimeoutMs = resolvePositiveIntFromEnvBounded(
+    const approvalResumeProgressTimeoutMs = resolveOptionalApprovalResumeTimeoutMs(
         'COWORKANY_MASTRA_APPROVAL_RESUME_PROGRESS_TIMEOUT_MS',
-        15_000,
-        {
-            min: 1_000,
-            max: 120_000,
-        },
     );
     const resolveFallbackRunIdsForTask = (taskId: string, attemptedRunId: string): string[] => {
         const candidates: string[] = [];
@@ -6198,8 +6186,8 @@ export async function handleApprovalResponse(
             requiredOutputPaths?: string[];
             originalMessage?: string;
             approvalResumeBeforeNarrative: boolean;
-            preNarrativeIdleTimeoutMs: number;
-            preNarrativeProgressTimeoutMs: number;
+            preNarrativeIdleTimeoutMs?: number;
+            preNarrativeProgressTimeoutMs?: number;
         };
     } => {
         const context = runContextById.get(approvalRunId);
@@ -6246,8 +6234,12 @@ export async function handleApprovalResponse(
                 requiredOutputPaths: context?.requiredOutputPaths,
                 originalMessage: context?.originalMessage,
                 approvalResumeBeforeNarrative: approved,
-                preNarrativeIdleTimeoutMs: approvalResumeIdleTimeoutMs,
-                preNarrativeProgressTimeoutMs: approvalResumeProgressTimeoutMs,
+                ...(typeof approvalResumeIdleTimeoutMs === 'number'
+                    ? { preNarrativeIdleTimeoutMs: approvalResumeIdleTimeoutMs }
+                    : {}),
+                ...(typeof approvalResumeProgressTimeoutMs === 'number'
+                    ? { preNarrativeProgressTimeoutMs: approvalResumeProgressTimeoutMs }
+                    : {}),
             },
         };
     };

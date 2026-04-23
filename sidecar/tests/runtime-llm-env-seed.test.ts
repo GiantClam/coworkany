@@ -152,4 +152,27 @@ describe('seedRuntimeLlmEnvFromConfig', () => {
         expect(env.OPENAI_BASE_URL).toBe('https://aiberm.com/v1');
         expect(env.COWORKANY_MODEL).toBe('openai/claude-sonnet-4-6');
     });
+
+    test('seeds insecure TLS env when active provider enables allowInsecureTls', () => {
+        const appDataDir = makeTempAppData();
+        fs.writeFileSync(path.join(appDataDir, 'llm-config.json'), JSON.stringify({
+            provider: 'openai',
+            openai: {
+                apiKey: 'config-openai-key',
+                baseUrl: 'https://aiberm.com/v1',
+                model: 'claude-sonnet-4-6',
+                allowInsecureTls: true,
+            },
+        }, null, 2));
+
+        const env: NodeJS.ProcessEnv = {};
+        const seeded = seedRuntimeLlmEnvFromConfig({
+            appDataDir,
+            env,
+        });
+
+        expect(seeded.provider).toBe('openai');
+        expect(env.COWORKANY_ALLOW_INSECURE_TLS).toBe('1');
+        expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0');
+    });
 });

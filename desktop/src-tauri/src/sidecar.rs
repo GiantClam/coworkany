@@ -79,6 +79,7 @@ struct SidecarProviderSettings {
     base_url: Option<String>,
     model: Option<String>,
     api_format: Option<String>,
+    allow_insecure_tls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2164,6 +2165,7 @@ impl SidecarManager {
         let Some(settings) = provider_settings else {
             return;
         };
+        let allow_insecure_tls = settings.allow_insecure_tls.unwrap_or(false);
 
         command.env("COWORKANY_LLM_CONFIG_PROVIDER", provider);
 
@@ -2296,6 +2298,16 @@ impl SidecarManager {
                 provider, model_id
             );
         }
+
+        if allow_insecure_tls {
+            command
+                .env("COWORKANY_ALLOW_INSECURE_TLS", "1")
+                .env("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+            info!(
+                "Sidecar LLM runtime enabled insecure TLS for provider={}",
+                provider
+            );
+        }
     }
 
     fn proxy_from_llm_config(app_data_dir: &str) -> Option<(String, Option<String>)> {
@@ -2345,6 +2357,30 @@ impl SidecarManager {
     }
 
     fn apply_proxy_env(command: &mut Command, app_data_dir: &str) {
+        // Bun may cache startup proxy protocol from standard env vars.
+        // Keep startup env clean and let sidecar runtime normalize transport before first fetch.
+        for key in [
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "GLOBAL_AGENT_HTTPS_PROXY",
+            "GLOBAL_AGENT_HTTP_PROXY",
+            "npm_config_proxy",
+            "npm_config_http_proxy",
+            "npm_config_https_proxy",
+            "NPM_CONFIG_PROXY",
+            "NPM_CONFIG_HTTP_PROXY",
+            "NPM_CONFIG_HTTPS_PROXY",
+            "COWORKANY_PROXY_TRANSPORT_URL",
+            "COWORKANY_PROXY_CONFIGURED_URL",
+            "COWORKANY_INTERNAL_UPSTREAM_URL",
+        ] {
+            command.env_remove(key);
+        }
+
         let proxy_from_config = Self::proxy_from_llm_config(app_data_dir);
         let proxy = proxy_from_config
             .as_ref()
@@ -2364,17 +2400,8 @@ impl SidecarManager {
             });
 
         if let Some(proxy_url) = proxy {
-            // Populate both uppercase and lowercase to maximize runtime compatibility.
             command
                 .env("COWORKANY_PROXY_URL", &proxy_url)
-                .env("HTTPS_PROXY", &proxy_url)
-                .env("https_proxy", &proxy_url)
-                .env("HTTP_PROXY", &proxy_url)
-                .env("http_proxy", &proxy_url)
-                .env("ALL_PROXY", &proxy_url)
-                .env("all_proxy", &proxy_url)
-                .env("GLOBAL_AGENT_HTTPS_PROXY", &proxy_url)
-                .env("GLOBAL_AGENT_HTTP_PROXY", &proxy_url)
                 .env(
                     "COWORKANY_PROXY_SOURCE",
                     if proxy_from_config.is_some() {
@@ -3817,18 +3844,9 @@ mod tests {
             envs.get("COWORKANY_PROXY_URL"),
             Some(&"http://127.0.0.1:7890".to_string())
         );
-        assert_eq!(
-            envs.get("HTTPS_PROXY"),
-            Some(&"http://127.0.0.1:7890".to_string())
-        );
-        assert_eq!(
-            envs.get("http_proxy"),
-            Some(&"http://127.0.0.1:7890".to_string())
-        );
-        assert_eq!(
-            envs.get("GLOBAL_AGENT_HTTPS_PROXY"),
-            Some(&"http://127.0.0.1:7890".to_string())
-        );
+        assert_eq!(envs.get("HTTPS_PROXY"), None);
+        assert_eq!(envs.get("http_proxy"), None);
+        assert_eq!(envs.get("GLOBAL_AGENT_HTTPS_PROXY"), None);
         assert_eq!(
             envs.get("COWORKANY_PROXY_SOURCE"),
             Some(&"config".to_string())
@@ -4355,6 +4373,47 @@ mod tests {
         assert!(
             !envs.contains_key("ANTHROPIC_API_KEY"),
             "custom openai-format profile should not inject anthropic key"
+        );
+
+        let _ = fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[test]
+    fn apply_llm_env_enables_insecure_tls_when_profile_requests_it() {
+        let app_data_dir = unique_temp_dir("sidecar-llm-config-insecure-tls");
+        fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        fs::write(
+            app_data_dir.join("llm-config.json"),
+            r#"{
+                "provider": "openai",
+                "activeProfileId": "profile-openai",
+                "profiles": [
+                    {
+                        "id": "profile-openai",
+                        "provider": "openai",
+                        "openai": {
+                            "apiKey": "sk-openai-real",
+                            "baseUrl": "https://api.openai.com/v1",
+                            "model": "gpt-5",
+                            "allowInsecureTls": true
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("write llm-config");
+
+        let mut command = Command::new("env");
+        SidecarManager::apply_llm_env(&mut command, app_data_dir.to_str().expect("utf8 path"));
+        let envs = command_env_map(&command);
+
+        assert_eq!(
+            envs.get("COWORKANY_ALLOW_INSECURE_TLS"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            envs.get("NODE_TLS_REJECT_UNAUTHORIZED"),
+            Some(&"0".to_string())
         );
 
         let _ = fs::remove_dir_all(&app_data_dir);

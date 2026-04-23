@@ -1,0 +1,44 @@
+{
+  "query": "请用一句中文回复“代理链路验证中”，不要调用工具。",
+  "expectedProxyUrl": "http://127.0.0.1:7890",
+  "expectedEndpoint": "http://127.0.0.1:7890",
+  "submitted": true,
+  "llmTimingPayload": {
+    "event": "llm_timing",
+    "taskId": "e0bdc329-5595-461c-ae64-f56a00b38c7b",
+    "threadId": "e0bdc329-5595-461c-ae64-f56a00b38c7b",
+    "turnId": "ed73af2d-fb6b-4a99-970e-6a8f08cb1547",
+    "modelId": "openai/gpt-5.3-codex",
+    "provider": "openai",
+    "phase": "stream",
+    "outcome": "success",
+    "attempt": 1,
+    "maxAttempts": 6,
+    "assistantChars": 0,
+    "finishReason": "error",
+    "error": null,
+    "timings": {
+      "elapsedMs": 9192,
+      "dnsMs": null,
+      "connectMs": null,
+      "ttfbMs": 4073,
+      "firstTokenMs": null,
+      "lastTokenMs": null
+    },
+    "proxy": {
+      "before": {
+        "enabled": true,
+        "source": "config",
+        "endpoint": "http://127.0.0.1:7890",
+        "noProxy": "localhost,127.0.0.1,::1"
+      },
+      "after": {
+        "enabled": true,
+        "source": "config",
+        "endpoint": "http://127.0.0.1:7890",
+        "noProxy": "localhost,127.0.0.1,::1"
+      }
+    },
+    "timestamp": "2026-04-20T11:18:35.841Z"
+  }
+}

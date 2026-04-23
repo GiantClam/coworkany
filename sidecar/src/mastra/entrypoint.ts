@@ -1,5 +1,4 @@
 import { randomUUID } from 'crypto';
-import * as fs from 'fs';
 import * as path from 'path';
 import type { DesktopEvent } from '../ipc/bridge';
 import { deriveDefaultResourceId } from './runtimeIdentity';
@@ -14,8 +13,6 @@ import {
     recoverTaskRuntimeStateAfterRestart,
     type TaskRuntimeCheckpoint,
     type TaskRuntimeExecutionPath,
-    type TaskRuntimeOperationAction,
-    type TaskRuntimeOperationRecord,
     type TaskRuntimeRetryState,
     type TaskRuntimeState,
 } from './taskRuntimeState';
@@ -24,7 +21,20 @@ import { handleStartOrSendTaskCommand } from './entrypointTaskCommands';
 import { handleRecoveryAndCheckpointCommands } from './entrypointRecoveryCommands';
 import { handleTaskControlCommands } from './entrypointTaskControlCommands';
 import { handleRemoteSessionCommands } from './entrypointRemoteSessionCommands';
-import { failGuard, passGuard, runGuardPipeline } from './entrypointGuardPipeline';
+import { handleEntrypointUtilityCommands } from './entrypointUtilityCommands';
+import { handleEntrypointForwardedCommand } from './entrypointForwardCommands';
+import { handleEntrypointFollowupCorrection } from './entrypointFollowupCorrection';
+import { handleEntrypointRuntimeCommands } from './entrypointRuntimeCommands';
+import { handleEntrypointLegacySimpleCommand } from './entrypointLegacySimpleCommands';
+import { createMissingToolEvidenceAutoRetryRunner } from './entrypointMissingToolEvidenceRetry';
+import { createTaskTurnEventStateStore } from './taskTurnEventStateStore';
+import { createTaskRuntimeStateStore } from './taskRuntimeStateStore';
+import { createLegacyRuntimeBootstrapHydrator } from './entrypointLegacyRuntimeBootstrap';
+import { createRuntimeSnapshotCollector } from './entrypointRuntimeSnapshot';
+import { createEntrypointRemoteSessionIndex } from './entrypointRemoteSessionIndex';
+import { createEntrypointRemoteSessionGovernanceEvaluator } from './entrypointRemoteSessionGovernance';
+import { createEntrypointRemoteSessionRecords } from './entrypointRemoteSessionRecords';
+import { deriveHostControlShellCommand, HOST_CONTROL_APPROVAL_PATTERN } from './hostControlCommand';
 import { buildRuntimeConfigDoctorSummary } from '../config/runtimeConfig';
 import {
     buildTaskTurnContract,
@@ -34,6 +44,7 @@ import {
 } from './capabilityRegistry';
 import { resolveSubagentFollowupMessage } from './subagentMessageRouter';
 import { buildCommandRecoveryHints } from '../utils/commandAlternatives';
+export { deriveHostControlShellCommand };
 type OutgoingMessage = Record<string, unknown>;
 type UserMessageExecutionOptions = {
     taskId?: string;
@@ -442,7 +453,8 @@ const DEFAULT_CHAT_STARTUP_BUDGET_MS = 90_000;
 const DEFAULT_TASK_TURN_TIMEOUT_MS = 240_000;
 const DEFAULT_TASK_STARTUP_BUDGET_MS = 90_000;
 const DEFAULT_COMMAND_ONLY_TASK_TURN_TIMEOUT_MS = 90_000;
-const DEFAULT_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_MAX_ATTEMPTS = 0;
+const DEFAULT_DELEGATED_TASK_EXECUTION_TIMEOUT_MS = 360_000;
+const DEFAULT_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_MAX_ATTEMPTS = 2;
 const DEFAULT_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = 1_000;
 const ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MAX_ATTEMPTS_CAP = 5;
 const ADAPTIVE_MISSING_TOOL_EVIDENCE_RETRY_MIN_ATTEMPTS = 1;
@@ -457,8 +469,6 @@ const MAX_TASK_OPERATION_LOG = 64;
 const TASK_TURN_EVENT_STATE_TTL_MS = 15 * 60 * 1000;
 const MAX_TASK_TURN_EVENT_STATES = 1024;
 const REMOTE_SESSION_SCOPE_METADATA_KEY = '__remoteSessionScope';
-const HOST_CONTROL_APPROVAL_PATTERN = /\b(shutdown|reboot|poweroff|halt|empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin))\b|关机|重启|清空(?:回收站|垃圾桶)/iu;
-const HOUR_CUE_PATTERN = /([01]?\d|2[0-3])\s*点/u;
 const DATABASE_OPERATION_PATTERN = /(数据库|mysql|postgres(?:ql)?|sqlite|database|select\s+.+\s+from)/iu;
 const TASK_EXECUTION_NARRATION_PREFIX_PATTERN = /^(?:我来|让我|我先|我会|我将|我现在|接下来|正在|先|马上|立即|I'll|I will|Let me|Now I|Next,? I)/iu;
 const TASK_EXECUTION_NARRATION_ACTION_PATTERN = /(搜索|查询|检索|获取|查找|确认|分析|收集|核对|search|lookup|check|fetch|verify|analy[sz]e|gather)/iu;
@@ -530,10 +540,27 @@ function resolveRequiredCompletionCapabilities(input: {
     return maybeWithArtifactWrite(derived);
 }
 
+type MissingToolEvidenceRetryReason = 'missing_tool_evidence' | 'command_failure' | 'missing_terminal_event';
+
+function extractRequiredCapabilitiesFromMissingToolEvidenceError(message: string): string[] {
+    const match = /workflow_missing_required_tool_evidence:([a-z0-9_,.-]+)/iu.exec(message);
+    const raw = match?.[1];
+    if (!raw) {
+        return [];
+    }
+    return normalizeStringList(
+        raw
+            .split(',')
+            .map((item) => item.trim().toLowerCase())
+            .filter((item) => item.length > 0),
+    );
+}
+
 function buildMissingToolEvidenceRetryMessage(input: {
     message: string;
     requiredCapabilities: string[];
     source: 'complete' | 'error';
+    reason?: MissingToolEvidenceRetryReason;
     commandRecoveryHint?: TaskTurnCommandRecoveryHint;
 }): string {
     const normalizedMessage = input.message.trim();
@@ -547,7 +574,7 @@ function buildMissingToolEvidenceRetryMessage(input: {
     }
     const lines: string[] = [
         RETRY_EXECUTION_CONTRACT_MARKER,
-        input.source === 'error'
+        input.reason === 'command_failure'
             ? '- Previous attempt ended with "error" after a failed command/tooling step. Retry only that failed step, then continue from saved artifacts.'
             : `- Previous attempt ended with "${input.source}" but lacked required tool evidence. You MUST execute required tools before final completion.`,
         '- Do not return refusal-only or disclaimer-only text in this retry.',
@@ -1086,31 +1113,6 @@ function buildCommandFailureReadableDelta(input: {
     return lines.join('\n');
 }
 
-export function deriveHostControlShellCommand(message: string): string {
-    const normalized = message.trim();
-    const isTrashCleanup = /\b(empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin))\b|清空(?:回收站|垃圾桶)/iu.test(normalized);
-    if (isTrashCleanup) {
-        if (process.platform === 'darwin') {
-            return `osascript -e 'tell application "Finder" to empty the trash'`;
-        }
-        if (process.platform === 'win32') {
-            return 'PowerShell -NoProfile -Command "Clear-RecycleBin -Force"';
-        }
-        return 'if command -v gio >/dev/null 2>&1; then gio trash --empty; elif command -v trash-empty >/dev/null 2>&1; then trash-empty; else echo "no_supported_trash_cli"; exit 127; fi';
-    }
-    const isReboot = /\b(reboot)\b|重启/u.test(normalized);
-    const hourMatch = normalized.match(HOUR_CUE_PATTERN);
-    if (hourMatch?.[1]) {
-        const hour = hourMatch[1].padStart(2, '0');
-        return isReboot
-            ? `sudo shutdown -r ${hour}00`
-            : `sudo shutdown -h ${hour}00`;
-    }
-    return isReboot
-        ? 'sudo shutdown -r now'
-        : 'sudo shutdown -h now';
-}
-
 function isToolResultExplicitlyErrored(result: unknown): boolean {
     const record = toOptionalRecord(result);
     if (!record) {
@@ -1560,6 +1562,18 @@ function resolveTaskStartupBudgetMs(
     );
 }
 
+function resolveDelegatedTaskExecutionTimeoutMs(
+    env: Record<string, string | undefined> = process.env,
+): number {
+    return resolveBoundedEnvInt(
+        'COWORKANY_MASTRA_DELEGATED_TASK_EXECUTION_TIMEOUT_MS',
+        DEFAULT_DELEGATED_TASK_EXECUTION_TIMEOUT_MS,
+        1_000,
+        900_000,
+        env,
+    );
+}
+
 function resolveMissingToolEvidenceAutoRetryMaxAttempts(
     env: Record<string, string | undefined> = process.env,
 ): number {
@@ -1808,79 +1822,6 @@ function getOptionalFiniteNumber(value: unknown): number | null {
         return null;
     }
     return value;
-}
-function parseVoiceProviderMode(value: unknown): 'auto' | 'system' | 'custom' | undefined {
-    return value === 'auto' || value === 'system' || value === 'custom'
-        ? value
-        : undefined;
-}
-function parseHookRuntimeEventType(
-    value: unknown,
-): 'SessionStart' | 'TaskCreated' | 'RemoteSessionLinked' | 'ChannelEventInjected' | 'PermissionRequest' | 'PreToolUse' | 'PostToolUse' | 'PreCompact' | 'PostCompact' | 'TaskCompleted' | 'TaskFailed' | 'TaskRewound' | undefined {
-    return value === 'SessionStart'
-        || value === 'TaskCreated'
-        || value === 'RemoteSessionLinked'
-        || value === 'ChannelEventInjected'
-        || value === 'PermissionRequest'
-        || value === 'PreToolUse'
-        || value === 'PostToolUse'
-        || value === 'PreCompact'
-        || value === 'PostCompact'
-        || value === 'TaskCompleted'
-        || value === 'TaskFailed'
-        || value === 'TaskRewound'
-        ? value
-        : undefined;
-}
-function buildUnsupportedAutonomousResponse(
-    commandType: string,
-    payload: Record<string, unknown>,
-): { type: string; payload: Record<string, unknown> } | null {
-    if (commandType === 'start_autonomous_task') {
-        return {
-            type: 'start_autonomous_task_response',
-            payload: {
-                success: false,
-                taskId: getString(payload.taskId) ?? '',
-                error: 'unsupported_in_mastra_runtime',
-            },
-        };
-    }
-    if (commandType === 'get_autonomous_task_status') {
-        return {
-            type: 'get_autonomous_task_status_response',
-            payload: {
-                success: false,
-                task: null,
-                error: 'unsupported_in_mastra_runtime',
-            },
-        };
-    }
-    if (
-        commandType === 'pause_autonomous_task'
-        || commandType === 'resume_autonomous_task'
-        || commandType === 'cancel_autonomous_task'
-    ) {
-        return {
-            type: `${commandType}_response`,
-            payload: {
-                success: false,
-                taskId: getString(payload.taskId) ?? '',
-                error: 'unsupported_in_mastra_runtime',
-            },
-        };
-    }
-    if (commandType === 'list_autonomous_tasks') {
-        return {
-            type: 'list_autonomous_tasks_response',
-            payload: {
-                success: false,
-                tasks: [],
-                error: 'unsupported_in_mastra_runtime',
-            },
-        };
-    }
-    return null;
 }
 function isScheduledCancellationRequest(text: string): boolean {
     const trimmed = text.trim();
@@ -2180,7 +2121,6 @@ const FILESYSTEM_READ_CAPABILITY = 'filesystem_read';
 const VOICE_OUTPUT_CAPABILITY = 'voice_output';
 const COMMAND_EXECUTION_CAPABILITY = 'command_execution';
 const ARTIFACT_WRITE_CAPABILITY = 'artifact_write';
-const LEGACY_RUNTIME_STATE_FILE = 'task-runtime.json';
 const LEGACY_LEAKED_PLANNED_OUTPUT_PATTERN = /^reports\/\d+-x-planned-output-artifact-.*-checkpoint-before-final-delivery\.[a-z0-9]+$/iu;
 const LEGACY_SAVE_TARGET_PATTERN = /(?:save(?:\s+it)?\s+to|write(?:\s+(?:it|result|output|report|file))?\s+to|保存到|写入|输出到)\s+([^\s,，。!?]+)/iu;
 const LEGACY_PATH_TOKEN_PATTERN = /(?:\/|\.\/|\.\.\/|~\/|[A-Za-z]:\\)[^\s,，。!?"'`]+/gu;
@@ -2224,20 +2164,6 @@ const READ_ONLY_PIPELINE_COMMANDS = new Set([
     'xargs',
     'command',
 ]);
-function buildMissingTerminalRecoverySummary(options: {
-    evidenceSatisfied: boolean;
-}): string {
-    if (options.evidenceSatisfied) {
-        return [
-            '检测到工具结果已产出，但上游终止事件丢失；系统已自动结束本轮以避免界面卡住。',
-            '可直接基于当前结果继续下一步，或重试以获取完整正文。',
-        ].join('\n');
-    }
-    return [
-        '检测到工具阶段后终止事件丢失，系统已自动结束本轮避免界面卡住。',
-        '当前结果可能不完整，请重试本轮任务。',
-    ].join('\n');
-}
 const SAFE_GIT_READ_ONLY_SUBCOMMANDS = new Set([
     'status',
     'diff',
@@ -2514,8 +2440,36 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     const taskMessageDedupByTaskId = new Map<string, TaskMessageDedupState>();
     const taskTurnEventStates = new Map<string, TaskTurnEventState>();
     const legacyDeliverablesByTaskId = new Map<string, string[]>();
-    const remoteSessionToTaskId = new Map<string, string>();
-    const channelDeliveryEvents = new Map<string, ChannelDeliveryEvent>();
+    const {
+        hydrateFromSessions: hydrateRemoteSessionMappings,
+        bindRemoteSessionToTask,
+        unbindRemoteSession,
+        resolveTaskIdForRemoteSessionId,
+        resolveTaskIdForExternalEvent,
+        resolveRemoteSessionState,
+        listRemoteSessions,
+    } = createEntrypointRemoteSessionIndex({
+        getNowIso,
+        getString,
+        remoteSessionStore: deps.remoteSessionStore,
+    });
+    const {
+        hydrateChannelDeliveryEvents,
+        upsertRemoteSessionRecord,
+        heartbeatRemoteSessionRecord,
+        closeRemoteSessionRecord,
+        enqueueChannelDeliveryEvent,
+        listChannelDeliveryEvents,
+        ackChannelDeliveryEvent,
+        getChannelDeliveryEvent,
+        markChannelDeliveryDelivered,
+    } = createEntrypointRemoteSessionRecords({
+        remoteSessionStore: deps.remoteSessionStore,
+        resolveTaskIdForRemoteSessionId,
+        getNowIso,
+        getString,
+        createId,
+    });
     if (deps.taskStateStore) {
         try {
             for (const state of deps.taskStateStore.list()) {
@@ -2531,12 +2485,8 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
     }
     if (deps.remoteSessionStore) {
         try {
-            for (const session of deps.remoteSessionStore.list({ status: 'active' })) {
-                remoteSessionToTaskId.set(session.remoteSessionId, session.taskId);
-            }
-            for (const event of deps.remoteSessionStore.listChannelEvents()) {
-                channelDeliveryEvents.set(event.id, event);
-            }
+            hydrateRemoteSessionMappings(deps.remoteSessionStore.list({ status: 'active' }));
+            hydrateChannelDeliveryEvents(deps.remoteSessionStore.listChannelEvents());
         } catch (error) {
             console.error('[MastraEntrypoint] Failed to load persisted remote sessions:', error);
         }
@@ -2553,512 +2503,50 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         'get_policy_config',
     ]);
     let bootstrapRuntimeContext: Record<string, unknown> | undefined;
-    const buildTaskTurnEventStateKey = (input: {
-        taskId: string;
-        turnId?: string;
-        runId?: string;
-    }): string => {
-        const turnPart = (input.turnId && input.turnId.trim().length > 0)
-            ? input.turnId.trim()
-            : (
-                input.runId && input.runId.trim().length > 0
-                    ? `run:${input.runId.trim()}`
-                    : 'unknown'
-            );
-        return `${input.taskId}:${turnPart}`;
-    };
-    const pruneTaskTurnEventStates = (nowMs: number): void => {
-        for (const [key, state] of taskTurnEventStates.entries()) {
-            if (nowMs - state.updatedAtMs > TASK_TURN_EVENT_STATE_TTL_MS) {
-                taskTurnEventStates.delete(key);
-            }
-        }
-        if (taskTurnEventStates.size <= MAX_TASK_TURN_EVENT_STATES) {
-            return;
-        }
-        const oldest = [...taskTurnEventStates.entries()]
-            .sort((left, right) => left[1].updatedAtMs - right[1].updatedAtMs)
-            .slice(0, taskTurnEventStates.size - MAX_TASK_TURN_EVENT_STATES);
-        for (const [key] of oldest) {
-            taskTurnEventStates.delete(key);
-        }
-    };
-    const getTaskTurnEventState = (
-        key: string,
-        nowMs: number,
-    ): TaskTurnEventState => {
-        const existing = taskTurnEventStates.get(key);
-        if (existing) {
-            const updated = {
-                ...existing,
-                updatedAtMs: nowMs,
-            };
-            taskTurnEventStates.set(key, updated);
-            return updated;
-        }
-        const created: TaskTurnEventState = {
-            assistantNarrativeSeen: false,
-            assistantNarrativeChars: 0,
-            toolEvidenceSeen: false,
-            strongToolEvidenceSeen: false,
-            toolResultSeen: false,
-            satisfiedCompletionCapabilities: [],
-            resultAttemptedCompletionCapabilities: [],
-            observedToolNames: [],
-            requireToolEvidenceForCompletion: false,
-            requiredCompletionCapabilities: [],
-            commandFailureNarrativeEmitted: false,
-            updatedAtMs: nowMs,
-        };
-        taskTurnEventStates.set(key, created);
-        return created;
-    };
-    const setTaskTurnCompletionRequirement = (input: {
-        key: string;
-        requireToolEvidence: boolean;
-        requiredCompletionCapabilities?: string[];
-        turnContractHash?: string;
-        turnContractDomain?: string;
-        routeMode?: 'chat' | 'task';
-        executionPath?: 'direct' | 'workflow';
-    }): void => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        const normalizedContractHash = typeof input.turnContractHash === 'string' && input.turnContractHash.trim().length > 0
-            ? input.turnContractHash.trim()
-            : undefined;
-        const shouldKeepExistingLock = Boolean(
-            state.turnContractHash
-            && normalizedContractHash
-            && state.turnContractHash !== normalizedContractHash,
-        );
-        if (shouldKeepExistingLock) {
-            console.warn('[MastraEntrypoint] Ignoring turn-contract drift for in-flight turn', {
-                key: input.key,
-                existingContractHash: state.turnContractHash,
-                incomingContractHash: normalizedContractHash,
-            });
-        }
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            requireToolEvidenceForCompletion: input.requireToolEvidence,
-            requiredCompletionCapabilities: normalizeStringList(input.requiredCompletionCapabilities ?? []),
-            turnContractHash: shouldKeepExistingLock
-                ? state.turnContractHash
-                : normalizedContractHash ?? state.turnContractHash,
-            turnContractDomain: shouldKeepExistingLock
-                ? state.turnContractDomain
-                : input.turnContractDomain ?? state.turnContractDomain,
-            routeMode: shouldKeepExistingLock
-                ? state.routeMode
-                : input.routeMode ?? state.routeMode,
-            executionPath: shouldKeepExistingLock
-                ? state.executionPath
-                : input.executionPath ?? state.executionPath,
-            updatedAtMs: nowMs,
-        });
-    };
-    const markTaskTurnAssistantNarrative = (input: {
-        key: string;
-        content?: string;
-    }): void => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        const deltaChars = typeof input.content === 'string' ? input.content.trim().length : 0;
-        const nextChars = state.assistantNarrativeChars + deltaChars;
-        const nextSeen = state.assistantNarrativeSeen || deltaChars > 0;
-        if (state.assistantNarrativeSeen === nextSeen && state.assistantNarrativeChars === nextChars) {
-            return;
-        }
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            assistantNarrativeSeen: nextSeen,
-            assistantNarrativeChars: nextChars,
-            updatedAtMs: nowMs,
-        });
-    };
-    const claimTaskTurnPrimaryNarrativeRun = (input: {
-        key: string;
-        runId: string;
-    }): boolean => {
-        const normalizedRunId = input.runId.trim();
-        if (normalizedRunId.length === 0) {
-            return true;
-        }
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        if (state.primaryNarrativeRunId && state.primaryNarrativeRunId !== normalizedRunId) {
-            return false;
-        }
-        if (state.primaryNarrativeRunId === normalizedRunId) {
-            return true;
-        }
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            primaryNarrativeRunId: normalizedRunId,
-            updatedAtMs: nowMs,
-        });
-        return true;
-    };
-    const shouldSuppressTaskTurnAssistantChunk = (input: {
-        key: string;
-        chunk: string;
-    }): boolean => {
-        const normalizedChunk = normalizeTaskMessageFingerprint(input.chunk);
-        if (normalizedChunk.length < 24) {
-            return false;
-        }
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        if (state.lastAssistantChunkFingerprint === normalizedChunk) {
-            return true;
-        }
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            lastAssistantChunkFingerprint: normalizedChunk,
-            updatedAtMs: nowMs,
-        });
-        return false;
-    };
-    const hasTaskTurnAssistantNarrative = (key: string): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return getTaskTurnEventState(key, nowMs).assistantNarrativeSeen;
-    };
-    const getTaskTurnAssistantNarrativeChars = (key: string): number => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return getTaskTurnEventState(key, nowMs).assistantNarrativeChars;
-    };
-    const markTaskTurnToolEvidence = (input: {
-        key: string;
-        evidenceStrength?: 'weak' | 'strong';
-        toolName?: string;
-        satisfiedCompletionCapabilities?: string[];
-        resultAttemptedCompletionCapabilities?: string[];
-        toolResultSeen?: boolean;
-    }): void => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        const evidenceStrength = input.evidenceStrength ?? 'weak';
-        const normalizedToolName = typeof input.toolName === 'string' ? input.toolName.trim() : '';
-        const normalizedSatisfied = normalizeStringList(
-            (input.satisfiedCompletionCapabilities ?? []).map((value) => value.toLowerCase()),
-        );
-        const normalizedResultAttempted = normalizeStringList(
-            (input.resultAttemptedCompletionCapabilities ?? []).map((value) => value.toLowerCase()),
-        );
-        const nextObservedToolNames = normalizedToolName.length > 0
-            ? normalizeStringList([...state.observedToolNames, normalizedToolName])
-            : state.observedToolNames;
-        const nextSatisfiedCompletionCapabilities = normalizedSatisfied.length > 0
-            ? normalizeStringList([...state.satisfiedCompletionCapabilities, ...normalizedSatisfied])
-            : state.satisfiedCompletionCapabilities;
-        const nextResultAttemptedCompletionCapabilities = normalizedResultAttempted.length > 0
-            ? normalizeStringList([...state.resultAttemptedCompletionCapabilities, ...normalizedResultAttempted])
-            : state.resultAttemptedCompletionCapabilities;
-        const nextToolResultSeen = state.toolResultSeen || input.toolResultSeen === true;
-        const shouldMarkWeakEvidence = !state.toolEvidenceSeen;
-        const shouldMarkStrongEvidence = evidenceStrength === 'strong' && !state.strongToolEvidenceSeen;
-        const shouldUpdateObservedToolNames = nextObservedToolNames.length !== state.observedToolNames.length;
-        const shouldUpdateSatisfiedCapabilities = nextSatisfiedCompletionCapabilities.length !== state.satisfiedCompletionCapabilities.length;
-        const shouldUpdateResultAttempts = nextResultAttemptedCompletionCapabilities.length !== state.resultAttemptedCompletionCapabilities.length;
-        const shouldUpdateToolResultSeen = nextToolResultSeen !== state.toolResultSeen;
-        if (
-            !shouldMarkWeakEvidence
-            && !shouldMarkStrongEvidence
-            && !shouldUpdateObservedToolNames
-            && !shouldUpdateSatisfiedCapabilities
-            && !shouldUpdateResultAttempts
-            && !shouldUpdateToolResultSeen
-        ) {
-            return;
-        }
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            toolEvidenceSeen: true,
-            strongToolEvidenceSeen: state.strongToolEvidenceSeen || evidenceStrength === 'strong',
-            toolResultSeen: nextToolResultSeen,
-            observedToolNames: nextObservedToolNames,
-            satisfiedCompletionCapabilities: nextSatisfiedCompletionCapabilities,
-            resultAttemptedCompletionCapabilities: nextResultAttemptedCompletionCapabilities,
-            updatedAtMs: nowMs,
-        });
-    };
-    const markTaskTurnCommandInvocation = (input: {
-        key: string;
-        taskId?: string;
-        command: string;
-    }): void => {
-        const normalizedCommand = input.command.trim();
-        if (normalizedCommand.length === 0) {
-            return;
-        }
-        if (input.taskId && input.taskId.trim().length > 0) {
-            latestCommandInvocationByTaskId.set(input.taskId, normalizedCommand);
-        }
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        if (state.lastCommandInvocation === normalizedCommand) {
-            return;
-        }
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            lastCommandInvocation: normalizedCommand,
-            updatedAtMs: nowMs,
-        });
-    };
-    const markTaskTurnCommandRecoveryHint = (input: {
-        key: string;
-        taskId?: string;
-        hint: TaskTurnCommandRecoveryHint;
-    }): void => {
-        if (input.taskId && input.taskId.trim().length > 0) {
-            latestCommandRecoveryHintByTaskId.set(input.taskId, input.hint);
-        }
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            latestCommandRecoveryHint: input.hint,
-            updatedAtMs: nowMs,
-        });
-    };
-    const markTaskTurnCommandFailureInfo = (input: {
-        key: string;
-        taskId?: string;
-        info: TaskTurnCommandFailureInfo;
-    }): void => {
-        if (input.taskId && input.taskId.trim().length > 0) {
-            latestCommandFailureInfoByTaskId.set(input.taskId, input.info);
-        }
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        taskTurnEventStates.set(input.key, {
-            ...state,
-            latestCommandFailureInfo: input.info,
-            updatedAtMs: nowMs,
-        });
-    };
-    const markTaskTurnCommandFailureNarrativeEmitted = (key: string): void => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        if (state.commandFailureNarrativeEmitted) {
-            return;
-        }
-        taskTurnEventStates.set(key, {
-            ...state,
-            commandFailureNarrativeEmitted: true,
-            updatedAtMs: nowMs,
-        });
-    };
-    const hasTaskTurnCommandFailureNarrativeEmitted = (key: string): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return getTaskTurnEventState(key, nowMs).commandFailureNarrativeEmitted === true;
-    };
-    const getTaskTurnCommandRecoveryHint = (
-        key: string,
-        taskId?: string,
-    ): TaskTurnCommandRecoveryHint | undefined => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const perTurn = getTaskTurnEventState(key, nowMs).latestCommandRecoveryHint;
-        if (perTurn) {
-            return perTurn;
-        }
-        if (taskId && taskId.trim().length > 0) {
-            return latestCommandRecoveryHintByTaskId.get(taskId);
-        }
-        return undefined;
-    };
-    const getTaskTurnCommandFailureInfo = (
-        key: string,
-        taskId?: string,
-    ): TaskTurnCommandFailureInfo | undefined => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const perTurn = getTaskTurnEventState(key, nowMs).latestCommandFailureInfo;
-        if (perTurn) {
-            return perTurn;
-        }
-        if (taskId && taskId.trim().length > 0) {
-            return latestCommandFailureInfoByTaskId.get(taskId);
-        }
-        return undefined;
-    };
-    const getTaskLatestCommandInvocation = (key: string, taskId?: string): string | undefined => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const perTurn = getTaskTurnEventState(key, nowMs).lastCommandInvocation;
-        if (typeof perTurn === 'string' && perTurn.trim().length > 0) {
-            return perTurn;
-        }
-        if (taskId && taskId.trim().length > 0) {
-            return latestCommandInvocationByTaskId.get(taskId);
-        }
-        return undefined;
-    };
-    const hasTaskTurnToolEvidenceRequirement = (key: string): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return getTaskTurnEventState(key, nowMs).requireToolEvidenceForCompletion;
-    };
-    const getTaskTurnRequiredCompletionCapabilities = (key: string): string[] => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return [...getTaskTurnEventState(key, nowMs).requiredCompletionCapabilities];
-    };
-    const getTaskTurnMissingRequiredCompletionCapabilities = (key: string): string[] => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        const satisfied = new Set(state.satisfiedCompletionCapabilities.map((value) => value.toLowerCase()));
-        return state.requiredCompletionCapabilities
-            .map((value) => value.toLowerCase())
-            .filter((capability) => !satisfied.has(capability));
-    };
-    const getTaskTurnResultAttemptedCompletionCapabilities = (key: string): string[] => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return [...getTaskTurnEventState(key, nowMs).resultAttemptedCompletionCapabilities];
-    };
-    const hasTaskTurnSatisfiedCompletionEvidence = (key: string): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        if (!state.requireToolEvidenceForCompletion) {
-            return true;
-        }
-        if (state.requiredCompletionCapabilities.length === 0) {
-            return state.strongToolEvidenceSeen;
-        }
-        return getTaskTurnMissingRequiredCompletionCapabilities(key).length === 0;
-    };
-    const getTaskTurnObservedToolNames = (key: string): string[] => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return [...getTaskTurnEventState(key, nowMs).observedToolNames];
-    };
-    const hasTaskTurnToolResultEvidence = (key: string): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        return getTaskTurnEventState(key, nowMs).toolResultSeen;
-    };
-    const getTaskTurnRouteMode = (key: string): 'chat' | 'task' | undefined => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const routeMode = getTaskTurnEventState(key, nowMs).routeMode;
-        return routeMode === 'chat' || routeMode === 'task'
-            ? routeMode
-            : undefined;
-    };
-    const getTaskTurnContractDomain = (key: string): string | undefined => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const domain = getTaskTurnEventState(key, nowMs).turnContractDomain;
-        if (typeof domain !== 'string') {
-            return undefined;
-        }
-        const normalized = domain.trim().toLowerCase();
-        return normalized.length > 0 ? normalized : undefined;
-    };
-    const shouldSuppressTaskTurnExecutionNarrationChunk = (input: {
-        key: string;
-        chunk: string;
-    }): boolean => {
-        const normalized = input.chunk.trim();
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(input.key, nowMs);
-        if (state.routeMode !== 'task') {
-            return false;
-        }
-        if (state.assistantNarrativeSeen || state.toolEvidenceSeen) {
-            return false;
-        }
-        if (isLikelyTaskMetaReasoningChunk(normalized)) {
-            return true;
-        }
-        if (
-            normalized.length > TASK_EXECUTION_NARRATION_MAX_SUPPRESS_CHARS
-            || !isLikelyTaskExecutionNarrationChunk(normalized)
-        ) {
-            return false;
-        }
-        return true;
-    };
-    const hasTaskTurnTerminalEvent = (key: string): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        return typeof state.terminal === 'string';
-    };
-    const shouldSuppressTaskTurnTerminalEvent = (
-        key: string,
-        nextTerminal: TaskTurnTerminalType,
-    ): boolean => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        const currentTerminal = state.terminal;
-        if (!currentTerminal) {
-            return false;
-        }
-        if (currentTerminal === nextTerminal) {
-            return true;
-        }
-        if (currentTerminal === 'complete') {
-            return true;
-        }
-        if (nextTerminal === 'complete') {
-            return false;
-        }
-        return true;
-    };
-    const markTaskTurnTerminalEvent = (
-        key: string,
-        terminal: TaskTurnTerminalType,
-    ): void => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        taskTurnEventStates.set(key, {
-            ...state,
-            terminal,
-            updatedAtMs: nowMs,
-        });
-    };
-    const resetTaskTurnAttemptStreamState = (key: string): void => {
-        const nowMs = Date.now();
-        pruneTaskTurnEventStates(nowMs);
-        const state = getTaskTurnEventState(key, nowMs);
-        taskTurnEventStates.set(key, {
-            ...state,
-            assistantNarrativeSeen: false,
-            assistantNarrativeChars: 0,
-            toolEvidenceSeen: false,
-            strongToolEvidenceSeen: false,
-            toolResultSeen: false,
-            satisfiedCompletionCapabilities: [],
-            resultAttemptedCompletionCapabilities: [],
-            observedToolNames: [],
-            primaryNarrativeRunId: undefined,
-            lastAssistantChunkFingerprint: undefined,
-            commandFailureNarrativeEmitted: false,
-            terminal: undefined,
-            updatedAtMs: nowMs,
-        });
-    };
+    const {
+        buildTaskTurnEventStateKey,
+        setTaskTurnCompletionRequirement,
+        markTaskTurnAssistantNarrative,
+        claimTaskTurnPrimaryNarrativeRun,
+        shouldSuppressTaskTurnAssistantChunk,
+        hasTaskTurnAssistantNarrative,
+        getTaskTurnAssistantNarrativeChars,
+        markTaskTurnToolEvidence,
+        markTaskTurnCommandInvocation,
+        markTaskTurnCommandRecoveryHint,
+        markTaskTurnCommandFailureInfo,
+        markTaskTurnCommandFailureNarrativeEmitted,
+        hasTaskTurnCommandFailureNarrativeEmitted,
+        getTaskTurnCommandRecoveryHint,
+        getTaskTurnCommandFailureInfo,
+        getTaskLatestCommandInvocation,
+        hasTaskTurnToolEvidenceRequirement,
+        getTaskTurnRequiredCompletionCapabilities,
+        getTaskTurnMissingRequiredCompletionCapabilities,
+        getTaskTurnResultAttemptedCompletionCapabilities,
+        hasTaskTurnSatisfiedCompletionEvidence,
+        getTaskTurnObservedToolNames,
+        hasTaskTurnToolResultEvidence,
+        getTaskTurnRouteMode,
+        getTaskTurnContractDomain,
+        shouldSuppressTaskTurnExecutionNarrationChunk,
+        hasTaskTurnTerminalEvent,
+        shouldSuppressTaskTurnTerminalEvent,
+        markTaskTurnTerminalEvent,
+        resetTaskTurnAttemptStreamState,
+    } = createTaskTurnEventStateStore({
+        taskTurnEventStates,
+        latestCommandInvocationByTaskId,
+        latestCommandRecoveryHintByTaskId,
+        latestCommandFailureInfoByTaskId,
+        taskTurnEventStateTtlMs: TASK_TURN_EVENT_STATE_TTL_MS,
+        maxTaskTurnEventStates: MAX_TASK_TURN_EVENT_STATES,
+        taskExecutionNarrationMaxSuppressChars: TASK_EXECUTION_NARRATION_MAX_SUPPRESS_CHARS,
+        normalizeStringList,
+        normalizeTaskMessageFingerprint,
+        isLikelyTaskMetaReasoningChunk,
+        isLikelyTaskExecutionNarrationChunk,
+    });
     const buildRetryExecutionOptionsFromTaskState = (state: TaskRuntimeState): UserMessageExecutionOptions => {
         const contract = state.turnContract;
         const requiredCompletionCapabilities = normalizeStringList(contract?.requiredCapabilities ?? []);
@@ -3201,138 +2689,25 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             completion,
         };
     };
-    const resolveTaskResourceId = (
-        taskId: string,
-        payload: Record<string, unknown>,
-        existingResourceId?: string,
-    ): string => {
-        const fromPayload = pickResourceOverride(payload);
-        if (fromPayload) {
-            return fromPayload;
-        }
-        if (existingResourceId) {
-            return existingResourceId;
-        }
-        const fromBootstrap = bootstrapRuntimeContext
-            ? (getString(bootstrapRuntimeContext.resourceId) ?? getString(bootstrapRuntimeContext.memoryResourceId))
-            : null;
-        if (fromBootstrap) {
-            return fromBootstrap;
-        }
-        return resolveResourceId(taskId);
-    };
-    const resolveTaskCheckpointVersion = (state?: TaskRuntimeState): number => {
-        const fromState = getNonNegativeInteger(state?.checkpointVersion);
-        if (fromState !== null) {
-            return fromState;
-        }
-        const fromCheckpoint = getNonNegativeInteger(state?.checkpoint?.version);
-        if (fromCheckpoint !== null) {
-            return fromCheckpoint;
-        }
-        return 0;
-    };
-    const resolveTaskOperationId = (
-        payload: Record<string, unknown>,
-        defaultValue: string,
-    ): string => {
-        const operationId = getString(payload.operationId)
-            ?? getString(payload.idempotencyKey)
-            ?? getString(payload.recoveryOperationId);
-        return operationId ?? defaultValue;
-    };
-    const resolveExpectedCheckpointVersion = (payload: Record<string, unknown>): number | undefined => {
-        const version = getNonNegativeInteger(payload.expectedCheckpointVersion);
-        return version === null ? undefined : version;
-    };
-    const findTaskOperationRecord = (
-        state: TaskRuntimeState | undefined,
-        operationId: string,
-        actions?: TaskRuntimeOperationAction[],
-    ): TaskRuntimeOperationRecord | null => {
-        if (!state || !Array.isArray(state.operationLog) || state.operationLog.length === 0) {
-            return null;
-        }
-        const actionSet = actions ? new Set(actions) : null;
-        for (let index = state.operationLog.length - 1; index >= 0; index -= 1) {
-            const entry = state.operationLog[index];
-            if (entry.operationId !== operationId) {
-                continue;
-            }
-            if (actionSet && !actionSet.has(entry.action)) {
-                continue;
-            }
-            return entry;
-        }
-        return null;
-    };
-    const appendTaskOperationRecord = (
-        state: TaskRuntimeState | undefined,
-        record: TaskRuntimeOperationRecord,
-    ): TaskRuntimeOperationRecord[] => {
-        const base = Array.isArray(state?.operationLog) ? state.operationLog : [];
-        const deduped = base.filter((entry) => entry.operationId !== record.operationId);
-        const next = [...deduped, record];
-        if (next.length <= MAX_TASK_OPERATION_LOG) {
-            return next;
-        }
-        return next.slice(next.length - MAX_TASK_OPERATION_LOG);
-    };
-    const upsertTaskState = (
-        taskId: string,
-        patch: Partial<TaskRuntimeState>,
-    ): TaskRuntimeState => {
-        const existing = taskStates.get(taskId);
-        const hasSuspended = Object.prototype.hasOwnProperty.call(patch, 'suspended');
-        const hasSuspensionReason = Object.prototype.hasOwnProperty.call(patch, 'suspensionReason');
-        const hasLastUserMessage = Object.prototype.hasOwnProperty.call(patch, 'lastUserMessage');
-        const hasLastTraceId = Object.prototype.hasOwnProperty.call(patch, 'lastTraceId');
-        const hasEnabledSkills = Object.prototype.hasOwnProperty.call(patch, 'enabledSkills');
-        const hasModelId = Object.prototype.hasOwnProperty.call(patch, 'modelId');
-        const hasCheckpoint = Object.prototype.hasOwnProperty.call(patch, 'checkpoint');
-        const hasCheckpointVersion = Object.prototype.hasOwnProperty.call(patch, 'checkpointVersion');
-        const hasRetry = Object.prototype.hasOwnProperty.call(patch, 'retry');
-        const hasAgentTasks = Object.prototype.hasOwnProperty.call(patch, 'agentTasks');
-        const hasAgentTaskProgress = Object.prototype.hasOwnProperty.call(patch, 'agentTaskProgress');
-        const hasOperationLog = Object.prototype.hasOwnProperty.call(patch, 'operationLog');
-        const hasExecutionPath = Object.prototype.hasOwnProperty.call(patch, 'executionPath');
-        const hasTurnContract = Object.prototype.hasOwnProperty.call(patch, 'turnContract');
-        const fallbackCheckpointVersion = resolveTaskCheckpointVersion(existing);
-        const next: TaskRuntimeState = {
-            taskId,
-            conversationThreadId: patch.conversationThreadId ?? existing?.conversationThreadId ?? taskId,
-            title: patch.title ?? existing?.title ?? 'Task',
-            workspacePath: patch.workspacePath ?? existing?.workspacePath ?? process.cwd(),
-            createdAt: existing?.createdAt ?? patch.createdAt ?? getNowIso(),
-            status: patch.status ?? existing?.status ?? 'idle',
-            suspended: hasSuspended ? patch.suspended : existing?.suspended,
-            suspensionReason: hasSuspensionReason ? patch.suspensionReason : existing?.suspensionReason,
-            lastUserMessage: hasLastUserMessage ? patch.lastUserMessage : existing?.lastUserMessage,
-            lastTraceId: hasLastTraceId ? patch.lastTraceId : existing?.lastTraceId,
-            enabledSkills: hasEnabledSkills ? patch.enabledSkills : existing?.enabledSkills,
-            modelId: hasModelId ? patch.modelId : existing?.modelId,
-            resourceId: patch.resourceId ?? existing?.resourceId ?? resolveResourceId(taskId),
-            checkpoint: hasCheckpoint ? patch.checkpoint : existing?.checkpoint,
-            checkpointVersion: hasCheckpointVersion
-                ? patch.checkpointVersion
-                : fallbackCheckpointVersion,
-            retry: hasRetry ? patch.retry : existing?.retry,
-            agentTasks: hasAgentTasks ? patch.agentTasks : existing?.agentTasks,
-            agentTaskProgress: hasAgentTaskProgress ? patch.agentTaskProgress : existing?.agentTaskProgress,
-            operationLog: hasOperationLog ? patch.operationLog : existing?.operationLog,
-            executionPath: hasExecutionPath ? patch.executionPath : existing?.executionPath,
-            turnContract: hasTurnContract ? patch.turnContract : existing?.turnContract,
-        };
-        taskStates.set(taskId, next);
-        if (deps.taskStateStore) {
-            try {
-                deps.taskStateStore.upsert(next);
-            } catch (error) {
-                console.error(`[MastraEntrypoint] Failed to persist task state for ${taskId}:`, error);
-            }
-        }
-        return next;
-    };
+    const {
+        resolveTaskResourceId,
+        resolveTaskCheckpointVersion,
+        resolveTaskOperationId,
+        resolveExpectedCheckpointVersion,
+        findTaskOperationRecord,
+        appendTaskOperationRecord,
+        upsertTaskState,
+    } = createTaskRuntimeStateStore({
+        taskStates,
+        taskStateStore: deps.taskStateStore,
+        resolveResourceId,
+        getBootstrapRuntimeContext: () => bootstrapRuntimeContext,
+        getString,
+        getNowIso,
+        getNonNegativeInteger,
+        pickResourceOverride,
+        maxTaskOperationLog: MAX_TASK_OPERATION_LOG,
+    });
     const recordDelegatedAgentTaskNotification = (input: {
         taskId: string;
         event: Extract<DesktopEvent, { type: 'tool_call' | 'tool_result' }>;
@@ -3382,704 +2757,41 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             agentTaskProgress,
         });
     };
-    const hydrateLegacyRuntimeRecordsFromBootstrap = (runtimeContext?: Record<string, unknown>): void => {
-        const appDataDir = getString(runtimeContext?.appDataDir);
-        if (!appDataDir) {
-            return;
-        }
-        const legacyRuntimePath = path.join(appDataDir, LEGACY_RUNTIME_STATE_FILE);
-        if (!fs.existsSync(legacyRuntimePath)) {
-            return;
-        }
-        let rawRecords: unknown;
-        try {
-            rawRecords = JSON.parse(fs.readFileSync(legacyRuntimePath, 'utf-8')) as unknown;
-        } catch {
-            return;
-        }
-        if (!Array.isArray(rawRecords)) {
-            return;
-        }
-
-        let changed = false;
-        const sanitizedRecords = rawRecords.map((record) => {
-            const nextRecord = toRecord(record);
-            const taskId = getString(nextRecord.taskId);
-            const workspacePath = getString(nextRecord.workspacePath) ?? process.cwd();
-            const config = toRecord(nextRecord.config);
-            const snapshot = toRecord(config.lastFrozenWorkRequestSnapshot);
-            const deliverables = Array.isArray(snapshot.deliverables)
-                ? snapshot.deliverables.map((item) => toRecord(item))
-                : [];
-            const plannedPaths: string[] = [];
-            const sanitizedDeliverables = deliverables.map((deliverable) => {
-                const originalPath = getString(deliverable.path);
-                if (!originalPath) {
-                    return deliverable;
-                }
-                const normalizedPath = sanitizeLegacyPlannedOutputPath(originalPath);
-                plannedPaths.push(normalizedPath);
-                if (normalizedPath !== originalPath) {
-                    changed = true;
-                    return {
-                        ...deliverable,
-                        path: normalizedPath,
-                    };
-                }
-                return deliverable;
-            });
-            if (deliverables.length > 0) {
-                nextRecord.config = {
-                    ...config,
-                    lastFrozenWorkRequestSnapshot: {
-                        ...snapshot,
-                        deliverables: sanitizedDeliverables,
-                    },
-                };
-            }
-
-            const sourceQuery = getString(snapshot.primaryObjective)
-                ?? getString(snapshot.sourceText)
-                ?? getString(toRecord(nextRecord.artifactContract).sourceQuery)
-                ?? 'restored planned deliverables';
-            if (plannedPaths.length > 0) {
-                const normalizedArtifactContract = buildLegacyPlannedArtifactContract(sourceQuery, plannedPaths);
-                const previousArtifactContract = toRecord(nextRecord.artifactContract);
-                if (JSON.stringify(previousArtifactContract) !== JSON.stringify(normalizedArtifactContract)) {
-                    changed = true;
-                }
-                nextRecord.artifactContract = normalizedArtifactContract;
-            }
-
-            if (taskId) {
-                const artifactPaths = plannedPaths.length > 0
-                    ? plannedPaths
-                    : extractLegacyPathTargetsFromArtifactContract(toRecord(nextRecord.artifactContract));
-                if (artifactPaths.length > 0) {
-                    legacyDeliverablesByTaskId.set(taskId, artifactPaths);
-                }
-                const conversation = Array.isArray(nextRecord.conversation) ? nextRecord.conversation : [];
-                const lastUserMessage = conversation
-                    .map((item) => toRecord(item))
-                    .reverse()
-                    .find((item) => getString(item.role)?.toLowerCase() === 'user');
-                const lastUserContent = getString(lastUserMessage?.content) ?? undefined;
-                const rawStatus = getString(nextRecord.status);
-                const status: TaskRuntimeState['status'] = (
-                    rawStatus === 'running'
-                    || rawStatus === 'retrying'
-                    || rawStatus === 'idle'
-                    || rawStatus === 'finished'
-                    || rawStatus === 'failed'
-                    || rawStatus === 'interrupted'
-                    || rawStatus === 'suspended'
-                    || rawStatus === 'scheduled'
-                )
-                    ? rawStatus
-                    : 'idle';
-                const statePatch: Partial<TaskRuntimeState> = {
-                    title: getString(nextRecord.title) ?? 'Task',
-                    workspacePath,
-                    createdAt: getString(nextRecord.createdAt) ?? getNowIso(),
-                    status,
-                    lastUserMessage: lastUserContent,
-                    resourceId: resolveTaskResourceId(taskId, {}),
-                    executionPath: 'direct',
-                };
-                if (lastUserContent) {
-                    statePatch.turnContract = buildTaskTurnContract({
-                        message: lastUserContent,
-                        workspacePath,
-                        mode: 'task',
-                        route: 'direct',
-                        requiredCapabilities: [],
-                        createdAt: getNowIso(),
-                    });
-                }
-                upsertTaskState(taskId, statePatch);
-            }
-            return nextRecord;
-        });
-
-        if (!changed) {
-            return;
-        }
-        try {
-            fs.writeFileSync(legacyRuntimePath, JSON.stringify(sanitizedRecords, null, 2), 'utf-8');
-        } catch (error) {
-            console.warn('[MastraEntrypoint] Failed to persist sanitized legacy runtime records:', error);
-        }
-    };
-    const collectRuntimeSnapshot = () => {
-        const tasks = Array.from(taskStates.values()).map((task) => ({
-            taskId: task.taskId,
-            threadId: task.conversationThreadId,
-            title: task.title,
-            workspacePath: task.workspacePath,
-            createdAt: task.createdAt,
-            status: task.status,
-            suspended: task.suspended,
-            suspensionReason: task.suspensionReason,
-            lastTraceId: task.lastTraceId,
-            enabledSkills: task.enabledSkills,
-            modelId: task.modelId,
-            resourceId: task.resourceId,
-            checkpoint: task.checkpoint,
-            checkpointVersion: task.checkpointVersion ?? resolveTaskCheckpointVersion(task),
-            retry: task.retry,
-            agentTasks: task.agentTasks ?? [],
-            agentTaskProgress: task.agentTaskProgress ?? null,
-            operationLog: task.operationLog ?? [],
-            executionPath: task.executionPath ?? 'workflow',
-            turnContract: task.turnContract ?? null,
-        }));
-        const remoteSessions = deps.remoteSessionStore
-            ? deps.remoteSessionStore.list()
-            : Array.from(remoteSessionToTaskId.entries()).map(([remoteSessionId, taskId]) => ({
-                remoteSessionId,
-                taskId,
-                status: 'active' as const,
-                linkedAt: getNowIso(),
-                lastSeenAt: getNowIso(),
-            }));
-        const channelDeliveries = listChannelDeliveryEvents();
-        const pendingChannelDeliveries = channelDeliveries.filter((event) => event.status === 'pending').length;
-        const ackedChannelDeliveries = channelDeliveries.filter((event) => event.status === 'acked').length;
-        const activeTaskId = tasks.find((task) => task.status === 'running')?.taskId
-            ?? tasks.find((task) => task.status === 'retrying')?.taskId
-            ?? tasks.find((task) => task.status === 'suspended')?.taskId
-            ?? tasks.find((task) => task.status === 'interrupted')?.taskId;
-        return {
-            generatedAt: getNowIso(),
-            activeTaskId,
-            tasks,
-            count: tasks.length,
-            remoteSessions: {
-                count: remoteSessions.length,
-                sessions: remoteSessions,
-            },
-            channelDeliveries: {
-                count: channelDeliveries.length,
-                pending: pendingChannelDeliveries,
-                acked: ackedChannelDeliveries,
-            },
-            policyGateBridge: {
-                ...forwardBridgeStats,
-            },
-            remoteSessionGovernance: {
-                ...remoteSessionGovernancePolicy,
-            },
-        };
-    };
-    const bindRemoteSessionToTask = (taskId: string, remoteSessionId: string): void => {
-        const normalizedRemoteSessionId = remoteSessionId.trim();
-        if (!normalizedRemoteSessionId) {
-            return;
-        }
-        remoteSessionToTaskId.set(normalizedRemoteSessionId, taskId);
-    };
-    const unbindRemoteSession = (remoteSessionId: string): void => {
-        const normalizedRemoteSessionId = remoteSessionId.trim();
-        if (!normalizedRemoteSessionId) {
-            return;
-        }
-        remoteSessionToTaskId.delete(normalizedRemoteSessionId);
-    };
-    const resolveTaskIdForExternalEvent = (payload: Record<string, unknown>): string | null => {
-        const directTaskId = getString(payload.taskId);
-        if (directTaskId) {
-            return directTaskId;
-        }
-        const remoteSessionId = getString(payload.remoteSessionId);
-        if (!remoteSessionId) {
-            return null;
-        }
-        return remoteSessionToTaskId.get(remoteSessionId) ?? null;
-    };
-    const resolveRemoteSessionState = (remoteSessionId: string): RemoteSessionState | undefined => {
-        if (deps.remoteSessionStore) {
-            return deps.remoteSessionStore.get(remoteSessionId);
-        }
-        const taskId = remoteSessionToTaskId.get(remoteSessionId);
-        if (!taskId) {
-            return undefined;
-        }
-        return {
-            remoteSessionId,
-            taskId,
-            status: 'active',
-            linkedAt: getNowIso(),
-            lastSeenAt: getNowIso(),
-        };
-    };
-    const listRemoteSessions = (input?: {
-        taskId?: string;
-        status?: RemoteSessionStatus;
-    }): RemoteSessionState[] => {
-        if (deps.remoteSessionStore) {
-            return deps.remoteSessionStore.list(input);
-        }
-        return Array.from(remoteSessionToTaskId.entries())
-            .map(([remoteSessionId, mappedTaskId]) => ({
-                remoteSessionId,
-                taskId: mappedTaskId,
-                status: 'active' as const,
-                linkedAt: getNowIso(),
-                lastSeenAt: getNowIso(),
-            }))
-            .filter((session) => !input?.taskId || session.taskId === input.taskId)
-            .filter((session) => !input?.status || session.status === input.status);
-    };
-    const evaluateRemoteSessionGovernance = (input: {
-        remoteSessionId: string;
-        targetTaskId: string;
-        scope: RemoteSessionScope;
-        metadata?: Record<string, unknown>;
-    }): {
-        allowed: boolean;
-        error?: string;
-        existingState?: RemoteSessionState;
-        arbitration?: RemoteSessionArbitration;
-    } => {
-        const existingState = resolveRemoteSessionState(input.remoteSessionId);
-        const targetTenantId = pickRemoteTenantId(input.metadata);
-        const targetEndpointId = pickRemoteEndpointId(input.metadata);
-        const existingScope = existingState
-            ? parseRemoteSessionScope({}, existingState.metadata)
-            : null;
-        const managedContext = input.scope === 'managed' || existingScope === 'managed';
-        if (
-            remoteSessionGovernancePolicy.requireTenantIdForManaged
-            && managedContext
-            && !targetTenantId
-        ) {
-            return {
-                allowed: false,
-                error: 'remote_session_tenant_required',
-                existingState,
-            };
-        }
-        if (
-            remoteSessionGovernancePolicy.requireEndpointIdForManaged
-            && managedContext
-            && !targetEndpointId
-        ) {
-            return {
-                allowed: false,
-                error: 'remote_session_endpoint_required',
-                existingState,
-            };
-        }
-        if (!existingState || existingState.status !== 'active') {
-            return {
-                allowed: true,
-                existingState,
-                arbitration: {
-                    action: 'none',
-                },
-            };
-        }
-        const existingTenantId = pickRemoteTenantId(existingState.metadata);
-        const existingEndpointId = pickRemoteEndpointId(existingState.metadata);
-        if (
-            remoteSessionGovernancePolicy.enforceManagedIdentityImmutable
-            && managedContext
-        ) {
-            if (
-                existingTenantId
-                && targetTenantId
-                && existingTenantId !== targetTenantId
-            ) {
-                return {
-                    allowed: false,
-                    error: 'remote_session_tenant_conflict_immutable',
-                    existingState,
-                };
-            }
-            if (
-                existingEndpointId
-                && targetEndpointId
-                && existingEndpointId !== targetEndpointId
-            ) {
-                return {
-                    allowed: false,
-                    error: 'remote_session_endpoint_conflict_immutable',
-                    existingState,
-                };
-            }
-        }
-        if (
-            remoteSessionGovernancePolicy.enforceTenantIsolation
-            && existingTenantId
-            && targetTenantId
-            && existingTenantId !== targetTenantId
-        ) {
-            return {
-                allowed: false,
-                error: 'remote_session_tenant_conflict',
-                existingState,
-            };
-        }
-        const crossTaskConflict = existingState.taskId !== input.targetTaskId;
-        const endpointConflict = (
-            remoteSessionGovernancePolicy.enforceEndpointIsolation
-            && !crossTaskConflict
-            && existingEndpointId
-            && targetEndpointId
-            && existingEndpointId !== targetEndpointId
-        );
-        if (!crossTaskConflict && !endpointConflict) {
-            return {
-                allowed: true,
-                existingState,
-                arbitration: {
-                    action: 'none',
-                },
-            };
-        }
-        if (remoteSessionGovernancePolicy.conflictStrategy === 'takeover') {
-            return {
-                allowed: true,
-                existingState,
-                arbitration: {
-                    action: 'takeover',
-                    previousTaskId: existingState.taskId,
-                    previousEndpointId: existingEndpointId,
-                },
-            };
-        }
-        if (remoteSessionGovernancePolicy.conflictStrategy === 'takeover_if_stale') {
-            const lastSeenAtMs = Date.parse(existingState.lastSeenAt);
-            const nowMs = Date.parse(getNowIso());
-            const staleMs = (
-                Number.isFinite(lastSeenAtMs)
-                && Number.isFinite(nowMs)
-            )
-                ? Math.max(0, nowMs - lastSeenAtMs)
-                : Number.POSITIVE_INFINITY;
-            if (staleMs >= remoteSessionGovernancePolicy.staleAfterMs) {
-                return {
-                    allowed: true,
-                    existingState,
-                    arbitration: {
-                        action: 'takeover_stale',
-                        previousTaskId: existingState.taskId,
-                        previousEndpointId: existingEndpointId,
-                        staleMs,
-                    },
-                };
-            }
-            return {
-                allowed: false,
-                error: endpointConflict
-                    ? 'remote_session_endpoint_conflict_active'
-                    : 'remote_session_task_conflict_active',
-                existingState,
-            };
-        }
-        return {
-            allowed: false,
-            error: endpointConflict
-                ? 'remote_session_endpoint_conflict'
-                : 'remote_session_task_conflict',
-            existingState,
-        };
-    };
-    const evaluateManagedTenantCommandGovernance = (
-        payload: Record<string, unknown>,
-        remoteSessionId?: string,
-    ): { allowed: true } | { allowed: false; error: string; remoteSession: RemoteSessionState | null } => {
-        if (!remoteSessionGovernancePolicy.requireTenantIdForManagedCommands) {
-            return { allowed: true };
-        }
-        if (!remoteSessionId) {
-            return { allowed: true };
-        }
-        const existingState = resolveRemoteSessionState(remoteSessionId);
-        if (!existingState) {
-            return { allowed: true };
-        }
-        const scope = parseRemoteSessionScope({}, existingState.metadata);
-        if (scope !== 'managed') {
-            return { allowed: true };
-        }
-        const existingTenantId = pickRemoteTenantId(existingState.metadata);
-        if (!existingTenantId) {
-            return { allowed: true };
-        }
-        const providedTenantId = pickTenantFromPayloadOrMetadata(payload);
-        if (!providedTenantId) {
-            return {
-                allowed: false,
-                error: 'remote_session_tenant_command_required',
-                remoteSession: existingState,
-            };
-        }
-        if (providedTenantId !== existingTenantId) {
-            return {
-                allowed: false,
-                error: 'remote_session_tenant_command_mismatch',
-                remoteSession: existingState,
-            };
-        }
-        return { allowed: true };
-    };
-    const upsertRemoteSessionRecord = (input: {
-        remoteSessionId: string;
-        taskId: string;
-        channel?: string;
-        metadata?: Record<string, unknown>;
-    }): { success: boolean; conflict?: boolean; state?: RemoteSessionState } => {
-        if (!deps.remoteSessionStore) {
-            return {
-                success: true,
-                state: {
-                    remoteSessionId: input.remoteSessionId,
-                    taskId: input.taskId,
-                    channel: input.channel,
-                    status: 'active',
-                    linkedAt: getNowIso(),
-                    lastSeenAt: getNowIso(),
-                    metadata: input.metadata,
-                },
-            };
-        }
-        return deps.remoteSessionStore.upsertLink(input);
-    };
-    const heartbeatRemoteSessionRecord = (remoteSessionId: string, metadata?: Record<string, unknown>): {
-        success: boolean;
-        state?: RemoteSessionState;
-    } => {
-        if (!deps.remoteSessionStore) {
-            const taskId = remoteSessionToTaskId.get(remoteSessionId);
-            if (!taskId) {
-                return { success: false };
-            }
-            return {
-                success: true,
-                state: {
-                    remoteSessionId,
-                    taskId,
-                    status: 'active',
-                    linkedAt: getNowIso(),
-                    lastSeenAt: getNowIso(),
-                    metadata,
-                },
-            };
-        }
-        return deps.remoteSessionStore.heartbeat(remoteSessionId, metadata);
-    };
-    const closeRemoteSessionRecord = (remoteSessionId: string): {
-        success: boolean;
-        state?: RemoteSessionState;
-    } => {
-        if (!deps.remoteSessionStore) {
-            const taskId = remoteSessionToTaskId.get(remoteSessionId);
-            if (!taskId) {
-                return { success: false };
-            }
-            return {
-                success: true,
-                state: {
-                    remoteSessionId,
-                    taskId,
-                    status: 'closed',
-                    linkedAt: getNowIso(),
-                    lastSeenAt: getNowIso(),
-                },
-            };
-        }
-        return deps.remoteSessionStore.close(remoteSessionId);
-    };
-    const enqueueChannelDeliveryEvent = (input: {
-        taskId: string;
-        remoteSessionId?: string;
-        channel: string;
-        eventType: string;
-        content?: string;
-        metadata?: Record<string, unknown>;
-        eventId?: string;
-        forceRequeue?: boolean;
-    }): {
-        event: ChannelDeliveryEvent;
-        deduplicated: boolean;
-        requeued: boolean;
-    } => {
-        if (!deps.remoteSessionStore) {
-            const normalizedEventId = getString(input.eventId) ?? '';
-            const existing = normalizedEventId ? channelDeliveryEvents.get(normalizedEventId) : undefined;
-            if (existing && input.forceRequeue !== true) {
-                return {
-                    event: existing,
-                    deduplicated: true,
-                    requeued: false,
-                };
-            }
-            const event: ChannelDeliveryEvent = {
-                id: normalizedEventId || `delivery-${createId()}-${channelDeliveryEvents.size + 1}`,
-                taskId: input.taskId,
-                remoteSessionId: input.remoteSessionId,
-                channel: input.channel,
-                eventType: input.eventType,
-                content: input.content,
-                metadata: input.metadata,
-                injectedAt: existing?.injectedAt ?? getNowIso(),
-                status: 'pending',
-                deliveryAttempts: existing?.deliveryAttempts ?? 0,
-                lastDeliveredAt: existing?.lastDeliveredAt,
-            };
-            channelDeliveryEvents.set(event.id, event);
-            return {
-                event,
-                deduplicated: false,
-                requeued: Boolean(existing),
-            };
-        }
-        const created = deps.remoteSessionStore.enqueueChannelEvent({
-            taskId: input.taskId,
-            remoteSessionId: input.remoteSessionId,
-            channel: input.channel,
-            eventType: input.eventType,
-            content: input.content,
-            metadata: input.metadata,
-            eventId: input.eventId,
-            forceRequeue: input.forceRequeue,
-        });
-        if (created.success && created.event) {
-            channelDeliveryEvents.set(created.event.id, created.event);
-            return {
-                event: created.event,
-                deduplicated: created.deduplicated === true,
-                requeued: created.requeued === true,
-            };
-        }
-        const fallback: ChannelDeliveryEvent = {
-            id: getString(input.eventId) || `delivery-${createId()}-${channelDeliveryEvents.size + 1}`,
-            taskId: input.taskId,
-            remoteSessionId: input.remoteSessionId,
-            channel: input.channel,
-            eventType: input.eventType,
-            content: input.content,
-            metadata: input.metadata,
-            injectedAt: getNowIso(),
-            status: 'pending',
-            deliveryAttempts: 0,
-        };
-        channelDeliveryEvents.set(fallback.id, fallback);
-        return {
-            event: fallback,
-            deduplicated: false,
-            requeued: false,
-        };
-    };
-    const listChannelDeliveryEvents = (input?: {
-        taskId?: string;
-        remoteSessionId?: string;
-        status?: ChannelDeliveryStatus;
-        limit?: number;
-    }): ChannelDeliveryEvent[] => {
-        if (!deps.remoteSessionStore) {
-            const taskId = getString(input?.taskId) ?? undefined;
-            const remoteSessionId = getString(input?.remoteSessionId) ?? undefined;
-            const status = input?.status;
-            const limit = typeof input?.limit === 'number' && Number.isFinite(input.limit) && input.limit > 0
-                ? Math.floor(input.limit)
-                : undefined;
-            const listed = Array
-                .from(channelDeliveryEvents.values())
-                .filter((event) => !taskId || event.taskId === taskId)
-                .filter((event) => !remoteSessionId || event.remoteSessionId === remoteSessionId)
-                .filter((event) => !status || event.status === status)
-                .sort((left, right) => right.injectedAt.localeCompare(left.injectedAt));
-            return limit ? listed.slice(0, limit) : listed;
-        }
-        const listed = deps.remoteSessionStore.listChannelEvents(input);
-        for (const event of listed) {
-            channelDeliveryEvents.set(event.id, event);
-        }
-        return listed;
-    };
-    const ackChannelDeliveryEvent = (input: {
-        eventId: string;
-        taskId?: string;
-        remoteSessionId?: string;
-        metadata?: Record<string, unknown>;
-    }): { success: boolean; event?: ChannelDeliveryEvent } => {
-        if (!deps.remoteSessionStore) {
-            const existing = channelDeliveryEvents.get(input.eventId);
-            if (!existing) {
-                return { success: false };
-            }
-            if (input.taskId && existing.taskId !== input.taskId) {
-                return { success: false };
-            }
-            if (input.remoteSessionId && existing.remoteSessionId !== input.remoteSessionId) {
-                return { success: false };
-            }
-            const next: ChannelDeliveryEvent = {
-                ...existing,
-                status: 'acked',
-                ackedAt: getNowIso(),
-                ackMetadata: input.metadata,
-            };
-            channelDeliveryEvents.set(next.id, next);
-            return {
-                success: true,
-                event: next,
-            };
-        }
-        const acked = deps.remoteSessionStore.ackChannelEvent(input);
-        if (acked.success && acked.event) {
-            channelDeliveryEvents.set(acked.event.id, acked.event);
-        }
-        return acked;
-    };
-    const getChannelDeliveryEvent = (eventId: string): ChannelDeliveryEvent | undefined => {
-        if (!deps.remoteSessionStore) {
-            return channelDeliveryEvents.get(eventId);
-        }
-        const event = deps.remoteSessionStore.getChannelEvent(eventId);
-        if (event) {
-            channelDeliveryEvents.set(event.id, event);
-        }
-        return event;
-    };
-    const markChannelDeliveryDelivered = (input: {
-        eventId: string;
-        taskId?: string;
-        remoteSessionId?: string;
-    }): { success: boolean; event?: ChannelDeliveryEvent } => {
-        if (!deps.remoteSessionStore) {
-            const existing = channelDeliveryEvents.get(input.eventId);
-            if (!existing) {
-                return { success: false };
-            }
-            if (input.taskId && existing.taskId !== input.taskId) {
-                return { success: false };
-            }
-            if (input.remoteSessionId && existing.remoteSessionId && existing.remoteSessionId !== input.remoteSessionId) {
-                return { success: false };
-            }
-            if (existing.status !== 'pending') {
-                return { success: true, event: existing };
-            }
-            const updated: ChannelDeliveryEvent = {
-                ...existing,
-                deliveryAttempts: (existing.deliveryAttempts ?? 0) + 1,
-                lastDeliveredAt: getNowIso(),
-            };
-            channelDeliveryEvents.set(updated.id, updated);
-            return {
-                success: true,
-                event: updated,
-            };
-        }
-        const marked = deps.remoteSessionStore.markChannelEventDelivered(input);
-        if (marked.success && marked.event) {
-            channelDeliveryEvents.set(marked.event.id, marked.event);
-        }
-        return marked;
-    };
+    const hydrateLegacyRuntimeRecordsFromBootstrap = createLegacyRuntimeBootstrapHydrator({
+        getString,
+        toRecord,
+        getNowIso,
+        resolveTaskResourceId,
+        upsertTaskState,
+        setLegacyDeliverables: (taskId, deliverables) => {
+            legacyDeliverablesByTaskId.set(taskId, deliverables);
+        },
+        sanitizeLegacyPlannedOutputPath,
+        buildLegacyPlannedArtifactContract,
+        extractLegacyPathTargetsFromArtifactContract,
+        buildTaskTurnContract,
+    });
+    const collectRuntimeSnapshot = createRuntimeSnapshotCollector({
+        taskStates,
+        resolveTaskCheckpointVersion,
+        listRemoteSessions: () => listRemoteSessions(),
+        listChannelDeliveryEvents: () => listChannelDeliveryEvents(),
+        forwardBridgeStats: forwardBridgeStats as Record<string, unknown>,
+        remoteSessionGovernancePolicy: remoteSessionGovernancePolicy as Record<string, unknown>,
+        getNowIso,
+    });
+    const {
+        evaluateRemoteSessionGovernance,
+        evaluateManagedTenantCommandGovernance,
+    } = createEntrypointRemoteSessionGovernanceEvaluator({
+        remoteSessionGovernancePolicy,
+        parseRemoteSessionScope,
+        pickRemoteTenantId,
+        pickRemoteEndpointId,
+        pickTenantFromPayloadOrMetadata,
+        resolveRemoteSessionState,
+        getNowIso,
+    });
     const appendTranscript = (
         taskId: string,
         role: 'user' | 'assistant' | 'system',
@@ -4169,6 +2881,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         traceId?: string | null;
         requiredCapabilities: string[];
         source: 'complete' | 'error';
+        reason?: MissingToolEvidenceRetryReason;
         runId?: string;
     }) => boolean) | null = null;
     const emitDesktopEvent = async (
@@ -4317,8 +3030,15 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             const retryCapabilities = missingCapabilities.length > 0
                 ? missingCapabilities
                 : requiredCapabilities;
+            const taskStateBeforeFailure = taskStates.get(taskId);
+            const isApprovalResumeDegradedCompletion = (
+                source === 'complete'
+                && taskStateBeforeFailure?.suspended === true
+                && taskStateBeforeFailure?.suspensionReason === 'approval_required'
+            );
             if (
-                runMissingToolEvidenceAutoRetry
+                !isApprovalResumeDegradedCompletion
+                && runMissingToolEvidenceAutoRetry
                 && runMissingToolEvidenceAutoRetry({
                     taskId,
                     turnEventStateKey,
@@ -4326,6 +3046,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     traceId,
                     requiredCapabilities: retryCapabilities,
                     source,
+                    reason: 'missing_tool_evidence',
                     runId: event.runId,
                 })
             ) {
@@ -4792,6 +3513,118 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 requiresUserConfirmation: true,
                 riskLevel: 7,
             };
+
+            const resumeApprovalWithoutUserPrompt = async (approved: boolean): Promise<void> => {
+                const autoApprovalResumeTimeoutMs = resolveAutoApprovalResumeTimeoutMs();
+                const runWithAutoApprovalTimeout = async <T>(
+                    promise: Promise<T>,
+                    stage: 'approve' | 'forward',
+                ): Promise<T> => {
+                    return await Promise.race([
+                        promise,
+                        new Promise<T>((_, reject) => {
+                            setTimeout(() => {
+                                reject(new Error(`auto_approval_resume_timeout:${stage}:${autoApprovalResumeTimeoutMs}`));
+                            }, autoApprovalResumeTimeoutMs);
+                        }),
+                    ]);
+                };
+
+                const candidateRunIds = Array.from(new Set(
+                    [
+                        effectiveApprovalRunId,
+                        eventRunId,
+                        trackedTaskRunId,
+                    ].filter((value): value is string => typeof value === 'string' && value.length > 0),
+                ));
+                if (candidateRunIds.length === 0) {
+                    throw new Error('approval_resume_missing_run_id');
+                }
+
+                let lastError: unknown;
+                for (const candidateRunId of candidateRunIds) {
+                    let autoResumeChain: Promise<void> = Promise.resolve();
+                    let approvalPromise: Promise<void> | null = null;
+                    try {
+                        let sawResumedEvent = false;
+                        let resolveFirstResumedEvent: (() => void) | null = null;
+                        const firstResumedEvent = new Promise<void>((resolve) => {
+                            resolveFirstResumedEvent = resolve;
+                        });
+                        approvalPromise = deps.handleApprovalResponse(
+                            candidateRunId,
+                            event.toolCallId,
+                            approved,
+                            (resumedEvent) => {
+                                sawResumedEvent = true;
+                                resolveFirstResumedEvent?.();
+                                resolveFirstResumedEvent = null;
+                                autoResumeChain = autoResumeChain.then(async () => {
+                                    await emitDesktopEvent(taskId, resumedEvent, emit, turnId);
+                                });
+                            },
+                            {
+                                taskId,
+                            },
+                        );
+
+                        const resumeReadySignal = approved
+                            ? Promise.race([
+                                firstResumedEvent,
+                                approvalPromise.then(() => {
+                                    if (!sawResumedEvent) {
+                                        throw new Error('approval_resume_completed_without_events');
+                                    }
+                                }),
+                            ])
+                            : Promise.race([
+                                firstResumedEvent,
+                                approvalPromise.then(() => undefined),
+                            ]);
+
+                        await runWithAutoApprovalTimeout(resumeReadySignal, 'approve');
+                        void approvalPromise
+                            .then(async () => {
+                                await autoResumeChain;
+                            })
+                            .catch((resumeError) => {
+                                console.warn('[MastraEntrypoint] Approval resume chain failed after handoff:', resumeError);
+                            });
+                        return;
+                    } catch (candidateError) {
+                        const message = candidateError instanceof Error ? candidateError.message : String(candidateError);
+                        if (approvalPromise && message.includes('auto_approval_resume_timeout:')) {
+                            void approvalPromise
+                                .then(async () => {
+                                    await autoResumeChain;
+                                })
+                                .catch((resumeError) => {
+                                    console.warn('[MastraEntrypoint] Approval resume chain failed after timeout handoff:', resumeError);
+                                });
+                            return;
+                        }
+                        lastError = candidateError;
+                        if (approvalPromise) {
+                            void approvalPromise
+                                .then(async () => {
+                                    await autoResumeChain;
+                                })
+                                .catch((resumeError) => {
+                                    console.warn('[MastraEntrypoint] Approval resume chain failed after retry:', resumeError);
+                                });
+                        }
+                    }
+                }
+
+                throw lastError instanceof Error
+                    ? lastError
+                    : new Error(lastError ? String(lastError) : 'approval_resume_failed');
+            };
+
+            let policyAwaitingConfirmation = true;
+            let policyApproved = false;
+            let policyDeniedReason: string | null = null;
+            let policyResponseRequestId: string | null = null;
             emitHookEvent('PermissionRequest', {
                 taskId,
                 runId: event.runId,
@@ -4802,8 +3635,71 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     toolName: event.toolName,
                 },
             });
+            try {
+                const approvalPolicyProbeTimeoutMs = Math.min(
+                    REQUEST_EFFECT_TIMEOUT_MS,
+                    Math.max(200, Math.min(policyGateResponseTimeoutMs, 1_500)),
+                );
+                const policyResponseCommand = await forwardCommandAndWait(
+                    'request_effect',
+                    requestPayload,
+                    emit,
+                    approvalPolicyProbeTimeoutMs,
+                );
+                const policyPayload = toRecord(policyResponseCommand.payload);
+                const policyResponse = toRecord(policyPayload?.response);
+
+                if (policyResponse) {
+                    policyResponseRequestId = getString(policyResponse.requestId);
+                    policyApproved = policyResponse.approved === true;
+                    if (!policyApproved) {
+                        const denialReason = getString(policyResponse.denialReason);
+                        if (denialReason !== 'awaiting_confirmation') {
+                            policyAwaitingConfirmation = false;
+                            policyDeniedReason = denialReason ?? 'policy_denied';
+                        }
+                    }
+                }
+            } catch {
+                // Fall back to approval-required flow when policy bridge is unavailable.
+            }
+
+            if (policyApproved) {
+                try {
+                    await resumeApprovalWithoutUserPrompt(true);
+                } catch (error) {
+                    await emitDesktopEvent(taskId, {
+                        type: 'error',
+                        runId: event.runId ?? undefined,
+                        message: error instanceof Error ? error.message : String(error),
+                        turnId,
+                    }, emit, turnId);
+                }
+                return;
+            }
+
+            if (!policyAwaitingConfirmation) {
+                appendTranscript(
+                    taskId,
+                    'system',
+                    `Approval denied by policy for ${event.toolName}: ${policyDeniedReason ?? 'policy_denied'}`,
+                );
+                try {
+                    await resumeApprovalWithoutUserPrompt(false);
+                } catch (error) {
+                    await emitDesktopEvent(taskId, {
+                        type: 'error',
+                        runId: event.runId ?? undefined,
+                        message: error instanceof Error ? error.message : String(error),
+                        turnId,
+                    }, emit, turnId);
+                }
+                return;
+            }
+
+            const approvalRequestId = policyResponseRequestId ?? requestId;
             const checkpoint: TaskRuntimeCheckpoint = {
-                id: `approval:${requestId}`,
+                id: `approval:${approvalRequestId}`,
                 label: `Awaiting approval for ${event.toolName}`,
                 at: getNowIso(),
                 metadata: {
@@ -4812,7 +3708,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     reason: 'approval_required',
                 },
             };
-            pendingApprovals.set(requestId, {
+            pendingApprovals.set(approvalRequestId, {
                 taskId,
                 runId: effectiveApprovalRunId,
                 toolCallId: event.toolCallId,
@@ -4934,15 +3830,32 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 !hasTaskTurnAssistantNarrative(turnEventStateKey)
                 && isWorkflowSnapshotMissingError(event.message)
             ) {
-                if (isAutoApprovalDebugEnabled()) {
-                    console.warn('[MastraEntrypoint] Suppressing missing-snapshot error before narrative', {
-                        taskId,
-                        runId: event.runId ?? null,
-                        message: event.message,
-                        turnId: turnId ?? null,
-                    });
+                const hasObservedToolEvidence = (
+                    hasTaskTurnToolResultEvidence(turnEventStateKey)
+                    || getTaskTurnObservedToolNames(turnEventStateKey).length > 0
+                );
+                const hasApprovalRecoveryInFlight = hasPendingApprovalForTask(taskId)
+                    || (autoApprovalInFlightByTaskId.get(taskId)?.size ?? 0) > 0;
+                if (!hasObservedToolEvidence && !hasApprovalRecoveryInFlight) {
+                    if (isAutoApprovalDebugEnabled()) {
+                        console.warn('[MastraEntrypoint] Missing-snapshot error has no recoverable progress; propagating failure', {
+                            taskId,
+                            runId: event.runId ?? null,
+                            message: event.message,
+                            turnId: turnId ?? null,
+                        });
+                    }
+                } else {
+                    if (isAutoApprovalDebugEnabled()) {
+                        console.warn('[MastraEntrypoint] Suppressing missing-snapshot error before narrative', {
+                            taskId,
+                            runId: event.runId ?? null,
+                            message: event.message,
+                            turnId: turnId ?? null,
+                        });
+                    }
+                    return;
                 }
-                return;
             }
             if (
                 eventRunId.length > 0
@@ -5027,6 +3940,33 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             }
             const commandFailureInfo = getTaskTurnCommandFailureInfo(turnEventStateKey, taskId);
             const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
+            const isWorkflowMissingToolEvidenceError = /workflow_missing_required_tool_evidence/iu.test(event.message);
+            const missingToolEvidenceCapabilitiesFromError = isWorkflowMissingToolEvidenceError
+                ? extractRequiredCapabilitiesFromMissingToolEvidenceError(event.message)
+                : [];
+            const fallbackRequiredCapabilities = requiredCapabilities.length > 0
+                ? requiredCapabilities
+                : (
+                    missingToolEvidenceCapabilitiesFromError.length > 0
+                        ? missingToolEvidenceCapabilitiesFromError
+                        : [COMMAND_EXECUTION_CAPABILITY]
+                );
+            if (
+                isWorkflowMissingToolEvidenceError
+                && runMissingToolEvidenceAutoRetry
+                && runMissingToolEvidenceAutoRetry({
+                    taskId,
+                    turnEventStateKey,
+                    turnId,
+                    traceId,
+                    requiredCapabilities: fallbackRequiredCapabilities,
+                    source: 'error',
+                    reason: 'missing_tool_evidence',
+                    runId: event.runId,
+                })
+            ) {
+                return;
+            }
             if (
                 commandFailureInfo
                 && isRetryableRuntimeStreamError(event.message)
@@ -5040,6 +3980,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         ? requiredCapabilities
                         : [COMMAND_EXECUTION_CAPABILITY],
                     source: 'error',
+                    reason: 'command_failure',
                     runId: event.runId,
                 })
             ) {
@@ -5372,47 +4313,15 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
         command: ProtocolCommand,
         emit: (message: OutgoingMessage) => void,
     ): Promise<boolean> => {
-        if (command.type === 'health_check') {
-            emit({
-                type: 'health',
-                runtime: 'mastra',
-                health: deps.getMastraHealth(),
-            });
-            return true;
-        }
-        if (command.type === 'user_message') {
-            const message = getString((command as { message?: unknown }).message);
-            const threadId = getString((command as { threadId?: unknown }).threadId);
-            const resourceId = getString((command as { resourceId?: unknown }).resourceId);
-            if (!message || !threadId || !resourceId) {
-                emit({ type: 'error', message: 'invalid_command' });
-                return true;
-            }
-            await deps.handleUserMessage(
-                message,
-                threadId,
-                resourceId,
-                (event) => emit(toRecord(event)),
-            );
-            return true;
-        }
-        if (command.type === 'approval_response') {
-            const runId = getString((command as { runId?: unknown }).runId);
-            const toolCallId = getString((command as { toolCallId?: unknown }).toolCallId);
-            const approved = (command as { approved?: unknown }).approved;
-            if (!runId || !toolCallId || typeof approved !== 'boolean') {
-                emit({ type: 'error', message: 'invalid_command' });
-                return true;
-            }
-            await deps.handleApprovalResponse(
-                runId,
-                toolCallId,
-                approved,
-                (event) => emit(toRecord(event)),
-            );
-            return true;
-        }
-        return false;
+        return await handleEntrypointLegacySimpleCommand({
+            command,
+            getString,
+            toRecord,
+            emit,
+            getMastraHealth: deps.getMastraHealth,
+            handleUserMessage: deps.handleUserMessage,
+            handleApprovalResponse: deps.handleApprovalResponse,
+        });
     };
     const rememberCompletedForwardResponseId = (responseId: string): void => {
         completedForwardResponseIds.add(responseId);
@@ -5795,74 +4704,6 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     const requiredCapabilities = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey);
                     const missingCapabilities = getTaskTurnMissingRequiredCompletionCapabilities(turnEventStateKey);
                     const toolResultSeen = hasTaskTurnToolResultEvidence(turnEventStateKey);
-                    if (
-                        runMissingToolEvidenceAutoRetry
-                        && missingCapabilities.length > 0
-                        && runMissingToolEvidenceAutoRetry({
-                            taskId: input.taskId,
-                            turnEventStateKey,
-                            turnId: input.turnId,
-                            traceId: null,
-                            requiredCapabilities: missingCapabilities,
-                            source: 'error',
-                            runId: latestRunIdByTaskId.get(input.taskId),
-                        })
-                    ) {
-                        return;
-                    }
-                    if ((requiredCapabilities.length === 0 || missingCapabilities.length === 0) && toolResultSeen) {
-                        if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'complete')) {
-                            return;
-                        }
-                        const finishReason = `degraded_${reason}`;
-                        const degradedSummary = buildMissingTerminalRecoverySummary({
-                            evidenceSatisfied: hasTaskTurnSatisfiedCompletionEvidence(turnEventStateKey) && toolResultSeen,
-                        });
-                        markTaskTurnTerminalEvent(turnEventStateKey, 'complete');
-                        appendTranscript(input.taskId, 'assistant', degradedSummary);
-                        clearPendingApprovalsForTask(input.taskId);
-                        const existingRetry = taskStates.get(input.taskId)?.retry;
-                        upsertTaskState(input.taskId, {
-                            status: 'finished',
-                            suspended: false,
-                            suspensionReason: undefined,
-                            checkpoint: undefined,
-                            retry: existingRetry
-                                ? {
-                                    ...existingRetry,
-                                    lastError: undefined,
-                                }
-                                : undefined,
-                        });
-                        emitHookEvent('TaskCompleted', {
-                            taskId: input.taskId,
-                            payload: {
-                                finishReason,
-                                reason,
-                                degraded: true,
-                            },
-                        });
-                        emit({
-                            type: 'TEXT_DELTA',
-                            taskId: input.taskId,
-                            payload: {
-                                delta: degradedSummary,
-                                turnId: input.turnId,
-                            },
-                        });
-                        emit({
-                            type: 'TASK_FINISHED',
-                            taskId: input.taskId,
-                            payload: {
-                                summary: degradedSummary,
-                                finishReason,
-                                reason,
-                                traceId: null,
-                                turnId: input.turnId,
-                            },
-                        });
-                        return;
-                    }
                     if (shouldSuppressTaskTurnTerminalEvent(turnEventStateKey, 'error')) {
                         return;
                     }
@@ -5887,6 +4728,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             message: 'Mastra stream ended without a terminal completion event.',
                             errorCode: 'E_PROTOCOL_MISSING_TERMINAL_EVENT',
                             reason,
+                            requiredCapabilities,
+                            missingCapabilities,
+                            toolResultSeen,
                         },
                     });
                     emit({
@@ -5898,6 +4742,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             recoverable: true,
                             suggestion: 'Retry this turn. If it repeats, lower delegation complexity or disable guardrails.',
                             reason,
+                            requiredCapabilities,
+                            missingCapabilities,
+                            toolResultSeen,
                             turnId: input.turnId,
                         },
                     });
@@ -5971,6 +4818,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 let sawRetryableNoNarrativeErrorDuringAutoApproval = false;
                 let sawRetryableNoNarrativeErrorAfterToolingProgress = false;
                 let autoApprovalRecoveryAttempted = false;
+                let retryableNoNarrativeRecoveryAttempted = false;
                 let autoApprovalIdleTerminalTimeoutReached = false;
                 const suppressedRecoverableEvents: DesktopEvent[] = [];
 
@@ -5998,6 +4846,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             ? requiredCapabilities
                             : [COMMAND_EXECUTION_CAPABILITY],
                         source: 'error',
+                        reason: 'command_failure',
                         runId,
                     });
                 };
@@ -6104,58 +4953,52 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     }
                     return hasTaskTurnTerminalEvent(turnEventStateKey);
                 };
-                const emitNoNarrativeDegradedCompletion = async (reason: string): Promise<void> => {
-                    if (hasPendingApprovalForTask(input.taskId)) {
-                        return;
+                const attemptRetryableNoNarrativeRecovery = async (reason: string): Promise<boolean> => {
+                    if (retryableNoNarrativeRecoveryAttempted) {
+                        return false;
                     }
-                    if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
-                        return;
+                    if (!sawRetryableNoNarrativeErrorAfterToolingProgress) {
+                        return false;
                     }
-                    // Never synthesize a successful terminal summary when no tool result was observed.
-                    // This prevents "fake completion" explanatory text when execution never produced output.
-                    if (!hasTaskTurnToolResultEvidence(turnEventStateKey)) {
-                        await emitMissingTerminalFailure(reason);
-                        return;
+                    if (awaitingUserApproval || hasPendingApprovalForTask(input.taskId)) {
+                        return false;
                     }
-                    const clippedOriginalRequest = input.message.trim().slice(0, 2400);
-                    const commandFailureInfo = getTaskTurnCommandFailureInfo(turnEventStateKey, input.taskId);
-                    const degradedLines = [
-                        '上游检索流在输出正文前中断，暂未产出完整分析结果。',
-                        '为避免界面继续卡住，我先结束本轮；你可以直接点击重试，或把请求拆成单标的重试。',
-                        `原始请求：${clippedOriginalRequest}`,
-                    ];
-                    if (commandFailureInfo) {
-                        degradedLines.push('检测到失败步骤：命令执行阶段报错。');
-                        if (commandFailureInfo.failedCommand) {
-                            degradedLines.push(`失败命令：${commandFailureInfo.failedCommand}`);
-                        }
-                        if (typeof commandFailureInfo.exitCode === 'number') {
-                            degradedLines.push(`退出码：${commandFailureInfo.exitCode}`);
-                        }
-                        if (commandFailureInfo.stderrSnippet) {
-                            degradedLines.push(`错误信息：${commandFailureInfo.stderrSnippet}`);
-                        }
-                        degradedLines.push('建议：仅重试当前失败步骤（无需重跑整个任务）。');
+                    if (sawAutoApprovalRequired || hasAutoApprovalInFlightForTask()) {
+                        return false;
                     }
-                    const degradedSummary = degradedLines.join('\n');
-                    const syntheticRunId = `synthetic-degraded-${createId()}`;
-                    enqueueEmitDesktopEvent({
-                        type: 'text_delta',
-                        runId: syntheticRunId,
-                        role: 'assistant',
-                        content: degradedSummary,
-                        turnId: input.turnId,
+                    retryableNoNarrativeRecoveryAttempted = true;
+                    const recoveryThreadId = `${input.taskId}-retryable-no-narrative-recovery-${createId()}`;
+                    upsertTaskState(input.taskId, {
+                        conversationThreadId: recoveryThreadId,
                     });
-                    enqueueEmitDesktopEvent({
-                        type: 'complete',
-                        runId: syntheticRunId,
-                        finishReason: `degraded_${reason}`,
-                        turnId: input.turnId,
-                    });
+                    pendingEmitChain = Promise.resolve();
+                    pendingEmitError = undefined;
+                    await executeAttempt(
+                        recoveryThreadId,
+                        (event) => {
+                            enqueueEmitDesktopEvent(event);
+                        },
+                        {
+                            forcePostAssistantCompletion: true,
+                        },
+                    );
                     await pendingEmitChain;
                     if (pendingEmitError) {
                         throw pendingEmitError;
                     }
+                    const recovered = hasTaskTurnTerminalEvent(turnEventStateKey)
+                        || hasTaskTurnAssistantNarrative(turnEventStateKey);
+                    if (isAutoApprovalDebugEnabled() && !recovered) {
+                        console.warn('[MastraEntrypoint] Retryable no-narrative recovery attempt finished without terminal evidence', {
+                            taskId: input.taskId,
+                            reason,
+                            turnId: input.turnId,
+                        });
+                    }
+                    return recovered;
+                };
+                const emitNoNarrativeDegradedCompletion = async (reason: string): Promise<void> => {
+                    await emitMissingTerminalFailure(reason);
                 };
                 latestRunIdByTaskId.delete(input.taskId);
                 autoApprovalInFlightByTaskId.delete(input.taskId);
@@ -6403,6 +5246,11 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 pendingNoNarrativeCompleteHadProgress = false;
                                 return;
                             }
+                            if (await attemptRetryableNoNarrativeRecovery('missing_terminal_after_late_tooling_progress')) {
+                                pendingNoNarrativeCompleteEvent = null;
+                                pendingNoNarrativeCompleteHadProgress = false;
+                                return;
+                            }
                             await emitNoNarrativeDegradedCompletion('missing_terminal_after_late_tooling_progress');
                             pendingNoNarrativeCompleteEvent = null;
                             pendingNoNarrativeCompleteHadProgress = false;
@@ -6590,6 +5438,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
                             return;
                         }
+                        if (await attemptRetryableNoNarrativeRecovery('missing_terminal_after_tooling_progress')) {
+                            return;
+                        }
                         await emitNoNarrativeDegradedCompletion('missing_terminal_after_tooling_progress');
                         return;
                     }
@@ -6711,19 +5562,44 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     await runDirect();
                     return 'direct';
                 }
-                const delegateResult = await deps.executeTaskMessage({
-                    taskId: input.taskId,
-                    turnId: input.turnId,
-                    message: input.message,
-                    resourceId: input.resourceId,
-                    preferredThreadId: input.preferredThreadId,
-                    workspacePath: input.workspacePath,
-                    executionOptions: executionOptionsWithCompactionHooks,
-                    runDirect,
-                    emitDesktopEvent: async (event: DesktopEvent) => {
-                        await emitDesktopEvent(input.taskId, event, emit, input.turnId);
-                    },
-                });
+                const delegatedTaskExecutionTimeoutMs = resolveDelegatedTaskExecutionTimeoutMs();
+                let delegateResult: TaskMessageExecutionDelegateResult;
+                try {
+                    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+                    delegateResult = await Promise.race([
+                        deps.executeTaskMessage({
+                            taskId: input.taskId,
+                            turnId: input.turnId,
+                            message: input.message,
+                            resourceId: input.resourceId,
+                            preferredThreadId: input.preferredThreadId,
+                            workspacePath: input.workspacePath,
+                            executionOptions: executionOptionsWithCompactionHooks,
+                            runDirect,
+                            emitDesktopEvent: async (event: DesktopEvent) => {
+                                await emitDesktopEvent(input.taskId, event, emit, input.turnId);
+                            },
+                        }),
+                        new Promise<TaskMessageExecutionDelegateResult>((_, reject) => {
+                            timeoutId = setTimeout(() => {
+                                reject(new Error(`delegated_task_execution_timeout:${delegatedTaskExecutionTimeoutMs}`));
+                            }, delegatedTaskExecutionTimeoutMs);
+                        }),
+                    ]).finally(() => {
+                        if (timeoutId) {
+                            clearTimeout(timeoutId);
+                        }
+                    });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    await emitDesktopEvent(input.taskId, {
+                        type: 'error',
+                        runId: `delegate-execution-${createId()}`,
+                        message,
+                        turnId: input.turnId,
+                    }, emit, input.turnId);
+                    return mode;
+                }
                 const executionPath = delegateResult?.executionPath;
                 if (
                     executionPath === 'workflow'
@@ -6734,355 +5610,88 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 }
                 return mode;
             };
-            runMissingToolEvidenceAutoRetry = (retryInput) => {
-                const turnRetryKey = `${retryInput.turnEventStateKey}:missing-tool-evidence`;
-                if (missingToolEvidenceAutoRetryByTurnKey.has(turnRetryKey)) {
-                    return true;
-                }
-                const existingState = taskStates.get(retryInput.taskId);
-                if (!existingState) {
-                    return false;
-                }
-                const baseRetryMessage = typeof existingState.lastUserMessage === 'string'
-                    ? existingState.lastUserMessage.trim()
-                    : '';
-                if (baseRetryMessage.length === 0) {
-                    return false;
-                }
-                const envMaxAttempts = resolveMissingToolEvidenceAutoRetryMaxAttempts();
-                const currentAttempts = Math.max(0, existingState.retry?.attempts ?? 0);
-                // Only apply implicit retry floor for "complete-without-evidence" class.
-                // Protocol error paths (for example missing terminal events) should fail fast
-                // unless an explicit retry budget is configured.
-                const hasActionableProgressSignal = hasTaskTurnAssistantNarrative(retryInput.turnEventStateKey)
-                    || getTaskTurnObservedToolNames(retryInput.turnEventStateKey).length > 0;
-                const missingCapabilitiesForTurn = getTaskTurnMissingRequiredCompletionCapabilities(
-                    retryInput.turnEventStateKey,
-                );
-                const requiredCapabilitiesForTurn = getTaskTurnRequiredCompletionCapabilities(
-                    retryInput.turnEventStateKey,
-                );
-                const commandRecoveryHint = getTaskTurnCommandRecoveryHint(
-                    retryInput.turnEventStateKey,
-                    retryInput.taskId,
-                );
-                const commandFailureInfo = getTaskTurnCommandFailureInfo(
-                    retryInput.turnEventStateKey,
-                    retryInput.taskId,
-                );
-                const retryFloorCapabilities = missingCapabilitiesForTurn.length > 0
-                    ? missingCapabilitiesForTurn
-                    : retryInput.requiredCapabilities;
-                const attemptedCapabilitiesForTurn = getTaskTurnResultAttemptedCompletionCapabilities(
-                    retryInput.turnEventStateKey,
-                );
-                const attemptedRetryFloorCapability = attemptedCapabilitiesForTurn.some((capability) => (
-                    retryFloorCapabilities.includes(capability)
-                ));
-                const hasAnyRequiredCapability = requiredCapabilitiesForTurn.length > 0;
-                const canApplyProtocolSafetyFloor = retryInput.source === 'complete'
-                    && hasActionableProgressSignal
-                    && hasAnyRequiredCapability
-                    && !attemptedRetryFloorCapability;
-                const hasCommandFailureSignal = Boolean(commandFailureInfo || commandRecoveryHint);
-                const canApplyErrorRecoveryFloor = retryInput.source === 'error'
-                    && retryInput.requiredCapabilities.includes(COMMAND_EXECUTION_CAPABILITY)
-                    && hasCommandFailureSignal;
-                const implicitRetryFloor = canApplyProtocolSafetyFloor
-                    ? resolveMissingToolEvidenceRetryFloor(retryFloorCapabilities)
-                    : (canApplyErrorRecoveryFloor ? 1 : 0);
-                const configuredRetryCapFromState = existingState.retry?.maxAttempts;
-                const configuredMaxAttempts = configuredRetryCapFromState === 0
-                    ? implicitRetryFloor
-                    : Math.max(
-                        0,
-                        configuredRetryCapFromState ?? envMaxAttempts,
-                        implicitRetryFloor,
-                    );
-                const maxAttempts = resolveAdaptiveMissingToolEvidenceRetryMaxAttempts({
-                    configuredMaxAttempts,
-                    currentAttempts,
-                    lastError: existingState.retry?.lastError,
-                    requiredCapabilities: retryInput.requiredCapabilities,
-                });
-                const nextAttempts = currentAttempts + 1;
-                if (maxAttempts <= 0 || nextAttempts > maxAttempts) {
-                    return false;
-                }
-                const retryDelayMs = resolveMissingToolEvidenceAutoRetryDelayMs();
-                const retryMessage = buildMissingToolEvidenceRetryMessage({
-                    message: baseRetryMessage,
-                    requiredCapabilities: retryInput.requiredCapabilities,
-                    source: retryInput.source,
-                    commandRecoveryHint,
-                });
-                const retryReason = retryInput.source === 'error'
-                    ? 'retryable_command_failure'
-                    : 'complete_without_required_tool_evidence';
-                const retryStatusMessage = retryInput.source === 'error'
-                    ? `命令步骤失败，正在仅重试失败步骤 (${nextAttempts}/${maxAttempts})...`
-                    : `缺少工具证据，正在自动重试 (${nextAttempts}/${maxAttempts})...`;
-                const updatedState = upsertTaskState(retryInput.taskId, {
-                    status: 'retrying',
-                    suspended: false,
-                    suspensionReason: undefined,
-                    checkpoint: undefined,
-                    retry: {
-                        attempts: nextAttempts,
-                        maxAttempts,
-                        lastRetryAt: getNowIso(),
-                        lastError: retryReason,
-                    },
-                });
-                resetTaskTurnAttemptStreamState(retryInput.turnEventStateKey);
-                clearPendingApprovalsForTask(retryInput.taskId);
-                missingToolEvidenceAutoRetryByTurnKey.add(turnRetryKey);
-                emit({
-                    type: 'RATE_LIMITED',
-                    taskId: retryInput.taskId,
-                    payload: {
-                        message: retryStatusMessage,
-                        attempt: nextAttempts,
-                        maxRetries: maxAttempts,
-                        retryAfterMs: retryDelayMs,
-                        error: retryReason,
-                        stage: 'unknown',
-                        requiredCapabilities: retryInput.requiredCapabilities,
-                        source: retryInput.source,
-                        traceId: retryInput.traceId ?? null,
-                        turnId: retryInput.turnId,
-                    },
-                });
-                const executionOptions = buildRetryExecutionOptionsFromTaskState(updatedState);
-                const retryTurnId = retryInput.turnId ?? `auto-retry:${createId()}`;
-                const queueExecution = enqueueTaskExecution({
-                    taskId: retryInput.taskId,
-                    turnId: retryTurnId,
-                    run: async () => {
-                        missingToolEvidenceAutoRetryByTurnKey.delete(turnRetryKey);
-                        if (retryDelayMs > 0) {
-                            await new Promise<void>((resolve) => {
-                                setTimeout(resolve, retryDelayMs);
-                            });
-                        }
-                        return await executeTaskMessage({
-                            taskId: retryInput.taskId,
-                            turnId: retryTurnId,
-                            message: retryMessage,
-                            resourceId: updatedState.resourceId,
-                            preferredThreadId: updatedState.conversationThreadId,
-                            workspacePath: updatedState.workspacePath,
-                            executionOptions,
-                        });
-                    },
-                });
-                void queueExecution.completion
-                    .then((executionPath) => {
-                        if (executionPath !== updatedState.executionPath) {
-                            upsertTaskState(retryInput.taskId, {
-                                executionPath,
-                            });
-                        }
-                    })
-                    .catch((error) => {
-                        const message = error instanceof Error ? error.message : String(error);
-                        const classification = classifyRuntimeErrorMessage(message);
-                        const adaptiveMaxAttempts = resolveAdaptiveMissingToolEvidenceRetryMaxAttempts({
-                            configuredMaxAttempts: maxAttempts,
-                            currentAttempts: nextAttempts,
-                            lastError: message,
-                            requiredCapabilities: retryInput.requiredCapabilities,
-                        });
-                        if (!hasTaskTurnTerminalEvent(retryInput.turnEventStateKey)) {
-                            markTaskTurnTerminalEvent(retryInput.turnEventStateKey, 'error');
-                            upsertTaskState(retryInput.taskId, {
-                                status: 'failed',
-                                suspended: false,
-                                suspensionReason: undefined,
-                                checkpoint: undefined,
-                                retry: {
-                                    attempts: nextAttempts,
-                                    maxAttempts: adaptiveMaxAttempts,
-                                    lastRetryAt: getNowIso(),
-                                    lastError: message,
-                                },
-                            });
-                            emit({
-                                type: 'TASK_FAILED',
-                                taskId: retryInput.taskId,
-                                payload: {
-                                    error: message,
-                                    errorCode: classification.errorCode,
-                                    recoverable: classification.recoverable,
-                                    suggestion: classification.suggestion,
-                                    failureClass: classification.failureClass,
-                                    traceId: retryInput.traceId ?? null,
-                                    turnId: retryInput.turnId,
-                                },
-                            });
-                        }
-                    })
-                    .finally(() => {
-                        missingToolEvidenceAutoRetryByTurnKey.delete(turnRetryKey);
+            runMissingToolEvidenceAutoRetry = createMissingToolEvidenceAutoRetryRunner({
+                missingToolEvidenceAutoRetryByTurnKey,
+                taskStates,
+                commandExecutionCapability: COMMAND_EXECUTION_CAPABILITY,
+                resolveMissingToolEvidenceAutoRetryMaxAttempts,
+                resolveMissingToolEvidenceRetryFloor,
+                resolveAdaptiveMissingToolEvidenceRetryMaxAttempts,
+                resolveMissingToolEvidenceAutoRetryDelayMs,
+                hasTaskTurnAssistantNarrative,
+                getTaskTurnObservedToolNames,
+                getTaskTurnMissingRequiredCompletionCapabilities,
+                getTaskTurnRequiredCompletionCapabilities,
+                getTaskTurnCommandRecoveryHint,
+                getTaskTurnCommandFailureInfo,
+                getTaskTurnResultAttemptedCompletionCapabilities,
+                buildMissingToolEvidenceRetryMessage,
+                upsertTaskState,
+                getNowIso,
+                resetTaskTurnAttemptStreamState,
+                clearPendingApprovalsForTask,
+                emitTaskEvent: (event) => {
+                    emit({
+                        type: event.type,
+                        taskId: event.taskId,
+                        payload: event.payload,
                     });
-                return true;
-            };
-            if (command.type === 'bootstrap_runtime_context') {
-                bootstrapRuntimeContext = toRecord(payload.runtimeContext);
-                hydrateLegacyRuntimeRecordsFromBootstrap(bootstrapRuntimeContext);
-                emitFor('bootstrap_runtime_context_response', {
-                    success: true,
-                });
-                return;
-            }
-            if (command.type === 'get_runtime_snapshot') {
-                try {
-                    emitFor('get_runtime_snapshot_response', {
-                        success: true,
-                        snapshot: collectRuntimeSnapshot(),
-                    });
-                } catch (error) {
-                    emitFor('get_runtime_snapshot_response', {
-                        success: false,
-                        snapshot: {
-                            generatedAt: getNowIso(),
-                            tasks: [],
-                            count: 0,
-                        },
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                }
-                return;
-            }
-            if (command.type === 'warmup_chat_runtime') {
-                if (!deps.warmupChatRuntime) {
-                    emitFor('warmup_chat_runtime_response', {
-                        success: true,
-                        warmup: {
-                            mcpServerCount: 0,
-                            mcpToolCount: 0,
-                            durationMs: 0,
-                            skipped: true,
-                        },
-                    });
-                    return;
-                }
-                try {
-                    const warmup = await deps.warmupChatRuntime();
-                    emitFor('warmup_chat_runtime_response', {
-                        success: true,
-                        warmup,
-                    });
-                } catch (error) {
-                    emitFor('warmup_chat_runtime_response', {
-                        success: false,
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                }
-                return;
-            }
-            if (command.type === 'doctor_preflight') {
-                const runtimeConfig = buildRuntimeConfigDoctorSummary();
-                emitFor('doctor_preflight_response', {
-                    success: true,
-                    report: {
-                        runtime: 'mastra',
-                        status: 'ok',
-                        hasRuntimeContext: Boolean(bootstrapRuntimeContext),
-                        runtimeConfig,
-                    },
-                    markdown: [
-                        '# Doctor Preflight',
-                        '',
-                        'Mastra runtime is healthy.',
-                        '',
-                        `- Runtime config: ${runtimeConfig.loadedFromPath ?? 'not found'}`,
-                        `- Search provider: ${runtimeConfig.search.provider.value} (${runtimeConfig.search.provider.source})`,
-                        `- Search credentials: serper=${runtimeConfig.search.credentials.serperApiKeyConfigured ? 'on' : 'off'}, exa=${runtimeConfig.search.credentials.exaApiKeyConfigured ? 'on' : 'off'}, tavily=${runtimeConfig.search.credentials.tavilyApiKeyConfigured ? 'on' : 'off'}, brave=${runtimeConfig.search.credentials.braveApiKeyConfigured ? 'on' : 'off'}`,
-                        ...(runtimeConfig.conflicts.length > 0
-                            ? ['', `- Conflicts: ${runtimeConfig.conflicts.join(' | ')}`]
-                            : []),
-                    ].join('\n'),
-                });
-                return;
-            }
-            if (command.type === 'get_tasks') {
-                const workspacePath = getString(payload.workspacePath);
-                if (!workspacePath) {
-                    emitInvalidPayload('get_tasks_response', { tasks: [], count: 0 });
-                    return;
-                }
-                const statusFilter = Array.isArray(payload.status)
-                    ? new Set(payload.status.filter((value): value is string => typeof value === 'string'))
-                    : null;
-                const limit = typeof payload.limit === 'number' && payload.limit > 0
-                    ? Math.floor(payload.limit)
-                    : null;
-                const all = Array.from(taskStates.values())
-                    .filter((task) => task.workspacePath === workspacePath)
-                    .filter((task) => {
-                        if (!statusFilter || statusFilter.size === 0) {
-                            return true;
-                        }
-                        return statusFilter.has(task.status);
-                    })
-                    .map((task) => ({
-                        id: task.taskId,
-                        taskId: task.taskId,
-                        title: task.title,
-                        workspacePath: task.workspacePath,
-                        status: task.status,
-                        createdAt: task.createdAt,
-                        modelId: task.modelId ?? null,
-                        executionPath: task.executionPath ?? 'workflow',
-                    }));
-                const tasks = limit ? all.slice(0, limit) : all;
-                emitFor('get_tasks_response', {
-                    success: true,
-                    tasks,
-                    count: tasks.length,
-                });
-                return;
-            }
-            if (command.type === 'get_task_runtime_state') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('get_task_runtime_state_response', {
+                },
+                buildRetryExecutionOptionsFromTaskState,
+                createId,
+                enqueueTaskExecution,
+                executeTaskMessage,
+                classifyRuntimeErrorMessage,
+                hasTaskTurnTerminalEvent,
+                markTaskTurnTerminalEvent,
+            });
+            if (await handleEntrypointRuntimeCommands({
+                commandType: command.type,
+                commandId,
+                payload,
+                taskStates,
+                getString,
+                toRecord,
+                getNowIso,
+                createId,
+                setBootstrapRuntimeContext: (context) => {
+                    bootstrapRuntimeContext = context;
+                },
+                hasBootstrapRuntimeContext: () => Boolean(bootstrapRuntimeContext),
+                hydrateLegacyRuntimeRecordsFromBootstrap,
+                collectRuntimeSnapshot,
+                warmupChatRuntime: deps.warmupChatRuntime,
+                buildRuntimeConfigDoctorSummary,
+                taskTranscriptStore: deps.taskTranscriptStore,
+                rewindTaskContext: deps.rewindTaskContext,
+                resolveTaskCheckpointVersion,
+                listPolicyDecisionLog: deps.policyDecisionLog
+                    ? ({ taskId, limit }) => deps.policyDecisionLog?.list({ taskId, limit }) ?? []
+                    : undefined,
+                listHookEvents: deps.hookRuntime
+                    ? ({ taskId, limit, type }) => deps.hookRuntime?.list({ taskId, limit, type }) ?? []
+                    : undefined,
+                applyPolicyDecision: (input) => applyPolicyDecision({
+                    requestId: input.requestId,
+                    action: input.action,
+                    commandType: input.commandType,
+                    taskId: input.taskId,
+                    source: input.source,
+                    payload: input.payload,
+                }),
+                upsertTaskState,
+                appendTranscript,
+                emitHookEvent,
+                emitTaskStatus: (taskId, statusPayload) => {
+                    emit({
+                        type: 'TASK_STATUS',
                         taskId,
-                        state: null,
+                        payload: statusPayload,
                     });
-                    return;
-                }
-                const state = taskStates.get(taskId);
-                emitFor('get_task_runtime_state_response', {
-                    success: Boolean(state),
-                    taskId,
-                    state: state
-                        ? {
-                            taskId: state.taskId,
-                            threadId: state.conversationThreadId,
-                            title: state.title,
-                            workspacePath: state.workspacePath,
-                            createdAt: state.createdAt,
-                            status: state.status,
-                            suspended: state.suspended ?? false,
-                            suspensionReason: state.suspensionReason ?? null,
-                            lastUserMessage: state.lastUserMessage ?? null,
-                            lastTraceId: state.lastTraceId ?? null,
-                            enabledSkills: state.enabledSkills ?? [],
-                            modelId: state.modelId ?? null,
-                            resourceId: state.resourceId,
-                            checkpoint: state.checkpoint ?? null,
-                            checkpointVersion: state.checkpointVersion ?? resolveTaskCheckpointVersion(state),
-                            retry: state.retry ?? null,
-                            agentTasks: state.agentTasks ?? [],
-                            agentTaskProgress: state.agentTaskProgress ?? null,
-                            operationLog: state.operationLog ?? [],
-                            executionPath: state.executionPath ?? 'workflow',
-                        }
-                        : null,
-                    error: state ? null : 'task_not_found',
-                });
+                },
+                emitInvalidPayload,
+                emitFor,
+            })) {
                 return;
             }
             if (await handleRemoteSessionCommands({
@@ -7102,7 +5711,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 evaluateRemoteSessionGovernance,
                 resolveTaskIdForExternalEvent,
                 resolveRemoteSessionState,
-                resolveTaskIdForRemoteSessionId: (remoteSessionId) => remoteSessionToTaskId.get(remoteSessionId),
+                resolveTaskIdForRemoteSessionId,
                 upsertRemoteSessionRecord,
                 bindRemoteSessionToTask,
                 unbindRemoteSession,
@@ -7130,262 +5739,20 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             })) {
                 return;
             }
-            if (command.type === 'get_policy_decision_log') {
-                const taskId = getString(payload.taskId) ?? undefined;
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.min(1000, Math.floor(payload.limit))
-                    : undefined;
-                const entries = deps.policyDecisionLog
-                    ? deps.policyDecisionLog.list({ taskId, limit })
-                    : [];
-                emitFor('get_policy_decision_log_response', {
-                    success: true,
-                    taskId: taskId ?? null,
-                    entries,
-                    count: entries.length,
-                });
-                return;
-            }
-            if (command.type === 'get_hook_events') {
-                const taskId = getString(payload.taskId) ?? undefined;
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.min(1000, Math.floor(payload.limit))
-                    : undefined;
-                const type = parseHookRuntimeEventType(payload.type);
-                const entries = deps.hookRuntime
-                    ? deps.hookRuntime.list({
-                        taskId,
-                        limit,
-                        type,
-                    })
-                    : [];
-                emitFor('get_hook_events_response', {
-                    success: true,
-                    taskId: taskId ?? null,
-                    type: type ?? null,
-                    entries,
-                    count: entries.length,
-                });
-                return;
-            }
-            if (command.type === 'get_task_transcript') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('get_task_transcript_response', { taskId, entries: [], count: 0 });
-                    return;
-                }
-                const limit = typeof payload.limit === 'number' && Number.isFinite(payload.limit) && payload.limit > 0
-                    ? Math.floor(payload.limit)
-                    : undefined;
-                const entries = deps.taskTranscriptStore
-                    ? deps.taskTranscriptStore.list(taskId, limit).map((entry) => ({
-                        id: entry.id,
-                        role: entry.role,
-                        content: entry.content,
-                        at: entry.at,
-                    }))
-                    : [];
-                emitFor('get_task_transcript_response', {
-                    success: true,
-                    taskId,
-                    entries,
-                    count: entries.length,
-                });
-                return;
-            }
-            if (command.type === 'rewind_task') {
-                const taskId = getString(payload.taskId) ?? '';
-                if (!taskId) {
-                    emitInvalidPayload('rewind_task_response', { taskId });
-                    return;
-                }
-                const rewindGuard = await runGuardPipeline<undefined>([
-                    () => {
-                        const rewindDecision = applyPolicyDecision({
-                            requestId: commandId,
-                            action: 'task_command',
-                            commandType: command.type,
-                            taskId,
-                            source: 'rewind_task',
-                            payload,
-                        });
-                        if (!rewindDecision.allowed) {
-                            return failGuard(`policy_denied:${rewindDecision.reason}`, undefined);
-                        }
-                        return passGuard();
-                    },
-                ]);
-                if (!rewindGuard.ok) {
-                    emitFor('rewind_task_response', {
-                        success: false,
-                        taskId,
-                        error: rewindGuard.error,
-                    });
-                    return;
-                }
-                const userTurns = typeof payload.userTurns === 'number' && Number.isFinite(payload.userTurns) && payload.userTurns > 0
-                    ? Math.min(20, Math.floor(payload.userTurns))
-                    : 1;
-                const rewound = deps.taskTranscriptStore
-                    ? deps.taskTranscriptStore.rewindByUserTurns(taskId, userTurns)
-                    : {
-                        success: false,
-                        removedEntries: 0,
-                        removedUserTurns: 0,
-                        remainingEntries: 0,
-                        latestUserMessage: undefined,
-                    };
-                if (!rewound.success) {
-                    emitFor('rewind_task_response', {
-                        success: false,
-                        taskId,
-                        error: 'rewind_unavailable_or_no_history',
-                        removedEntries: rewound.removedEntries,
-                        removedUserTurns: rewound.removedUserTurns,
-                    });
-                    return;
-                }
-                const newThreadId = `${taskId}-rewind-${createId()}`;
-                const updatedState = upsertTaskState(taskId, {
-                    conversationThreadId: newThreadId,
-                    status: 'idle',
-                    suspended: false,
-                    suspensionReason: undefined,
-                    checkpoint: undefined,
-                    lastUserMessage: rewound.latestUserMessage,
-                });
-                const contextRewind = deps.rewindTaskContext
-                    ? deps.rewindTaskContext({ taskId, userTurns: rewound.removedUserTurns })
-                    : { success: false, removedTurns: 0, remainingTurns: 0 };
-                appendTranscript(taskId, 'system', `Rewound last ${rewound.removedUserTurns} user turn(s).`);
-                emitHookEvent('TaskRewound', {
-                    taskId,
-                    payload: {
-                        removedUserTurns: rewound.removedUserTurns,
-                        removedEntries: rewound.removedEntries,
-                        newThreadId: updatedState.conversationThreadId,
-                    },
-                });
-                emitFor('rewind_task_response', {
-                    success: true,
-                    taskId,
-                    removedEntries: rewound.removedEntries,
-                    removedUserTurns: rewound.removedUserTurns,
-                    remainingEntries: rewound.remainingEntries,
-                    latestUserMessage: rewound.latestUserMessage ?? null,
-                    newThreadId: updatedState.conversationThreadId,
-                    contextRewind,
-                });
-                emit({
-                    type: 'TASK_STATUS',
-                    taskId,
-                    payload: {
-                        status: 'idle',
-                        blockingReason: `Task rewound by ${rewound.removedUserTurns} user turn(s).`,
-                    },
-                });
-                return;
-            }
-            if (command.type === 'get_voice_state') {
-                emitFor('get_voice_state_response', {
-                    success: true,
-                    state: toRecord(getVoicePlaybackState()),
-                });
-                return;
-            }
-            if (command.type === 'stop_voice') {
-                const stopped = await stopVoicePlayback('user_requested');
-                emitFor('stop_voice_response', {
-                    success: true,
-                    stopped,
-                    state: toRecord(getVoicePlaybackState()),
-                });
-                return;
-            }
-            if (command.type === 'get_voice_provider_status') {
-                const effectiveProviderMode = parseVoiceProviderMode(payload.providerMode);
-                emitFor('get_voice_provider_status_response', {
-                    success: true,
-                    ...toRecord(getVoiceProviderStatus(effectiveProviderMode)),
-                });
-                return;
-            }
-            if (command.type === 'transcribe_voice') {
-                const audioBase64 = getString(payload.audioBase64) ?? '';
-                if (!audioBase64) {
-                    emitInvalidPayload('transcribe_voice_response');
-                    return;
-                }
-                const effectiveProviderMode = parseVoiceProviderMode(payload.providerMode);
-                emitFor('transcribe_voice_response', await transcribeWithCustomAsr({
-                    audioBase64,
-                    mimeType: getString(payload.mimeType) ?? undefined,
-                    language: getString(payload.language) ?? undefined,
-                    providerMode: effectiveProviderMode,
-                }));
-                return;
-            }
-            const unsupportedAutonomous = buildUnsupportedAutonomousResponse(command.type, payload);
-            if (unsupportedAutonomous) {
-                emitFor(unsupportedAutonomous.type, unsupportedAutonomous.payload);
-                return;
-            }
-            if (command.type === 'time_travel_workflow_run') {
-                if (!deps.replayWorkflowRunTimeTravel) {
-                    emitCurrent({
-                        success: false,
-                        error: 'unsupported_in_mastra_runtime',
-                    });
-                    return;
-                }
-                const workflowId = getString(payload.workflowId) ?? getString(payload.workflow) ?? '';
-                const runId = getString(payload.runId) ?? '';
-                const steps = Array.isArray(payload.steps)
-                    ? payload.steps.filter((value): value is string => typeof value === 'string' && value.length > 0)
-                    : [];
-                const singleStep = getString(payload.step);
-                const replaySteps = steps.length > 0
-                    ? steps
-                    : (singleStep ? [singleStep] : []);
-                if (!workflowId || !runId || replaySteps.length === 0) {
-                    emitCurrentInvalidPayload({
-                        workflowId,
-                        runId,
-                    });
-                    return;
-                }
-                try {
-                    const replay = await deps.replayWorkflowRunTimeTravel({
-                        workflowId,
-                        runId,
-                        steps: replaySteps,
-                        taskId: getString(payload.taskId) ?? undefined,
-                        resourceId: getString(payload.resourceId) ?? undefined,
-                        threadId: getString(payload.threadId) ?? undefined,
-                        workspacePath: getString(payload.workspacePath) ?? getString(toRecord(payload.context).workspacePath) ?? undefined,
-                        inputData: Object.prototype.hasOwnProperty.call(payload, 'inputData') ? payload.inputData : undefined,
-                        resumeData: Object.prototype.hasOwnProperty.call(payload, 'resumeData') ? payload.resumeData : undefined,
-                        perStep: typeof payload.perStep === 'boolean' ? payload.perStep : undefined,
-                    });
-                    emitCurrent({
-                        success: replay.success,
-                        workflowId: replay.workflowId,
-                        runId: replay.runId,
-                        status: replay.status,
-                        steps: replay.steps,
-                        traceId: replay.traceId,
-                        sampled: replay.sampled,
-                        result: replay.result ?? null,
-                        error: replay.error ?? null,
-                    });
-                } catch (error) {
-                    emitCurrent({
-                        success: false,
-                        workflowId,
-                        runId,
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                }
+            if (await handleEntrypointUtilityCommands({
+                commandType: command.type,
+                payload,
+                getString,
+                toRecord,
+                emitFor,
+                emitCurrent,
+                emitCurrentInvalidPayload,
+                stopVoicePlayback,
+                getVoicePlaybackState,
+                getVoiceProviderStatus,
+                transcribeWithCustomAsr,
+                replayWorkflowRunTimeTravel: deps.replayWorkflowRunTimeTravel,
+            })) {
                 return;
             }
             let startOrSendCommandType = command.type;
@@ -7413,83 +5780,31 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     subagentTaskId: subagentFollowup.subagentTaskId,
                 };
             }
-            if (command.type === 'send_task_message') {
-                const followupTaskId = getString(payload.taskId);
-                const followupMessage = getString(payload.content);
-                if (followupTaskId && followupMessage) {
-                    const previousState = taskStates.get(followupTaskId);
-                    const previousTargets = legacyDeliverablesByTaskId.get(followupTaskId) ?? [];
-                    const previousTarget = previousTargets[0]
-                        ?? extractSaveTargetFromMessage(previousState?.lastUserMessage);
-                    const requestedTarget = extractSaveTargetFromMessage(followupMessage);
-                    const correctionHint = /\b(instead|actually|correct(?:ed|ion)?|update)\b/i.test(followupMessage)
-                        || /改成|改为|改到|换成|修正/u.test(followupMessage);
-                    if (
-                        previousState?.status === 'finished'
-                        && correctionHint
-                        && previousTarget
-                        && requestedTarget
-                        && previousTarget !== requestedTarget
-                    ) {
-                        legacyDeliverablesByTaskId.set(followupTaskId, [requestedTarget]);
-                        emit({
-                            type: 'TASK_CONTRACT_REOPENED',
-                            taskId: followupTaskId,
-                            payload: {
-                                trigger: 'contradictory_evidence',
-                                reason: 'User corrected the previous contract deliverable target.',
-                                diff: {
-                                    changedFields: ['deliverables'],
-                                    deliverablesChanged: {
-                                        before: [previousTarget],
-                                        after: [requestedTarget],
-                                    },
-                                },
-                            },
-                        });
-                        emit({
-                            type: 'TASK_RESEARCH_UPDATED',
-                            taskId: followupTaskId,
-                            payload: {
-                                trigger: 'contradictory_evidence',
-                                summary: 'Follow-up correction detected and deliverable research refreshed.',
-                            },
-                        });
-                        emit({
-                            type: 'TASK_PLAN_READY',
-                            taskId: followupTaskId,
-                            payload: {
-                                trigger: 'contradictory_evidence',
-                                summary: `Updated deliverable target: ${requestedTarget}`,
-                                deliverables: [requestedTarget],
-                            },
-                        });
-                        const workspacePath = previousState.workspacePath || process.cwd();
-                        upsertTaskState(followupTaskId, {
-                            status: 'idle',
-                            suspended: false,
-                            suspensionReason: undefined,
-                            lastUserMessage: followupMessage,
-                            executionPath: 'direct',
-                            turnContract: buildTaskTurnContract({
-                                message: followupMessage,
-                                workspacePath,
-                                mode: 'task',
-                                route: 'direct',
-                                requiredCapabilities: [],
-                                createdAt: getNowIso(),
-                            }),
-                        });
-                        emitFor('send_task_message_response', {
-                            success: true,
-                            taskId: followupTaskId,
-                            accepted: true,
-                            queuePosition: 0,
-                            turnId: commandId,
-                        });
-                        return;
-                    }
-                }
+            if (handleEntrypointFollowupCorrection({
+                commandType: command.type,
+                commandId,
+                payload,
+                getString,
+                getTaskState: (taskId) => taskStates.get(taskId),
+                getLegacyDeliverables: (taskId) => legacyDeliverablesByTaskId.get(taskId),
+                setLegacyDeliverables: (taskId, deliverables) => {
+                    legacyDeliverablesByTaskId.set(taskId, deliverables);
+                },
+                extractSaveTargetFromMessage,
+                emitTaskEvent: (taskId, type, taskPayload) => {
+                    emit({
+                        type,
+                        taskId,
+                        payload: taskPayload,
+                    });
+                },
+                upsertTaskState: (taskId, patch) => upsertTaskState(taskId, patch),
+                buildTaskTurnContract,
+                emitFor,
+                getNowIso,
+                defaultWorkspacePath: () => process.cwd(),
+            })) {
+                return;
             }
             if (await handleStartOrSendTaskCommand({
                 commandType: startOrSendCommandType,
@@ -7605,65 +5920,26 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
             })) {
                 return;
             }
-            if (forwardedCommandTypes.has(command.type)) {
-                const forwardedCommandGuard = await runGuardPipeline<undefined>([
-                    () => {
-                        const forwardedCommandDecision = applyPolicyDecision({
-                            requestId: commandId,
-                            action: 'forward_command',
-                            commandType: command.type,
-                            taskId: getString(payload.taskId) ?? undefined,
-                            source: 'policy_gate_forward',
-                            payload,
-                        });
-                        if (!forwardedCommandDecision.allowed) {
-                            return failGuard(`policy_denied:${forwardedCommandDecision.reason}`, undefined);
-                        }
-                        return passGuard();
-                    },
-                ]);
-                if (!forwardedCommandGuard.ok) {
-                    emitCurrent({
-                        success: false,
-                        error: forwardedCommandGuard.error,
-                    });
-                    return;
-                }
-                try {
-                    const forwarded = await forwardCommandAndWait(
-                        command.type,
-                        payload,
-                        emit,
-                        command.type === 'request_effect' ? REQUEST_EFFECT_TIMEOUT_MS : policyGateResponseTimeoutMs,
-                    );
-                    const expectedType = `${command.type}_response`;
-                    if (forwarded.type === expectedType) {
-                        emitFor(expectedType, toRecord(forwarded.payload));
-                        return;
-                    }
+            if (await handleEntrypointForwardedCommand({
+                commandId,
+                commandType: command.type,
+                payload,
+                forwardedCommandTypes,
+                requestEffectTimeoutMs: REQUEST_EFFECT_TIMEOUT_MS,
+                defaultTimeoutMs: policyGateResponseTimeoutMs,
+                getString,
+                toRecord,
+                emitFor,
+                emitCurrent,
+                createId,
+                applyPolicyDecision: (decisionInput) => applyPolicyDecision(decisionInput),
+                forwardCommandAndWait,
+                emitRaw: emit,
+                onInvalidResponse: () => {
                     forwardBridgeStats.invalidResponses += 1;
-                    emitFor(expectedType, {
-                        success: false,
-                        error: `policy_gate_invalid_response:${forwarded.type}`,
-                    });
-                    return;
-                } catch (error) {
-                    const errorMessage = error instanceof Error ? error.message : String(error);
-                    if (command.type === 'apply_patch') {
-                        emitFor('apply_patch_response', {
-                            patchId: getString(payload.patchId) ?? createId(),
-                            success: false,
-                            error: `policy_gate_unavailable:${errorMessage}`,
-                            errorCode: 'io_error',
-                        });
-                        return;
-                    }
-                    emitCurrent({
-                        success: false,
-                        error: `policy_gate_unavailable:${errorMessage}`,
-                    });
-                    return;
-                }
+                },
+            })) {
+                return;
             }
             if (deps.handleAdditionalCommand) {
                 const delegated = await deps.handleAdditionalCommand(command);

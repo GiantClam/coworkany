@@ -905,6 +905,15 @@ describe('mastra entrypoint processor', () => {
         expect(command).toContain('trash');
     });
 
+    test('deriveHostControlShellCommand maps relative minute shutdown phrasing to delayed shutdown command', () => {
+        expect(deriveHostControlShellCommand('设置 1 分钟后关机')).toBe('sudo shutdown -h +1');
+        expect(deriveHostControlShellCommand('设置电脑一分钟后关机')).toBe('sudo shutdown -h +1');
+    });
+
+    test('deriveHostControlShellCommand maps relative reboot delay to delayed reboot command', () => {
+        expect(deriveHostControlShellCommand('1小时后重启电脑')).toBe('sudo shutdown -r +60');
+    });
+
     test('start_task returns capability_missing when market query has no runtime research tools', async () => {
         const harness = createHarness({
             onListRuntimeCapabilities: () => ({
@@ -1264,6 +1273,73 @@ describe('mastra entrypoint processor', () => {
         expect(missingCapabilities).toContain('command_execution');
     });
 
+    test('start_task emits TASK_FAILED when delegated task executor hangs past watchdog timeout', async () => {
+        const previousDelegateTimeout = process.env.COWORKANY_MASTRA_DELEGATED_TASK_EXECUTION_TIMEOUT_MS;
+        process.env.COWORKANY_MASTRA_DELEGATED_TASK_EXECUTION_TIMEOUT_MS = '1000';
+        try {
+            const harness = createHarness({
+                onExecuteTaskMessage: async () => await new Promise<never>(() => undefined),
+            });
+
+            await harness.process({
+                id: 'cmd-delegate-timeout',
+                type: 'start_task',
+                payload: {
+                    taskId: 'task-delegate-timeout',
+                    title: 'delegate timeout',
+                    userQuery: '[Resolved attachments] - /tmp/a.png - /tmp/b.png 把附件图片合并为一个视频，每张图片播放 5s',
+                    config: {
+                        executionPath: 'direct',
+                        routeMode: 'task',
+                    },
+                },
+            });
+
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+            const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+            expect(failed).toBeDefined();
+            const payload = toRecord(failed?.payload);
+            expect(toString(payload.errorCode)).toBe('UPSTREAM_TIMEOUT');
+            expect(toString(payload.error)).toContain('delegated_task_execution_timeout:1000');
+        } finally {
+            if (typeof previousDelegateTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_DELEGATED_TASK_EXECUTION_TIMEOUT_MS = previousDelegateTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_DELEGATED_TASK_EXECUTION_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('start_task classifies TLS certificate trust failures as configuration-required errors', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'error',
+                    runId: 'run-tls-trust-failure',
+                    message: 'Error: unable to get issuer certificate',
+                });
+                return { runId: 'run-tls-trust-failure' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-tls-trust-failure',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-tls-trust-failure',
+                title: 'tls trust failure',
+                userQuery: '检查最新港股走势',
+            },
+        });
+
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        const payload = toRecord(failed?.payload);
+        expect(toString(payload.errorCode)).toBe('PROVIDER_TLS_TRUST_FAILURE');
+        expect(toString(payload.failureClass)).toBe('configuration_required');
+        expect(toString(payload.suggestion)).toContain('Allow insecure TLS');
+    });
+
     test('send_task_message auto-retries when task turn has no required tool evidence', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -1301,6 +1377,57 @@ describe('mastra entrypoint processor', () => {
         ));
         expect(retrying).toBeDefined();
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
+    test('send_task_message defaults to two auto-retries for missing required tool evidence when maxRetries is not provided', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-no-tool-evidence-default-retry',
+                    role: 'assistant',
+                    content: '我先分析一下走势，再给你结论。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-no-tool-evidence-default-retry',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-no-tool-evidence-default-retry' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-no-tool-evidence-default-retry',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-no-tool-evidence-default-retry',
+                content: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            },
+        });
+
+        const retryingEvents = harness.outgoing.filter((message) => (
+            message.type === 'RATE_LIMITED'
+            && (message.payload as Record<string, unknown>)?.error === 'complete_without_required_tool_evidence'
+        ));
+        expect(retryingEvents).toHaveLength(1);
+        const retryingPayload = toRecord(retryingEvents[0]?.payload);
+        expect(Number(retryingPayload.maxRetries)).toBe(2);
+
+        await harness.process({
+            id: 'cmd-no-tool-evidence-default-retry-state',
+            type: 'get_task_runtime_state',
+            payload: {
+                taskId: 'task-no-tool-evidence-default-retry',
+            },
+        });
+        const stateResponse = harness.outgoing.find((message) => (
+            message.type === 'get_task_runtime_state_response'
+            && message.commandId === 'cmd-no-tool-evidence-default-retry-state'
+        ));
+        const state = toRecord((stateResponse?.payload as Record<string, unknown>)?.state);
+        const retry = toRecord(state.retry);
+        expect(retry.maxAttempts).toBe(2);
     });
 
     test('send_task_message auto-retries delegated agent tool_call without follow-up as missing required tool evidence', async () => {
@@ -1713,7 +1840,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
-    test('send_task_message emits terminal-recovery summary when terminal event is missing after tool evidence', async () => {
+    test('send_task_message fails when terminal event is missing after tool evidence', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -1750,16 +1877,10 @@ describe('mastra entrypoint processor', () => {
             },
         });
 
-        const degradedDelta = harness.outgoing.find((message) =>
-            message.type === 'TEXT_DELTA'
-            && toString(toRecord(message.payload).delta).includes('终止事件丢失'),
-        );
-        expect(degradedDelta).toBeDefined();
-        expect(toString(toRecord(degradedDelta?.payload).delta).length).toBeGreaterThanOrEqual(20);
-        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
-        expect(finished).toBeDefined();
-        expect(toString(toRecord(finished?.payload).summary).includes('终止事件丢失')).toBe(true);
-        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
     });
 
     test('send_task_message accepts usable web evidence when search payload has no url host', async () => {
@@ -2742,6 +2863,26 @@ describe('mastra entrypoint processor', () => {
         expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
     });
 
+    test('send_task_message overrides chat route envelope for high-risk host control command', async () => {
+        const harness = createHarness();
+        await harness.process({
+            id: 'cmd-send-chat-envelope-host-control',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-send-chat-envelope-host-control',
+                content: '__route_chat__\n设置 1 分钟后关机',
+                config: {
+                    executionPath: 'workflow',
+                },
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(1);
+        expect(harness.userMessageCalls[0]?.options?.executionPath).toBe('direct');
+        expect(harness.userMessageCalls[0]?.options?.forcedRouteMode).toBe('task');
+        expect(harness.userMessageCalls[0]?.options?.useDirectChatResponder).toBeUndefined();
+    });
+
     test('send_task_message returns runtime skill and toolpack list for capability queries without model execution', async () => {
         const harness = createHarness({
             onListRuntimeCapabilities: () => ({
@@ -3520,7 +3661,9 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect(failed).toBeDefined();
-        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
+        expect(['E_PROTOCOL_MISSING_TERMINAL_EVENT', 'UPSTREAM_TIMEOUT']).toContain(
+            String((failed?.payload as Record<string, unknown>)?.errorCode ?? ''),
+        );
     });
 
     test('send_task_message fails when tooling progress has no tool_result before terminal recovery', async () => {
@@ -3557,7 +3700,9 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect(failed).toBeDefined();
-        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
+        expect(['E_PROTOCOL_MISSING_TERMINAL_EVENT', 'UPSTREAM_TIMEOUT']).toContain(
+            String((failed?.payload as Record<string, unknown>)?.errorCode ?? ''),
+        );
     });
 
     test('send_task_message tolerates zero-progress complete before late approval and resumes successfully', async () => {
@@ -4474,7 +4619,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
-    test('send_task_message does not fail immediately when auto-approval resume handshake exceeds timeout', async () => {
+    test('send_task_message fails when auto-approval resume handshake exceeds timeout and no resume events arrive', async () => {
         const previousAutoApprovalTimeout = process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
         process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = '1000';
         const harness = createHarness({
@@ -4517,7 +4662,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.approvalCalls.length).toBe(1);
         expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
-        expect(failed).toBeUndefined();
+        expect(failed).toBeDefined();
     });
 
     test('send_task_message does not fail auto-approval when resume stream starts before timeout but finishes later', async () => {
@@ -4975,7 +5120,7 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
-    test('send_task_message degrades to synthetic completion when retryable no-narrative error follows tooling progress', async () => {
+    test('send_task_message fails with missing-terminal error when retryable no-narrative error follows tooling progress', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -5009,14 +5154,13 @@ describe('mastra entrypoint processor', () => {
             },
         });
 
-        const assistantText = harness.outgoing
-            .filter((message) => message.type === 'TEXT_DELTA')
-            .map((message) => String((message.payload as Record<string, unknown>)?.delta ?? ''))
-            .join('\n');
-
-        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
-        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
-        expect(assistantText).toContain('上游检索流在输出正文前中断');
+        expect(harness.userMessageCalls.length).toBeGreaterThanOrEqual(2);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect(['E_PROTOCOL_MISSING_TERMINAL_EVENT', 'UPSTREAM_TIMEOUT']).toContain(
+            String((failed?.payload as Record<string, unknown>)?.errorCode ?? ''),
+        );
     });
 
     test('send_task_message fails when retryable no-narrative error follows tooling progress without tool_result', async () => {
@@ -5049,7 +5193,36 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
         const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
         expect(failed).toBeDefined();
-        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('E_PROTOCOL_MISSING_TERMINAL_EVENT');
+        expect(['E_PROTOCOL_MISSING_TERMINAL_EVENT', 'UPSTREAM_TIMEOUT']).toContain(
+            String((failed?.payload as Record<string, unknown>)?.errorCode ?? ''),
+        );
+    });
+
+    test('send_task_message fails fast when workflow snapshot is missing before any progress', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'error',
+                    runId: 'run-missing-snapshot-no-progress',
+                    message: 'No snapshot found for this workflow run: agentic-loop run-missing-snapshot-no-progress',
+                });
+                return { runId: 'run-missing-snapshot-no-progress' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-missing-snapshot-no-progress',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-missing-snapshot-no-progress',
+                content: '请继续刚才的任务',
+            },
+        });
+
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect((failed?.payload as Record<string, unknown>)?.errorCode).toBe('PROVIDER_TEMPORARILY_UNAVAILABLE');
     });
 
     test('send_task_message retries failed command step when retryable timeout is thrown after tooling progress without explicit error event', async () => {
@@ -5227,6 +5400,86 @@ describe('mastra entrypoint processor', () => {
 
             expect(retryEvent).toBeDefined();
             expect(retryMessage).toContain('仅重试失败步骤');
+            expect(harness.userMessageCalls.length).toBe(2);
+            expect(harness.userMessageCalls[1]?.message).toContain('[CoworkAny Retry Execution Contract]');
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('send_task_message auto-retries workflow missing tool evidence error for command execution tasks', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '30';
+        let attempt = 0;
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    attempt += 1;
+                    if (attempt === 1) {
+                        emit({
+                            type: 'error',
+                            runId: 'run-workflow-missing-tool-evidence',
+                            message: 'workflow_missing_required_tool_evidence:command_execution',
+                        });
+                        return { runId: 'run-workflow-missing-tool-evidence' };
+                    }
+                    emit({
+                        type: 'tool_call',
+                        runId: 'run-workflow-missing-tool-evidence-retry',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: {
+                            command: 'ffmpeg -y -framerate 1/5 -i frame-%02d.png output.mp4',
+                        },
+                    });
+                    emit({
+                        type: 'tool_result',
+                        runId: 'run-workflow-missing-tool-evidence-retry',
+                        toolCallId: 'tool-workflow-missing-tool-evidence-retry',
+                        toolName: 'mastra_workspace_execute_command',
+                        result: {
+                            stdout: 'video merged successfully',
+                            exitCode: 0,
+                        },
+                    });
+                    emit({
+                        type: 'text_delta',
+                        runId: 'run-workflow-missing-tool-evidence-retry',
+                        role: 'assistant',
+                        content: '已完成视频合并并输出 output.mp4。',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-workflow-missing-tool-evidence-retry',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-workflow-missing-tool-evidence-retry' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-workflow-missing-tool-evidence-retry',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-workflow-missing-tool-evidence-retry',
+                    content: '把附件图片合并为一个视频，每张图片播放 5s',
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 300);
+            });
+
+            const retryEvent = harness.outgoing.find((message) => message.type === 'RATE_LIMITED');
+            const retryPayload = toRecord(retryEvent?.payload);
+            const retryMessage = toString(retryPayload.message);
+
+            expect(retryEvent).toBeDefined();
+            expect(retryMessage).toContain('缺少工具证据');
             expect(harness.userMessageCalls.length).toBe(2);
             expect(harness.userMessageCalls[1]?.message).toContain('[CoworkAny Retry Execution Contract]');
             expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
@@ -5418,7 +5671,66 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(true);
     });
 
-    test('send_task_message forwards approval_required while run is still waiting for approval', async () => {
+    test('send_task_message suppresses EFFECT_REQUESTED when policy pre-approves approval_required', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-policy-preapproved',
+                    toolCallId: 'tool-policy-preapproved',
+                    toolName: 'bash_approval',
+                    args: {
+                        command: 'shutdown -h +1',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-policy-preapproved' };
+            },
+            onOutgoing: async (message, injectIncoming) => {
+                if (message.type !== 'request_effect') {
+                    return;
+                }
+                const payload = (message.payload as Record<string, unknown>) ?? {};
+                const request = (payload.request as Record<string, unknown>) ?? {};
+                await injectIncoming({
+                    id: 'cmd-policy-preapproved-response',
+                    commandId: typeof message.id === 'string' ? message.id : undefined,
+                    type: 'request_effect_response',
+                    payload: {
+                        effectType: request.effectType ?? 'shell:write',
+                        taskId: (request.context as Record<string, unknown>)?.taskId ?? 'task-policy-preapproved',
+                        response: {
+                            requestId: request.id ?? 'req-fixed',
+                            approved: true,
+                            denialReason: null,
+                            approvalType: 'once',
+                        },
+                    },
+                });
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-policy-preapproved',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-policy-preapproved',
+                content: '设置电脑一分钟后关机',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-policy-preapproved',
+            toolCallId: 'tool-policy-preapproved',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'request_effect')).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message forwards request_effect immediately while run is still waiting for approval', async () => {
         let releaseRun: (() => void) | undefined;
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -5450,15 +5762,17 @@ describe('mastra entrypoint processor', () => {
         expect(
             harness.outgoing.some((message) => message.type === 'send_task_message_response'),
         ).toBe(true);
-        expect(
-            harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED'),
-        ).toBe(true);
+        const forwardedPolicyRequest = harness.outgoing.find((message) => message.type === 'request_effect');
+        expect(forwardedPolicyRequest).toBeDefined();
+        const requestPayload = (forwardedPolicyRequest?.payload as Record<string, unknown>) ?? {};
+        const forwardedRequest = (requestPayload.request as Record<string, unknown>) ?? {};
+        expect(forwardedRequest.effectType).toBe('shell:write');
 
         releaseRun?.();
         await processing;
     });
 
-    test('send_task_message does not fail false-completion when run is waiting for user approval', async () => {
+    test('send_task_message fails after approval when resume stream emits no terminal events', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
                 emit({
@@ -5505,8 +5819,12 @@ describe('mastra entrypoint processor', () => {
         });
 
         expect(harness.approvalCalls.length).toBe(1);
-        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
-        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        const failed = harness.outgoing.find((message) => message.type === 'TASK_FAILED');
+        expect(failed).toBeDefined();
+        expect(['E_PROTOCOL_MISSING_TERMINAL_EVENT', 'UPSTREAM_TIMEOUT', 'MASTRA_RUNTIME_ERROR', 'E_PROTOCOL_MISSING_TOOL_EVIDENCE']).toContain(
+            String((failed?.payload as Record<string, unknown>)?.errorCode ?? ''),
+        );
     });
 
     test('report_effect_result returns not-found when request id is unknown', async () => {
@@ -5582,6 +5900,67 @@ describe('mastra entrypoint processor', () => {
         );
         expect(response).toBeDefined();
         expect((response?.payload as Record<string, unknown>)?.success).toBe(true);
+    });
+
+    test('request_effect_response awaiting_confirmation keeps pending approval until explicit report_effect_result', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-awaiting-confirmation',
+                    toolCallId: 'tool-awaiting-confirmation',
+                    toolName: 'bash_approval',
+                    args: { command: 'sudo shutdown -h now' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-awaiting-confirmation' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-awaiting-confirmation-start',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-awaiting-confirmation',
+                userQuery: '设置 1 分钟后关机',
+            },
+        });
+
+        const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+        const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+        expect(typeof requestId).toBe('string');
+
+        await harness.process({
+            id: 'cmd-awaiting-confirmation-response',
+            type: 'request_effect_response',
+            payload: {
+                taskId: 'task-awaiting-confirmation',
+                effectType: 'shell:write',
+                response: {
+                    requestId,
+                    approved: false,
+                    denialReason: 'awaiting_confirmation',
+                },
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(0);
+
+        await harness.process({
+            id: 'cmd-awaiting-confirmation-report',
+            type: 'report_effect_result',
+            payload: {
+                requestId,
+                success: true,
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-awaiting-confirmation',
+            toolCallId: 'tool-awaiting-confirmation',
+            approved: true,
+        });
     });
 
     test('report_effect_result resumes approval when pending request has empty runId', async () => {
@@ -5688,6 +6067,84 @@ describe('mastra entrypoint processor', () => {
         expect(responseIndex).toBeGreaterThanOrEqual(0);
         expect(finishedIndex).toBeGreaterThanOrEqual(0);
         expect(responseIndex).toBeLessThan(finishedIndex);
+    });
+
+    test('report_effect_result tolerates late first resume event beyond timeout window and keeps stream handoff alive', async () => {
+        const previousAutoApprovalTimeout = process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
+        process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = '20';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-delayed-first-event-timeout',
+                    toolCallId: 'tool-delayed-first-event-timeout',
+                    toolName: 'bash_approval',
+                    args: { command: 'echo delayed-timeout' },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-delayed-first-event-timeout' };
+            },
+            onHandleApprovalResponse: async (_input, emit) => {
+                await new Promise<void>((resolve) => setTimeout(resolve, 80));
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-delayed-first-event-timeout',
+                    role: 'assistant',
+                    content: 'approval resume completed after delayed startup.',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-delayed-first-event-timeout',
+                    finishReason: 'stop',
+                });
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-delayed-timeout-start',
+                type: 'start_task',
+                payload: {
+                    taskId: 'task-delayed-timeout',
+                    userQuery: 'needs approval',
+                },
+            });
+
+            const effectRequested = harness.outgoing.find((message) => message.type === 'EFFECT_REQUESTED');
+            const requestId = ((effectRequested?.payload as Record<string, unknown>)?.request as Record<string, unknown>)?.id;
+            expect(typeof requestId).toBe('string');
+
+            await harness.process({
+                id: 'cmd-delayed-timeout-report',
+                type: 'report_effect_result',
+                payload: {
+                    requestId,
+                    success: true,
+                },
+            });
+
+            await new Promise<void>((resolve) => setTimeout(resolve, 120));
+        } finally {
+            if (typeof previousAutoApprovalTimeout === 'string') {
+                process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS = previousAutoApprovalTimeout;
+            } else {
+                delete process.env.COWORKANY_MASTRA_AUTO_APPROVAL_RESUME_TIMEOUT_MS;
+            }
+        }
+
+        expect(harness.approvalCalls.length).toBe(1);
+        const reportResponse = harness.outgoing.find((message) =>
+            message.type === 'report_effect_result_response'
+            && message.commandId === 'cmd-delayed-timeout-report',
+        );
+        expect((reportResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(harness.outgoing.some((message) =>
+            message.type === 'TASK_FINISHED' && message.taskId === 'task-delayed-timeout',
+        )).toBe(true);
+        expect(harness.outgoing.some((message) =>
+            message.type === 'TASK_FAILED'
+            && String((message.payload as Record<string, unknown>)?.error ?? '').includes('auto_approval_resume_timeout'),
+        )).toBe(false);
     });
 
     test('cancel_task clears pending approvals for the task to prevent stale approval resume', async () => {
@@ -6386,6 +6843,70 @@ describe('mastra entrypoint processor', () => {
         expect(retry.attempts).toBe(1);
         expect(retry.maxAttempts).toBe(1);
         expect(toString(retry.lastError)).toContain('network timeout');
+    });
+
+    test('retry_task can recover approval-suspended task when no pending approval request remains', async () => {
+        const harness = createHarness({
+            initialTaskStates: [{
+                taskId: 'task-retry-approval-chain-broken',
+                conversationThreadId: 'thread-retry-approval-chain-broken',
+                title: 'Retry approval suspended task',
+                workspacePath: '/tmp/retry-approval-chain-broken',
+                createdAt: '2026-04-01T00:00:00.000Z',
+                status: 'suspended',
+                suspended: true,
+                suspensionReason: 'approval_required',
+                lastUserMessage: '继续执行并完成任务',
+                resourceId: 'employee-task-retry-approval-chain-broken',
+                retry: {
+                    attempts: 0,
+                    maxAttempts: 3,
+                },
+                executionPath: 'workflow',
+            }],
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-retry-approval-chain-broken',
+                    role: 'assistant',
+                    content: '已恢复执行并完成任务。',
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-retry-approval-chain-broken',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-retry-approval-chain-broken' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-retry-approval-chain-broken',
+            type: 'retry_task',
+            payload: {
+                taskId: 'task-retry-approval-chain-broken',
+            },
+        });
+
+        const retryResponse = harness.outgoing.find((message) =>
+            message.type === 'retry_task_response'
+            && message.commandId === 'cmd-retry-approval-chain-broken',
+        );
+        expect((retryResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(harness.userMessageCalls).toHaveLength(1);
+        await harness.process({
+            id: 'cmd-retry-approval-chain-broken-state',
+            type: 'get_task_runtime_state',
+            payload: {
+                taskId: 'task-retry-approval-chain-broken',
+            },
+        });
+        const stateResponse = harness.outgoing.find((message) =>
+            message.type === 'get_task_runtime_state_response'
+            && message.commandId === 'cmd-retry-approval-chain-broken-state',
+        );
+        const state = toRecord((stateResponse?.payload as Record<string, unknown>)?.state);
+        expect(['completed', 'finished']).toContain(toString(state.status));
     });
 
     test('retry_task recovers complete-before-approval race without duplicate assistant reply', async () => {

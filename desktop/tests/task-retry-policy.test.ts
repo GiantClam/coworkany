@@ -50,6 +50,22 @@ describe('task retry policy', () => {
         })).toBe(false);
     });
 
+    test('approval-suspended session without pending effect request is not pending-approval-blocked', () => {
+        const session = {
+            status: 'suspended' as const,
+            suspension: {
+                reason: 'approval_required',
+                userMessage: 'Awaiting approval',
+                canAutoResume: false,
+            },
+            effects: [],
+            events: [],
+        };
+        expect(isSuspendedForApproval(session)).toBe(true);
+        expect(hasPendingEffectApproval(session)).toBe(false);
+        expect(getLatestPendingEffectRequestId(session)).toBeNull();
+    });
+
     test('detects pending effect approval from session effects', () => {
         const session = {
             effects: [

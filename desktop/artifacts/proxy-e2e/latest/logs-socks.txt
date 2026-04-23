@@ -1,0 +1,115 @@
+start_task command received
+send_task_message command received
+Sending to sidecar: {"id":"7912066c-9b63-4f03-949e-e4e928be221a","timestamp":"2026-04-20T11:59:41.719Z","type":"start_task","payload":{"taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","title":"请用一句中文回复“代理链路验证中”，不要调用工具。","userQuery":"请用一句中文回复“代理链路验证中”，不要调用工具。","context":{"workspacePath":"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace","displayText":"请用一句中文回复“代理链路验证中”，不要调用工具。","environmentContext":{"platform":"macos","arch":"arm64","appDir":"/Users/beihuang/Documents/github/coworkany/desktop","appDataDir":"/private/var/folders/z_/bq49_j7s03j97t1vz5b87q1m0000gn/T/coworkany-nochrome-appdata-0","shell":"/bin/zsh","sidecarLaunchMode":"development","python":{"available":false,"source":"not_required_in_mastra_single_process"},"skillhub":{"available":true,"path":"/Users/beihuang/.local/bin/skillhub","source":"path_lookup"},"managedServices":[]}},"config":{"executionPath":"direct","enabledClaudeSkills":[],"enabledToolpacks":[],"enabledSkills":[],"enableChatSkills":false,"voiceProviderMode":"auto","disabledTools":["install_coworkany_skill_from_marketplace","search_coworkany_skill_marketplace"]}}}
+Received from sidecar: {"type":"TASK_STARTED","taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","payload":{"turnId":"7912066c-9b63-4f03-949e-e4e928be221a","title":"请用一句中文回复“代理链路验证中”，不要调用工具。","description":"请用一句中文回复“代理链路验证中”，不要调用工具。","context":{"workspacePath":"/Users/beihuang/Documents/github/coworkany/sidecar/.coworkany/test-workspace","userQuery":"请用一句中文回复“代理链路验证中”，不要调用工具。","mode":"immediate_task"}}}
+Received from sidecar: {"type":"start_task_response","commandId":"7912066c-9b63-4f03-949e-e4e928be221a","timestamp":"2026-04-20T11:59:41.734Z","payload":{"success":true,"taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","accepted":true,"queuePosition":0,"turnId":"7912066c-9b63-4f03-949e-e4e928be221a"}}
+[coworkany-task-turn-contract] {"taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","turnId":"7912066c-9b63-4f03-949e-e4e928be221a","routeMode":"task","executionPath":"direct","domain":"general","requiredCapabilities":[],"contractHash":"24fd718f9202acce21fc93d56a8a5f65b6193bb0"}
+[coworkany-proxy-bridge] activated {
+  [0msource[2m:[0m [0m[32m[0m[32m"socks5://127.0.0.1:1080"[0m[0m[0m[2m,[0m
+  [0mtransport[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+}
+[coworkany-proxy-env-debug] {
+  [0mconfigured[2m:[0m [0m[32m[0m[32m"socks5://127.0.0.1:1080"[0m[0m[0m[2m,[0m
+  [0mhttpsProxy[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+  [0mhttpsProxyLower[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+  [0mhttpProxy[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+  [0mhttpProxyLower[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+  [0mallProxy[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+  [0mallProxyLower[2m:[0m [0m[32m[0m[32m"http://127.0.0.1:49430"[0m[0m[0m[2m,[0m
+}
+[coworkany-mcp-toolset-resolution] {"taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","routeMode":"task","useChatLatencyProfile":false,"loadStatus":"ready","servedFromCache":false,"cacheAgeMs":null,"timeoutMs":8000,"elapsedMs":1995,"mcpToolCount":21}
+[coworkany-task-route-agent] {"taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","routeMode":"task","selectedAgent":"supervisor","requiredCompletionCapabilities":[],"turnContractDomain":"general","enabledToolpackCount":0,"useAgentNetworkExecution":false,"multiAgentContractInjected":false,"delegationPlanInjected":false,"delegationWorkflowShape":null,"delegationRoleCount":0,"networkReason":"no_multi_agent_signal","multiAgentSignalScore":0}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_close"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_resize"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_console_messages"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_handle_dialog"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_evaluate"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_file_upload"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_fill_form"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_press_key"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_type"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_navigate"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_navigate_back"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_network_requests"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_run_code"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_take_screenshot"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_snapshot"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_click"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_drag"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_hover"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_select_option"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_tabs"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+[Mastra MCP] patched tool input schema for draft-2020-12 compatibility. {
+  [0mtoolName[2m:[0m [0m[32m[0m[32m"browser_wait_for"[0m[0m[0m[2m,[0m
+  [0mdeclaredDraft[2m:[0m [0m[32m[0m[32m"https://json-schema.org/draft/2020-12/schema"[0m[0m[0m[2m,[0m
+}
+Received from sidecar: {"type":"TASK_FAILED","taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","payload":{"error":"UnsupportedProxyProtocol fetching \"https://aiberm.com/v1/chat/completions\". For more information, pass `verbose: true` in the second argument to fetch()","errorCode":"MASTRA_RUNTIME_ERROR","recoverable":false,"suggestion":"Check provider/network status and retry.","failureClass":"unknown","traceId":"8167b0ca60a8404f96702b7333132962","turnId":"7912066c-9b63-4f03-949e-e4e928be221a"}}
+[0m[31mError in agent stream {
+  [0merror[2m:[0m [0m[31mUnsupportedProxyProtocol[0m[2m:[0m [1mUnsupportedProxyProtocol fetching "https://aiberm.com/v1/chat/completions". For more information, pass `verbose: true` in the second argument to fetch()[0m
+ path[2m: [0m[36m"https://aiberm.com/v1/chat/completions"[0m
+[0m[2m,[0m
+  [0mrunId[2m:[0m [0m[32m[0m[32m"e5e38dd5-2ca0-48fe-b690-71ff61165d66"[0m[0m[0m[2m,[0m
+  [0mprovider[2m:[0m [0m[32m[0m[32m"openai"[0m[0m[0m[2m,[0m
+  [0mmodelId[2m:[0m [0m[32m[0m[32m"gpt-5.3-codex"[0m[0m[0m[2m,[0m
+}[0m
+[coworkany-metrics] {"event":"llm_timing","taskId":"c5ea4410-d397-4165-aad9-414d52c36c25","threadId":"c5ea4410-d397-4165-aad9-414d52c36c25","turnId":"7912066c-9b63-4f03-949e-e4e928be221a","modelId":"openai/gpt-5.3-codex","provider":"openai","phase":"stream","outcome":"success","attempt":1,"maxAttempts":6,"assistantChars":0,"finishReason":"error","error":null,"timings":{"elapsedMs":3650,"dnsMs":null,"connectMs":null,"ttfbMs":3588,"firstTokenMs":null,"lastTokenMs":null},"proxy":{"before":{"enabled":true,"source":"config","endpoint":"socks5://127.0.0.1:1080","noProxy":"localhost,127.0.0.1,::1"},"after":{"enabled":true,"source":"config","endpoint":"socks5://127.0.0.1:1080","noProxy":"localhost,127.0.0.1,::1"}},"timestamp":"2026-04-20T11:59:48.851Z"}

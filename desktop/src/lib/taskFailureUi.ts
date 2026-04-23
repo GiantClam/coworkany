@@ -1,4 +1,5 @@
 import type { TaskSession } from '../types';
+import { resolveTaskFailureSemantic } from './taskFailureSemantics';
 
 export type TaskFailureUiCategory = 'configuration_required' | 'retryable' | 'general' | 'suspended';
 export type TaskFailureUiAction = 'settings' | 'retry';
@@ -145,31 +146,6 @@ function normalizeErrorCode(errorCode: string | undefined): string {
     return (errorCode ?? '').trim().toUpperCase();
 }
 
-function isConfigurationRequiredFailure(errorCode: string, errorMessage: string): boolean {
-    if (errorCode === 'PROVIDER_CONFIG_REQUIRED') {
-        return true;
-    }
-    if (errorCode === 'MISSING_API_KEY') {
-        return true;
-    }
-    return /\bmissing[_\s-]?api[_\s-]?key\b|no available providers|provider not configured|invalid[_\s-]?api[_\s-]?key|unknown model|未知模型/i.test(errorMessage);
-}
-
-function isRetryableFailure(errorCode: string, errorMessage: string): boolean {
-    if (errorCode === 'UPSTREAM_TIMEOUT' || errorCode === 'PROVIDER_TEMPORARILY_UNAVAILABLE') {
-        return true;
-    }
-    return /\btimeout\b|timed out|gateway time-?out|headers timeout error|\b429\b|rate.?limit|temporar(?:y|ily)/i.test(errorMessage);
-}
-
-function isMissingToolEvidenceFailure(errorCode: string, errorMessage: string): boolean {
-    if (errorCode === 'E_PROTOCOL_MISSING_TOOL_EVIDENCE') {
-        return true;
-    }
-    return /\bworkflow_missing_required_tool_evidence\b|\bcomplete_without_required_tool_evidence\b|required tool evidence/i
-        .test(errorMessage);
-}
-
 function normalizeFailureClass(value: string | undefined): string {
     return (value ?? '').trim().toLowerCase();
 }
@@ -255,10 +231,14 @@ export function getTaskFailureUiDescriptor(
     if (!failure?.error) {
         return null;
     }
-    const errorCode = normalizeErrorCode(failure.errorCode);
     const errorMessage = normalizeTaskFailureErrorMessage(failure.error);
+    const semantic = resolveTaskFailureSemantic({
+        failureClass: failure.failureClass,
+        errorCode: failure.errorCode,
+        errorMessage,
+    });
 
-    if (isConfigurationRequiredFailure(errorCode, errorMessage)) {
+    if (semantic === 'configuration_required') {
         return {
             category: 'configuration_required',
             action: 'settings',
@@ -271,7 +251,7 @@ export function getTaskFailureUiDescriptor(
         };
     }
 
-    if (isRetryableFailure(errorCode, errorMessage)) {
+    if (semantic === 'retryable') {
         return {
             category: 'retryable',
             action: 'retry',
@@ -284,7 +264,7 @@ export function getTaskFailureUiDescriptor(
         };
     }
 
-    if (isMissingToolEvidenceFailure(errorCode, errorMessage)) {
+    if (semantic === 'missing_tool_evidence') {
         return {
             category: 'retryable',
             action: 'retry',
