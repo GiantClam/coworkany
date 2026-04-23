@@ -160,6 +160,8 @@ function createHarness(overrides?: {
             enabled: boolean;
             description?: string;
             tools?: string[];
+            runtimeStatus?: 'disabled' | 'configured_only' | 'configured' | 'resolved' | 'callable' | 'blocked';
+            callableToolCount?: number;
         }>;
     };
     onListRuntimeToolsets?: () => Record<string, Record<string, unknown>> | Promise<Record<string, Record<string, unknown>>>;
@@ -946,6 +948,56 @@ describe('mastra entrypoint processor', () => {
         expect(delta).toContain('mcp_enabled=no');
     });
 
+    test('start_task capability_missing summary keeps callable toolpack preview free of description noise', async () => {
+        const harness = createHarness({
+            onListRuntimeCapabilities: () => ({
+                skills: [],
+                toolpacks: [
+                    {
+                        id: 'alpha-configured-pack',
+                        name: 'Alpha Configured Pack',
+                        enabled: true,
+                        description: 'enabled-description-marker',
+                        tools: ['search_web'],
+                        runtimeStatus: 'configured',
+                    },
+                    {
+                        id: 'beta-callable-pack',
+                        name: 'Beta Callable Pack',
+                        enabled: true,
+                        description: 'callable-description-marker',
+                        tools: ['search_web'],
+                        runtimeStatus: 'callable',
+                        callableToolCount: 1,
+                    },
+                ],
+            }),
+            onListRuntimeToolsets: () => ({}),
+            onIsRuntimeMcpEnabled: () => false,
+        });
+
+        await harness.process({
+            id: 'cmd-start-browser-capability-preview-shape',
+            type: 'start_task',
+            payload: {
+                taskId: 'task-start-browser-capability-preview-shape',
+                title: 'browser capability preview shape',
+                userQuery: '请打开 https://example.com 并截图给我',
+            },
+        });
+
+        expect(harness.userMessageCalls).toHaveLength(0);
+        const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+        expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_missing');
+        const delta = toString(toRecord(harness.outgoing.find((message) => message.type === 'TEXT_DELTA')?.payload).delta);
+        const callablePreviewLine = delta.split('\n').find((line) => line.includes('运行时可调用工具包预览：')) ?? '';
+        const enabledPreviewLine = delta.split('\n').find((line) => line.includes('已启用工具包预览：')) ?? '';
+        expect(callablePreviewLine).toContain('beta-callable-pack');
+        expect(callablePreviewLine).not.toContain('callable-description-marker');
+        expect(enabledPreviewLine).toContain('enabled-description-marker');
+        expect(enabledPreviewLine).toContain('callable-description-marker');
+    });
+
     test('start_task keeps tool-first execution when runtime market tools are available', async () => {
         const harness = createHarness({
             onListRuntimeCapabilities: () => ({
@@ -1092,6 +1144,86 @@ describe('mastra entrypoint processor', () => {
             expect(harness.userMessageCalls).toHaveLength(1);
             expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED'
                 && toString(toRecord(message.payload).finishReason) === 'capability_missing')).toBe(false);
+        } finally {
+            if (typeof previousTimeout === 'string') {
+                process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = previousTimeout;
+            } else {
+                delete process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('start_task keeps strict capability_missing when timeout env is below minimum clamp', async () => {
+        const previousTimeout = process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS;
+        process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = '150';
+        try {
+            const harness = createHarness({
+                onListRuntimeCapabilities: () => ({
+                    skills: [],
+                    toolpacks: [
+                        { id: 'builtin-websearch', name: 'websearch', enabled: true, tools: ['search_web'] },
+                    ],
+                }),
+                onListRuntimeToolsets: async () => {
+                    await new Promise((resolve) => setTimeout(resolve, 180));
+                    return {};
+                },
+                onIsRuntimeMcpEnabled: () => false,
+            });
+
+            await harness.process({
+                id: 'cmd-start-timeout-min-clamp',
+                type: 'start_task',
+                payload: {
+                    taskId: 'task-start-timeout-min-clamp',
+                    title: 'timeout min clamp',
+                    userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                },
+            });
+
+            expect(harness.userMessageCalls).toHaveLength(0);
+            const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+            expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_missing');
+        } finally {
+            if (typeof previousTimeout === 'string') {
+                process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = previousTimeout;
+            } else {
+                delete process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS;
+            }
+        }
+    });
+
+    test('start_task keeps strict capability_missing when timeout env is invalid and falls back to default window', async () => {
+        const previousTimeout = process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS;
+        process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = 'invalid';
+        try {
+            const harness = createHarness({
+                onListRuntimeCapabilities: () => ({
+                    skills: [],
+                    toolpacks: [
+                        { id: 'builtin-websearch', name: 'websearch', enabled: true, tools: ['search_web'] },
+                    ],
+                }),
+                onListRuntimeToolsets: async () => {
+                    await new Promise((resolve) => setTimeout(resolve, 260));
+                    return {};
+                },
+                onIsRuntimeMcpEnabled: () => false,
+            });
+
+            await harness.process({
+                id: 'cmd-start-timeout-invalid-fallback',
+                type: 'start_task',
+                payload: {
+                    taskId: 'task-start-timeout-invalid-fallback',
+                    title: 'timeout invalid fallback',
+                    userQuery: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+                },
+            });
+
+            expect(harness.userMessageCalls).toHaveLength(0);
+            const finished = harness.outgoing.find((message) => message.type === 'TASK_FINISHED');
+            expect(toString(toRecord(finished?.payload).finishReason)).toBe('capability_missing');
         } finally {
             if (typeof previousTimeout === 'string') {
                 process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS = previousTimeout;
@@ -4019,6 +4151,42 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
     });
 
+    test('send_task_message auto-approves uppercase workspace execute command tool name for low-risk read-only command', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-workspace-exec-uppercase',
+                    toolCallId: 'tool-safe-workspace-exec-uppercase',
+                    toolName: 'MASTRA_WORKSPACE_EXECUTE_COMMAND',
+                    args: {
+                        command: "pwd && ls -la sidecar | head -n 20",
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-workspace-exec-uppercase' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-workspace-exec-uppercase',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-workspace-exec-uppercase',
+                content: '查看当前工程目录信息',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-workspace-exec-uppercase',
+            toolCallId: 'tool-safe-workspace-exec-uppercase',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+    });
+
     test('send_task_message auto-approves read-only workspace list_files tool without EFFECT_REQUESTED', async () => {
         const harness = createHarness({
             onHandleUserMessage: async (_input, emit) => {
@@ -4055,6 +4223,46 @@ describe('mastra entrypoint processor', () => {
         });
         expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message auto-approves uppercase read-only workspace list_files tool name without EFFECT_REQUESTED', async () => {
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-safe-workspace-list-files-uppercase',
+                    toolCallId: 'tool-safe-workspace-list-files-uppercase',
+                    toolName: 'MASTRA_WORKSPACE_LIST_FILES',
+                    args: {
+                        path: '.coworkany/attachments/staged',
+                        maxDepth: 2,
+                        showHidden: true,
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-safe-workspace-list-files-uppercase' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-safe-workspace-list-files-uppercase',
+            type: 'send_task_message',
+            payload: {
+                taskId: 'task-safe-workspace-list-files-uppercase',
+                content: '检查附件目录中的图片文件',
+            },
+        });
+
+        expect(harness.approvalCalls.length).toBe(1);
+        expect(harness.approvalCalls[0]).toEqual({
+            runId: 'run-safe-workspace-list-files-uppercase',
+            toolCallId: 'tool-safe-workspace-list-files-uppercase',
+            approved: true,
+        });
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
     });
 
     test('send_task_message auto-approves browser_navigate for market web_research tasks without EFFECT_REQUESTED', async () => {
@@ -4320,6 +4528,67 @@ describe('mastra entrypoint processor', () => {
         });
         expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('send_task_message mixed auto-approval without resume events keeps strict failure guardrails', async () => {
+        const previousLateApprovalGrace = process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+        process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = '120';
+        const harness = createHarness({
+            onHandleUserMessage: async (_input, emit) => {
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-mixed-read-only',
+                    toolCallId: 'tool-mixed-read-only',
+                    toolName: 'mastra_workspace_list_files',
+                    args: {
+                        path: '.',
+                    },
+                    resumeSchema: '{}',
+                });
+                emit({
+                    type: 'approval_required',
+                    runId: 'run-mixed-agent',
+                    toolCallId: 'tool-mixed-agent',
+                    toolName: 'agent-researcher',
+                    args: {
+                        prompt: 'research this',
+                    },
+                    resumeSchema: '{}',
+                });
+                return { runId: 'run-mixed-agent' };
+            },
+            onHandleApprovalResponse: async () => {
+                // Intentionally emit no resume events to simulate a broken auto-approval resume chain.
+            },
+        });
+
+        try {
+            await harness.process({
+                id: 'cmd-mixed-auto-approval-no-resume',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-mixed-auto-approval-no-resume',
+                    content: '先扫描目录再继续调研',
+                },
+            });
+        } finally {
+            if (typeof previousLateApprovalGrace === 'string') {
+                process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS = previousLateApprovalGrace;
+            } else {
+                delete process.env.COWORKANY_MASTRA_LATE_APPROVAL_GRACE_MS;
+            }
+        }
+
+        expect(harness.approvalCalls.length).toBeGreaterThanOrEqual(2);
+        expect(harness.outgoing.some((message) => message.type === 'EFFECT_REQUESTED')).toBe(false);
+        expect(harness.outgoing.some((message) => (
+            message.type === 'TEXT_DELTA'
+            && String((message.payload as Record<string, unknown>)?.delta ?? '')
+                .includes('已完成只读工具执行，未返回可展示正文')
+        ))).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(false);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(true);
     });
 
     test('send_task_message auto-approves low-risk workspace git status command without EFFECT_REQUESTED', async () => {

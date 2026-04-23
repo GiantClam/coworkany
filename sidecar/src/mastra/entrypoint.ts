@@ -2107,6 +2107,9 @@ function buildResponse(
 const AUTO_APPROVE_TOOLS = new Set([
     'updateWorkingMemory',
 ]);
+const AUTO_APPROVE_TOOLS_NORMALIZED = new Set(
+    Array.from(AUTO_APPROVE_TOOLS).map((value) => value.trim().toLowerCase()),
+);
 const WORKSPACE_EXECUTE_COMMAND_TOOL = 'mastra_workspace_execute_command';
 const READ_ONLY_WORKSPACE_TOOLS = new Set([
     'mastra_workspace_list_files',
@@ -2353,27 +2356,14 @@ function isReadOnlyBrowserResearchTool(toolName: string): boolean {
         .test(normalized);
 }
 
-function shouldAutoApproveTool(input: {
-    event: Extract<DesktopEvent, { type: 'approval_required' }>;
-    requiredCompletionCapabilities?: string[];
-}): boolean {
-    const event = input.event;
+function isReadOnlyWorkspaceToolAutoApprovable(
+    event: Extract<DesktopEvent, { type: 'approval_required' }>,
+): boolean {
     const normalizedToolName = event.toolName.trim().toLowerCase();
-    if (AUTO_APPROVE_TOOLS.has(event.toolName) || isDelegatedAgentToolName(event.toolName)) {
-        return true;
-    }
     if (READ_ONLY_WORKSPACE_TOOLS.has(normalizedToolName)) {
         return true;
     }
-    const requiredCompletionCapabilities = normalizeStringList(input.requiredCompletionCapabilities ?? [])
-        .map((value) => value.toLowerCase());
-    if (
-        requiredCompletionCapabilities.includes(WEB_RESEARCH_CAPABILITY)
-        && isReadOnlyBrowserResearchTool(event.toolName)
-    ) {
-        return true;
-    }
-    if (event.toolName !== WORKSPACE_EXECUTE_COMMAND_TOOL) {
+    if (normalizedToolName !== WORKSPACE_EXECUTE_COMMAND_TOOL) {
         return false;
     }
     const command = extractWorkspaceExecuteCommand(event.args);
@@ -2381,6 +2371,40 @@ function shouldAutoApproveTool(input: {
         return false;
     }
     return isLowRiskReadOnlyWorkspaceCommand(command);
+}
+
+function shouldAutoApproveTool(input: {
+    event: Extract<DesktopEvent, { type: 'approval_required' }>;
+    requiredCompletionCapabilities?: string[];
+}): boolean {
+    const event = input.event;
+    const rawToolName = event.toolName.trim();
+    const normalizedToolName = event.toolName.trim().toLowerCase();
+    if (
+        AUTO_APPROVE_TOOLS.has(rawToolName)
+        || AUTO_APPROVE_TOOLS_NORMALIZED.has(normalizedToolName)
+        || isDelegatedAgentToolName(normalizedToolName)
+    ) {
+        return true;
+    }
+    if (isReadOnlyWorkspaceToolAutoApprovable(event)) {
+        return true;
+    }
+    const requiredCompletionCapabilities = normalizeStringList(input.requiredCompletionCapabilities ?? [])
+        .map((value) => value.toLowerCase());
+    if (
+        requiredCompletionCapabilities.includes(WEB_RESEARCH_CAPABILITY)
+        && isReadOnlyBrowserResearchTool(normalizedToolName)
+    ) {
+        return true;
+    }
+    return false;
+}
+
+function shouldAllowAutoApprovalWithoutResumeEvents(
+    event: Extract<DesktopEvent, { type: 'approval_required' }>,
+): boolean {
+    return isReadOnlyWorkspaceToolAutoApprovable(event);
 }
 
 export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
@@ -3273,6 +3297,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 requiredCompletionCapabilities,
             })) {
                 const autoApprovalDebugEnabled = isAutoApprovalDebugEnabled();
+                const allowNoResumeEvents = shouldAllowAutoApprovalWithoutResumeEvents(event);
                 const toolCallId = event.toolCallId;
                 if (toolCallId && toolCallId.length > 0) {
                     const completed = autoApprovalCompletedByTaskId.get(taskId);
@@ -3385,6 +3410,17 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                     firstResumedEvent,
                                     approvalPromise.then(() => {
                                         if (!sawResumedEvent) {
+                                            if (allowNoResumeEvents) {
+                                                autoResumeChain = autoResumeChain.then(async () => {
+                                                    await emitDesktopEvent(taskId, {
+                                                        type: 'complete',
+                                                        runId: candidateRunId || event.runId || `auto-approval-no-resume-${createId()}`,
+                                                        finishReason: 'auto_approval_completed_without_resume_events',
+                                                        turnId,
+                                                    }, emit, turnId);
+                                                });
+                                                return;
+                                            }
                                             throw new Error('auto_approval_resume_completed_without_events');
                                         }
                                     }),
@@ -4813,8 +4849,21 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 let noNarrativeTerminalFailure = false;
                 let pendingNoNarrativeCompleteEvent: Extract<DesktopEvent, { type: 'complete' }> | null = null;
                 let pendingNoNarrativeCompleteHadProgress = false;
+                const clearPendingNoNarrativeCompleteState = (): void => {
+                    pendingNoNarrativeCompleteEvent = null;
+                    pendingNoNarrativeCompleteHadProgress = false;
+                };
                 let awaitingUserApproval = false;
                 let sawAutoApprovalRequired = false;
+                let sawReadOnlyAutoApprovalWithoutNarrative = false;
+                let latestReadOnlyAutoApprovalRunId: string | undefined;
+                let sawStrictAutoApprovalWithoutNoResumeAllowance = false;
+                const canUseReadOnlyAutoApprovalNoNarrativeFallback = (): boolean => (
+                    sawReadOnlyAutoApprovalWithoutNarrative
+                    && sawAutoApprovalRequired
+                    && !sawStrictAutoApprovalWithoutNoResumeAllowance
+                    && !awaitingUserApproval
+                );
                 let sawRetryableNoNarrativeErrorDuringAutoApproval = false;
                 let sawRetryableNoNarrativeErrorAfterToolingProgress = false;
                 let autoApprovalRecoveryAttempted = false;
@@ -4859,6 +4908,48 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             pendingEmitError = pendingEmitError ?? error;
                         });
                 };
+                const flushPendingEmitOrThrow = async (): Promise<void> => {
+                    await pendingEmitChain;
+                    if (pendingEmitError) {
+                        throw pendingEmitError;
+                    }
+                };
+                const emitSyntheticCompletionAfterAssistantText = async (): Promise<void> => {
+                    enqueueEmitDesktopEvent({
+                        type: 'complete',
+                        runId: `synthetic-complete-${createId()}`,
+                        finishReason: 'synthetic_terminal_after_assistant_text',
+                        turnId: input.turnId,
+                    });
+                    await flushPendingEmitOrThrow();
+                };
+                const emitReadOnlyAutoApprovalNoNarrativeCompletion = async (
+                    runIdHint?: string,
+                ): Promise<void> => {
+                    const summary = '已完成只读工具执行，未返回可展示正文；如需我可以继续输出整理后的结果。';
+                    appendTranscript(input.taskId, 'assistant', summary);
+                    markTaskTurnAssistantNarrative({
+                        key: turnEventStateKey,
+                        content: summary,
+                    });
+                    hasAssistantNarrative = true;
+                    enqueueEmitDesktopEvent({
+                        type: 'text_delta',
+                        runId: runIdHint ?? latestReadOnlyAutoApprovalRunId ?? `auto-approval-read-only-${createId()}`,
+                        role: 'assistant',
+                        content: summary,
+                        turnId: input.turnId,
+                    });
+                    await flushPendingEmitOrThrow();
+                    await emitSyntheticCompletionAfterAssistantText();
+                };
+                const tryEmitSyntheticCompletionFromTaskTurnNarrative = async (): Promise<boolean> => {
+                    if (!hasTaskTurnAssistantNarrative(turnEventStateKey)) {
+                        return false;
+                    }
+                    await emitSyntheticCompletionAfterAssistantText();
+                    return true;
+                };
                 const lateApprovalGraceMs = resolveLateApprovalGraceMs();
                 const requiredCompletionCapabilitiesForTurn = getTaskTurnRequiredCompletionCapabilities(turnEventStateKey)
                     .map((value) => value.toLowerCase());
@@ -4881,10 +4972,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         await new Promise<void>((resolve) => {
                             setTimeout(resolve, LATE_APPROVAL_POLL_INTERVAL_MS);
                         });
-                        await pendingEmitChain;
-                        if (pendingEmitError) {
-                            throw pendingEmitError;
-                        }
+                        await flushPendingEmitOrThrow();
                         if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
                             return;
                         }
@@ -4904,10 +4992,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         await new Promise<void>((resolve) => {
                             setTimeout(resolve, LATE_APPROVAL_POLL_INTERVAL_MS);
                         });
-                        await pendingEmitChain;
-                        if (pendingEmitError) {
-                            throw pendingEmitError;
-                        }
+                        await flushPendingEmitOrThrow();
                     }
                     autoApprovalIdleTerminalTimeoutReached = (
                         hasAutoApprovalInFlightForTask()
@@ -4947,10 +5032,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             maxSteps: Math.max(4, Math.min(input.executionOptions?.maxSteps ?? 8, 8)),
                         },
                     );
-                    await pendingEmitChain;
-                    if (pendingEmitError) {
-                        throw pendingEmitError;
-                    }
+                    await flushPendingEmitOrThrow();
                     return hasTaskTurnTerminalEvent(turnEventStateKey);
                 };
                 const attemptRetryableNoNarrativeRecovery = async (reason: string): Promise<boolean> => {
@@ -4982,10 +5064,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             forcePostAssistantCompletion: true,
                         },
                     );
-                    await pendingEmitChain;
-                    if (pendingEmitError) {
-                        throw pendingEmitError;
-                    }
+                    await flushPendingEmitOrThrow();
                     const recovered = hasTaskTurnTerminalEvent(turnEventStateKey)
                         || hasTaskTurnAssistantNarrative(turnEventStateKey);
                     if (isAutoApprovalDebugEnabled() && !recovered) {
@@ -4999,6 +5078,13 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 };
                 const emitNoNarrativeDegradedCompletion = async (reason: string): Promise<void> => {
                     await emitMissingTerminalFailure(reason);
+                };
+                const resolveStalledAutoApprovalNoNarrative = async (reason: string): Promise<void> => {
+                    autoApprovalInFlightByTaskId.delete(input.taskId);
+                    if (await attemptAutoApprovalNoNarrativeRecovery()) {
+                        return;
+                    }
+                    await emitNoNarrativeDegradedCompletion(reason);
                 };
                 latestRunIdByTaskId.delete(input.taskId);
                 autoApprovalInFlightByTaskId.delete(input.taskId);
@@ -5067,6 +5153,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                             // The initial stream can legitimately end with stream_exhausted before narrative.
                             if (autoApproval) {
                                 sawAutoApprovalRequired = true;
+                                if (shouldAllowAutoApprovalWithoutResumeEvents(event)) {
+                                    sawReadOnlyAutoApprovalWithoutNarrative = true;
+                                    latestReadOnlyAutoApprovalRunId = event.runId;
+                                } else {
+                                    sawStrictAutoApprovalWithoutNoResumeAllowance = true;
+                                }
                             } else {
                                 awaitingUserApproval = true;
                             }
@@ -5077,8 +5169,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                                 if (pendingFinishReason === 'stream_exhausted') {
                                     // Late approval events can arrive after an early stream_exhausted marker.
                                     // Treat that marker as provisional and cancel false-completion escalation.
-                                    pendingNoNarrativeCompleteEvent = null;
-                                    pendingNoNarrativeCompleteHadProgress = false;
+                                    clearPendingNoNarrativeCompleteState();
                                 }
                             }
                         }
@@ -5178,16 +5269,12 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                 } finally {
                     stopTaskExecutionHeartbeat();
                 }
-                await pendingEmitChain;
-                if (pendingEmitError) {
-                    throw pendingEmitError;
-                }
+                await flushPendingEmitOrThrow();
                 if (
                     pendingNoNarrativeCompleteEvent
                     && hasTaskTurnTerminalEvent(turnEventStateKey)
                 ) {
-                    pendingNoNarrativeCompleteEvent = null;
-                    pendingNoNarrativeCompleteHadProgress = false;
+                    clearPendingNoNarrativeCompleteState();
                 }
                 if (
                     pendingNoNarrativeCompleteEvent
@@ -5202,13 +5289,9 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         await new Promise<void>((resolve) => {
                             setTimeout(resolve, LATE_APPROVAL_POLL_INTERVAL_MS);
                         });
-                        await pendingEmitChain;
-                        if (pendingEmitError) {
-                            throw pendingEmitError;
-                        }
+                        await flushPendingEmitOrThrow();
                         if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
-                            pendingNoNarrativeCompleteEvent = null;
-                            pendingNoNarrativeCompleteHadProgress = false;
+                            clearPendingNoNarrativeCompleteState();
                             break;
                         }
                     }
@@ -5224,41 +5307,41 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                         }
                         if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
                             hasAssistantNarrative = true;
-                            pendingNoNarrativeCompleteEvent = null;
-                            pendingNoNarrativeCompleteHadProgress = false;
+                            clearPendingNoNarrativeCompleteState();
                         } else if (hasAutoApprovalInFlightForTask()) {
                             autoApprovalInFlightByTaskId.delete(input.taskId);
                             if (await attemptAutoApprovalNoNarrativeRecovery()) {
-                                pendingNoNarrativeCompleteEvent = null;
-                                pendingNoNarrativeCompleteHadProgress = false;
+                                clearPendingNoNarrativeCompleteState();
                                 return;
                             }
                             await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
-                            pendingNoNarrativeCompleteEvent = null;
-                            pendingNoNarrativeCompleteHadProgress = false;
+                            clearPendingNoNarrativeCompleteState();
                             return;
                         }
                     }
                     if (pendingNoNarrativeCompleteHadProgress) {
+                        if (canUseReadOnlyAutoApprovalNoNarrativeFallback()) {
+                            await emitReadOnlyAutoApprovalNoNarrativeCompletion(
+                                latestReadOnlyAutoApprovalRunId,
+                            );
+                            clearPendingNoNarrativeCompleteState();
+                            return;
+                        }
                         if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
                             if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
-                                pendingNoNarrativeCompleteEvent = null;
-                                pendingNoNarrativeCompleteHadProgress = false;
+                                clearPendingNoNarrativeCompleteState();
                                 return;
                             }
                             if (await attemptRetryableNoNarrativeRecovery('missing_terminal_after_late_tooling_progress')) {
-                                pendingNoNarrativeCompleteEvent = null;
-                                pendingNoNarrativeCompleteHadProgress = false;
+                                clearPendingNoNarrativeCompleteState();
                                 return;
                             }
                             await emitNoNarrativeDegradedCompletion('missing_terminal_after_late_tooling_progress');
-                            pendingNoNarrativeCompleteEvent = null;
-                            pendingNoNarrativeCompleteHadProgress = false;
+                            clearPendingNoNarrativeCompleteState();
                             return;
                         }
                         await emitMissingTerminalFailure('missing_terminal_after_late_tooling_progress');
-                        pendingNoNarrativeCompleteEvent = null;
-                        pendingNoNarrativeCompleteHadProgress = false;
+                        clearPendingNoNarrativeCompleteState();
                         return;
                     }
                     const noNarrativeCompleteEvent = pendingNoNarrativeCompleteEvent;
@@ -5267,8 +5350,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     }
                     noNarrativeTerminalFailure = true;
                     emitFalseCompletionFailure(noNarrativeCompleteEvent);
-                    pendingNoNarrativeCompleteEvent = null;
-                    pendingNoNarrativeCompleteHadProgress = false;
+                    clearPendingNoNarrativeCompleteState();
                     return;
                 }
 
@@ -5282,10 +5364,7 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     await executeAttempt(recoveryThreadId, (event) => {
                         enqueueEmitDesktopEvent(event);
                     });
-                    await pendingEmitChain;
-                    if (pendingEmitError) {
-                        throw pendingEmitError;
-                    }
+                    await flushPendingEmitOrThrow();
                     return;
                 }
 
@@ -5293,158 +5372,109 @@ export function createMastraEntrypointProcessor(deps: ProcessorDeps) {
                     for (const event of suppressedRecoverableEvents) {
                         enqueueEmitDesktopEvent(event);
                     }
-                    await pendingEmitChain;
-                    if (pendingEmitError) {
-                        throw pendingEmitError;
-                    }
+                    await flushPendingEmitOrThrow();
                 }
                 const hasTerminalEvent = hasTaskTurnTerminalEvent(turnEventStateKey);
                 const assistantNarrativeSeen = hasAssistantNarrative || hasTaskTurnAssistantNarrative(turnEventStateKey);
                 const hasPendingApproval = hasPendingApprovalForTask(input.taskId);
-                if (!hasTerminalEvent && assistantNarrativeSeen && !(awaitingUserApproval && hasPendingApproval)) {
-                    enqueueEmitDesktopEvent({
-                        type: 'complete',
-                        runId: `synthetic-complete-${createId()}`,
-                        finishReason: 'synthetic_terminal_after_assistant_text',
-                        turnId: input.turnId,
-                    });
-                    await pendingEmitChain;
-                    if (pendingEmitError) {
-                        throw pendingEmitError;
+                const handleToolingProgressWithoutTerminal = async (): Promise<boolean> => {
+                    if (hasTerminalEvent) {
+                        return false;
                     }
-                    return;
-                }
-                if (!hasTerminalEvent && !assistantNarrativeSeen && hasToolingEvidenceForTurn() && !(awaitingUserApproval && hasPendingApproval)) {
+                    if (assistantNarrativeSeen) {
+                        return false;
+                    }
+                    if (!hasToolingEvidenceForTurn()) {
+                        return false;
+                    }
+                    if (awaitingUserApproval && hasPendingApproval) {
+                        return false;
+                    }
                     if (sawAutoApprovalRequired && !awaitingUserApproval) {
+                        if (canUseReadOnlyAutoApprovalNoNarrativeFallback() && !hasAutoApprovalInFlightForTask()) {
+                            await emitReadOnlyAutoApprovalNoNarrativeCompletion();
+                            return true;
+                        }
                         if (hasAutoApprovalInFlightForTask()) {
                             if (!sawRetryableNoNarrativeErrorDuringAutoApproval) {
                                 await waitForAutoApprovalIdleTerminalWatchdog();
                                 if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
-                                    return;
+                                    return true;
                                 }
-                                if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
-                                    enqueueEmitDesktopEvent({
-                                        type: 'complete',
-                                        runId: `synthetic-complete-${createId()}`,
-                                        finishReason: 'synthetic_terminal_after_assistant_text',
-                                        turnId: input.turnId,
-                                    });
-                                    await pendingEmitChain;
-                                    if (pendingEmitError) {
-                                        throw pendingEmitError;
-                                    }
-                                    return;
+                                if (await tryEmitSyntheticCompletionFromTaskTurnNarrative()) {
+                                    return true;
                                 }
                                 if (!autoApprovalIdleTerminalTimeoutReached) {
-                                    return;
+                                    return true;
                                 }
-                                autoApprovalInFlightByTaskId.delete(input.taskId);
-                                if (await attemptAutoApprovalNoNarrativeRecovery()) {
-                                    return;
-                                }
-                                await emitNoNarrativeDegradedCompletion('auto_approval_idle_timeout_without_terminal_event');
-                                return;
+                                await resolveStalledAutoApprovalNoNarrative('auto_approval_idle_timeout_without_terminal_event');
+                                return true;
                             }
                             await waitForAutoApprovalInFlightToSettle();
                             if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
-                                return;
+                                return true;
                             }
-                            if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
-                                enqueueEmitDesktopEvent({
-                                    type: 'complete',
-                                    runId: `synthetic-complete-${createId()}`,
-                                    finishReason: 'synthetic_terminal_after_assistant_text',
-                                    turnId: input.turnId,
-                                });
-                                await pendingEmitChain;
-                                if (pendingEmitError) {
-                                    throw pendingEmitError;
-                                }
-                                return;
+                            if (await tryEmitSyntheticCompletionFromTaskTurnNarrative()) {
+                                return true;
                             }
                             if (hasAutoApprovalInFlightForTask()) {
-                                autoApprovalInFlightByTaskId.delete(input.taskId);
-                                if (await attemptAutoApprovalNoNarrativeRecovery()) {
-                                    return;
-                                }
-                                await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
-                                return;
+                                await resolveStalledAutoApprovalNoNarrative('auto_approval_resume_stalled_without_terminal_event');
+                                return true;
                             }
                         }
                         if (await attemptAutoApprovalNoNarrativeRecovery()) {
-                            return;
+                            return true;
                         }
                         await emitNoNarrativeDegradedCompletion('missing_terminal_after_auto_approval_resume');
-                        return;
+                        return true;
                     }
                     if (hasAutoApprovalInFlightForTask()) {
                         if (sawRetryableNoNarrativeErrorDuringAutoApproval) {
                             await waitForAutoApprovalInFlightToSettle();
                             if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
-                                return;
+                                return true;
                             }
-                            if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
-                                enqueueEmitDesktopEvent({
-                                    type: 'complete',
-                                    runId: `synthetic-complete-${createId()}`,
-                                    finishReason: 'synthetic_terminal_after_assistant_text',
-                                    turnId: input.turnId,
-                                });
-                                await pendingEmitChain;
-                                if (pendingEmitError) {
-                                    throw pendingEmitError;
-                                }
-                                return;
+                            if (await tryEmitSyntheticCompletionFromTaskTurnNarrative()) {
+                                return true;
                             }
                             if (hasAutoApprovalInFlightForTask()) {
-                                autoApprovalInFlightByTaskId.delete(input.taskId);
-                                if (await attemptAutoApprovalNoNarrativeRecovery()) {
-                                    return;
-                                }
-                                await emitNoNarrativeDegradedCompletion('auto_approval_resume_stalled_without_terminal_event');
-                                return;
+                                await resolveStalledAutoApprovalNoNarrative('auto_approval_resume_stalled_without_terminal_event');
+                                return true;
                             }
                             await emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
-                            return;
+                            return true;
                         }
                         await waitForAutoApprovalIdleTerminalWatchdog();
                         if (hasTaskTurnTerminalEvent(turnEventStateKey)) {
-                            return;
+                            return true;
                         }
-                        if (hasTaskTurnAssistantNarrative(turnEventStateKey)) {
-                            enqueueEmitDesktopEvent({
-                                type: 'complete',
-                                runId: `synthetic-complete-${createId()}`,
-                                finishReason: 'synthetic_terminal_after_assistant_text',
-                                turnId: input.turnId,
-                            });
-                            await pendingEmitChain;
-                            if (pendingEmitError) {
-                                throw pendingEmitError;
-                            }
-                            return;
+                        if (await tryEmitSyntheticCompletionFromTaskTurnNarrative()) {
+                            return true;
                         }
                         if (!autoApprovalIdleTerminalTimeoutReached) {
-                            return;
+                            return true;
                         }
-                        autoApprovalInFlightByTaskId.delete(input.taskId);
-                        if (await attemptAutoApprovalNoNarrativeRecovery()) {
-                            return;
-                        }
-                        await emitNoNarrativeDegradedCompletion('auto_approval_idle_timeout_without_terminal_event');
-                        return;
+                        await resolveStalledAutoApprovalNoNarrative('auto_approval_idle_timeout_without_terminal_event');
+                        return true;
                     }
                     if (sawRetryableNoNarrativeErrorAfterToolingProgress) {
                         if (tryScheduleCommandFailureStepRetry(latestRunIdByTaskId.get(input.taskId))) {
-                            return;
+                            return true;
                         }
                         if (await attemptRetryableNoNarrativeRecovery('missing_terminal_after_tooling_progress')) {
-                            return;
+                            return true;
                         }
                         await emitNoNarrativeDegradedCompletion('missing_terminal_after_tooling_progress');
-                        return;
+                        return true;
                     }
                     await emitMissingTerminalFailure('missing_terminal_after_tooling_progress');
+                    return true;
+                };
+                if (!hasTerminalEvent && assistantNarrativeSeen && !(awaitingUserApproval && hasPendingApproval)) {
+                    await emitSyntheticCompletionAfterAssistantText();
+                    return;
+                }
+                if (await handleToolingProgressWithoutTerminal()) {
                     return;
                 }
             };

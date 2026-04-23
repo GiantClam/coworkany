@@ -246,6 +246,11 @@ const ARTIFACT_WRITE_CAPABILITY = 'artifact_write';
 const SAVE_TARGET_INTENT_PATTERN = /(?:save(?:\s+it)?\s+to|write(?:\s+(?:it|result|output|report|file))?\s+to|保存到|写入|输出到)\s+([^\s,，。!?]+)/iu;
 const SAVE_TARGET_PATH_PATTERN = /(?:\/|\.\/|\.\.\/|~\/|[A-Za-z]:\\)[^\s,，。!?"'`]+/gu;
 const TOOL_PREVIEW_LIMIT = 12;
+const TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_ENV_KEY = 'COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS';
+const TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MARKER = 'runtime_toolset_timeout:';
+const TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_DEFAULT_MS = 1_500;
+const TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MIN_MS = 200;
+const TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MAX_MS = 10_000;
 const FILESYSTEM_TOOLS_PATH_HINT_PATTERN = /(?:^|[\\/])(?:src|lib|app|test|tests|tools?)(?:[\\/]|$)|(?:^|[\\/])[^\s\\/]+\.[a-z0-9]{1,8}(?:$|[\\/])|目录|文件|路径|\b(?:path|folder|directory)\b/iu;
 const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_SIMPLE = 1;
 const DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_MODERATE = 2;
@@ -386,23 +391,41 @@ function maybeAppendArtifactWriteCapability(message: string, capabilities: strin
     return normalizeCapabilityValues([...normalized, ARTIFACT_WRITE_CAPABILITY]);
 }
 
-function collectEnabledToolpackHints(snapshot: RuntimeCapabilitySnapshot | null): string[] {
+function collectToolpackHints(
+    snapshot: RuntimeCapabilitySnapshot | null,
+    options?: {
+        callableOnly?: boolean;
+        includeDescription?: boolean;
+    },
+): string[] {
     if (!snapshot) {
         return [];
     }
+    const callableOnly = options?.callableOnly === true;
+    const includeDescription = options?.includeDescription === true;
     const values: string[] = [];
     for (const toolpack of snapshot.toolpacks) {
         if (!toolpack.enabled) {
             continue;
         }
-        if (typeof toolpack.id === 'string') {
-            values.push(toolpack.id);
+        const hasCallableTools = (
+            toolpack.runtimeStatus === 'callable'
+            || (typeof toolpack.callableToolCount === 'number' && toolpack.callableToolCount > 0)
+        );
+        if (callableOnly && !hasCallableTools) {
+            continue;
         }
-        if (typeof toolpack.name === 'string') {
-            values.push(toolpack.name);
+        const id = typeof toolpack.id === 'string' ? toolpack.id : '';
+        const name = typeof toolpack.name === 'string' ? toolpack.name : '';
+        const description = typeof toolpack.description === 'string' ? toolpack.description : '';
+        if (id.length > 0) {
+            values.push(id);
         }
-        if (typeof toolpack.description === 'string') {
-            values.push(toolpack.description);
+        if (name.length > 0) {
+            values.push(name);
+        }
+        if (includeDescription && description.length > 0) {
+            values.push(description);
         }
         if (Array.isArray(toolpack.tools)) {
             for (const tool of toolpack.tools) {
@@ -415,37 +438,16 @@ function collectEnabledToolpackHints(snapshot: RuntimeCapabilitySnapshot | null)
     return normalizeCapabilityValues(values);
 }
 
+function collectEnabledToolpackHints(snapshot: RuntimeCapabilitySnapshot | null): string[] {
+    return collectToolpackHints(snapshot, {
+        includeDescription: true,
+    });
+}
+
 function collectCallableToolpackHints(snapshot: RuntimeCapabilitySnapshot | null): string[] {
-    if (!snapshot) {
-        return [];
-    }
-    const values: string[] = [];
-    for (const toolpack of snapshot.toolpacks) {
-        if (!toolpack.enabled) {
-            continue;
-        }
-        const hasCallableTools = (
-            toolpack.runtimeStatus === 'callable'
-            || (typeof toolpack.callableToolCount === 'number' && toolpack.callableToolCount > 0)
-        );
-        if (!hasCallableTools) {
-            continue;
-        }
-        if (typeof toolpack.id === 'string') {
-            values.push(toolpack.id);
-        }
-        if (typeof toolpack.name === 'string') {
-            values.push(toolpack.name);
-        }
-        if (Array.isArray(toolpack.tools)) {
-            for (const tool of toolpack.tools) {
-                if (typeof tool === 'string') {
-                    values.push(tool);
-                }
-            }
-        }
-    }
-    return normalizeCapabilityValues(values);
+    return collectToolpackHints(snapshot, {
+        callableOnly: true,
+    });
 }
 
 function collectRuntimeToolHints(toolsets: RuntimeToolsetMap): string[] {
@@ -523,6 +525,108 @@ function formatRequirementLabel(requirement: TaskCapabilityRequirement): string 
     return formatTaskCapabilityRequirement(requirement);
 }
 
+type RuntimeToolsetLookupResult = {
+    runtimeToolsets: RuntimeToolsetMap;
+    runtimeToolsetLookupOk: boolean;
+    runtimeToolsetLookupTimedOut: boolean;
+};
+
+function resolveTaskCapabilityGateToolsetTimeoutMs(): number {
+    const raw = Number.parseInt(process.env[TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_ENV_KEY] ?? '', 10);
+    if (!Number.isFinite(raw)) {
+        return TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_DEFAULT_MS;
+    }
+    return Math.min(
+        TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MAX_MS,
+        Math.max(TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MIN_MS, Math.floor(raw)),
+    );
+}
+
+function isRuntimeToolsetTimeoutError(error: unknown): boolean {
+    return String(error).includes(TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MARKER);
+}
+
+async function lookupRuntimeToolsetsWithTimeout(input: {
+    listRuntimeToolsets?: () => RuntimeToolsetMap | Promise<RuntimeToolsetMap>;
+    timeoutMs: number;
+}): Promise<RuntimeToolsetLookupResult> {
+    if (!input.listRuntimeToolsets) {
+        return {
+            runtimeToolsets: {},
+            runtimeToolsetLookupOk: false,
+            runtimeToolsetLookupTimedOut: false,
+        };
+    }
+    try {
+        const runtimeToolsets = await Promise.race([
+            Promise.resolve(input.listRuntimeToolsets()),
+            new Promise<RuntimeToolsetMap>((_, reject) => {
+                setTimeout(
+                    () => reject(new Error(`${TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MARKER}${input.timeoutMs}`)),
+                    input.timeoutMs,
+                );
+            }),
+        ]);
+        return {
+            runtimeToolsets,
+            runtimeToolsetLookupOk: true,
+            runtimeToolsetLookupTimedOut: false,
+        };
+    } catch (error) {
+        const runtimeToolsetLookupTimedOut = isRuntimeToolsetTimeoutError(error);
+        if (runtimeToolsetLookupTimedOut) {
+            console.warn('[coworkany-capability-gate] runtime toolset lookup timed out; bypassing strict gate for this turn.', {
+                timeoutMs: input.timeoutMs,
+            });
+        }
+        return {
+            runtimeToolsets: {},
+            runtimeToolsetLookupOk: false,
+            runtimeToolsetLookupTimedOut,
+        };
+    }
+}
+
+function shouldBypassCapabilityGateForMcpLoading(input: {
+    mcpSnapshot?: RuntimeMcpSnapshot;
+    runtimeToolsetLookupOk: boolean;
+    runtimeToolsetLookupTimedOut: boolean;
+    runtimeToolHints: string[];
+}): boolean {
+    return Boolean(
+        input.mcpSnapshot?.enabled
+        && (
+            input.runtimeToolsetLookupTimedOut
+            || (
+                input.runtimeToolsetLookupOk
+                && input.runtimeToolHints.length === 0
+                && input.mcpSnapshot.status !== 'ready'
+            )
+        ),
+    );
+}
+
+function buildTaskCapabilityMissingSummary(input: {
+    requirements: TaskCapabilityRequirement[];
+    missingRequirements: TaskCapabilityRequirement[];
+    mcpEnabled: boolean | null;
+    mcpSnapshot?: RuntimeMcpSnapshot;
+    runtimeToolHints: string[];
+    callableConfiguredToolHints: string[];
+    configuredToolHints: string[];
+}): string {
+    const requirementLabels = input.requirements.map(formatRequirementLabel).join(', ');
+    const missingLabels = input.missingRequirements.map(formatRequirementLabel).join(', ');
+    return [
+        '当前无法稳定执行该任务：缺少所需工具能力。',
+        `required_capabilities=${requirementLabels}; missing_capabilities=${missingLabels}; mcp_enabled=${input.mcpEnabled === null ? 'unknown' : (input.mcpEnabled ? 'yes' : 'no')}; mcp_status=${input.mcpSnapshot?.status ?? 'unknown'}; mcp_allowed_servers=${input.mcpSnapshot?.allowedServerCount ?? 'unknown'}.`,
+        `运行时工具预览：${truncateCapabilityPreview(input.runtimeToolHints)}`,
+        `运行时可调用工具包预览：${truncateCapabilityPreview(input.callableConfiguredToolHints)}`,
+        `已启用工具包预览：${truncateCapabilityPreview(input.configuredToolHints)}`,
+        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*、run_command、write_to_file）。',
+    ].join('\n');
+}
+
 async function evaluateTaskCapabilityGate(input: {
     message: string;
     workspacePath: string;
@@ -549,36 +653,15 @@ async function evaluateTaskCapabilityGate(input: {
         }
     }
 
-    let runtimeToolsets: RuntimeToolsetMap = {};
-    let runtimeToolsetLookupOk = false;
-    let runtimeToolsetLookupTimedOut = false;
-    const runtimeToolsetLookupTimeoutMs = (() => {
-        const raw = Number.parseInt(process.env.COWORKANY_TASK_CAPABILITY_GATE_TOOLSET_TIMEOUT_MS ?? '', 10);
-        if (!Number.isFinite(raw)) {
-            return 1_500;
-        }
-        return Math.min(10_000, Math.max(200, Math.floor(raw)));
-    })();
-    if (input.listRuntimeToolsets) {
-        try {
-            runtimeToolsets = await Promise.race([
-                Promise.resolve(input.listRuntimeToolsets()),
-                new Promise<RuntimeToolsetMap>((_, reject) => {
-                    setTimeout(() => reject(new Error(`runtime_toolset_timeout:${runtimeToolsetLookupTimeoutMs}`)), runtimeToolsetLookupTimeoutMs);
-                }),
-            ]);
-            runtimeToolsetLookupOk = true;
-        } catch (error) {
-            runtimeToolsets = {};
-            runtimeToolsetLookupOk = false;
-            runtimeToolsetLookupTimedOut = String(error).includes('runtime_toolset_timeout:');
-            if (runtimeToolsetLookupTimedOut) {
-                console.warn('[coworkany-capability-gate] runtime toolset lookup timed out; bypassing strict gate for this turn.', {
-                    timeoutMs: runtimeToolsetLookupTimeoutMs,
-                });
-            }
-        }
-    }
+    const runtimeToolsetLookupTimeoutMs = resolveTaskCapabilityGateToolsetTimeoutMs();
+    const {
+        runtimeToolsets,
+        runtimeToolsetLookupOk,
+        runtimeToolsetLookupTimedOut,
+    } = await lookupRuntimeToolsetsWithTimeout({
+        listRuntimeToolsets: input.listRuntimeToolsets,
+        timeoutMs: runtimeToolsetLookupTimeoutMs,
+    });
 
     const configuredToolHints = collectEnabledToolpackHints(snapshot);
     const callableConfiguredToolHints = collectCallableToolpackHints(snapshot);
@@ -602,17 +685,12 @@ async function evaluateTaskCapabilityGate(input: {
     const combinedHints = normalizeCapabilityValues([...runtimeToolHints, ...callableConfiguredToolHints]);
     const availableRequirements = requirements.filter((requirement) => isRequirementAvailable(requirement, combinedHints));
     const missingRequirements = requirements.filter((requirement) => !availableRequirements.includes(requirement));
-    const isRuntimeMcpStillLoading = Boolean(
-        mcpSnapshot?.enabled
-        && (
-            runtimeToolsetLookupTimedOut
-            || (
-                runtimeToolsetLookupOk
-                && runtimeToolHints.length === 0
-                && mcpSnapshot.status !== 'ready'
-            )
-        ),
-    );
+    const isRuntimeMcpStillLoading = shouldBypassCapabilityGateForMcpLoading({
+        mcpSnapshot,
+        runtimeToolsetLookupOk,
+        runtimeToolsetLookupTimedOut,
+        runtimeToolHints,
+    });
     if (isRuntimeMcpStillLoading) {
         return {
             ready: true,
@@ -627,21 +705,18 @@ async function evaluateTaskCapabilityGate(input: {
         };
     }
 
-    const requirementLabels = requirements.map(formatRequirementLabel).join(', ');
-    const missingLabels = missingRequirements.map(formatRequirementLabel).join(', ');
-    const summary = [
-        '当前无法稳定执行该任务：缺少所需工具能力。',
-        `required_capabilities=${requirementLabels}; missing_capabilities=${missingLabels}; mcp_enabled=${mcpEnabled === null ? 'unknown' : (mcpEnabled ? 'yes' : 'no')}; mcp_status=${mcpSnapshot?.status ?? 'unknown'}; mcp_allowed_servers=${mcpSnapshot?.allowedServerCount ?? 'unknown'}.`,
-        `运行时工具预览：${truncateCapabilityPreview(runtimeToolHints)}`,
-        `运行时可调用工具包预览：${truncateCapabilityPreview(callableConfiguredToolHints)}`,
-        `已启用工具包预览：${truncateCapabilityPreview(configuredToolHints)}`,
-        '请在 CoworkAny 中启用并加载对应工具后重试（例如 search_web、crawl_url、check_weather、get_news、browser_*、run_command、write_to_file）。',
-    ].join('\n');
-
     return {
         ready: false,
         requirements,
-        summary,
+        summary: buildTaskCapabilityMissingSummary({
+            requirements,
+            missingRequirements,
+            mcpEnabled,
+            mcpSnapshot,
+            runtimeToolHints,
+            callableConfiguredToolHints,
+            configuredToolHints,
+        }),
     };
 }
 
@@ -1004,6 +1079,7 @@ export async function handleStartOrSendTaskCommand(
     const explicitEnabledToolpacks = explicitEnabledToolpacksRaw && explicitEnabledToolpacksRaw.length > 0
         ? explicitEnabledToolpacksRaw
         : undefined;
+    const requestedTitle = input.getString(payload.title);
     const configuredModelId = input.pickStringConfigValue(commandConfig, 'modelId');
     const resolvedModelId = configuredModelId ?? previousState?.modelId;
     const retryConfig = input.pickTaskRuntimeRetryConfig(commandConfig);
@@ -1104,6 +1180,18 @@ export async function handleStartOrSendTaskCommand(
             ? true
             : undefined,
     };
+    const patchExecutionOptions = (patch: Partial<UserMessageExecutionOptions>): void => {
+        executionOptions = {
+            ...executionOptions,
+            ...patch,
+        };
+    };
+    const setRequiredCompletionCapabilities = (requiredCompletionCapabilities: string[]): void => {
+        patchExecutionOptions({
+            requiredCompletionCapabilities,
+            requireToolEvidenceForCompletion: requiredCompletionCapabilities.length > 0,
+        });
+    };
     const resourceId = input.resolveTaskResourceId(taskId, payload, previousState?.resourceId);
     const shouldSeedDefaultCapabilityRetryBudget = (
         commandType === 'start_task'
@@ -1111,13 +1199,6 @@ export async function handleStartOrSendTaskCommand(
         && !previousState?.retry
         && hasToolBackedCapabilityRequirement(inferredCapabilityRequirements)
     );
-    const defaultCapabilityRetryMaxAttempts = shouldSeedDefaultCapabilityRetryBudget
-        ? resolveDefaultCapabilityRetryMaxAttempts({
-            message: effectiveMessage,
-            workspacePath,
-            requirements: inferredCapabilityRequirements,
-        })
-        : DEFAULT_CAPABILITY_TASK_RETRY_MAX_ATTEMPTS_SIMPLE;
     const nextRetryState: TaskRuntimeRetryState | undefined = retryConfig
         ? retryConfig
         : (previousState?.retry
@@ -1129,9 +1210,114 @@ export async function handleStartOrSendTaskCommand(
             }
             : (
                 shouldSeedDefaultCapabilityRetryBudget
-                    ? buildDefaultCapabilityRetryState(defaultCapabilityRetryMaxAttempts)
+                    ? buildDefaultCapabilityRetryState(resolveDefaultCapabilityRetryMaxAttempts({
+                        message: effectiveMessage,
+                        workspacePath,
+                        requirements: inferredCapabilityRequirements,
+                    }))
                     : undefined
             ));
+    const startedTaskTitle = requestedTitle ?? 'Task';
+    const persistedExecutionPath = executionOptions.executionPath === 'direct' ? 'direct' : 'workflow';
+    const emitAcceptedResponse = (queuePosition: number, responseType?: string): void => {
+        const payload = {
+            success: true,
+            taskId,
+            accepted: true,
+            queuePosition,
+            turnId,
+        };
+        if (responseType) {
+            input.emitFor(responseType, payload);
+            return;
+        }
+        input.emitCurrent(payload);
+    };
+    const emitAcceptedSummary = (inputSummary: {
+        summary: string;
+        finishReason: string;
+        responseType?: string;
+        queuePosition?: number;
+    }): void => {
+        emitAcceptedResponse(inputSummary.queuePosition ?? 0, inputSummary.responseType);
+        input.emitTaskSummary({
+            taskId,
+            summary: inputSummary.summary,
+            finishReason: inputSummary.finishReason,
+            turnId,
+        });
+    };
+    const emitSessionAndTaskStartLifecycle = (
+        state: TaskRuntimeState,
+        modeInput: {
+            forcedRouteMode?: UserMessageExecutionOptions['forcedRouteMode'];
+            executionPath?: UserMessageExecutionOptions['executionPath'];
+        },
+        title: string,
+    ): void => {
+        if (!shouldEmitTaskLifecycleEvents) {
+            return;
+        }
+        input.emitHookEvent('SessionStart', {
+            taskId,
+            payload: {
+                threadId: state.conversationThreadId,
+                workspacePath: state.workspacePath,
+                resourceId: state.resourceId,
+            },
+        });
+        input.emitHookEvent('TaskCreated', {
+            taskId,
+            payload: {
+                title: state.title,
+                workspacePath: state.workspacePath,
+                enabledSkills: state.enabledSkills ?? [],
+            },
+        });
+        input.emitTaskStarted({
+            taskId,
+            title,
+            message: effectiveMessage,
+            workspacePath,
+            mode: resolveTaskStartedMode(modeInput),
+            turnId,
+        });
+    };
+    const upsertTaskStateWithDefaults = (
+        patch: Partial<TaskRuntimeState>,
+    ): TaskRuntimeState => {
+        const nextTitle = requestedTitle
+            ?? previousState?.title
+            ?? 'Task';
+        return input.upsertTaskState(taskId, {
+            title: nextTitle,
+            workspacePath,
+            suspended: false,
+            suspensionReason: undefined,
+            lastUserMessage: effectiveMessage,
+            enabledSkills: resolvedSkillPrompt.enabledSkillIds,
+            modelId: resolvedModelId,
+            resourceId,
+            checkpoint: undefined,
+            retry: nextRetryState,
+            ...patch,
+        });
+    };
+    const emitCapabilityQueryShortcutSuccess = (summary: string): void => {
+        appendUserTranscript();
+        const state = upsertTaskStateWithDefaults({
+            status: 'idle',
+            executionPath: persistedExecutionPath,
+        });
+        emitSessionAndTaskStartLifecycle(state, {
+            forcedRouteMode: executionOptions.forcedRouteMode,
+            executionPath: executionOptions.executionPath,
+        }, startedTaskTitle);
+        emitAcceptedSummary({
+            summary,
+            finishReason: 'capability_query',
+        });
+    };
 
     if (
         commandType === 'send_task_message'
@@ -1143,34 +1329,16 @@ export async function handleStartOrSendTaskCommand(
             sourceTaskId: taskId,
             userMessage: effectiveMessage,
         });
-        input.upsertTaskState(taskId, {
-            title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
-            workspacePath,
+        upsertTaskStateWithDefaults({
             status: 'idle',
-            suspended: false,
-            suspensionReason: undefined,
-            lastUserMessage: effectiveMessage,
-            enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-            modelId: resolvedModelId,
-            resourceId,
-            checkpoint: undefined,
-            retry: nextRetryState,
-        });
-        input.emitFor('send_task_message_response', {
-            success: true,
-            taskId,
-            accepted: true,
-            queuePosition: 0,
-            turnId,
         });
         const cancellationSummary = cancelled.cancelledCount > 0
             ? `已取消 ${cancelled.cancelledCount} 个定时任务。`
             : '没有可取消的定时任务。';
-        input.emitTaskSummary({
-            taskId,
+        emitAcceptedSummary({
             summary: cancellationSummary,
             finishReason: 'scheduled_cancel',
-            turnId,
+            responseType: 'send_task_message_response',
         });
         return true;
     }
@@ -1183,63 +1351,7 @@ export async function handleStartOrSendTaskCommand(
                 await input.listRuntimeCapabilities(),
             );
             if (capabilitySummary) {
-                appendUserTranscript();
-                const state = input.upsertTaskState(taskId, {
-                    title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
-                    workspacePath,
-                    status: 'idle',
-                    suspended: false,
-                    suspensionReason: undefined,
-                        lastUserMessage: effectiveMessage,
-                    enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                    modelId: resolvedModelId,
-                    resourceId,
-                    checkpoint: undefined,
-                    retry: nextRetryState,
-                    executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
-                });
-                if (shouldEmitTaskLifecycleEvents) {
-                    input.emitHookEvent('SessionStart', {
-                        taskId,
-                        payload: {
-                            threadId: state.conversationThreadId,
-                            workspacePath: state.workspacePath,
-                            resourceId: state.resourceId,
-                        },
-                    });
-                    input.emitHookEvent('TaskCreated', {
-                        taskId,
-                        payload: {
-                            title: state.title,
-                            workspacePath: state.workspacePath,
-                            enabledSkills: state.enabledSkills ?? [],
-                        },
-                    });
-                    input.emitTaskStarted({
-                        taskId,
-                        title: input.getString(payload.title) ?? 'Task',
-                        message: effectiveMessage,
-                        workspacePath,
-                        mode: resolveTaskStartedMode({
-                            forcedRouteMode: executionOptions.forcedRouteMode,
-                            executionPath: executionOptions.executionPath,
-                        }),
-                        turnId,
-                    });
-                }
-                input.emitCurrent({
-                    success: true,
-                    taskId,
-                    accepted: true,
-                    queuePosition: 0,
-                    turnId,
-                });
-                input.emitTaskSummary({
-                    taskId,
-                    summary: capabilitySummary,
-                    finishReason: 'capability_query',
-                    turnId,
-                });
+                emitCapabilityQueryShortcutSuccess(capabilitySummary);
                 return true;
             }
         } catch {
@@ -1249,63 +1361,7 @@ export async function handleStartOrSendTaskCommand(
     if (isGeneralCapabilityQuery(effectiveMessage) && input.listRuntimeCapabilities) {
         try {
             const capabilitySummary = buildGeneralCapabilitySummary(await input.listRuntimeCapabilities());
-            appendUserTranscript();
-            const state = input.upsertTaskState(taskId, {
-                title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
-                workspacePath,
-                status: 'idle',
-                suspended: false,
-                suspensionReason: undefined,
-                lastUserMessage: effectiveMessage,
-                enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                modelId: resolvedModelId,
-                resourceId,
-                checkpoint: undefined,
-                retry: nextRetryState,
-                executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
-            });
-            if (shouldEmitTaskLifecycleEvents) {
-                input.emitHookEvent('SessionStart', {
-                    taskId,
-                    payload: {
-                        threadId: state.conversationThreadId,
-                        workspacePath: state.workspacePath,
-                        resourceId: state.resourceId,
-                    },
-                });
-                input.emitHookEvent('TaskCreated', {
-                    taskId,
-                    payload: {
-                        title: state.title,
-                        workspacePath: state.workspacePath,
-                        enabledSkills: state.enabledSkills ?? [],
-                    },
-                });
-                input.emitTaskStarted({
-                    taskId,
-                    title: input.getString(payload.title) ?? 'Task',
-                    message: effectiveMessage,
-                    workspacePath,
-                    mode: resolveTaskStartedMode({
-                        forcedRouteMode: executionOptions.forcedRouteMode,
-                        executionPath: executionOptions.executionPath,
-                    }),
-                    turnId,
-                });
-            }
-            input.emitCurrent({
-                success: true,
-                taskId,
-                accepted: true,
-                queuePosition: 0,
-                turnId,
-            });
-            input.emitTaskSummary({
-                taskId,
-                summary: capabilitySummary,
-                finishReason: 'capability_query',
-                turnId,
-            });
+            emitCapabilityQueryShortcutSuccess(capabilitySummary);
             return true;
         } catch {
             // Best-effort optimization; fall back to normal LLM execution on capability lookup failure.
@@ -1317,40 +1373,30 @@ export async function handleStartOrSendTaskCommand(
     const isHighRiskHostAction = HIGH_RISK_HOST_ACTION_PATTERN.test(effectiveMessage);
     const hasSpacedAbsoluteTimeCue = SPACED_ABSOLUTE_TIME_PATTERN.test(effectiveMessage);
     const isDatabaseOperation = DATABASE_OPERATION_PATTERN.test(effectiveMessage);
+    const forceDirectTaskPath = (): void => {
+        patchExecutionOptions({
+            executionPath: 'direct',
+            forcedRouteMode: 'task',
+            useDirectChatResponder: undefined,
+            forcePostAssistantCompletion: undefined,
+        });
+    };
     const skipImplicitSchedule =
         !hasExplicitRouteCommand
         && !hasExplicitSchedulePrefix
         && isHighRiskHostAction
         && !hasSpacedAbsoluteTimeCue;
     if (skipImplicitSchedule) {
-        executionOptions = {
-            ...executionOptions,
-            executionPath: 'direct',
-            forcedRouteMode: 'task',
-            useDirectChatResponder: undefined,
-            forcePostAssistantCompletion: undefined,
-        };
+        forceDirectTaskPath();
     }
     const shouldForceDatabaseTaskPath = isDatabaseOperation
         && routedMessage.forcedRouteMode !== 'chat';
     if (shouldForceDatabaseTaskPath) {
-        executionOptions = {
-            ...executionOptions,
-            executionPath: 'direct',
-            forcedRouteMode: 'task',
-            useDirectChatResponder: undefined,
-            forcePostAssistantCompletion: undefined,
-        };
+        forceDirectTaskPath();
     }
     const shouldForceToolFirstTaskPath = hasToolBackedCapabilityRequirement(inferredCapabilityRequirements);
     if (shouldForceToolFirstTaskPath) {
-        executionOptions = {
-            ...executionOptions,
-            executionPath: 'direct',
-            forcedRouteMode: 'task',
-            useDirectChatResponder: undefined,
-            forcePostAssistantCompletion: undefined,
-        };
+        forceDirectTaskPath();
     }
     const shouldRunTaskCapabilityGate = executionOptions.forcedRouteMode === 'task';
     if (shouldRunTaskCapabilityGate) {
@@ -1376,62 +1422,18 @@ export async function handleStartOrSendTaskCommand(
                 ),
                 createdAt: new Date().toISOString(),
             });
-            const state = input.upsertTaskState(taskId, {
-                title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
-                workspacePath,
+            const state = upsertTaskStateWithDefaults({
                 status: 'idle',
-                suspended: false,
-                suspensionReason: undefined,
-                lastUserMessage: effectiveMessage,
-                enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                modelId: resolvedModelId,
-                resourceId,
-                checkpoint: undefined,
-                retry: nextRetryState,
                 executionPath: 'direct',
                 turnContract,
             });
-            if (shouldEmitTaskLifecycleEvents) {
-                input.emitHookEvent('SessionStart', {
-                    taskId,
-                    payload: {
-                        threadId: state.conversationThreadId,
-                        workspacePath: state.workspacePath,
-                        resourceId: state.resourceId,
-                    },
-                });
-                input.emitHookEvent('TaskCreated', {
-                    taskId,
-                    payload: {
-                        title: state.title,
-                        workspacePath: state.workspacePath,
-                        enabledSkills: state.enabledSkills ?? [],
-                    },
-                });
-                input.emitTaskStarted({
-                    taskId,
-                    title: input.getString(payload.title) ?? 'Task',
-                    message: effectiveMessage,
-                    workspacePath,
-                    mode: resolveTaskStartedMode({
-                        forcedRouteMode: 'task',
-                        executionPath: 'direct',
-                    }),
-                    turnId,
-                });
-            }
-            input.emitCurrent({
-                success: true,
-                taskId,
-                accepted: true,
-                queuePosition: 0,
-                turnId,
-            });
-            input.emitTaskSummary({
-                taskId,
+            emitSessionAndTaskStartLifecycle(state, {
+                forcedRouteMode: 'task',
+                executionPath: 'direct',
+            }, startedTaskTitle);
+            emitAcceptedSummary({
                 summary: taskCapabilityGate.summary,
                 finishReason: 'capability_missing',
-                turnId,
             });
             return true;
         }
@@ -1440,11 +1442,7 @@ export async function handleStartOrSendTaskCommand(
                 effectiveMessage,
                 taskCapabilityGate.requirements.map(formatRequirementLabel),
             );
-            executionOptions = {
-                ...executionOptions,
-                requireToolEvidenceForCompletion: requiredCompletionCapabilities.length > 0,
-                requiredCompletionCapabilities,
-            };
+            setRequiredCompletionCapabilities(requiredCompletionCapabilities);
         }
     }
     const shouldDisableChatSkills = isFollowupCommand
@@ -1452,22 +1450,17 @@ export async function handleStartOrSendTaskCommand(
         && executionOptions.forcedRouteMode !== 'task'
         && input.pickBooleanConfigValue(commandConfig, 'enableChatSkills') !== true;
     if (shouldDisableChatSkills) {
-        executionOptions = {
-            ...executionOptions,
+        patchExecutionOptions({
             enabledSkills: [],
             skillPrompt: undefined,
-        };
+        });
     }
 
     const augmentedRequiredCompletionCapabilities = maybeAppendArtifactWriteCapability(
         effectiveMessage,
         executionOptions.requiredCompletionCapabilities ?? [],
     );
-    executionOptions = {
-        ...executionOptions,
-        requiredCompletionCapabilities: augmentedRequiredCompletionCapabilities,
-        requireToolEvidenceForCompletion: augmentedRequiredCompletionCapabilities.length > 0,
-    };
+    setRequiredCompletionCapabilities(augmentedRequiredCompletionCapabilities);
     const turnContract = buildTaskTurnContract({
         message: effectiveMessage,
         workspacePath,
@@ -1476,18 +1469,19 @@ export async function handleStartOrSendTaskCommand(
         requiredCapabilities: executionOptions.requiredCompletionCapabilities,
         createdAt: new Date().toISOString(),
     });
-    executionOptions = {
-        ...executionOptions,
-        requiredCompletionCapabilities: turnContract.requiredCapabilities,
-        requireToolEvidenceForCompletion: turnContract.requiredCapabilities.length > 0,
+    setRequiredCompletionCapabilities(turnContract.requiredCapabilities);
+    patchExecutionOptions({
         turnContractHash: turnContract.hash,
         turnContractDomain: turnContract.domain,
-    };
+    });
+    const stateExecutionPath: TaskRuntimeExecutionPath = executionOptions.executionPath === 'direct'
+        ? 'direct'
+        : 'workflow';
 
     if (input.scheduleTaskIfNeeded && !skipImplicitSchedule) {
         const scheduleDecision = await input.scheduleTaskIfNeeded({
             sourceTaskId: taskId,
-            title: input.getString(payload.title) ?? undefined,
+            title: requestedTitle ?? undefined,
             message: effectiveMessage,
             workspacePath,
             config: input.toRecord(payload.config),
@@ -1502,24 +1496,14 @@ export async function handleStartOrSendTaskCommand(
         }
         if (scheduleDecision.scheduled) {
             appendUserTranscript();
-            input.upsertTaskState(taskId, {
-                title: input.getString(payload.title) ?? previousState?.title ?? 'Task',
-                workspacePath,
+            upsertTaskStateWithDefaults({
                 status: 'scheduled',
-                suspended: false,
-                suspensionReason: undefined,
-                lastUserMessage: effectiveMessage,
-                enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-                modelId: resolvedModelId,
-                resourceId,
-                checkpoint: undefined,
-                retry: nextRetryState,
-                executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
+                executionPath: stateExecutionPath,
             });
             if (shouldEmitTaskLifecycleEvents) {
                 input.emitTaskStarted({
                     taskId,
-                    title: input.getString(payload.title) ?? 'Task',
+                    title: startedTaskTitle,
                     message: effectiveMessage,
                     workspacePath,
                     mode: resolveTaskStartedMode({
@@ -1531,19 +1515,10 @@ export async function handleStartOrSendTaskCommand(
                     turnId,
                 });
             }
-            input.emitCurrent({
-                success: true,
-                taskId,
-                accepted: true,
-                queuePosition: 0,
-                turnId,
-            });
             const summary = scheduleDecision.summary ?? '已安排定时任务。';
-            input.emitTaskSummary({
-                taskId,
+            emitAcceptedSummary({
                 summary,
                 finishReason: 'scheduled',
-                turnId,
             });
             return true;
         }
@@ -1555,6 +1530,16 @@ export async function handleStartOrSendTaskCommand(
             fingerprint: string;
         }
         | undefined;
+    const completeMessageDispatch = (): void => {
+        if (!messageDispatchToken || !input.completeTaskMessageDispatch) {
+            return;
+        }
+        input.completeTaskMessageDispatch({
+            taskId: messageDispatchToken.taskId,
+            fingerprint: messageDispatchToken.fingerprint,
+        });
+        messageDispatchToken = undefined;
+    };
     if (
         isFollowupCommand
         && !allowDuplicateTaskMessage
@@ -1586,50 +1571,15 @@ export async function handleStartOrSendTaskCommand(
     }
 
     appendUserTranscript();
-    const state = input.upsertTaskState(taskId, {
-        title: input.getString(payload.title) ?? input.taskStates.get(taskId)?.title ?? 'Task',
-        workspacePath,
+    const state = upsertTaskStateWithDefaults({
         status: 'running',
-        suspended: false,
-        suspensionReason: undefined,
-        lastUserMessage: effectiveMessage,
-        enabledSkills: resolvedSkillPrompt.enabledSkillIds,
-        modelId: resolvedModelId,
-        resourceId,
-        checkpoint: undefined,
-        retry: nextRetryState,
-        executionPath: executionOptions.executionPath === 'direct' ? 'direct' : 'workflow',
+        executionPath: stateExecutionPath,
         turnContract,
     });
-    if (shouldEmitTaskLifecycleEvents) {
-        input.emitHookEvent('SessionStart', {
-            taskId,
-            payload: {
-                threadId: state.conversationThreadId,
-                workspacePath: state.workspacePath,
-                resourceId: state.resourceId,
-            },
-        });
-        input.emitHookEvent('TaskCreated', {
-            taskId,
-            payload: {
-                title: state.title,
-                workspacePath: state.workspacePath,
-                enabledSkills: state.enabledSkills ?? [],
-            },
-        });
-        input.emitTaskStarted({
-            taskId,
-            title: input.getString(payload.title) ?? 'Task',
-            message: effectiveMessage,
-            workspacePath,
-            mode: resolveTaskStartedMode({
-                forcedRouteMode: executionOptions.forcedRouteMode,
-                executionPath: executionOptions.executionPath,
-            }),
-            turnId,
-        });
-    }
+    emitSessionAndTaskStartLifecycle(state, {
+        forcedRouteMode: executionOptions.forcedRouteMode,
+        executionPath: executionOptions.executionPath,
+    }, startedTaskTitle);
     let queuedExecution: ReturnType<HandleStartOrSendTaskCommandInput['enqueueTaskExecution']>;
     try {
         queuedExecution = input.enqueueTaskExecution({
@@ -1646,41 +1596,20 @@ export async function handleStartOrSendTaskCommand(
             }),
         });
     } catch (error) {
-        if (messageDispatchToken && input.completeTaskMessageDispatch) {
-            input.completeTaskMessageDispatch({
-                taskId: messageDispatchToken.taskId,
-                fingerprint: messageDispatchToken.fingerprint,
-            });
-        }
+        completeMessageDispatch();
         throw error;
     }
     try {
-        input.emitCurrent({
-            success: true,
-            taskId,
-            accepted: true,
-            queuePosition: queuedExecution.queuePosition,
-            turnId,
-        });
+        emitAcceptedResponse(queuedExecution.queuePosition);
     } catch (error) {
-        if (messageDispatchToken && input.completeTaskMessageDispatch) {
-            input.completeTaskMessageDispatch({
-                taskId: messageDispatchToken.taskId,
-                fingerprint: messageDispatchToken.fingerprint,
-            });
-        }
+        completeMessageDispatch();
         throw error;
     }
     let executionPath: TaskRuntimeExecutionPath;
     try {
         executionPath = await queuedExecution.completion;
     } finally {
-        if (messageDispatchToken && input.completeTaskMessageDispatch) {
-            input.completeTaskMessageDispatch({
-                taskId: messageDispatchToken.taskId,
-                fingerprint: messageDispatchToken.fingerprint,
-            });
-        }
+        completeMessageDispatch();
     }
     if (executionPath !== state.executionPath) {
         input.upsertTaskState(taskId, {
