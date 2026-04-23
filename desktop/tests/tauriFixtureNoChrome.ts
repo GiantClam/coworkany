@@ -781,6 +781,7 @@ class DarwinBrowserHarness {
 
         const envProxyUrl = firstNonEmpty([
             process.env.COWORKANY_PROXY_URL,
+            process.env.COWORKANY_TEST_PROXY_URL,
             process.env.HTTPS_PROXY,
             process.env.https_proxy,
             process.env.ALL_PROXY,
@@ -797,6 +798,7 @@ class DarwinBrowserHarness {
         const proxySource = configProxyEnabled && configProxyUrl.length > 0 ? 'config' : 'env';
         const noProxy = firstNonEmpty([
             configProxyBypass,
+            process.env.COWORKANY_TEST_PROXY_BYPASS,
             process.env.NO_PROXY,
             process.env.no_proxy,
             'localhost,127.0.0.1,::1',
@@ -839,10 +841,10 @@ class DarwinBrowserHarness {
         const effectResponse = {
             requestId,
             timestamp: new Date().toISOString(),
-            approved: true,
+            approved: false,
             approvalType: 'once',
             expiresAt: null,
-            denialReason: null,
+            denialReason: 'awaiting_confirmation',
             denialCode: null,
             modifiedScope: null,
         };
@@ -857,7 +859,9 @@ class DarwinBrowserHarness {
         };
 
         this.logs.push(`Sending to sidecar: ${JSON.stringify(ipcResponse)}\n`);
-        await this.emitToPage('ipc-response', ipcResponse);
+        // request_effect/request_effect_response is an internal sidecar policy-gate probe.
+        // Avoid forwarding this handshake into the desktop page bus, otherwise page-layer
+        // listeners can spuriously trigger report_effect_result before EFFECT_REQUESTED lands.
         this.sidecarProc?.stdin?.write(`${JSON.stringify(ipcResponse)}\n`);
     }
 
