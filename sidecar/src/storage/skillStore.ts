@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import YAML from 'yaml';
-import { BUILTIN_SKILLS } from '../data/defaults';
+import { listBuiltinSkills } from '../data/defaults';
 export interface SkillRequirements {
     tools: string[];
     capabilities: string[];
@@ -74,7 +74,7 @@ export class SkillStore {
     }
     list(): StoredSkill[] {
         const stored = Array.from(this.skills.values());
-        const builtins = BUILTIN_SKILLS.map((manifest) => ({
+        const builtins = listBuiltinSkills().map((manifest) => ({
             manifest: manifest as unknown as ClaudeSkillManifest,
             enabled: true,
             installedAt: new Date().toISOString(),
@@ -88,7 +88,7 @@ export class SkillStore {
     get(name: string): StoredSkill | undefined {
         const stored = this.skills.get(name);
         if (stored) return stored;
-        const builtin = BUILTIN_SKILLS.find((b) => b.name === name);
+        const builtin = listBuiltinSkills().find((b) => b.name === name);
         if (builtin) {
             return {
                 manifest: builtin as unknown as ClaudeSkillManifest,
@@ -111,7 +111,7 @@ export class SkillStore {
         console.log(`[SkillStore] Installed skill: ${manifest.name}`);
     }
     uninstall(name: string): boolean {
-        const builtin = BUILTIN_SKILLS.find((b) => b.name === name);
+        const builtin = listBuiltinSkills().find((b) => b.name === name);
         if (builtin) {
             console.warn(`[SkillStore] Cannot uninstall builtin skill: ${name}`);
             return false;

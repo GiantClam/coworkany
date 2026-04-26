@@ -1,5 +1,5 @@
 import { ToolpackManifest } from '../protocol';
-import { BUILTIN_TOOLPACKS } from '../data/defaults';
+import { listBuiltinToolpacks } from '../data/defaults';
 import * as fs from 'fs';
 import * as path from 'path';
 export interface StoredToolpack {
@@ -44,7 +44,7 @@ export class ToolpackStore {
     }
     list(): StoredToolpack[] {
         const stored = Array.from(this.toolpacks.values());
-        const builtins = BUILTIN_TOOLPACKS.map((manifest) => ({
+        const builtins = listBuiltinToolpacks().map((manifest) => ({
             manifest,
             enabled: true,
             workingDir: '',
@@ -78,7 +78,7 @@ export class ToolpackStore {
     get(name: string): StoredToolpack | undefined {
         const stored = this.toolpacks.get(name);
         if (stored) return stored;
-        const builtin = BUILTIN_TOOLPACKS.find((b) => b.name === name);
+        const builtin = listBuiltinToolpacks().find((b) => b.name === name);
         if (builtin) {
             return {
                 manifest: builtin,
@@ -114,7 +114,7 @@ export class ToolpackStore {
         console.log(`[ToolpackStore] Added toolpack: ${manifest.name}`);
     }
     remove(name: string): boolean {
-        const builtin = BUILTIN_TOOLPACKS.find((b) => b.name === name);
+        const builtin = listBuiltinToolpacks().find((b) => b.name === name);
         if (builtin) {
             console.warn(`[ToolpackStore] Cannot remove builtin toolpack: ${name}`);
             return false;

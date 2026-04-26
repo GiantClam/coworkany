@@ -73,6 +73,25 @@ bun install
 
 如果你需要天气、新闻、Google Calendar 或 Gmail 相关能力，可参考根目录的 [.env.example](../.env.example) 配置额外环境变量。
 
+### 2.3.1 运行时能力模式（Core / Full）
+
+如果你想先验证 `loop + 审核 + harness`，不加载内置 skills/toolpacks，可开启 core 模式：
+
+```bash
+export COWORKANY_RUNTIME_PROFILE=core
+```
+
+可选覆盖变量：
+
+- `COWORKANY_ENABLE_BUILTIN_SKILLS=1|0`
+- `COWORKANY_ENABLE_BUILTIN_TOOLPACKS=1|0`
+- `COWORKANY_DEFAULT_TOOLPACKS=builtin-filesystem,builtin-websearch`（逗号分隔）
+
+默认规则：
+
+- `full`：保留当前默认能力注入
+- `core`：默认不注入内置 skills/toolpacks，只保留核心执行与审核链路
+
 ### 2.4 启动应用
 
 ```bash

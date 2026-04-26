@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { getDefaultWorkspaceToolpackIds } from '../config/runtimeProfile';
 export interface Workspace {
     id: string;
     name: string;
@@ -17,13 +18,14 @@ export interface WorkspaceConfig {
 }
 const LEGACY_AUTO_NAMES = new Set(['new workspace', 'workspace']);
 function normalizeDefaultToolpacks(toolpacks?: string[]): string[] {
+    const defaults = getDefaultWorkspaceToolpackIds();
     if (!Array.isArray(toolpacks) || toolpacks.length === 0) {
-        return ['builtin-websearch'];
+        return defaults;
     }
     const normalized = toolpacks
         .map((toolpackId) => (toolpackId === 'websearch' ? 'builtin-websearch' : toolpackId))
         .filter((toolpackId): toolpackId is string => typeof toolpackId === 'string' && toolpackId.length > 0);
-    return normalized.length > 0 ? Array.from(new Set(normalized)) : ['builtin-websearch'];
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : defaults;
 }
 function normalizeWorkspaceSummaryText(value: string): string {
     return value
@@ -170,7 +172,7 @@ export class WorkspaceStore {
             lastAccessedAt: new Date().toISOString(),
             autoNamed,
             defaultSkills: [],
-            defaultToolpacks: ['builtin-websearch'], // Include builtin-websearch by default
+            defaultToolpacks: getDefaultWorkspaceToolpackIds(),
         };
         this.config.workspaces.push(workspace);
         this.save();

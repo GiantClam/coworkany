@@ -227,6 +227,25 @@ bun install
 
 可选环境变量可参考 [.env.example](.env.example)，用于天气、新闻、Google Calendar / Gmail 等能力。
 
+### 2.5 运行时能力模式（Core / Full）
+
+`coworkany` 现在支持“核心编排模式”，用于只验证 `loop + 审核 + harness`，先不注入内置 skill/toolpack。
+
+```bash
+export COWORKANY_RUNTIME_PROFILE=core
+```
+
+可选覆盖：
+
+- `COWORKANY_ENABLE_BUILTIN_SKILLS=1|0`
+- `COWORKANY_ENABLE_BUILTIN_TOOLPACKS=1|0`
+- `COWORKANY_DEFAULT_TOOLPACKS=builtin-filesystem,builtin-websearch`（逗号分隔）
+
+默认行为：
+
+- `full` 模式：保持现状（默认注入内置能力）
+- `core` 模式：默认不注入内置 skills/toolpacks，仅保留核心 loop 与审核链路
+
 ### 3. 启动桌面应用
 
 ```bash
