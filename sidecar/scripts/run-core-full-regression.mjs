@@ -66,7 +66,68 @@ function getString(value) {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '';
 }
 
-function findConfiguredProviderBaseUrl() {
+function normalizeProviderBaseUrl(baseUrl) {
+    return getString(baseUrl)
+        .replace(/\/chat\/completions\/?$/u, '')
+        .replace(/\/+$/u, '');
+}
+
+function normalizeProbeModel(model) {
+    const normalized = getString(model) || 'gpt-5.3-codex';
+    const delimiter = normalized.indexOf('/');
+    return delimiter >= 0 ? normalized.slice(delimiter + 1) : normalized;
+}
+
+function pickProviderSection(config, profile, key) {
+    if (profile?.[key] && typeof profile[key] === 'object') {
+        return profile[key];
+    }
+    if (config?.[key] && typeof config[key] === 'object') {
+        return config[key];
+    }
+    return {};
+}
+
+function resolveActiveProfile(config) {
+    const profiles = Array.isArray(config?.profiles) ? config.profiles.filter((profile) => profile && typeof profile === 'object') : [];
+    if (profiles.length === 0) {
+        return null;
+    }
+    const activeProfileId = getString(config.activeProfileId);
+    if (activeProfileId) {
+        const active = profiles.find((profile) => getString(profile?.id) === activeProfileId);
+        if (active) {
+            return active;
+        }
+    }
+    return profiles.find((profile) => profile?.verified === true) ?? profiles[0] ?? null;
+}
+
+function providerFromConfig(config) {
+    const activeProfile = resolveActiveProfile(config);
+    const provider = getString(activeProfile?.provider || config?.provider).toLowerCase();
+    const openai = pickProviderSection(config, activeProfile, 'openai');
+    const custom = pickProviderSection(config, activeProfile, 'custom');
+    const aiberm = pickProviderSection(config, activeProfile, 'aiberm');
+    const sections = provider === 'custom'
+        ? [custom, openai, aiberm]
+        : [openai, aiberm, custom];
+    for (const section of sections) {
+        const baseUrl = normalizeProviderBaseUrl(section?.baseUrl ?? section?.baseURL);
+        if (!baseUrl) {
+            continue;
+        }
+        return {
+            provider: provider || (baseUrl.includes('aiberm.com') ? 'aiberm' : 'openai'),
+            baseUrl,
+            apiKey: getString(section?.apiKey),
+            model: getString(section?.model),
+        };
+    }
+    return null;
+}
+
+function findConfiguredProvider() {
     const candidates = [
         path.join(sidecarDir, 'llm-config.json'),
         path.join(os.homedir(), 'Library', 'Application Support', 'com.coworkany.desktop', 'llm-config.json'),
@@ -76,25 +137,15 @@ function findConfiguredProviderBaseUrl() {
         if (!config || typeof config !== 'object') {
             continue;
         }
-        const profiles = Array.isArray(config.profiles) ? config.profiles : [];
-        const activeProfile = profiles.find((profile) => getString(profile?.id) === getString(config.activeProfileId))
-            ?? profiles[0]
-            ?? {};
-        const sections = [
-            activeProfile?.openai,
-            activeProfile?.custom,
-            config.openai,
-            config.custom,
-            config.aiberm,
-        ];
-        for (const section of sections) {
-            const baseUrl = getString(section?.baseUrl);
-            if (baseUrl) {
-                return baseUrl.replace(/\/chat\/completions\/?$/u, '').replace(/\/+$/u, '');
-            }
+        const provider = providerFromConfig(config);
+        if (provider) {
+            return {
+                ...provider,
+                source: configPath,
+            };
         }
     }
-    return '';
+    return null;
 }
 
 function resolveMacOsSystemProxyUrl() {
@@ -124,19 +175,36 @@ function resolveMacOsSystemProxyUrl() {
 
 function buildLiveEnv(extra = {}) {
     const env = { ...extra };
-    const configuredProxy = process.env.COWORKANY_PROXY_URL
-        ?? process.env.HTTPS_PROXY
-        ?? process.env.HTTP_PROXY
-        ?? '';
-    if (!configuredProxy) {
-        const systemProxy = resolveMacOsSystemProxyUrl();
-        if (systemProxy) {
-            env.COWORKANY_PROXY_URL = systemProxy;
-            env.COWORKANY_PROXY_SOURCE = 'macos_system_proxy';
-            console.log(`[core-full-regression] Using macOS system proxy for live checks: ${systemProxy}`);
-        }
+    const explicitProxy = resolvePreflightProxyUrl(env) || resolvePreflightProxyUrl(process.env);
+    if (explicitProxy) {
+        env.COWORKANY_PROXY_URL = explicitProxy;
+        env.HTTPS_PROXY = explicitProxy;
+        env.HTTP_PROXY = explicitProxy;
+        env.ALL_PROXY = explicitProxy;
+        env.COWORKANY_PROXY_SOURCE = env.COWORKANY_PROXY_SOURCE || process.env.COWORKANY_PROXY_SOURCE || 'env';
+        return env;
+    }
+
+    const systemProxy = resolveMacOsSystemProxyUrl();
+    if (systemProxy) {
+        env.COWORKANY_PROXY_URL = systemProxy;
+        env.HTTPS_PROXY = systemProxy;
+        env.HTTP_PROXY = systemProxy;
+        env.ALL_PROXY = systemProxy;
+        env.COWORKANY_PROXY_SOURCE = 'macos_system_proxy';
+        console.log(`[core-full-regression] Using macOS system proxy for live checks: ${systemProxy}`);
     }
     return env;
+}
+
+export function resolvePreflightProxyUrl(env) {
+    return getString(env?.COWORKANY_PROXY_URL)
+        || getString(env?.HTTPS_PROXY)
+        || getString(env?.https_proxy)
+        || getString(env?.HTTP_PROXY)
+        || getString(env?.http_proxy)
+        || getString(env?.ALL_PROXY)
+        || getString(env?.all_proxy);
 }
 
 function isReservedProviderAddress(address) {
@@ -165,37 +233,109 @@ async function resolveProviderAddresses(baseUrl) {
     }
 }
 
+function curlConfigQuote(value) {
+    return String(value)
+        .replace(/\\/gu, '\\\\')
+        .replace(/"/gu, '\\"')
+        .replace(/\r/gu, '\\r')
+        .replace(/\n/gu, '\\n');
+}
+
+export function buildProviderPreflightCurl(provider, proxyUrl) {
+    const baseUrl = normalizeProviderBaseUrl(provider?.baseUrl);
+    if (!baseUrl) {
+        throw new Error('Provider baseURL is required for network preflight.');
+    }
+
+    const args = ['--config', '-'];
+    const lines = [
+        'silent',
+        'show-error',
+        'insecure',
+        'location',
+        'connect-timeout = 15',
+        'max-time = 90',
+        'retry = 1',
+        'retry-delay = 1',
+        'output = "/dev/null"',
+        'write-out = "%{http_code}"',
+    ];
+    const apiKey = getString(provider?.apiKey);
+    if (proxyUrl) {
+        lines.push(`proxy = "${curlConfigQuote(proxyUrl)}"`);
+    }
+    if (apiKey) {
+        const chatCompletionsUrl = `${baseUrl}/chat/completions`;
+        const payload = JSON.stringify({
+            model: normalizeProbeModel(provider?.model),
+            messages: [
+                {
+                    role: 'user',
+                    content: 'ping',
+                },
+            ],
+            max_tokens: 8,
+        });
+        lines.push(
+            `url = "${curlConfigQuote(chatCompletionsUrl)}"`,
+            'request = "POST"',
+            'header = "Content-Type: application/json"',
+            `header = "Authorization: Bearer ${curlConfigQuote(apiKey)}"`,
+            `data = "${curlConfigQuote(payload)}"`,
+        );
+    } else {
+        lines.push(`url = "${curlConfigQuote(baseUrl)}"`);
+    }
+    return {
+        args,
+        input: `${lines.join('\n')}\n`,
+        probe: apiKey ? 'chat.completions' : 'base-url',
+    };
+}
+
+export function formatProviderPreflightFailure(input) {
+    const addressDetail = input.addresses.length ? `; local-dns=${input.addresses.join(',')}` : '';
+    const reservedAddresses = input.addresses.filter(isReservedProviderAddress);
+    const reservedHint = reservedAddresses.length
+        ? input.proxyUrl
+            ? `; local reserved/private DNS observed (${reservedAddresses.join(',')}) but HTTP proxy CONNECT uses the hostname`
+            : `; reserved/private resolution detected (${reservedAddresses.join(',')}) - check local DNS/fake-IP routing`
+        : '';
+    return `Provider network preflight failed for ${input.baseUrl}${input.proxyUrl ? ` via ${input.proxyUrl}` : ''}; probe=${input.probe}${addressDetail}${reservedHint}: ${input.detail || `curl exit ${input.status ?? 'unknown'}`}`;
+}
+
 async function runNetworkPreflight(env) {
     if (skipNetworkPreflight) {
         return;
     }
-    const baseUrl = findConfiguredProviderBaseUrl();
-    if (!baseUrl) {
+    const provider = findConfiguredProvider();
+    if (!provider?.baseUrl) {
         console.log('[core-full-regression] No provider baseURL found for network preflight.');
         return;
     }
+    const baseUrl = provider.baseUrl;
     const addresses = await resolveProviderAddresses(baseUrl);
-    const reservedAddresses = addresses.filter(isReservedProviderAddress);
-    const curlArgs = ['-k', '-sS', '-o', '/dev/null', '-w', '%{http_code}', baseUrl];
-    const proxyUrl = env.COWORKANY_PROXY_URL ?? process.env.COWORKANY_PROXY_URL;
-    if (proxyUrl) {
-        curlArgs.splice(0, 0, '--proxy', proxyUrl);
-    }
-    const result = spawnSync('curl', curlArgs, {
+    const proxyUrl = resolvePreflightProxyUrl(env) || resolvePreflightProxyUrl(process.env);
+    const curlProbe = buildProviderPreflightCurl(provider, proxyUrl);
+    const result = spawnSync('curl', curlProbe.args, {
         cwd: repoRoot,
         encoding: 'utf-8',
+        input: curlProbe.input,
     });
     const code = (result.stdout ?? '').trim();
-    if (result.status === 0 && code !== '000') {
-        console.log(`[core-full-regression] Provider network preflight passed: ${baseUrl} -> HTTP ${code}${addresses.length ? ` (${addresses.join(', ')})` : ''}`);
+    if (result.status === 0 && /^2\d\d$/u.test(code)) {
+        console.log(`[core-full-regression] Provider network preflight passed: ${baseUrl} -> HTTP ${code}; probe=${curlProbe.probe}${proxyUrl ? `; proxy=${proxyUrl}` : ''}${addresses.length ? `; local-dns=${addresses.join(',')}` : ''}`);
         return;
     }
-    const detail = (result.stderr || result.stdout || '').trim();
-    const addressDetail = addresses.length ? `; resolved=${addresses.join(',')}` : '';
-    const reservedHint = reservedAddresses.length
-        ? `; reserved/private resolution detected (${reservedAddresses.join(',')}) - check proxy fake-IP/DNS routing before blaming model loop`
-        : '';
-    const message = `Provider network preflight failed for ${baseUrl}${proxyUrl ? ` via ${proxyUrl}` : ''}${addressDetail}${reservedHint}: ${detail || `curl exit ${result.status}`}`;
+    const detail = (result.stderr || (code && code !== '000' ? `HTTP ${code}` : result.stdout) || '').trim();
+    const message = formatProviderPreflightFailure({
+        baseUrl,
+        proxyUrl,
+        addresses,
+        probe: curlProbe.probe,
+        detail,
+        status: result.status,
+    });
     if (strictLive) {
         throw new Error(message);
     }
@@ -206,11 +346,12 @@ const coreFullTests = [
     'tests/runtime-profile-builtin-isolation.test.ts',
     'tests/profiled-builtin-agent-tools.test.ts',
     'tests/core-full-capability-regression.test.ts',
+    'tests/core-full-provider-preflight.test.mjs',
     'tests/streaming-toolset-resolution.test.ts',
     'tests/runtime-tool-catalog.test.ts',
 ];
 
-try {
+async function main() {
     runStep('sidecar lint', {
         cwd: sidecarDir,
         cmd: 'npm',
@@ -267,7 +408,13 @@ try {
     }
 
     console.log('\nCore/full + live regression completed successfully.');
-} catch (error) {
-    console.error(`\nCore/full regression failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+    try {
+        await main();
+    } catch (error) {
+        console.error(`\nCore/full regression failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+    }
 }
