@@ -1,5 +1,6 @@
 import { ToolpackManifest } from '../protocol';
 import { listBuiltinToolpacks } from '../data/defaults';
+import { createCoreToolpackManifest } from '../data/coreToolpack';
 import * as fs from 'fs';
 import * as path from 'path';
 export interface StoredToolpack {
@@ -60,16 +61,7 @@ export class ToolpackStore {
     }
     private getStandardToolpack(): StoredToolpack {
         return {
-            manifest: {
-                id: 'standard-tools',
-                name: 'Standard Tools',
-                version: '1.0.0',
-                description: 'Core agent capabilities (filesystem, command execution).',
-                tools: ['view_file', 'list_dir', 'write_to_file', 'replace_file_content', 'run_command', 'voice_speak'],
-                runtime: 'internal',
-                effects: [],
-                tags: ['core', 'standard'],
-            },
+            manifest: createCoreToolpackManifest(),
             enabled: true,
             workingDir: '',
             installedAt: new Date().toISOString(),

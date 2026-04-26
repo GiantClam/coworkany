@@ -64,6 +64,7 @@ describe('researcher tools resolver', () => {
     test('keeps builtin search_web as canonical and aliases same-name MCP tool', async () => {
         const fakeSearchWebTool = { id: 'search_web' } as unknown as Tool<unknown, unknown, unknown, unknown>;
         const { tools, diagnostics } = await resolveResearchTools({
+            env: { COWORKANY_RUNTIME_PROFILE: 'full' } as NodeJS.ProcessEnv,
             listMcpToolsetsFn: async () => ({
                 runtime: {
                     search_web: fakeSearchWebTool,
@@ -82,6 +83,7 @@ describe('researcher tools resolver', () => {
         const customMarketTool = { id: 'futu_realtime_quote' } as unknown as Tool<unknown, unknown, unknown, unknown>;
         const fakeSearchWebTool = { id: 'search_web' } as unknown as Tool<unknown, unknown, unknown, unknown>;
         const { tools } = await resolveResearchTools({
+            env: { COWORKANY_RUNTIME_PROFILE: 'full' } as NodeJS.ProcessEnv,
             listMcpToolsetsFn: async () => ({
                 market: {
                     futu_realtime_quote: customMarketTool,
@@ -95,5 +97,22 @@ describe('researcher tools resolver', () => {
         expect(orderedToolNames).toContain('search_web');
         expect(orderedToolNames).toContain('mcp_market_search_web');
         expect(orderedToolNames.at(-1)).toBe('bash');
+    });
+
+    test('core profile exposes MCP research tools without builtin research or bash fallback', async () => {
+        const fakeSearchWebTool = { id: 'search_web' } as unknown as Tool<unknown, unknown, unknown, unknown>;
+        const { tools, diagnostics } = await resolveResearchTools({
+            env: { COWORKANY_RUNTIME_PROFILE: 'core' } as NodeJS.ProcessEnv,
+            listMcpToolsetsFn: async () => ({
+                runtime: {
+                    search_web: fakeSearchWebTool,
+                },
+            }),
+        });
+
+        expect(tools.search_web).toBe(fakeSearchWebTool);
+        expect(tools.mcp_runtime_search_web).toBeUndefined();
+        expect(tools.bash).toBeUndefined();
+        expect(diagnostics.includesBashFallback).toBe(false);
     });
 });

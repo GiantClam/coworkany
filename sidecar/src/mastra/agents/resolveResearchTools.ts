@@ -1,4 +1,5 @@
 import type { Tool } from '@mastra/core/tools';
+import { areBuiltinToolpacksEnabled } from '../../config/runtimeProfile';
 import { listMcpToolsetsSafe } from '../mcp/clients';
 import { bashTool } from '../tools/bash';
 import { crawlUrlTool, extractContentTool, searchWebTool } from '../tools/research';
@@ -71,6 +72,7 @@ export type ResolveResearchToolsDiagnostics = {
 
 type ResolveResearchToolsDependencies = {
     listMcpToolsetsFn?: () => Promise<ResearchToolsetsMap>;
+    env?: NodeJS.ProcessEnv;
 };
 
 function sanitizeAliasSegment(value: string): string {
@@ -151,12 +153,15 @@ export async function resolveResearchTools(
     diagnostics: ResolveResearchToolsDiagnostics;
 }> {
     const listMcpToolsetsFn = deps?.listMcpToolsetsFn ?? listMcpToolsetsSafe;
+    const includeBuiltins = areBuiltinToolpacksEnabled(deps?.env ?? process.env);
     const mcpToolsets = await listMcpToolsetsFn();
-    const builtInResearchTools: ResearchToolsMap = {
-        search_web: searchWebTool as AnyMastraTool,
-        crawl_url: crawlUrlTool as AnyMastraTool,
-        extract_content: extractContentTool as AnyMastraTool,
-    };
+    const builtInResearchTools: ResearchToolsMap = includeBuiltins
+        ? {
+            search_web: searchWebTool as AnyMastraTool,
+            crawl_url: crawlUrlTool as AnyMastraTool,
+            extract_content: extractContentTool as AnyMastraTool,
+        }
+        : {};
     const builtInToolNames = new Set(Object.keys(builtInResearchTools));
     const allTools: ResearchToolsMap = { ...builtInResearchTools };
     let namespacedAliasCount = 0;
@@ -227,7 +232,7 @@ export async function resolveResearchTools(
         });
 
     const tools: ResearchToolsMap = Object.fromEntries(orderedEntries);
-    if (!Object.prototype.hasOwnProperty.call(tools, 'bash')) {
+    if (includeBuiltins && !Object.prototype.hasOwnProperty.call(tools, 'bash')) {
         tools.bash = bashTool as AnyMastraTool;
     }
 

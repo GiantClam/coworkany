@@ -244,7 +244,9 @@ export COWORKANY_RUNTIME_PROFILE=core
 默认行为：
 
 - `full` 模式：保持现状（默认注入内置能力）
-- `core` 模式：默认不注入内置 skills/toolpacks，仅保留核心 loop 与审核链路
+- `core` 模式：默认不注入内置 skills/toolpacks，也不会把搜索、记忆、语音等功能型工具硬编码进 agent，仅保留核心 loop、审核链路与 harness
+
+`core` 模式下仍会暴露一个可审计的 `standard-tools` baseline：`view_file`、`list_dir`、`write_to_file`、`replace_file_content`、`run_command`。搜索、语音、长期记忆等能力需要通过 toolpack/MCP 或显式开启内置 toolpack 注入。
 
 ### 3. 启动桌面应用
 

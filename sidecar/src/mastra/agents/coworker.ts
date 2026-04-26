@@ -8,8 +8,8 @@ import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrai
 import { runtimeScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
-import { voiceSpeakTool } from '../tools/voice';
-import { rememberTool, recallTool } from '../tools/memory';
+import { areBuiltinToolpacksEnabled } from '../../config/runtimeProfile';
+import { resolveProfiledBuiltinAgentTools } from '../tools/profiledBuiltins';
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 export const coworker = new Agent({
     id: 'coworker',
@@ -36,15 +36,18 @@ export const coworker = new Agent({
     memory: memoryConfig,
     tools: async () => {
         const mcpTools = await listMcpToolsSafe();
+        const builtinToolpacksEnabled = areBuiltinToolpacksEnabled();
         return {
             bash: bashTool,
             bash_approval: bashApprovalTool,
-            delete_files: deleteFilesTool,
-            send_email: sendEmailTool,
-            remember: rememberTool,
-            recall: recallTool,
-            voice_speak: voiceSpeakTool,
-            ...enterpriseTools,
+            ...(builtinToolpacksEnabled
+                ? {
+                    delete_files: deleteFilesTool,
+                    send_email: sendEmailTool,
+                    ...enterpriseTools,
+                }
+                : {}),
+            ...resolveProfiledBuiltinAgentTools({ include: ['remember', 'recall', 'voice_speak'] }),
             ...mcpTools,
         };
     },

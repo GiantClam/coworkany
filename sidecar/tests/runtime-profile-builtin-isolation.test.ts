@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { CORE_BASELINE_TOOL_IDS, CORE_TOOLPACK_ID } from '../src/data/coreToolpack';
 import { SkillStore } from '../src/storage/skillStore';
 import { ToolpackStore } from '../src/storage/toolpackStore';
 import { WorkspaceStore } from '../src/storage/workspaceStore';
@@ -68,10 +69,15 @@ describe('runtime capability profile builtin isolation', () => {
 
         const builtinSkills = skillStore.list().filter((skill) => skill.isBuiltin === true);
         const builtinToolpacks = toolpackStore.list().filter((toolpack) => toolpack.isBuiltin === true);
+        const enabledToolpacks = toolpackStore.listEnabled();
+        const coreToolpack = enabledToolpacks.find((toolpack) => toolpack.manifest.id === CORE_TOOLPACK_ID);
 
         expect(builtinSkills).toHaveLength(0);
         expect(builtinToolpacks).toHaveLength(0);
-        expect(toolpackStore.listEnabled().some((toolpack) => toolpack.manifest.id === 'standard-tools')).toBe(true);
+        expect(coreToolpack).toBeDefined();
+        expect(coreToolpack?.manifest.tools).toEqual([...CORE_BASELINE_TOOL_IDS]);
+        expect(coreToolpack?.manifest.tools).not.toContain('voice_speak');
+        expect(enabledToolpacks.map((toolpack) => toolpack.manifest.id)).toEqual([CORE_TOOLPACK_ID]);
     });
 
     test('core profile can opt back into builtin skill/toolpack injection explicitly', () => {

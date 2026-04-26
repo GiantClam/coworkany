@@ -5,7 +5,7 @@ import { runtimeScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 import { resolveResearchTools } from './resolveResearchTools';
-import { voiceSpeakTool } from '../tools/voice';
+import { resolveProfiledBuiltinAgentTools } from '../tools/profiledBuiltins';
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 export const researcher = new Agent({
     id: 'researcher',
@@ -37,7 +37,7 @@ export const researcher = new Agent({
         const resolved = await resolveResearchTools();
         return {
             ...resolved.tools,
-            voice_speak: voiceSpeakTool,
+            ...resolveProfiledBuiltinAgentTools({ include: ['voice_speak'] }),
         };
     },
     workspace: async ({ requestContext }) => {

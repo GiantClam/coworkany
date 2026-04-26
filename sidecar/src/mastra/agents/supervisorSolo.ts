@@ -4,10 +4,8 @@ import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrai
 import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
-import { voiceSpeakTool } from '../tools/voice';
-import { crawlUrlTool, extractContentTool, searchWebTool } from '../tools/research';
-import { rememberTool, recallTool } from '../tools/memory';
 import { listMcpToolsSafe } from '../mcp/clients';
+import { resolveProfiledBuiltinAgentTools } from '../tools/profiledBuiltins';
 
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 
@@ -45,12 +43,7 @@ export const supervisorSolo = new Agent({
         const mcpTools = await listMcpToolsSafe();
         return {
             ...mcpTools,
-            search_web: searchWebTool,
-            crawl_url: crawlUrlTool,
-            extract_content: extractContentTool,
-            remember: rememberTool,
-            recall: recallTool,
-            voice_speak: voiceSpeakTool,
+            ...resolveProfiledBuiltinAgentTools(),
         };
     },
     workspace: async ({ requestContext }) => {
