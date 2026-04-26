@@ -1,6 +1,6 @@
 import { ToolpackManifest } from '../protocol';
 import { listBuiltinToolpacks } from '../data/defaults';
-import { createCoreToolpackManifest } from '../data/coreToolpack';
+import { CORE_TOOLPACK_ID, createCoreToolpackManifest } from '../data/coreToolpack';
 import * as fs from 'fs';
 import * as path from 'path';
 export interface StoredToolpack {
@@ -45,19 +45,19 @@ export class ToolpackStore {
     }
     list(): StoredToolpack[] {
         const stored = Array.from(this.toolpacks.values());
+        const standard = this.getStandardToolpack();
         const builtins = listBuiltinToolpacks().map((manifest) => ({
             manifest,
             enabled: true,
             workingDir: '',
             installedAt: new Date().toISOString(),
             isBuiltin: true,
-        })).filter((b) => !this.toolpacks.has(b.manifest.name)); // Avoid duplicates if shadowed/overridden
-        return [...builtins, ...stored];
+        })).filter((b) => !this.hasStoredToolpackIdentifier(b.manifest.id) && !this.hasStoredToolpackIdentifier(b.manifest.name));
+        const storedWithoutCore = stored.filter((toolpack) => !this.isCoreToolpackManifest(toolpack.manifest));
+        return [standard, ...builtins, ...storedWithoutCore];
     }
     listEnabled(): StoredToolpack[] {
-        const standard = this.getStandardToolpack();
-        const stored = this.list().filter((t) => t.enabled);
-        return [standard, ...stored];
+        return this.list().filter((t) => t.enabled);
     }
     private getStandardToolpack(): StoredToolpack {
         return {
@@ -68,6 +68,9 @@ export class ToolpackStore {
         };
     }
     get(name: string): StoredToolpack | undefined {
+        if (this.isStandardToolpackIdentifier(name)) {
+            return this.getStandardToolpack();
+        }
         const stored = this.toolpacks.get(name);
         if (stored) return stored;
         const builtin = listBuiltinToolpacks().find((b) => b.name === name);
@@ -83,6 +86,9 @@ export class ToolpackStore {
         return undefined;
     }
     getById(id: string): StoredToolpack | undefined {
+        if (this.isStandardToolpackIdentifier(id)) {
+            return this.getStandardToolpack();
+        }
         if (this.toolpacks.has(id)) {
             return this.toolpacks.get(id);
         }
@@ -93,7 +99,11 @@ export class ToolpackStore {
         }
         return undefined;
     }
-    add(manifest: ToolpackManifest, workingDir: string): void {
+    add(manifest: ToolpackManifest, workingDir: string): boolean {
+        if (this.isCoreToolpackManifest(manifest)) {
+            console.warn(`[ToolpackStore] Cannot override core toolpack: ${manifest.id ?? manifest.name}`);
+            return false;
+        }
         const existing = this.toolpacks.get(manifest.name);
         this.toolpacks.set(manifest.name, {
             manifest,
@@ -104,8 +114,13 @@ export class ToolpackStore {
         });
         this.save();
         console.log(`[ToolpackStore] Added toolpack: ${manifest.name}`);
+        return true;
     }
     remove(name: string): boolean {
+        if (this.isStandardToolpackIdentifier(name)) {
+            console.warn(`[ToolpackStore] Cannot remove core toolpack: ${name}`);
+            return false;
+        }
         const builtin = listBuiltinToolpacks().find((b) => b.name === name);
         if (builtin) {
             console.warn(`[ToolpackStore] Cannot remove builtin toolpack: ${name}`);
@@ -119,6 +134,10 @@ export class ToolpackStore {
         return removed;
     }
     removeById(id: string): boolean {
+        if (this.isStandardToolpackIdentifier(id)) {
+            console.warn(`[ToolpackStore] Cannot remove core toolpack: ${id}`);
+            return false;
+        }
         if (this.toolpacks.has(id)) {
             return this.remove(id);
         }
@@ -129,6 +148,10 @@ export class ToolpackStore {
         return this.remove(entry[0]);
     }
     setEnabled(name: string, enabled: boolean): boolean {
+        if (this.isStandardToolpackIdentifier(name)) {
+            console.warn(`[ToolpackStore] Cannot disable core toolpack: ${name}`);
+            return enabled === true;
+        }
         const toolpack = this.toolpacks.get(name);
         if (!toolpack) return false;
         toolpack.enabled = enabled;
@@ -137,6 +160,9 @@ export class ToolpackStore {
         return true;
     }
     setEnabledById(id: string, enabled: boolean): boolean {
+        if (this.isStandardToolpackIdentifier(id)) {
+            return this.setEnabled(id, enabled);
+        }
         if (this.toolpacks.has(id)) {
             return this.setEnabled(id, enabled);
         }
@@ -152,5 +178,24 @@ export class ToolpackStore {
             toolpack.lastUsedAt = new Date().toISOString();
             this.save();
         }
+    }
+
+    private isStandardToolpackIdentifier(value: string): boolean {
+        const normalized = value.trim().toLowerCase();
+        return normalized === CORE_TOOLPACK_ID || normalized === 'standard tools';
+    }
+
+    private isCoreToolpackManifest(manifest: ToolpackManifest): boolean {
+        return this.isStandardToolpackIdentifier(manifest.id ?? '')
+            || this.isStandardToolpackIdentifier(manifest.name);
+    }
+
+    private hasStoredToolpackIdentifier(value: string): boolean {
+        if (this.toolpacks.has(value)) {
+            return true;
+        }
+        return Array.from(this.toolpacks.values()).some(
+            (toolpack) => toolpack.manifest.id === value || toolpack.manifest.name === value,
+        );
     }
 }

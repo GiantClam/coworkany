@@ -633,7 +633,29 @@ async function handleInstallFromGitHub(
         });
     }
     const existing = deps.toolpackStore.getById(manifest.id) ?? deps.toolpackStore.getById(manifest.name);
-    deps.toolpackStore.add(manifest, path.dirname(manifestPath));
+    const added = deps.toolpackStore.add(manifest, path.dirname(manifestPath));
+    if (!added) {
+        const failedAudit = auditStore.append({
+            action: 'install_from_github',
+            source,
+            targetType,
+            success: false,
+            trust,
+            error: 'core_toolpack_immutable',
+            metadata: {
+                path: download.path,
+                filesDownloaded: download.filesDownloaded,
+            },
+        });
+        return respond(command.id, 'install_from_github_response', {
+            success: false,
+            path: download.path,
+            filesDownloaded: download.filesDownloaded,
+            error: 'core_toolpack_immutable',
+            trust,
+            auditEntryId: failedAudit.id,
+        });
+    }
     const stored = deps.toolpackStore.getById(manifest.id) ?? deps.toolpackStore.getById(manifest.name);
     const auditEntry = auditStore.append({
         action: 'install_from_github',
@@ -871,7 +893,13 @@ export async function handleCapabilityCommand(
                     });
                 }
             }
-            deps.toolpackStore.add(manifest, installPath);
+            const added = deps.toolpackStore.add(manifest, installPath);
+            if (!added) {
+                return respond(command.id, 'install_toolpack_response', {
+                    success: false,
+                    error: 'core_toolpack_immutable',
+                });
+            }
             const stored = deps.toolpackStore.getById(manifest.id) ?? deps.toolpackStore.getById(manifest.name);
             return respond(command.id, 'install_toolpack_response', {
                 success: true,
@@ -918,7 +946,7 @@ export async function handleCapabilityCommand(
                 success,
                 toolpackId,
                 enabled,
-                error: success ? undefined : 'toolpack_not_found',
+                error: success ? undefined : 'toolpack_not_mutable',
             });
         }
         case 'remove_toolpack': {

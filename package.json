@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test:codex": "bun run scripts/test-codex.ts"
+    "test:codex": "bun run scripts/test-codex.ts",
+    "test:regression:core-full": "cd sidecar && npm run test:regression:core-full",
+    "test:regression:core-full:live": "cd sidecar && npm run test:regression:core-full:live"
   }
 }
