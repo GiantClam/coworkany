@@ -1,7 +1,6 @@
 import { mkdirSync } from 'fs';
 import path from 'path';
 import { LibSQLStore, LibSQLVector } from '@mastra/libsql';
-import { fastembed } from '@mastra/fastembed';
 import { Memory } from '@mastra/memory';
 import { workingMemoryTemplate } from './working-memory-template';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
@@ -23,14 +22,8 @@ export const memoryVector = new LibSQLVector({
 export const memoryConfig = new Memory({
     storage: memoryStorage,
     vector: memoryVector,
-    embedder: fastembed,
     options: {
         lastMessages: 20,
-        semanticRecall: {
-            topK: 5,
-            messageRange: { before: 3, after: 1 },
-            scope: 'resource',
-        },
         workingMemory: WORKING_MEMORY_ENABLED
             ? {
                 enabled: true,

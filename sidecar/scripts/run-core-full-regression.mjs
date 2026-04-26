@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'child_process';
+import { lookup } from 'dns/promises';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -138,7 +139,33 @@ function buildLiveEnv(extra = {}) {
     return env;
 }
 
-function runNetworkPreflight(env) {
+function isReservedProviderAddress(address) {
+    const parts = address.split('.').map((part) => Number.parseInt(part, 10));
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) {
+        return address === '::1' || address.toLowerCase().startsWith('fe80:');
+    }
+    const [a, b] = parts;
+    return a === 10
+        || a === 127
+        || (a === 169 && b === 254)
+        || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168)
+        || (a === 198 && (b === 18 || b === 19));
+}
+
+async function resolveProviderAddresses(baseUrl) {
+    try {
+        const hostname = new URL(baseUrl).hostname;
+        if (!hostname) {
+            return [];
+        }
+        return (await lookup(hostname, { all: true })).map((entry) => entry.address);
+    } catch {
+        return [];
+    }
+}
+
+async function runNetworkPreflight(env) {
     if (skipNetworkPreflight) {
         return;
     }
@@ -147,6 +174,8 @@ function runNetworkPreflight(env) {
         console.log('[core-full-regression] No provider baseURL found for network preflight.');
         return;
     }
+    const addresses = await resolveProviderAddresses(baseUrl);
+    const reservedAddresses = addresses.filter(isReservedProviderAddress);
     const curlArgs = ['-k', '-sS', '-o', '/dev/null', '-w', '%{http_code}', baseUrl];
     const proxyUrl = env.COWORKANY_PROXY_URL ?? process.env.COWORKANY_PROXY_URL;
     if (proxyUrl) {
@@ -158,11 +187,15 @@ function runNetworkPreflight(env) {
     });
     const code = (result.stdout ?? '').trim();
     if (result.status === 0 && code !== '000') {
-        console.log(`[core-full-regression] Provider network preflight passed: ${baseUrl} -> HTTP ${code}`);
+        console.log(`[core-full-regression] Provider network preflight passed: ${baseUrl} -> HTTP ${code}${addresses.length ? ` (${addresses.join(', ')})` : ''}`);
         return;
     }
     const detail = (result.stderr || result.stdout || '').trim();
-    const message = `Provider network preflight failed for ${baseUrl}${proxyUrl ? ` via ${proxyUrl}` : ''}: ${detail || `curl exit ${result.status}`}`;
+    const addressDetail = addresses.length ? `; resolved=${addresses.join(',')}` : '';
+    const reservedHint = reservedAddresses.length
+        ? `; reserved/private resolution detected (${reservedAddresses.join(',')}) - check proxy fake-IP/DNS routing before blaming model loop`
+        : '';
+    const message = `Provider network preflight failed for ${baseUrl}${proxyUrl ? ` via ${proxyUrl}` : ''}${addressDetail}${reservedHint}: ${detail || `curl exit ${result.status}`}`;
     if (strictLive) {
         throw new Error(message);
     }
@@ -206,7 +239,7 @@ try {
         const liveEnv = buildLiveEnv({
             COWORKANY_REQUIRE_REAL_MODEL_SMOKE: strictLive ? '1' : process.env.COWORKANY_REQUIRE_REAL_MODEL_SMOKE ?? '0',
         });
-        runNetworkPreflight(liveEnv);
+        await runNetworkPreflight(liveEnv);
         runStep('live model sidecar smoke', {
             cwd: sidecarDir,
             cmd: 'bun',

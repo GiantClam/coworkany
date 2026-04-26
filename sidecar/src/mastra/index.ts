@@ -29,7 +29,6 @@ function resolveMastraPackageVersions(): Record<string, string | null> {
         mcp: readPackageVersion('@mastra/mcp'),
         libsql: readPackageVersion('@mastra/libsql'),
         loggers: readPackageVersion('@mastra/loggers'),
-        fastembed: readPackageVersion('@mastra/fastembed'),
     };
 }
 export const mastra = new Mastra({

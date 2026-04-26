@@ -2,7 +2,6 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, rmSync } from 'fs';
 import { Memory } from '@mastra/memory';
 import { LibSQLStore, LibSQLVector } from '@mastra/libsql';
-import { fastembed } from '@mastra/fastembed';
 import { workingMemoryTemplate } from '../src/mastra/memory/working-memory-template';
 
 const MEM_DB = '.test-phase5-memory.db';
@@ -21,17 +20,12 @@ afterAll(() => {
 });
 
 describe('Phase 5: Memory + Enterprise Knowledge', () => {
-    test('can create memory instance with storage/vector/embedder', () => {
+    test('can create memory instance with storage/vector without optional embedding dependency', () => {
         const memory = new Memory({
             storage: new LibSQLStore({ id: 'phase5-store', url: `file:${MEM_DB}` }),
             vector: new LibSQLVector({ id: 'phase5-vector', url: `file:${MEM_DB}` }),
-            embedder: fastembed,
             options: {
                 lastMessages: 20,
-                semanticRecall: {
-                    topK: 5,
-                    messageRange: { before: 2, after: 1 },
-                },
                 workingMemory: {
                     enabled: true,
                     template: workingMemoryTemplate,
