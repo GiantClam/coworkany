@@ -18,6 +18,7 @@ import type {
     ToolCallItem,
 } from '../../../../types';
 import { sanitizeDisplayText, sanitizeNoiseText } from '../textSanitizer';
+import { formatTaskFailureDetails } from '../../../../lib/taskFailureUi';
 import {
     type CanonicalStreamEvent,
     type TaskEvent as SidecarTaskEvent,
@@ -59,6 +60,19 @@ type CanonicalEffectPart = Extract<CanonicalMessagePart, { type: 'effect' }>;
 type CanonicalPatchPart = Extract<CanonicalMessagePart, { type: 'patch' }>;
 type CanonicalFinishPart = Extract<CanonicalMessagePart, { type: 'finish' }>;
 type CanonicalErrorPart = Extract<CanonicalMessagePart, { type: 'error' }>;
+
+function formatCanonicalErrorForDisplay(part: CanonicalErrorPart, options?: { includePrefix?: boolean }): string {
+    return formatTaskFailureDetails(
+        {
+            error: part.message,
+            suggestion: part.suggestion,
+        },
+        {
+            fallbackDescription: 'Task failed',
+            includePrefix: options?.includePrefix ?? false,
+        },
+    );
+}
 
 function createEmptyPhaseLines(): Record<TaskPhaseKey, string[]> {
     return {
@@ -102,6 +116,33 @@ function upsertCanonicalTaskCardSection(
     }
 
     card.sections = nextSections;
+}
+
+function canonicalCapabilityLabel(value: string): string {
+    switch (value) {
+        case 'browser_interaction':
+            return 'Browser interaction';
+        case 'external_auth':
+            return 'Login/account state';
+        case 'workspace_write':
+            return 'Workspace write';
+        case 'host_access':
+            return 'Host access';
+        case 'human_review':
+            return 'Human review';
+        default:
+            return value;
+    }
+}
+
+function buildExecutionProfileSectionLines(executionProfile: TaskCardItem['executionProfile']): string[] {
+    const capabilities = executionProfile?.requiredCapabilities ?? [];
+    if (capabilities.length === 0) {
+        return [];
+    }
+    return [
+        `Capabilities: ${capabilities.map(canonicalCapabilityLabel).join(', ')}`,
+    ];
 }
 
 function ensureCanonicalTaskCard(
@@ -351,6 +392,12 @@ function updateCanonicalTaskCardFromTaskPart(
                 card.executionProfile = data.executionProfile as TaskCardItem['executionProfile'];
                 card.primaryHardness = card.executionProfile?.primaryHardness;
                 card.activeHardness = card.activeHardness ?? card.primaryHardness;
+                upsertCanonicalTaskCardSection(
+                    card,
+                    'Execution profile',
+                    buildExecutionProfileSectionLines(card.executionProfile),
+                    { mode: 'replace', maxLines: 4 },
+                );
             }
             if (data.capabilityPlan && typeof data.capabilityPlan === 'object') {
                 card.capabilityPlan = data.capabilityPlan as TaskCardItem['capabilityPlan'];
@@ -569,8 +616,12 @@ function applyCanonicalTaskCardFinish(
 
     const card = ensureCanonicalTaskCard(session, turn, message);
     card.status = 'finished';
+    const normalizedSummary = normalizeText(part.summary);
+    const displaySummary = normalizedSummary === 'Task completed via Mastra runtime.'
+        ? '任务已完成。'
+        : normalizedSummary;
     card.result = {
-        summary: normalizeText(part.summary),
+        summary: displaySummary,
         artifacts: normalizeLines(Array.isArray(part.artifacts) ? part.artifacts : []),
         files: normalizeLines(Array.isArray(part.files) ? part.files : []),
     };
@@ -590,7 +641,7 @@ function applyCanonicalTaskCardFinish(
 
     const lines = [
         `Status: ${mapStatusLabel('finished')}`,
-        part.summary,
+        displaySummary,
         ...(Array.isArray(part.artifacts) ? part.artifacts.map((artifact) => `Artifact: ${artifact}`) : []),
         ...(Array.isArray(part.files) ? part.files.map((file) => `File changed: ${file}`) : []),
     ];
@@ -620,9 +671,10 @@ function applyCanonicalTaskCardError(
 
     const card = ensureCanonicalTaskCard(session, turn, message);
     card.status = 'failed';
+    const displayError = formatCanonicalErrorForDisplay(part) || 'Unknown error';
     card.result = {
-        error: normalizeText(part.message) || 'Unknown error',
-        suggestion: normalizeText(part.suggestion),
+        error: displayError,
+        suggestion: '',
     };
     card.collaboration = undefined;
 
@@ -870,10 +922,7 @@ function buildCanonicalTimelineItems(
                             break;
                         }
                         currentAssistantTurn = ensureCanonicalAssistantTurn(currentAssistantTurn, message);
-                        appendCanonicalSystemEvent(currentAssistantTurn, part.message ? `Task failed: ${part.message}` : 'Task failed');
-                        if (part.suggestion) {
-                            appendCanonicalSystemEvent(currentAssistantTurn, part.suggestion);
-                        }
+                        appendCanonicalSystemEvent(currentAssistantTurn, formatCanonicalErrorForDisplay(part, { includePrefix: true }));
                         suppressTextParts = true;
                     }
                     break;
@@ -1554,8 +1603,21 @@ function toLatencyLabel(metric: string, value: unknown): string {
 }
 
 function formatRateLimitedRuntimeLabel(payload: Record<string, unknown>): string {
+    const error = normalizeText(payload.error);
+    const source = normalizeText(payload.source);
+    if (error === 'retryable_command_failure') {
+        return '命令执行遇到问题，正在根据错误信息修正并重试。';
+    }
+    if (error === 'complete_without_required_tool_evidence') {
+        return source === 'error'
+            ? '任务还缺少必要的工具验证，正在补齐证据并重试。'
+            : '任务还没有满足完成条件，正在补齐必要步骤并重试。';
+    }
     const baseMessage = normalizeText(payload.message)
         || `API rate limited (attempt ${String(payload.attempt ?? '?')}/${String(payload.maxRetries ?? '?')}). Retrying...`;
+    if (/rate[_\s-]?limit|timeout|timed?\s*out|first_token|last_token|ttfb/iu.test(baseMessage)) {
+        return '模型响应较慢，正在等待后继续重试。';
+    }
     const stageRaw = normalizeText(payload.stage);
     const stage = stageRaw.length > 0 ? stageRaw.toUpperCase() : 'UNKNOWN';
     const timings = (payload.timings && typeof payload.timings === 'object')
@@ -1568,7 +1630,10 @@ function formatRateLimitedRuntimeLabel(payload: Record<string, unknown>): string
         toLatencyLabel('FIRST_TOKEN', timings.firstTokenMs),
         toLatencyLabel('LAST_TOKEN', timings.lastTokenMs),
     ].join(', ');
-    return `${baseMessage} | Timeout stage: ${stage} | ${timingSummary}`;
+    if (stage !== 'UNKNOWN' && timingSummary.length > 0) {
+        return `${baseMessage}`;
+    }
+    return baseMessage;
 }
 
 function buildCanonicalMessagesFromTaskEvents(taskId: string, events: TaskSession['events']): CanonicalTaskMessage[] {

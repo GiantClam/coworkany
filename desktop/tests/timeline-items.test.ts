@@ -157,6 +157,76 @@ describe('buildTimelineItems', () => {
         expect(taskCards[0]?.collaboration?.input?.submitLabel).toBe('Submit and continue');
     });
 
+    test('renders retry process as user-readable timeline text instead of raw protocol details', () => {
+        const session = makeSession({
+            taskMode: 'immediate_task',
+            events: [
+                makeEvent({
+                    id: 'retry-process',
+                    sequence: 1,
+                    type: 'RATE_LIMITED',
+                    payload: {
+                        message: '命令步骤失败，正在仅重试失败步骤 (1/2)...',
+                        error: 'retryable_command_failure',
+                        stage: 'unknown',
+                        timings: {
+                            dnsMs: 0,
+                            connectMs: 0,
+                            ttfbMs: 0,
+                        },
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const visibleText = [
+            ...extractAssistantMessages(result.items),
+            ...(firstAssistantTurn(result.items)?.systemEvents ?? []),
+        ].join('\n');
+        expect(visibleText).toContain('命令执行遇到问题，正在根据错误信息修正并重试。');
+        expect(visibleText).not.toContain('retryable_command_failure');
+        expect(visibleText).not.toContain('Timeout stage');
+        expect(visibleText).not.toContain('DNS');
+    });
+
+    test('renders generic runtime completion as user-readable final result', () => {
+        const session = makeSession({
+            taskMode: 'immediate_task',
+            events: [
+                makeEvent({
+                    id: 'plan-visible',
+                    sequence: 1,
+                    type: 'TASK_PLAN_READY',
+                    payload: {
+                        summary: '准备执行任务。',
+                        mode: 'immediate_task',
+                        intentRouting: explicitTaskIntentRouting(),
+                        deliverables: [],
+                        checkpoints: [],
+                        userActionsRequired: [],
+                        missingInfo: [],
+                    },
+                }),
+                makeEvent({
+                    id: 'finish-visible',
+                    sequence: 2,
+                    type: 'TASK_FINISHED',
+                    payload: {
+                        summary: 'Task completed via Mastra runtime.',
+                    },
+                }),
+            ],
+        });
+
+        const result = buildTimelineItems(session);
+        const summaryLines = extractTaskCards(result.items).flatMap((card) =>
+            card.sections.flatMap((section) => section.lines)
+        );
+        expect(summaryLines).toContain('任务已完成。');
+        expect(summaryLines).not.toContain('Task completed via Mastra runtime.');
+    });
+
     test('renders external auth user action with open-login and continue choices', () => {
         const session = makeSession({
             status: 'idle',
@@ -840,6 +910,10 @@ describe('buildTimelineItems', () => {
                 missingCapability: 'new_runtime_tool_needed',
                 learningRequired: true,
             },
+        });
+        expect(taskCards[0].sections).toContainEqual({
+            label: 'Execution profile',
+            lines: ['Capabilities: Workspace write, Human review'],
         });
     });
 

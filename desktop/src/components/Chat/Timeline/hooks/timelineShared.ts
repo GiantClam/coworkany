@@ -117,13 +117,16 @@ export function setTaskList(card: TaskCardItem, tasks: TaskCardTask[]): void {
 }
 
 export function syncTaskCardExecutionProfile(card: TaskCardItem, session: TaskSession): void {
-    card.executionProfile = session.executionProfile;
-    card.capabilityPlan = session.capabilityPlan;
-    card.capabilityReview = session.capabilityReview;
-    card.primaryHardness = session.primaryHardness ?? session.executionProfile?.primaryHardness;
-    card.activeHardness = session.activeHardness ?? card.primaryHardness;
-    card.blockingReason = session.blockingReason;
-    card.lastResumeReason = session.lastResumeReason;
+    card.executionProfile = session.executionProfile ?? card.executionProfile;
+    card.capabilityPlan = session.capabilityPlan ?? card.capabilityPlan;
+    card.capabilityReview = session.capabilityReview ?? card.capabilityReview;
+    card.primaryHardness = session.primaryHardness
+        ?? session.executionProfile?.primaryHardness
+        ?? card.primaryHardness
+        ?? card.executionProfile?.primaryHardness;
+    card.activeHardness = session.activeHardness ?? card.activeHardness ?? card.primaryHardness;
+    card.blockingReason = session.blockingReason ?? card.blockingReason;
+    card.lastResumeReason = session.lastResumeReason ?? card.lastResumeReason;
 }
 
 export function buildPlannedTaskList(value: unknown): TaskCardTask[] {

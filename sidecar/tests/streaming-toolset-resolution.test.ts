@@ -73,9 +73,11 @@ describe('researcher tools resolver', () => {
         });
         expect(tools.search_web).toBe(searchWebTool);
         expect(tools.mcp_runtime_search_web).toBe(fakeSearchWebTool);
-        expect(tools.bash).toBeDefined();
+        expect(tools.run_command).toBeDefined();
+        expect(tools.bash).toBeUndefined();
         expect(diagnostics.preferredResearchToolCount).toBeGreaterThanOrEqual(1);
-        expect(diagnostics.includesBashFallback).toBe(true);
+        expect(diagnostics.includesCommandFallback).toBe(true);
+        expect(diagnostics.includesBashFallback).toBe(false);
         expect(diagnostics.namespacedAliasCount).toBeGreaterThanOrEqual(0);
     });
 
@@ -96,10 +98,10 @@ describe('researcher tools resolver', () => {
         expect(orderedToolNames[0]).toBe('futu_realtime_quote');
         expect(orderedToolNames).toContain('search_web');
         expect(orderedToolNames).toContain('mcp_market_search_web');
-        expect(orderedToolNames.at(-1)).toBe('bash');
+        expect(orderedToolNames.at(-1)).toBe('run_command');
     });
 
-    test('core profile exposes MCP research tools without builtin research or bash fallback', async () => {
+    test('core profile exposes MCP research tools without builtin research or command fallback', async () => {
         const fakeSearchWebTool = { id: 'search_web' } as unknown as Tool<unknown, unknown, unknown, unknown>;
         const { tools, diagnostics } = await resolveResearchTools({
             env: { COWORKANY_RUNTIME_PROFILE: 'core' } as NodeJS.ProcessEnv,
@@ -113,6 +115,8 @@ describe('researcher tools resolver', () => {
         expect(tools.search_web).toBe(fakeSearchWebTool);
         expect(tools.mcp_runtime_search_web).toBeUndefined();
         expect(tools.bash).toBeUndefined();
+        expect(tools.run_command).toBeUndefined();
+        expect(diagnostics.includesCommandFallback).toBe(false);
         expect(diagnostics.includesBashFallback).toBe(false);
     });
 });

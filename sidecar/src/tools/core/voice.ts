@@ -10,13 +10,13 @@ import {
     type VoicePlaybackState,
 } from '../../runtime/jarvis/voiceInterface';
 import type { StoredSkill } from '../../storage/skillStore';
-import { globalToolRegistry } from '../registry';
 import { invokeCustomTtsProvider, type VoiceProviderMode } from './speechProviders';
 // Singleton instance with lazy initialization
 let voiceInterface = createVoiceInterface();
 let initialized = false;
 let voicePlaybackReporter: ((state: VoicePlaybackState) => void) | null = null;
 let listEnabledSkills: (() => StoredSkill[]) | null = null;
+let getVoiceProviderToolByName: ((toolName: string) => ToolDefinition | undefined) | null = null;
 let getVoiceProviderModeForTask: ((taskId: string) => VoiceProviderMode | undefined) | null = null;
 let customPlaybackState: VoicePlaybackState | null = null;
 let activeCustomStopToolName: string | null = null;
@@ -47,9 +47,11 @@ async function ensureInitialized(): Promise<void> {
 }
 export function configureVoiceProviders(input: {
     listEnabledSkills: () => StoredSkill[];
+    getToolByName?: (toolName: string) => ToolDefinition | undefined;
     getVoiceProviderModeForTask?: (taskId: string) => VoiceProviderMode | undefined;
 }): void {
     listEnabledSkills = input.listEnabledSkills;
+    getVoiceProviderToolByName = input.getToolByName ?? null;
     getVoiceProviderModeForTask = input.getVoiceProviderModeForTask ?? null;
 }
 export function setVoicePlaybackReporter(reporter: ((state: VoicePlaybackState) => void) | null): void {
@@ -79,7 +81,7 @@ export async function speakText(
         emitPlaybackState();
         const customResult = await invokeCustomTtsProvider(
             enabledSkills,
-            (toolName) => globalToolRegistry.getTool(toolName),
+            (toolName) => getVoiceProviderToolByName?.(toolName),
             { text },
             context,
             providerMode,
@@ -127,7 +129,7 @@ export async function speakText(
 export async function stopVoicePlayback(reason = 'user_requested'): Promise<boolean> {
     await ensureInitialized();
     if (customPlaybackState?.isSpeaking && activeCustomStopToolName) {
-        const stopTool = globalToolRegistry.getTool(activeCustomStopToolName);
+        const stopTool = getVoiceProviderToolByName?.(activeCustomStopToolName);
         if (stopTool) {
             await stopTool.handler({ reason }, activeCustomContext ?? {
                 workspacePath: process.cwd(),

@@ -5,7 +5,8 @@ import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runt
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 import { listMcpToolsSafe } from '../mcp/clients';
-import { resolveProfiledBuiltinAgentTools } from '../tools/profiledBuiltins';
+import { resolveCoworkAnyMastraTools } from '../tools/coworkanyToolRegistry';
+import { resolveSupervisorIterationDecision } from './iterationPolicy';
 
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 
@@ -42,8 +43,8 @@ export const supervisorSolo = new Agent({
     tools: async () => {
         const mcpTools = await listMcpToolsSafe();
         return {
+            ...resolveCoworkAnyMastraTools(),
             ...mcpTools,
-            ...resolveProfiledBuiltinAgentTools(),
         };
     },
     workspace: async ({ requestContext }) => {
@@ -64,23 +65,6 @@ export const supervisorSolo = new Agent({
             timeout: 1_500,
             suppressFeedback: true,
         },
-        onIterationComplete: ({ iteration, toolCalls, text, isFinal }) => {
-            if (isFinal) {
-                return undefined;
-            }
-            if (toolCalls.length === 0 && text.trim().length >= 12) {
-                return {
-                    continue: false,
-                    feedback: 'Answer is already complete with no pending tool calls. Stop iteration.',
-                };
-            }
-            if (iteration >= 10 && toolCalls.length === 0 && text.trim().length < 20) {
-                return {
-                    continue: false,
-                    feedback: 'No meaningful progress detected. Stop and provide current findings plus blockers.',
-                };
-            }
-            return undefined;
-        },
+        onIterationComplete: resolveSupervisorIterationDecision,
     },
 });

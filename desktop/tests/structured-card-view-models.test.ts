@@ -113,6 +113,78 @@ describe('structured card view models', () => {
         ]);
     });
 
+    test('buildTaskCardViewModel expands dense task-center cards instead of hiding task evidence', () => {
+        const viewModel = buildTaskCardViewModel(makeTaskCard({
+            tasks: [
+                { id: '1', title: 'Collect context', status: 'completed', dependencies: [] },
+                { id: '2', title: 'Verify routing', status: 'completed', dependencies: ['1'] },
+                { id: '3', title: 'Run tools', status: 'in_progress', dependencies: ['2'] },
+                { id: '4', title: 'Write artifact', status: 'pending', dependencies: ['3'] },
+                { id: '5', title: 'Review output', status: 'pending', dependencies: ['4'] },
+            ],
+            executionProfile: {
+                primaryHardness: 'multi_step',
+                requiredCapabilities: ['workspace_write', 'browser_interaction'],
+                blockingRisk: 'manual_step',
+                interactionMode: 'action_first',
+                executionShape: 'staged',
+                reasons: ['Multiple evidence-bearing steps are required.'],
+            },
+            sections: [
+                { label: 'Plan', lines: ['Collect context', 'Verify routing'] },
+                { label: 'Execute', lines: ['Read replay file', 'Capture browser screenshot'] },
+            ],
+        }));
+
+        expect(viewModel.presentation).toBe('card');
+        expect(viewModel.taskSection?.items.map((item) => item.title)).toEqual([
+            'Collect context',
+            'Verify routing',
+            'Run tools',
+            'Write artifact',
+            'Review output',
+        ]);
+        expect(viewModel.sections.map((section) => section.label)).toEqual([
+            'Execution profile',
+            'Plan',
+            'Execute',
+        ]);
+    });
+
+    test('buildTaskCardViewModel expands dense manual-review task-center cards while keeping collaboration actions', () => {
+        const viewModel = buildTaskCardViewModel(makeTaskCard({
+            tasks: [
+                { id: '1', title: 'Collect context', status: 'completed', dependencies: [] },
+                { id: '2', title: 'Verify routing', status: 'completed', dependencies: ['1'] },
+                { id: '3', title: 'Run tools', status: 'in_progress', dependencies: ['2'] },
+                { id: '4', title: 'Review output', status: 'blocked', dependencies: ['3'] },
+            ],
+            sections: [
+                { label: 'Execute', lines: ['Waiting for dense timeline visual review.'] },
+            ],
+            collaboration: {
+                actionId: 'manual_review',
+                title: 'Manual review required',
+                description: 'Confirm the dense timeline remains readable before finalizing.',
+                blocking: true,
+                questions: ['Does the task card remain readable?'],
+                instructions: ['Review screenshot before approval.'],
+                choices: [
+                    { label: 'Looks good', value: 'approve_dense_timeline' },
+                    { label: 'Needs adjustment', value: 'revise_dense_timeline' },
+                ],
+            },
+        }));
+
+        expect(viewModel.presentation).toBe('card');
+        expect(viewModel.collaboration?.title).toBe('Manual review required');
+        expect(viewModel.collaboration?.choices?.map((choice) => choice.label)).toEqual([
+            'Looks good',
+            'Needs adjustment',
+        ]);
+        expect(viewModel.taskSection?.items).toHaveLength(4);
+    });
+
     test('buildTaskCardViewModel prefers explicit blocking reason for shifted runtime hardness', () => {
         const viewModel = buildTaskCardViewModel(makeTaskCard({
             executionProfile: {

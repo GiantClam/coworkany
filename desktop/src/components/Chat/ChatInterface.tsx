@@ -703,6 +703,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const fallback = t(activeFailureDescriptor.descriptionKey, {
             defaultValue: activeFailureDescriptor.descriptionDefault,
         });
+        if (activeFailureDescriptor.category === 'suspended') {
+            return activeSession?.suspension?.userMessage?.trim() || fallback;
+        }
         return formatTaskFailureDetails(activeSession?.failure, {
             fallbackDescription: fallback,
             includePrefix: true,
@@ -764,6 +767,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             case 'failed':
                 if (activeFailureDescriptor?.category === 'configuration_required') {
                     return t('chat.statusFailedNeedsConfig', { defaultValue: 'Configuration required' });
+                }
+                if (activeFailureDescriptor?.category === 'suspended') {
+                    return t('chat.statusSuspended', { defaultValue: 'Suspended' });
                 }
                 if (activeFailureDescriptor?.category === 'retryable') {
                     return t('chat.statusFailedRetryable', { defaultValue: 'Retry available' });

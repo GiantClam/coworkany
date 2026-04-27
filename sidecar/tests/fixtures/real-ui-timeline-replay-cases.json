@@ -1,0 +1,803 @@
+{
+  "source": ".coworkany/data/coworkany.db:mastra_messages",
+  "capturedAt": "2026-04-26T00:00:00.000Z",
+  "cases": [
+    {
+      "id": "thread-doc-004-long-multiturn-ui-timeline",
+      "sourceThreadId": "thread-doc-004",
+      "failureClass": "long_multiturn_output_contract_with_suspended_approval",
+      "focus": [
+        "long_multiturn",
+        "slow_response",
+        "manual_review"
+      ],
+      "dbStats": {
+        "messageCount": 52,
+        "userMessageCount": 17,
+        "assistantMessageCount": 35,
+        "firstAt": "2026-04-12T13:15:32.412Z",
+        "lastAt": "2026-04-12T14:44:39.564Z",
+        "durationMs": 5347152,
+        "maxObservedGapMs": 1606705
+      },
+      "session": {
+        "taskId": "replay-thread-doc-004",
+        "title": "Regex replacement output contract replay",
+        "status": "finished",
+        "taskMode": "immediate_task"
+      },
+      "events": [
+        {
+          "id": "doc-004-001",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 1,
+          "type": "CHAT_MESSAGE",
+          "timestamp": "2026-04-12T13:15:32.412Z",
+          "payload": {
+            "role": "user",
+            "content": "Apply regex replacement rules to workspace/document.txt and write the result to workspace/result.txt."
+          }
+        },
+        {
+          "id": "doc-004-002",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 2,
+          "type": "TASK_PLAN_READY",
+          "timestamp": "2026-04-12T13:15:36.980Z",
+          "payload": {
+            "mode": "immediate_task",
+            "summary": "Replay thread-doc-004: preserve regex replacement contract, output artifact, and approval evidence.",
+            "intentRouting": {
+              "intent": "immediate_task",
+              "confidence": 0.99,
+              "reasonCodes": [
+                "db_replay",
+                "output_file_contract"
+              ],
+              "needsDisambiguation": false,
+              "forcedByUserSelection": true
+            },
+            "tasks": [
+              {
+                "id": "read-inputs",
+                "title": "Read document and replacement rules",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "id": "apply-rules",
+                "title": "Apply regex rules in order",
+                "status": "in_progress",
+                "dependencies": [
+                  "read-inputs"
+                ]
+              },
+              {
+                "id": "write-result",
+                "title": "Write workspace/result.txt",
+                "status": "pending",
+                "dependencies": [
+                  "apply-rules"
+                ]
+              },
+              {
+                "id": "verify-output",
+                "title": "Verify result artifact exists and is non-empty",
+                "status": "pending",
+                "dependencies": [
+                  "write-result"
+                ]
+              }
+            ],
+            "deliverables": [
+              {
+                "id": "result",
+                "title": "Transformed document",
+                "type": "artifact_file",
+                "required": true,
+                "path": "workspace/result.txt",
+                "format": "txt"
+              }
+            ],
+            "executionProfile": {
+              "primaryHardness": "multi_step",
+              "requiredCapabilities": [
+                "workspace_write",
+                "human_review"
+              ],
+              "blockingRisk": "manual_step",
+              "interactionMode": "review_first",
+              "executionShape": "staged",
+              "reasons": [
+                "DB replay contains repeated suspended tool approval and output-contract follow-ups."
+              ]
+            }
+          }
+        },
+        {
+          "id": "doc-004-003",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 3,
+          "type": "PLAN_UPDATED",
+          "timestamp": "2026-04-12T13:18:35.062Z",
+          "payload": {
+            "summary": "Read attempts and replacement planning are in progress across multiple turns.",
+            "taskProgress": [
+              {
+                "taskId": "read-inputs",
+                "title": "Read document and replacement rules",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "taskId": "apply-rules",
+                "title": "Apply regex rules in order",
+                "status": "in_progress",
+                "dependencies": [
+                  "read-inputs"
+                ]
+              },
+              {
+                "taskId": "write-result",
+                "title": "Write workspace/result.txt",
+                "status": "pending",
+                "dependencies": [
+                  "apply-rules"
+                ]
+              },
+              {
+                "taskId": "verify-output",
+                "title": "Verify result artifact exists and is non-empty",
+                "status": "pending",
+                "dependencies": [
+                  "write-result"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "doc-004-004",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 4,
+          "type": "TOOL_CALLED",
+          "timestamp": "2026-04-12T13:18:35.100Z",
+          "payload": {
+            "toolId": "read-document",
+            "toolName": "mastra_workspace_read_file",
+            "args": {
+              "path": "workspace/document.txt"
+            }
+          }
+        },
+        {
+          "id": "doc-004-005",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 5,
+          "type": "RATE_LIMITED",
+          "timestamp": "2026-04-12T13:42:16.000Z",
+          "payload": {
+            "message": "Model response delayed during replay; keeping task visible instead of completing from stale text.",
+            "attempt": 2,
+            "maxRetries": 4,
+            "stage": "first_token",
+            "timings": {
+              "dnsMs": 4,
+              "connectMs": 22,
+              "ttfbMs": 45000,
+              "firstTokenMs": 90000,
+              "lastTokenMs": 0
+            }
+          }
+        },
+        {
+          "id": "doc-004-006",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 6,
+          "type": "CHAT_MESSAGE",
+          "timestamp": "2026-04-12T13:42:17.605Z",
+          "payload": {
+            "role": "user",
+            "content": "Before completion, verify workspace/result.txt exists and is non-empty."
+          }
+        },
+        {
+          "id": "doc-004-007",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 7,
+          "type": "TASK_CONTRACT_REOPENED",
+          "timestamp": "2026-04-12T13:42:18.000Z",
+          "payload": {
+            "title": "Output contract restated",
+            "summary": "User restated the required output artifact and verification condition.",
+            "reason": "Follow-up repeated output file contract after slow response.",
+            "trigger": "output_contract_restated",
+            "diff": {
+              "changedFields": [
+                "deliverables",
+                "completion_criteria"
+              ]
+            }
+          }
+        },
+        {
+          "id": "doc-004-008",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 8,
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "timestamp": "2026-04-12T13:42:20.000Z",
+          "payload": {
+            "kind": "manual_review",
+            "title": "Manual review required before writing result.txt",
+            "description": "The DB replay shows a suspended write step; keep the task blocked until the write approval is resolved.",
+            "reason": "Suspended write approval observed in real thread-doc-004",
+            "blocking": true,
+            "questions": [
+              "Approve writing workspace/result.txt after regex transformation?"
+            ],
+            "instructions": [
+              "Review the output contract before resuming execution."
+            ],
+            "routeChoices": [
+              {
+                "label": "Approve write",
+                "value": "approve_write_result"
+              },
+              {
+                "label": "Revise plan",
+                "value": "revise_regex_plan"
+              }
+            ]
+          }
+        },
+        {
+          "id": "doc-004-009",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 9,
+          "type": "PLAN_UPDATED",
+          "timestamp": "2026-04-12T13:42:21.000Z",
+          "payload": {
+            "summary": "Waiting for manual write approval; do not report completion yet.",
+            "taskProgress": [
+              {
+                "taskId": "read-inputs",
+                "title": "Read document and replacement rules",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "taskId": "apply-rules",
+                "title": "Apply regex rules in order",
+                "status": "completed",
+                "dependencies": [
+                  "read-inputs"
+                ]
+              },
+              {
+                "taskId": "write-result",
+                "title": "Write workspace/result.txt",
+                "status": "blocked",
+                "dependencies": [
+                  "apply-rules"
+                ]
+              },
+              {
+                "taskId": "verify-output",
+                "title": "Verify result artifact exists and is non-empty",
+                "status": "pending",
+                "dependencies": [
+                  "write-result"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "doc-004-009-finished",
+          "taskId": "replay-thread-doc-004",
+          "sequence": 10,
+          "type": "TASK_FINISHED",
+          "timestamp": "2026-04-12T14:44:39.564Z",
+          "payload": {
+            "summary": "Finished replay after regex result artifact and approval path were detected.",
+            "finishReason": "stop",
+            "files": [
+              "workspace/result.txt"
+            ],
+            "artifacts": [
+              "workspace/result.txt"
+            ]
+          }
+        }
+      ],
+      "expectations": {
+        "minRounds": 2,
+        "expectedEventTypesInclude": [
+          "CHAT_MESSAGE",
+          "TASK_PLAN_READY",
+          "RATE_LIMITED",
+          "TASK_CONTRACT_REOPENED",
+          "TASK_USER_ACTION_REQUIRED",
+          "TASK_FINISHED"
+        ],
+        "expectedVisibleTextIncludes": [
+          "Replay thread-doc-004",
+          "Capabilities: Workspace write, Human review",
+          "Model response delayed during replay",
+          "Manual review required before writing result.txt",
+          "Waiting for manual write approval",
+          "Status: Completed",
+          "Finished replay after regex result artifact and approval path were detected."
+        ],
+        "expectedTaskTitlesInclude": [
+          "Write workspace/result.txt",
+          "Verify result artifact exists and is non-empty"
+        ],
+        "expectedSectionLabelsInclude": [
+          "Execution profile",
+          "Plan",
+          "Execute",
+          "Thinking",
+          "Summary"
+        ],
+        "forbiddenVisibleTextIncludes": [
+          "undefined",
+          "Task completed via Mastra runtime"
+        ],
+        "expectedFinalTaskStatus": "finished",
+        "expectedAllTaskItemsCompleted": true,
+        "expectedCollaborationCleared": true
+      }
+    },
+    {
+      "id": "thread-comm-004-debug-no-approval-slow-response-ui-timeline",
+      "sourceThreadId": "thread-comm-004-debug-no-approval",
+      "failureClass": "slow_response_retry_loop_with_output_file_contract",
+      "focus": [
+        "slow_response",
+        "multi_turn",
+        "output_contract"
+      ],
+      "dbStats": {
+        "messageCount": 8,
+        "userMessageCount": 4,
+        "assistantMessageCount": 4,
+        "firstAt": "2026-04-12T13:39:28.481Z",
+        "lastAt": "2026-04-12T13:42:32.806Z",
+        "durationMs": 184325,
+        "maxObservedGapMs": 117265
+      },
+      "session": {
+        "taskId": "replay-thread-comm-004-debug-no-approval",
+        "title": "Chat stats slow response replay",
+        "status": "finished",
+        "taskMode": "immediate_task"
+      },
+      "events": [
+        {
+          "id": "comm-004-001",
+          "taskId": "replay-thread-comm-004-debug-no-approval",
+          "sequence": 1,
+          "type": "CHAT_MESSAGE",
+          "timestamp": "2026-04-12T13:39:59.064Z",
+          "payload": {
+            "role": "user",
+            "content": "Read workspace/chat_log.json and write chat statistics to workspace/chat_stats.json."
+          }
+        },
+        {
+          "id": "comm-004-002",
+          "taskId": "replay-thread-comm-004-debug-no-approval",
+          "sequence": 2,
+          "type": "TASK_PLAN_READY",
+          "timestamp": "2026-04-12T13:40:10.217Z",
+          "payload": {
+            "mode": "immediate_task",
+            "summary": "Replay thread-comm-004-debug-no-approval: compute chat stats with output file evidence.",
+            "intentRouting": {
+              "intent": "immediate_task",
+              "confidence": 0.99,
+              "reasonCodes": [
+                "db_replay",
+                "output_file_contract"
+              ],
+              "needsDisambiguation": false,
+              "forcedByUserSelection": true
+            },
+            "tasks": [
+              {
+                "id": "read-chat-log",
+                "title": "Read workspace/chat_log.json",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "id": "compute-stats",
+                "title": "Compute message counts and average response time",
+                "status": "in_progress",
+                "dependencies": [
+                  "read-chat-log"
+                ]
+              },
+              {
+                "id": "write-stats",
+                "title": "Write workspace/chat_stats.json",
+                "status": "pending",
+                "dependencies": [
+                  "compute-stats"
+                ]
+              }
+            ],
+            "executionProfile": {
+              "primaryHardness": "multi_step",
+              "requiredCapabilities": [
+                "workspace_write"
+              ],
+              "blockingRisk": "manual_step",
+              "interactionMode": "passive_status",
+              "executionShape": "staged",
+              "reasons": [
+                "Real DB replay includes a slow gap before retrying the output contract."
+              ]
+            }
+          }
+        },
+        {
+          "id": "comm-004-003",
+          "taskId": "replay-thread-comm-004-debug-no-approval",
+          "sequence": 3,
+          "type": "RATE_LIMITED",
+          "timestamp": "2026-04-12T13:42:15.972Z",
+          "payload": {
+            "message": "Slow model response detected while computing chat stats; keep the task running.",
+            "attempt": 3,
+            "maxRetries": 5,
+            "stage": "last_token",
+            "timings": {
+              "dnsMs": 2,
+              "connectMs": 18,
+              "ttfbMs": 62000,
+              "firstTokenMs": 71000,
+              "lastTokenMs": 125755
+            }
+          }
+        },
+        {
+          "id": "comm-004-004",
+          "taskId": "replay-thread-comm-004-debug-no-approval",
+          "sequence": 4,
+          "type": "CHAT_MESSAGE",
+          "timestamp": "2026-04-12T13:42:17.605Z",
+          "payload": {
+            "role": "user",
+            "content": "The output file contract still requires workspace/chat_stats.json before completion."
+          }
+        },
+        {
+          "id": "comm-004-005",
+          "taskId": "replay-thread-comm-004-debug-no-approval",
+          "sequence": 5,
+          "type": "PLAN_UPDATED",
+          "timestamp": "2026-04-12T13:42:32.806Z",
+          "payload": {
+            "summary": "Retrying from already-read data; output artifact is still pending.",
+            "taskProgress": [
+              {
+                "taskId": "read-chat-log",
+                "title": "Read workspace/chat_log.json",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "taskId": "compute-stats",
+                "title": "Compute message counts and average response time",
+                "status": "completed",
+                "dependencies": [
+                  "read-chat-log"
+                ]
+              },
+              {
+                "taskId": "write-stats",
+                "title": "Write workspace/chat_stats.json",
+                "status": "pending",
+                "dependencies": [
+                  "compute-stats"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "comm-004-005-finished",
+          "taskId": "replay-thread-comm-004-debug-no-approval",
+          "sequence": 6,
+          "type": "TASK_FINISHED",
+          "timestamp": "2026-04-12T13:42:32.806Z",
+          "payload": {
+            "summary": "Finished replay after chat stats artifact evidence was detected.",
+            "finishReason": "stop",
+            "files": [
+              "workspace/chat_stats.json"
+            ],
+            "artifacts": [
+              "workspace/chat_stats.json"
+            ]
+          }
+        }
+      ],
+      "expectations": {
+        "minRounds": 2,
+        "expectedEventTypesInclude": [
+          "CHAT_MESSAGE",
+          "TASK_PLAN_READY",
+          "RATE_LIMITED",
+          "PLAN_UPDATED",
+          "TASK_FINISHED"
+        ],
+        "expectedVisibleTextIncludes": [
+          "Replay thread-comm-004-debug-no-approval",
+          "Capabilities: Workspace write",
+          "Slow model response detected while computing chat stats",
+          "Retrying from already-read data",
+          "Write workspace/chat_stats.json",
+          "Status: Completed",
+          "Finished replay after chat stats artifact evidence was detected."
+        ],
+        "expectedTaskTitlesInclude": [
+          "Compute message counts and average response time",
+          "Write workspace/chat_stats.json"
+        ],
+        "expectedSectionLabelsInclude": [
+          "Execution profile",
+          "Plan",
+          "Execute",
+          "Summary"
+        ],
+        "forbiddenVisibleTextIncludes": [
+          "undefined",
+          "Task completed via Mastra runtime"
+        ],
+        "expectedFinalTaskStatus": "finished",
+        "expectedAllTaskItemsCompleted": true,
+        "expectedCollaborationCleared": true
+      }
+    },
+    {
+      "id": "thread-web-004-debug-no-approval-manual-approval-ui-timeline",
+      "sourceThreadId": "thread-web-004-debug-no-approval",
+      "failureClass": "suspended_write_approval_must_not_fast_complete",
+      "focus": [
+        "manual_review",
+        "suspended_approval",
+        "chat_task_routing"
+      ],
+      "dbStats": {
+        "messageCount": 14,
+        "userMessageCount": 3,
+        "assistantMessageCount": 11,
+        "firstAt": "2026-04-12T13:21:42.923Z",
+        "lastAt": "2026-04-12T13:23:09.849Z",
+        "durationMs": 86926,
+        "maxObservedGapMs": 31569
+      },
+      "session": {
+        "taskId": "replay-thread-web-004-debug-no-approval",
+        "title": "Form inventory manual approval replay",
+        "status": "finished",
+        "taskMode": "immediate_task"
+      },
+      "events": [
+        {
+          "id": "web-004-001",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 1,
+          "type": "CHAT_MESSAGE",
+          "timestamp": "2026-04-12T13:22:02.467Z",
+          "payload": {
+            "role": "user",
+            "content": "Analyze workspace/form.html and write all fields to workspace/form_fields.json."
+          }
+        },
+        {
+          "id": "web-004-002",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 2,
+          "type": "TASK_PLAN_READY",
+          "timestamp": "2026-04-12T13:22:13.759Z",
+          "payload": {
+            "mode": "immediate_task",
+            "summary": "Replay thread-web-004-debug-no-approval: field inventory requires explicit write approval and artifact evidence.",
+            "intentRouting": {
+              "intent": "immediate_task",
+              "confidence": 0.99,
+              "reasonCodes": [
+                "db_replay",
+                "manual_approval"
+              ],
+              "needsDisambiguation": false,
+              "forcedByUserSelection": true
+            },
+            "tasks": [
+              {
+                "id": "read-form",
+                "title": "Read workspace/form.html",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "id": "extract-fields",
+                "title": "Extract input, select, and textarea fields",
+                "status": "completed",
+                "dependencies": [
+                  "read-form"
+                ]
+              },
+              {
+                "id": "write-fields",
+                "title": "Write workspace/form_fields.json",
+                "status": "blocked",
+                "dependencies": [
+                  "extract-fields"
+                ]
+              }
+            ],
+            "executionProfile": {
+              "primaryHardness": "externally_blocked",
+              "requiredCapabilities": [
+                "workspace_write",
+                "human_review"
+              ],
+              "blockingRisk": "manual_step",
+              "interactionMode": "review_first",
+              "executionShape": "staged",
+              "reasons": [
+                "Real DB replay contains suspended write operation waiting for approval."
+              ]
+            }
+          }
+        },
+        {
+          "id": "web-004-003",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 3,
+          "type": "TASK_SUSPENDED",
+          "timestamp": "2026-04-12T13:22:13.900Z",
+          "payload": {
+            "reason": "approval_required",
+            "userMessage": "Suspended write operation waiting for approval.",
+            "canAutoResume": false
+          }
+        },
+        {
+          "id": "web-004-004",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 4,
+          "type": "TASK_USER_ACTION_REQUIRED",
+          "timestamp": "2026-04-12T13:22:14.000Z",
+          "payload": {
+            "kind": "manual_review",
+            "title": "Approve write to workspace/form_fields.json",
+            "description": "The real thread had a suspended write operation; the UI must show this as a blocking approval, not a completed chat answer.",
+            "reason": "Suspended write approval observed in real thread-web-004-debug-no-approval",
+            "blocking": true,
+            "questions": [
+              "Approve writing the form inventory artifact?"
+            ],
+            "instructions": [
+              "Resume only after write approval is granted."
+            ],
+            "routeChoices": [
+              {
+                "label": "Approve artifact write",
+                "value": "approve_form_fields_write"
+              },
+              {
+                "label": "Cancel write",
+                "value": "cancel_form_fields_write"
+              }
+            ]
+          }
+        },
+        {
+          "id": "web-004-005",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 5,
+          "type": "CHAT_MESSAGE",
+          "timestamp": "2026-04-12T13:22:57.526Z",
+          "payload": {
+            "role": "user",
+            "content": "Do not mark complete until workspace/form_fields.json exists and is non-empty."
+          }
+        },
+        {
+          "id": "web-004-006",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 6,
+          "type": "PLAN_UPDATED",
+          "timestamp": "2026-04-12T13:23:06.514Z",
+          "payload": {
+            "summary": "Still blocked on artifact write approval; completion is not allowed.",
+            "taskProgress": [
+              {
+                "taskId": "read-form",
+                "title": "Read workspace/form.html",
+                "status": "completed",
+                "dependencies": []
+              },
+              {
+                "taskId": "extract-fields",
+                "title": "Extract input, select, and textarea fields",
+                "status": "completed",
+                "dependencies": [
+                  "read-form"
+                ]
+              },
+              {
+                "taskId": "write-fields",
+                "title": "Write workspace/form_fields.json",
+                "status": "blocked",
+                "dependencies": [
+                  "extract-fields"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "web-004-006-finished",
+          "taskId": "replay-thread-web-004-debug-no-approval",
+          "sequence": 7,
+          "type": "TASK_FINISHED",
+          "timestamp": "2026-04-12T13:23:09.849Z",
+          "payload": {
+            "summary": "Finished replay after form inventory write approval and artifact evidence were detected.",
+            "finishReason": "stop",
+            "files": [
+              "workspace/form_fields.json"
+            ],
+            "artifacts": [
+              "workspace/form_fields.json"
+            ]
+          }
+        }
+      ],
+      "expectations": {
+        "minRounds": 2,
+        "expectedEventTypesInclude": [
+          "CHAT_MESSAGE",
+          "TASK_PLAN_READY",
+          "TASK_SUSPENDED",
+          "TASK_USER_ACTION_REQUIRED",
+          "PLAN_UPDATED",
+          "TASK_FINISHED"
+        ],
+        "expectedVisibleTextIncludes": [
+          "Replay thread-web-004-debug-no-approval",
+          "Capabilities: Workspace write, Human review",
+          "Approve write to workspace/form_fields.json",
+          "Still blocked on artifact write approval",
+          "Write workspace/form_fields.json",
+          "Status: Completed",
+          "Finished replay after form inventory write approval and artifact evidence were detected."
+        ],
+        "expectedTaskTitlesInclude": [
+          "Extract input, select, and textarea fields",
+          "Write workspace/form_fields.json"
+        ],
+        "expectedSectionLabelsInclude": [
+          "Execution profile",
+          "Plan",
+          "Execute",
+          "Summary"
+        ],
+        "forbiddenVisibleTextIncludes": [
+          "undefined",
+          "Task completed via Mastra runtime"
+        ],
+        "expectedFinalTaskStatus": "finished",
+        "expectedAllTaskItemsCompleted": true,
+        "expectedCollaborationCleared": true
+      }
+    }
+  ]
+}

@@ -100,6 +100,66 @@ describe('execute-task workflow step', () => {
         expect(prompts[0]).toContain('MUST call a command-execution tool');
     });
 
+    test('rejects unrelated tool calls when web research evidence is required', async () => {
+        const coworker = {
+            generate: async () => ({
+                text: 'I ran a command but did not search the web.',
+                finishReason: 'stop',
+                toolCalls: [{ toolName: 'mastra_workspace_execute_command' }],
+            }),
+        } as unknown as Agent;
+
+        const previousRetryCount = process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT;
+        process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = '0';
+        try {
+            await expect(executeFrozenTask({
+                coworker,
+                task: {
+                    frozen: { id: 'frozen-task-web-evidence-missing' } as any,
+                    executionPlan: { steps: [] } as any,
+                    executionQuery: '查询今天的市场新闻',
+                    requiredCapabilities: ['web_research'],
+                },
+                workspacePath: '/tmp/ws',
+            })).rejects.toThrow('workflow_missing_required_tool_evidence:web_research');
+        } finally {
+            if (typeof previousRetryCount === 'string') {
+                process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT = previousRetryCount;
+            } else {
+                delete process.env.COWORKANY_MASTRA_TASK_EXECUTE_STEP_RETRY_COUNT;
+            }
+        }
+    });
+
+    test('accepts completion only when every required capability has matching tool evidence', async () => {
+        const coworker = {
+            generate: async () => ({
+                text: 'I searched and wrote the report.',
+                finishReason: 'stop',
+                toolCalls: [
+                    { toolName: 'search_web' },
+                    { toolName: 'write_to_file' },
+                ],
+            }),
+        } as unknown as Agent;
+
+        const output = await executeFrozenTask({
+            coworker,
+            task: {
+                frozen: { id: 'frozen-task-multi-evidence' } as any,
+                executionPlan: { steps: [] } as any,
+                executionQuery: '查询市场新闻并保存到报告文件',
+                requiredCapabilities: ['web_research', 'artifact_write'],
+            },
+            workspacePath: '/tmp/ws',
+        });
+
+        expect(output.completed).toBe(true);
+        expect(output.toolEvidence.satisfiedCapabilities).toContain('web_research');
+        expect(output.toolEvidence.satisfiedCapabilities).toContain('artifact_write');
+        expect(output.toolEvidence.missingCapabilities).toEqual([]);
+    });
+
     test('deterministic fallback generates attachment video when model never emits command tool evidence', async () => {
         const ffmpegProbe = Bun.spawnSync({
             cmd: ['ffmpeg', '-version'],

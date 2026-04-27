@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { spawn, type ChildProcess } from 'child_process';
 import {
     buildCommandRecoveryHints,
@@ -536,6 +537,173 @@ const deletePath: ToolDefinition = {
         }
     },
 };
+const createDirectory: ToolDefinition = {
+    name: 'create_directory',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            path: {
+                type: 'string',
+            },
+        },
+        required: ['path'],
+    },
+    handler: async (args: { path: string }, context) => {
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
+        try {
+            await fs.promises.mkdir(targetPath, { recursive: true });
+            return { success: true, path: targetPath };
+        } catch (error: any) {
+            return { error: `Failed to create directory: ${error.message}` };
+        }
+    },
+};
+const computeFileHash: ToolDefinition = {
+    name: 'compute_file_hash',
+    effects: ['filesystem:read'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            path: {
+                type: 'string',
+            },
+            algorithm: {
+                type: 'string',
+            },
+        },
+        required: ['path'],
+    },
+    handler: async (args: { path: string; algorithm?: string }, context) => {
+        const targetPath = resolveContextPath(context.workspacePath, args.path);
+        const algorithm = typeof args.algorithm === 'string' && args.algorithm.trim().length > 0
+            ? args.algorithm.trim()
+            : 'sha256';
+        try {
+            const hash = createHash(algorithm);
+            const content = await fs.promises.readFile(targetPath);
+            hash.update(content);
+            return {
+                success: true,
+                path: targetPath,
+                algorithm,
+                hash: hash.digest('hex'),
+                size: content.byteLength,
+            };
+        } catch (error: any) {
+            return { error: `Failed to compute file hash: ${error.message}` };
+        }
+    },
+};
+const batchDeletePaths: ToolDefinition = {
+    name: 'batch_delete_paths',
+    effects: ['filesystem:delete'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            deletes: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string' },
+                        recursive: { type: 'boolean' },
+                        force: { type: 'boolean' },
+                    },
+                    required: ['path'],
+                },
+            },
+        },
+        required: ['deletes'],
+    },
+    handler: async (
+        args: { deletes: Array<{ path: string; recursive?: boolean; force?: boolean }> },
+        context,
+    ) => {
+        const results: Array<Record<string, unknown>> = [];
+        for (const item of args.deletes ?? []) {
+            const targetPath = resolveContextPath(context.workspacePath, item.path);
+            try {
+                await fs.promises.rm(targetPath, {
+                    recursive: item.recursive ?? false,
+                    force: item.force ?? false,
+                });
+                results.push({ success: true, path: targetPath });
+            } catch (error: any) {
+                results.push({ success: false, path: targetPath, error: error.message });
+            }
+        }
+        return {
+            success: results.every((result) => result.success === true),
+            count: results.length,
+            results,
+        };
+    },
+};
+const batchMoveFiles: ToolDefinition = {
+    name: 'batch_move_files',
+    effects: ['filesystem:write'],
+    input_schema: {
+        type: 'object',
+        properties: {
+            moves: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        source_path: { type: 'string' },
+                        destination_path: { type: 'string' },
+                        overwrite: { type: 'boolean' },
+                    },
+                    required: ['source_path', 'destination_path'],
+                },
+            },
+        },
+        required: ['moves'],
+    },
+    handler: async (
+        args: { moves: Array<{ source_path: string; destination_path: string; overwrite?: boolean }> },
+        context,
+    ) => {
+        const results: Array<Record<string, unknown>> = [];
+        for (const item of args.moves ?? []) {
+            const sourcePath = resolveContextPath(context.workspacePath, item.source_path);
+            const destinationPath = resolveContextPath(context.workspacePath, item.destination_path);
+            try {
+                if (!item.overwrite) {
+                    const exists = await fs.promises
+                        .access(destinationPath, fs.constants.F_OK)
+                        .then(() => true)
+                        .catch(() => false);
+                    if (exists) {
+                        results.push({
+                            success: false,
+                            source_path: sourcePath,
+                            destination_path: destinationPath,
+                            error: `Destination already exists: ${destinationPath}`,
+                        });
+                        continue;
+                    }
+                }
+                await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+                await movePath(sourcePath, destinationPath);
+                results.push({ success: true, source_path: sourcePath, destination_path: destinationPath });
+            } catch (error: any) {
+                results.push({
+                    success: false,
+                    source_path: sourcePath,
+                    destination_path: destinationPath,
+                    error: error.message,
+                });
+            }
+        }
+        return {
+            success: results.every((result) => result.success === true),
+            count: results.length,
+            results,
+        };
+    },
+};
 const runCommand: ToolDefinition = {
     name: 'run_command',
     effects: ['process:spawn', 'code:execute'],
@@ -1010,6 +1178,10 @@ export const STANDARD_TOOLS: ToolDefinition[] = [
     replaceFileContent,
     moveFile,
     deletePath,
+    createDirectory,
+    computeFileHash,
+    batchDeletePaths,
+    batchMoveFiles,
     runCommand,
     remember,
     recall,

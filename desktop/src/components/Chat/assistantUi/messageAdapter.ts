@@ -25,6 +25,21 @@ export interface AssistantUiStructuredTask {
         completed: number;
         total: number;
     };
+    items?: Array<{
+        title: string;
+        status: string;
+        dependencies?: string;
+    }>;
+    sections?: Array<{
+        label: string;
+        lines: string[];
+    }>;
+    collaboration?: {
+        title: string;
+        description?: string;
+        questions: string[];
+        instructions: string[];
+    };
 }
 
 export interface AssistantUiStructuredPatch {
@@ -187,6 +202,115 @@ function summarizeUnknown(value: unknown, maxLength: number): string | undefined
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function textFromUnknown(value: unknown): string {
+    if (typeof value === 'string') {
+        return value.trim();
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+    if (value && typeof value === 'object') {
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+    return '';
+}
+
+function isCommandTool(toolName: string): boolean {
+    return /\b(mastra_workspace_execute_command|run_command|bash|shell|terminal|exec_shell)\b/iu.test(toolName);
+}
+
+function isFileWriteTool(toolName: string): boolean {
+    return /\b(write_to_file|replace_file_content|append_to_file|move_file|copy_file|create_file|apply_patch|mastra_workspace_write_file|mastra_workspace_replace_file_content)\b/iu.test(toolName);
+}
+
+function isWebTool(toolName: string): boolean {
+    return /\b(web\.search|search_web|websearch|crawl_url|browser_|open_in_browser|finance|weather|market)\b/iu.test(toolName);
+}
+
+function summarizeToolInputForUser(toolName: string, args: unknown): string | undefined {
+    const normalizedToolName = normalizeText(toolName);
+    if (isCommandTool(normalizedToolName)) {
+        return '正在执行必要的本地命令。';
+    }
+    if (isFileWriteTool(normalizedToolName)) {
+        const path = normalizeText(asString(asRecord(args).path));
+        return path ? `准备保存输出文件：${path}` : '准备保存输出文件。';
+    }
+    if (isWebTool(normalizedToolName)) {
+        const record = asRecord(args);
+        const query = normalizeText(asString(record.query) || asString(record.q) || asString(record.url));
+        return query ? `正在查询：${query}` : '正在查询相关信息。';
+    }
+    return summarizeUnknown(args, 120);
+}
+
+function summarizeToolResultForUser(toolName: string, result: unknown, status: AssistantUiStructuredTool['status']): string | undefined {
+    const normalizedToolName = normalizeText(toolName);
+    const text = textFromUnknown(result);
+    const failed = status === 'failed'
+        || /\b(exit\s*code\s*[:=]?\s*[1-9]\d*|unrecognized option|option not found|error|failed|failure|exception)\b/iu.test(text);
+    if (isCommandTool(normalizedToolName)) {
+        return failed
+            ? '命令执行失败，正在根据错误信息修正。'
+            : '命令执行完成。';
+    }
+    if (isFileWriteTool(normalizedToolName)) {
+        return failed ? '输出文件保存失败，正在准备修正。' : '输出文件已保存。';
+    }
+    if (isWebTool(normalizedToolName)) {
+        return failed ? '查询失败，正在准备重试。' : '已获取查询结果。';
+    }
+    if (status === 'success') {
+        return '步骤已完成。';
+    }
+    if (status === 'failed') {
+        return '步骤失败，正在准备修正。';
+    }
+    return summarizeUnknown(result, 140);
+}
+
+function capabilityLabel(value: string): string {
+    switch (value) {
+        case 'browser_interaction':
+            return 'Browser interaction';
+        case 'external_auth':
+            return 'Login/account state';
+        case 'workspace_write':
+            return 'Workspace write';
+        case 'host_access':
+            return 'Host access';
+        case 'human_review':
+            return 'Human review';
+        default:
+            return value;
+    }
+}
+
+function buildTaskExecutionProfileSection(
+    taskCard: NonNullable<TimelineTurnRound['assistantTurn']>['taskCard'],
+): { label: string; lines: string[] } | undefined {
+    const capabilities = taskCard?.executionProfile?.requiredCapabilities ?? [];
+    if (capabilities.length === 0) {
+        return undefined;
+    }
+    return {
+        label: 'Execution profile',
+        lines: [
+            `Capabilities: ${capabilities.map(capabilityLabel).join(', ')}`,
+        ],
+    };
+}
+
 function toRiskSeverity(risk: number): AssistantUiStructuredApproval['severity'] {
     if (risk >= 9) {
         return 'critical';
@@ -222,12 +346,15 @@ function buildStructuredPayload(
         return undefined;
     }
 
-    const tools = (round.assistantTurn.toolCalls ?? []).map((toolCall) => ({
-        toolName: normalizeText(toolCall.toolName) || 'Tool',
-        status: toolCall.status,
-        inputSummary: summarizeUnknown(toolCall.args, 120),
-        resultSummary: summarizeUnknown(toolCall.result, 140),
-    }));
+    const tools = (round.assistantTurn.toolCalls ?? []).map((toolCall) => {
+        const toolName = normalizeText(toolCall.toolName) || 'Tool';
+        return {
+            toolName,
+            status: toolCall.status,
+            inputSummary: summarizeToolInputForUser(toolName, toolCall.args),
+            resultSummary: summarizeToolResultForUser(toolName, toolCall.result, toolCall.status),
+        };
+    });
     const approvals = (round.assistantTurn.effectRequests ?? [])
         .map((effect) => {
             const risk = Number.isFinite(effect.risk) ? effect.risk : 0;
@@ -256,11 +383,46 @@ function buildStructuredPayload(
     const taskStatus = round.assistantTurn.taskCard?.status ?? 'idle';
     const taskHasTerminalState = taskStatus === 'finished' || taskStatus === 'failed';
     const shouldExposeTask = Boolean(round.assistantTurn.taskCard) && (Boolean(taskProgress) || taskHasTerminalState);
+    const taskCardSections = (round.assistantTurn.taskCard?.sections ?? [])
+        .map((section) => ({
+            label: normalizeText(section.label),
+            lines: section.lines
+                .map((line) => normalizeText(line))
+                .filter((line) => line.length > 0)
+                .slice(0, 6),
+        }))
+        .filter((section) => section.label.length > 0 && section.lines.length > 0);
+    const hasExecutionProfileSection = taskCardSections.some((section) => (
+        section.label.trim().toLowerCase() === 'execution profile'
+    ));
     const task = shouldExposeTask
         ? {
             title: normalizeText(round.assistantTurn.taskCard?.title) || 'Task center',
             status: taskStatus,
             progress: taskProgress,
+            items: (round.assistantTurn.taskCard?.tasks ?? [])
+                .map((task) => ({
+                    title: normalizeText(task.title),
+                    status: normalizeText(task.status),
+                    dependencies: (task.dependencies ?? []).length > 0 ? (task.dependencies ?? []).join(', ') : undefined,
+                }))
+                .filter((task) => task.title.length > 0),
+            sections: [
+                hasExecutionProfileSection ? undefined : buildTaskExecutionProfileSection(round.assistantTurn.taskCard),
+                ...taskCardSections,
+            ].filter((section): section is { label: string; lines: string[] } => Boolean(section)),
+            collaboration: round.assistantTurn.taskCard?.collaboration
+                ? {
+                    title: normalizeText(round.assistantTurn.taskCard.collaboration.title),
+                    description: normalizeText(round.assistantTurn.taskCard.collaboration.description),
+                    questions: round.assistantTurn.taskCard.collaboration.questions
+                        .map((question) => normalizeText(question))
+                        .filter((question) => question.length > 0),
+                    instructions: round.assistantTurn.taskCard.collaboration.instructions
+                        .map((instruction) => normalizeText(instruction))
+                        .filter((instruction) => instruction.length > 0),
+                }
+                : undefined,
         }
         : undefined;
     const patches = (round.assistantTurn.patches ?? []).map((patch) => ({

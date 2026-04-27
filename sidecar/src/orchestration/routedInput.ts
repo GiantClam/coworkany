@@ -1,4 +1,4 @@
-export type ForcedRouteMode = 'chat' | 'task';
+export type ForcedRouteMode = 'chat' | 'task' | 'schedule';
 
 export type RoutedInputParseResult = {
     cleanText: string;
@@ -8,6 +8,9 @@ export type RoutedInputParseResult = {
 
 const ROUTE_TOKEN_ONLY_PATTERN = /^\s*__route_(chat|task)__\s*$/iu;
 const ROUTE_TOKEN_PREFIX_PATTERN = /^\s*__route_(chat|task)__\s*(?:\n+|[\t ]+)([\s\S]*)$/iu;
+const ROUTE_TOKEN_ONLY_EXTENDED_PATTERN = /^\s*__route_(chat|task|schedule)__\s*$/iu;
+const ROUTE_TOKEN_PREFIX_EXTENDED_PATTERN = /^\s*__route_(chat|task|schedule)__\s*(?:\n+|[\t ]+)([\s\S]*)$/iu;
+const SLASH_ROUTE_PATTERN = /^\s*\/(ask|task|schedule)\b(?:[\t ]+([\s\S]*))?$/iu;
 const LEGACY_ROUTE_ENVELOPE_PATTERN =
     /^\s*(?:原始任务|original\s+task)\s*[:：]\s*([\s\S]*?)(?:\n+(?:用户路由|user\s+route)\s*[:：]\s*([^\n]+))?\s*$/iu;
 
@@ -16,7 +19,7 @@ function toForcedRouteMode(value: string | null | undefined): ForcedRouteMode | 
         return null;
     }
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'chat') {
+    if (normalized === 'chat' || normalized === 'ask') {
         return 'chat';
     }
     if (
@@ -27,12 +30,24 @@ function toForcedRouteMode(value: string | null | undefined): ForcedRouteMode | 
     ) {
         return 'task';
     }
+    if (normalized === 'schedule' || normalized === 'scheduled') {
+        return 'schedule';
+    }
     return null;
 }
 
 export function parseRoutedInput(input: string): RoutedInputParseResult {
     const raw = input ?? '';
-    const tokenOnlyMatch = raw.match(ROUTE_TOKEN_ONLY_PATTERN);
+    const slashRouteMatch = raw.match(SLASH_ROUTE_PATTERN);
+    if (slashRouteMatch?.[1]) {
+        return {
+            cleanText: slashRouteMatch[2]?.trim() ?? '',
+            forcedRouteMode: toForcedRouteMode(slashRouteMatch[1]),
+            usedEnvelope: true,
+        };
+    }
+
+    const tokenOnlyMatch = raw.match(ROUTE_TOKEN_ONLY_EXTENDED_PATTERN) ?? raw.match(ROUTE_TOKEN_ONLY_PATTERN);
     if (tokenOnlyMatch?.[1]) {
         return {
             cleanText: '',
@@ -41,7 +56,7 @@ export function parseRoutedInput(input: string): RoutedInputParseResult {
         };
     }
 
-    const tokenPrefixMatch = raw.match(ROUTE_TOKEN_PREFIX_PATTERN);
+    const tokenPrefixMatch = raw.match(ROUTE_TOKEN_PREFIX_EXTENDED_PATTERN) ?? raw.match(ROUTE_TOKEN_PREFIX_PATTERN);
     if (tokenPrefixMatch?.[1]) {
         return {
             cleanText: tokenPrefixMatch[2]?.trim() ?? '',
@@ -68,12 +83,15 @@ export function parseRoutedInput(input: string): RoutedInputParseResult {
 
 export function resolveForcedWorkMode(
     forcedRouteMode: ForcedRouteMode | null | undefined,
-): 'chat' | 'immediate_task' | undefined {
+): 'chat' | 'immediate_task' | 'scheduled_task' | undefined {
     if (forcedRouteMode === 'chat') {
         return 'chat';
     }
     if (forcedRouteMode === 'task') {
         return 'immediate_task';
+    }
+    if (forcedRouteMode === 'schedule') {
+        return 'scheduled_task';
     }
     return undefined;
 }

@@ -485,6 +485,7 @@ const VOICE_OUTPUT_EVIDENCE_TOOL_PATTERN = /\b(voice_speak|tts|text[-_\s]?to[-_\
 const FILESYSTEM_READ_EVIDENCE_TOOL_PATTERN = /\b(list_dir|view_file|read_file|mastra_workspace_list_files|mastra_workspace_read_file|mastra_workspace_file_stat)\b/iu;
 const COMMAND_EXECUTION_EVIDENCE_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/iu;
 const COMMAND_NOT_FOUND_RESULT_PATTERN = /\b(command not found|not recognized as an internal or external command|is not recognized)\b/iu;
+const COMMAND_UNRECOGNIZED_OPTION_PATTERN = /\bunrecognized\s+option\s+['"`]?([a-z][a-z0-9_-]*[^\s'"`]*)['"`]?/iu;
 const COMMAND_EXECUTION_FAILURE_RESULT_PATTERN = /\b(no such file or directory|permission denied|operation not permitted|error opening input|impossible to open|error while opening encoder|failed to open|unable to (?:open|find)|invalid argument|width not divisible by 2)\b/iu;
 const COMMAND_RESULT_EXIT_CODE_PATTERN = /\bexit\s*code\s*[:=]\s*(-?\d+)\b/iu;
 const DUPLICATED_PATH_SEGMENT_MARKER_PATTERN = /(^|\/)([^/]+(?:\/[^/]+){0,4})\/\2(\/|$)/u;
@@ -590,6 +591,7 @@ function buildMissingToolEvidenceRetryMessage(input: {
             lines.push(`- Last failed command: ${input.commandRecoveryHint.failedCommand}`);
             if (input.commandRecoveryHint.retryCommands.length > 0) {
                 lines.push(`- Retry this fallback command first: ${input.commandRecoveryHint.retryCommands[0]}`);
+                lines.push('- Do not repeat the last failed command verbatim; the next command must differ from Last failed command.');
                 if (input.commandRecoveryHint.retryCommands.length > 1) {
                     lines.push(`- Additional fallback commands: ${input.commandRecoveryHint.retryCommands.slice(1).join(' ; ')}`);
                 }
@@ -935,6 +937,47 @@ function buildInputManifestDuplicatePathRecoveryHint(input: {
     };
 }
 
+function buildFfmpegUnrecognizedOptionRecoveryHint(input: {
+    command: string;
+    stderr: string;
+    toolName: string;
+}): TaskTurnCommandRecoveryHint | null {
+    const normalizedCommand = input.command.trim();
+    if (normalizedCommand.length === 0 || !/\bffmpeg\b/iu.test(normalizedCommand)) {
+        return null;
+    }
+    const match = COMMAND_UNRECOGNIZED_OPTION_PATTERN.exec(input.stderr);
+    const badOption = match?.[1]?.trim();
+    if (!badOption) {
+        return null;
+    }
+    const optionRepair = /^(framerate|r)(.+)$/iu.exec(badOption);
+    const optionName = optionRepair?.[1];
+    const optionValue = optionRepair?.[2]?.trim();
+    if (!optionName || !optionValue) {
+        return null;
+    }
+    const failedTokenPattern = new RegExp(`(^|\\s)-${badOption.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?=\\s|$)`, 'u');
+    if (!failedTokenPattern.test(normalizedCommand)) {
+        return null;
+    }
+    const repairedCommand = normalizedCommand.replace(
+        failedTokenPattern,
+        (_full, prefix: string) => `${prefix}-${optionName} ${optionValue}`,
+    );
+    if (repairedCommand === normalizedCommand) {
+        return null;
+    }
+    return {
+        failedCommand: normalizedCommand,
+        retryCommands: [repairedCommand],
+        probeCommands: [],
+        suggestedFix: `The ffmpeg option "-${badOption}" is parsed as one invalid option. Split it into "-${optionName} ${optionValue}" and retry only this failed command step.`,
+        stderrSnippet: input.stderr.trim().replace(/\s+/gu, ' ').slice(0, 320),
+        toolName: input.toolName,
+    };
+}
+
 function resolveCommandRecoveryHintFromToolResult(input: {
     toolName: string;
     result: unknown;
@@ -960,6 +1003,14 @@ function resolveCommandRecoveryHintFromToolResult(input: {
     });
     if (manifestDuplicatePathHint) {
         return manifestDuplicatePathHint;
+    }
+    const ffmpegUnrecognizedOptionHint = buildFfmpegUnrecognizedOptionRecoveryHint({
+        command,
+        stderr,
+        toolName: normalizedToolName,
+    });
+    if (ffmpegUnrecognizedOptionHint) {
+        return ffmpegUnrecognizedOptionHint;
     }
     const errorType = getString(resultRecord?.error_type)?.toLowerCase() ?? '';
     const exitCode = (

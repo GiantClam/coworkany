@@ -90,7 +90,7 @@ describe('assistant-ui message adapter', () => {
                 tools: [{
                     toolName: 'web.search',
                     status: 'success',
-                    inputSummary: expect.stringContaining('"q":"NVDA weekly news"'),
+                    inputSummary: '正在查询：NVDA weekly news',
                 }],
                 approvals: [{
                     requestId: 'effect-1',
@@ -109,8 +109,40 @@ describe('assistant-ui message adapter', () => {
             },
         });
         expect(messages[1]?.text).toContain('Here is the weekly brief.');
-        expect(messages[1]?.text).toContain('Runtime:');
-        expect(messages[1]?.text).toContain('Structured cards: Tools 1 | Approvals 1 | Task 1 | Patches 1');
+        expect(messages[1]?.text).not.toContain('Structured cards:');
+        expect(messages[1]?.structured?.tools[0]?.inputSummary).toBe('正在查询：NVDA weekly news');
+    });
+
+    test('converts command tool raw input and result into user-readable summaries', () => {
+        const rounds: TimelineTurnRound[] = [
+            {
+                id: 'round-command-readable',
+                assistantTurn: {
+                    type: 'assistant_turn',
+                    id: 'assistant-command-readable',
+                    timestamp: '2026-04-27T00:30:00.000Z',
+                    lead: '',
+                    steps: [],
+                    messages: [],
+                    toolCalls: [{
+                        type: 'tool_call',
+                        id: 'tool-command-readable',
+                        timestamp: '2026-04-27T00:30:01.000Z',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: { command: 'ffmpeg -y -framerate1/5 ...' },
+                        status: 'failed',
+                        result: "Unrecognized option 'framerate1/5'.\nExit code: 8",
+                    }],
+                },
+            },
+        ];
+
+        const messages = buildAssistantUiExternalMessages(rounds);
+        const tool = messages[0]?.structured?.tools[0];
+        expect(tool?.inputSummary).toBe('正在执行必要的本地命令。');
+        expect(tool?.resultSummary).toBe('命令执行失败，正在根据错误信息修正。');
+        expect(JSON.stringify(messages[0])).not.toContain('framerate1/5');
+        expect(JSON.stringify(messages[0])).not.toContain('Exit code: 8');
     });
 
     test('converts external message to ThreadMessageLike', () => {
@@ -295,7 +327,7 @@ describe('assistant-ui message adapter', () => {
         expect(messages).toHaveLength(1);
         expect(messages[0]).toMatchObject({
             role: 'assistant',
-            text: 'Structured cards: Approvals 1',
+            text: 'Structured update: Approvals 1',
             structured: {
                 approvals: [
                     {

@@ -16,7 +16,14 @@ export type SocialPublishPlatform = 'x' | 'xiaohongshu' | 'wechat_official' | 'r
 export type PublishExecutionMode = 'direct_publish' | 'preview_then_publish' | 'draft_only';
 export type PublishIntent = { action: 'publish_social_post'; platform: SocialPublishPlatform; executionMode: PublishExecutionMode; requiresSideEffect: boolean };
 export type ExecutionProfile = { primaryHardness: TaskHardness; requiredCapabilities: RequiredCapability[]; blockingRisk: BlockingRisk; interactionMode: InteractionMode; executionShape: ExecutionShape; reasons: string[] };
-export type TaskExecutionRequirement = { id: string; kind: 'tool_evidence'; capability: 'browser_interaction' | 'shell_execution'; required: boolean; reason: string };
+export type TaskEvidenceCapability =
+    | 'web_research'
+    | 'browser_automation'
+    | 'voice_output'
+    | 'command_execution'
+    | 'artifact_write'
+    | 'filesystem_read';
+export type TaskExecutionRequirement = { id: string; kind: 'tool_evidence'; capability: TaskEvidenceCapability; required: boolean; reason: string };
 export type TaskDefinition = { id: string; title: string; objective: string; constraints: string[]; acceptanceCriteria: string[]; dependencies: string[]; preferredSkills: string[]; preferredTools: string[]; preferredWorkflow?: string; resolvedTargets?: string[]; sourceUrls?: string[]; executionRequirements?: TaskExecutionRequirement[] };
 export type ClarificationDecision = { required: boolean; reason?: string; questions: string[]; missingFields: string[]; canDefault: boolean; assumptions: string[] };
 export type WorkRequestFollowUpContext = { baseObjective?: string; latestAssistantMessage?: string; recentMessages?: Array<{ role: 'user' | 'assistant'; content: string }> };

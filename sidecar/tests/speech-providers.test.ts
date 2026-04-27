@@ -4,6 +4,8 @@ import {
     getSpeechProviderStatus,
     invokeCustomAsrProvider,
 } from '../src/tools/core/speechProviders';
+import { createVoiceProviderBindings } from '../src/mastra/runtimeBindings';
+import { resolveVoiceProviderMastraToolDefinition } from '../src/mastra/voiceProviderToolResolver';
 import type { StoredSkill } from '../src/storage/skillStore';
 import type { ToolDefinition } from '../src/tools/standard';
 
@@ -138,5 +140,40 @@ describe('speechProviders', () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toBe('transcription_unavailable');
+    });
+
+    test('voice provider bindings reuse Mastra registry tools for provider discovery', () => {
+        const skills = [
+            makeSkill('mastra-backed-tts', { voice: { tts: { tool: 'search_web' } } }),
+        ];
+        const bindings = createVoiceProviderBindings({
+            listEnabledSkills: () => skills,
+            getToolByName: resolveVoiceProviderMastraToolDefinition,
+            workspaceRoot: '/tmp/project',
+        });
+
+        const status = bindings.getVoiceProviderStatus();
+
+        expect(status.preferredTts).toBe('custom');
+        expect(status.hasCustomTts).toBe(true);
+        expect(status.providers.tts[0]?.toolName).toBe('search_web');
+    });
+
+    test('voice_speak is not exposed as a provider implementation to avoid recursion', () => {
+        const skills = [
+            makeSkill('recursive-tts', { voice: { tts: { tool: 'voice_speak' } } }),
+        ];
+        const bindings = createVoiceProviderBindings({
+            listEnabledSkills: () => skills,
+            getToolByName: resolveVoiceProviderMastraToolDefinition,
+            workspaceRoot: '/tmp/project',
+        });
+
+        const status = bindings.getVoiceProviderStatus();
+
+        expect(resolveVoiceProviderMastraToolDefinition('voice_speak')).toBeUndefined();
+        expect(status.preferredTts).toBe('system');
+        expect(status.hasCustomTts).toBe(false);
+        expect(status.providers.tts).toEqual([]);
     });
 });

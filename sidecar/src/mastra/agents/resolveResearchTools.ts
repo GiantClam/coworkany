@@ -1,8 +1,7 @@
 import type { Tool } from '@mastra/core/tools';
 import { areBuiltinToolpacksEnabled } from '../../config/runtimeProfile';
 import { listMcpToolsetsSafe } from '../mcp/clients';
-import { bashTool } from '../tools/bash';
-import { crawlUrlTool, extractContentTool, searchWebTool } from '../tools/research';
+import { resolveCoworkAnyMastraTools } from '../tools/coworkanyToolRegistry';
 
 const RESEARCH_TOOL_NAME_PATTERN = /\b(search_web|crawl_url|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|websearch)\b/iu;
 const MARKET_DATA_TOOL_NAME_PATTERN = /\b(finance|quote|ticker|stock|equity|market|price|ohlc|candlestick|kline|trade|trading|exchange|hkex|nasdaq|nyse)\b|股|港股|美股|行情|股价|涨跌|市值|成交量/iu;
@@ -66,6 +65,8 @@ export type ResolveResearchToolsDiagnostics = {
     totalTools: number;
     preferredResearchToolCount: number;
     preferredResearchTools: string[];
+    includesCommandFallback: boolean;
+    /** @deprecated command fallback is now exposed as run_command, not bash. */
     includesBashFallback: boolean;
     namespacedAliasCount: number;
 };
@@ -156,13 +157,21 @@ export async function resolveResearchTools(
     const includeBuiltins = areBuiltinToolpacksEnabled(deps?.env ?? process.env);
     const mcpToolsets = await listMcpToolsetsFn();
     const builtInResearchTools: ResearchToolsMap = includeBuiltins
-        ? {
-            search_web: searchWebTool as AnyMastraTool,
-            crawl_url: crawlUrlTool as AnyMastraTool,
-            extract_content: extractContentTool as AnyMastraTool,
-        }
+        ? resolveCoworkAnyMastraTools({
+            env: deps?.env ?? process.env,
+            include: ['search_web', 'crawl_url', 'extract_content'],
+        }) as ResearchToolsMap
         : {};
-    const builtInToolNames = new Set(Object.keys(builtInResearchTools));
+    const commandFallbackTools: ResearchToolsMap = includeBuiltins
+        ? resolveCoworkAnyMastraTools({
+            env: deps?.env ?? process.env,
+            include: ['run_command'],
+        }) as ResearchToolsMap
+        : {};
+    const builtInToolNames = new Set([
+        ...Object.keys(builtInResearchTools),
+        ...Object.keys(commandFallbackTools),
+    ]);
     const allTools: ResearchToolsMap = { ...builtInResearchTools };
     let namespacedAliasCount = 0;
 
@@ -196,7 +205,7 @@ export async function resolveResearchTools(
         .sort((left, right) => left.localeCompare(right, 'en', { sensitivity: 'base' }));
 
     const prioritizeTool = (toolName: string): number => {
-        if (toolName === 'bash') {
+        if (toolName === 'bash' || toolName === 'run_command') {
             return -1_000;
         }
         let score = 0;
@@ -222,7 +231,7 @@ export async function resolveResearchTools(
     };
 
     const orderedEntries = Object.entries(allTools)
-        .filter(([toolName]) => toolName !== 'bash')
+        .filter(([toolName]) => toolName !== 'bash' && toolName !== 'run_command')
         .sort((left, right) => {
             const scoreDelta = prioritizeTool(right[0]) - prioritizeTool(left[0]);
             if (scoreDelta !== 0) {
@@ -232,14 +241,15 @@ export async function resolveResearchTools(
         });
 
     const tools: ResearchToolsMap = Object.fromEntries(orderedEntries);
-    if (includeBuiltins && !Object.prototype.hasOwnProperty.call(tools, 'bash')) {
-        tools.bash = bashTool as AnyMastraTool;
+    if (includeBuiltins && commandFallbackTools.run_command) {
+        tools.run_command = commandFallbackTools.run_command;
     }
 
     const diagnostics: ResolveResearchToolsDiagnostics = {
         totalTools: Object.keys(tools).length,
         preferredResearchToolCount: preferredResearchTools.length,
         preferredResearchTools,
+        includesCommandFallback: Boolean(tools.run_command),
         includesBashFallback: Boolean(tools.bash),
         namespacedAliasCount,
     };

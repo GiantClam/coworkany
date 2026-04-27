@@ -95,6 +95,32 @@ describe('Phase 4: Control Plane Workflow', () => {
         expect(task.mode).toBe('immediate_task');
     });
 
+    test('explicit slash routes are resolved before agent execution', () => {
+        const ask = analyzeWorkRequest({
+            userInput: '/ask 帮我写一份简洁日报',
+            workspacePath: '/tmp',
+        });
+        const task = analyzeWorkRequest({
+            userInput: '/task 帮我写一份简洁日报',
+            workspacePath: '/tmp',
+        });
+        const scheduled = analyzeWorkRequest({
+            userInput: '/schedule 10分钟后提醒我复盘',
+            workspacePath: '/tmp',
+        });
+
+        expect(ask.mode).toBe('chat');
+        expect(ask.normalized.sourceText).toBe('帮我写一份简洁日报');
+        expect(ask.normalized.intentRouting.forcedByUserSelection).toBe(true);
+        expect(task.mode).toBe('immediate_task');
+        expect(task.normalized.sourceText).toBe('帮我写一份简洁日报');
+        expect(task.normalized.intentRouting.forcedByUserSelection).toBe(true);
+        expect(scheduled.mode).toBe('scheduled_task');
+        expect(scheduled.normalized.sourceText).toBe('10分钟后提醒我复盘');
+        expect(scheduled.normalized.tasks[0]?.objective).toBe('提醒我复盘');
+        expect(scheduled.normalized.taskDraftRequired).toBe(true);
+    });
+
     test('risk wrapper returns execution policy', () => {
         const analyzed = analyzeWorkRequest({
             userInput: '帮我删除 /tmp 下所有日志文件',
@@ -115,6 +141,21 @@ describe('Phase 4: Control Plane Workflow', () => {
         expect(frozen.frozen.id.length).toBeGreaterThan(0);
         expect(frozen.executionPlan.steps.length).toBeGreaterThan(0);
         expect(frozen.executionQuery.length).toBeGreaterThan(0);
+        expect(frozen.frozen.taskDraftRequired).toBe(true);
+        expect(frozen.frozen.tasks[0]?.executionRequirements?.map((item) => item.capability)).toContain('artifact_write');
+        expect(frozen.executionQuery).toContain('Required evidence:');
+        expect(frozen.executionQuery).toContain('artifact_write');
+    });
+
+    test('web research tasks carry required tool evidence in the contract', () => {
+        const analyzed = analyzeWorkRequest({
+            userInput: '今天 minimax 的港股股价怎么样？本周会有哪些趋势？',
+            workspacePath: '/tmp',
+        });
+
+        expect(analyzed.mode).toBe('immediate_task');
+        expect(analyzed.normalized.taskDraftRequired).toBe(false);
+        expect(analyzed.normalized.tasks[0]?.executionRequirements?.map((item) => item.capability)).toContain('web_research');
     });
 
     test('control plane workflow object exists', () => {

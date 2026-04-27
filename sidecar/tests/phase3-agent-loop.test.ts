@@ -103,6 +103,146 @@ describe('Phase 3: Agent Loop', () => {
         expect(decision?.continue).toBe(false);
     });
 
+    test('supervisor iteration policy continues after command failure repair prompt', async () => {
+        const options = await supervisor.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        expect(typeof onIterationComplete).toBe('function');
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 2,
+                toolCalls: [],
+                text: [
+                    '刚才已定位到失败原因：`ffmpeg` 参数写错了（`-framerate1/5`），所以没有生成成功。',
+                    '我可以立即继续执行正确命令来完成你要的视频。回复我“继续”我就直接执行完并回报实际结果。',
+                ].join('\n\n'),
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(true);
+        expect(decision?.feedback).toContain('Import the failure details');
+        expect(decision?.feedback).toContain('run the corrected retry command now');
+    });
+
+    test('supervisor solo iteration policy continues after command failure repair prompt', async () => {
+        const options = await supervisorSolo.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        expect(typeof onIterationComplete).toBe('function');
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 2,
+                toolCalls: [],
+                text: '已为你执行了合并，但命令里有个参数写法错误导致失败。请确认我继续直接执行。',
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(true);
+    });
+
+    test('supervisor iteration policy continues when failed command is delegated to user manually', async () => {
+        const options = await supervisor.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        expect(typeof onIterationComplete).toBe('function');
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 3,
+                toolCalls: [],
+                text: [
+                    '已修复并继续完成（根因是命令参数写错：`-framerate1/5` 少空格）。',
+                    '不过我这轮工具执行里被同一错误命令重复触发，导致还未真正产出文件。',
+                    '现在请直接用这条正确命令执行即可一次完成：',
+                    '```bash',
+                    'mkdir -p output && ffmpeg -y -framerate 1/5 -pattern_type glob -i "*.png" output/merged_images_5s.mp4',
+                    '```',
+                ].join('\n\n'),
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(true);
+        expect(decision?.feedback).toContain('Do not ask the user to run commands manually');
+        expect(decision?.feedback).toContain('execute the corrected command yourself via tools');
+    });
+
+    test('supervisor iteration policy continues when automatable command is delegated without tool execution', async () => {
+        const options = await supervisor.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        expect(typeof onIterationComplete).toBe('function');
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 1,
+                toolCalls: [],
+                text: [
+                    '在 Mac 终端执行下面两步即可把这 6 张图合成一个视频（每张 5 秒）：',
+                    '```bash',
+                    'cat > /tmp/image_list.txt <<EOF',
+                    'ffmpeg -y -f concat -safe 0 -i /tmp/image_list.txt output/merged_images_5s.mp4',
+                    '```',
+                ].join('\n\n'),
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(true);
+        expect(decision?.feedback).toContain('CoworkAny must run local commands via tools');
+        expect(decision?.feedback).toContain('Execute the command yourself');
+    });
+
+    test('supervisor iteration policy allows necessary human-assisted sudo command guidance', async () => {
+        const options = await supervisor.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        expect(typeof onIterationComplete).toBe('function');
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 2,
+                toolCalls: [],
+                text: '当前环境里 sudo 需要交互输入密码，无法在非交互会话里完成。请在终端执行 sudo shutdown -h 03:00。',
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(false);
+    });
+
+    test('supervisor iteration policy continues when failed command asks for permission to run repaired command', async () => {
+        const options = await supervisor.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        expect(typeof onIterationComplete).toBe('function');
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 4,
+                toolCalls: [],
+                text: [
+                    '执行失败，原因明确：',
+                    "- 报错：`Unrecognized option 'framerate1/5'`",
+                    '- 根因：命令实际仍是错误参数 `-framerate1/5`（少空格），所以没有生成视频。',
+                    '请允许我再执行一次真正修复后的命令（`-framerate 1/5`），我会直接回传生成结果和文件时长校验。',
+                ].join('\n'),
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(true);
+        expect(decision?.feedback).toContain('Do not stop or ask for confirmation');
+        expect(decision?.feedback).toContain('-framerate 1/5');
+    });
+
+    test('supervisor iteration policy still stops for completed optional follow-up offers', async () => {
+        const options = await supervisor.getDefaultOptions();
+        const onIterationComplete = options?.onIterationComplete;
+        const decision = onIterationComplete
+            ? onIterationComplete({
+                iteration: 2,
+                toolCalls: [],
+                text: '已完成本次分析。如果你愿意，我可以继续监控后续变化。',
+                isFinal: false,
+            })
+            : undefined;
+
+        expect(decision?.continue).toBe(false);
+    });
+
     test('all core agents disable internal auto-resume for tool approvals', async () => {
         const coworkerOptions = await coworker.getDefaultOptions();
         const researcherOptions = await researcher.getDefaultOptions();
@@ -113,6 +253,18 @@ describe('Phase 3: Agent Loop', () => {
         expect(researcherOptions?.autoResumeSuspendedTools).toBe(false);
         expect(coderOptions?.requireToolApproval).toBe(false);
         expect(coderOptions?.autoResumeSuspendedTools).toBe(false);
+    });
+
+    test('direct execution agents expose canonical run_command instead of legacy bash tools', async () => {
+        const coworkerTools = await coworker.listTools() as Record<string, unknown>;
+        const coderTools = await coder.listTools() as Record<string, unknown>;
+
+        expect(coworkerTools.run_command).toBeDefined();
+        expect(coderTools.run_command).toBeDefined();
+        expect(coworkerTools.bash).toBeUndefined();
+        expect(coworkerTools.bash_approval).toBeUndefined();
+        expect(coderTools.bash).toBeUndefined();
+        expect(coderTools.bash_approval).toBeUndefined();
     });
 
     test('supervisor has own memory for propagation', () => {

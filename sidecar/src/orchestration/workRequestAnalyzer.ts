@@ -13,6 +13,8 @@ import type {
     ResearchEvidence,
     ResearchQuery,
     TaskDefinition,
+    TaskEvidenceCapability,
+    TaskExecutionRequirement,
     UserActionRequest,
     WorkRequestFollowUpContext,
 } from './workRequestSchema';
@@ -37,8 +39,8 @@ import type { PlatformRuntimeContext } from '../protocol/commands';
 const URL_PATTERN = /\bhttps?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gi;
 const CHAT_PATTERN = /^(hi|hello|hey|你好|您好|在吗|thanks|thank you|谢谢|收到|ok|好的)[.!?？。!]*$/i;
 const CODE_PATTERN = /(修复|修改|重构|实现|patch|apply patch|edit|refactor|implement|bug|test|代码|code)/i;
-const FILE_WRITE_PATTERN = /(写入|保存|创建文件|生成文件|输出到|write to|save to|create (a )?file|readme|markdown|md\b)/i;
-const FILE_READ_PATTERN = /(读取|读一下|查看文件|查看这个文件|列出(?:当前)?目录|列出.*目录|列出.*文件|read (?:the )?file|open (?:the )?file|list (?:the )?(?:current )?(?:directory|dir|files?)|cat\s+\S+|view_file|list_dir)/i;
+const FILE_WRITE_PATTERN = /(写入|保存|创建文件|生成文件|输出到|保存到|保存为|write\s+(?:the\s+)?(?:result|results?|output|report|classification|classifications|inventory|file|json|markdown|document)?\s*(?:to)?\s*[`"']?(?:workspace\/|\.\/|\/|[A-Za-z]:\\)|write\s+to|save\s+(?:to|as)|output\s+to|create (a )?file|\[Output File Contract\]|readme|markdown|md\b)/i;
+const FILE_READ_PATTERN = /(读取|读一下|查看文件|查看这个文件|列出(?:当前)?目录|列出.*目录|列出.*文件|read\s+(?:the\s+)?(?:input\s+)?(?:file|files|document)?\s*[`"']?(?:workspace\/|\.\/|\/|[A-Za-z]:\\|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)|read (?:the )?file|open (?:the )?file|list (?:the )?(?:current )?(?:directory|dir|files?)|cat\s+\S+|view_file|list_dir)/i;
 const MEMORY_PATTERN = /(记住|记下来|记忆|remember|memorize|save (?:this )?preference|偏好)/i;
 const SHELL_PATTERN = /(运行命令|执行命令|terminal|shell|bash|zsh|command line|run command|run[_\s-]?command|mastra[_\s-]?workspace[_\s-]?execute[_\s-]?command|npm\s+run|bun\s+run|\bnode\s+["']?.+\.m?(?:js|ts)\b|dedupe|duplicate|checksum|hash|bulk\s+(?:process|cleanup)|batch\s+(?:process|cleanup)|empty\s+(?:the\s+)?(?:trash|recycle\s+bin)|clear\s+(?:the\s+)?(?:trash|recycle\s+bin)|(?:move|rename|copy|delete|remove|relocate)\s+(?:file|files|folder|folders|directory|directories|path)|(?:move|rename|copy|delete|remove|relocate).{0,20}(?:\/|~\/|[A-Za-z]:\\)|(?:\/|~\/|[A-Za-z]:\\).{0,20}(?:move|rename|copy|delete|remove|relocate)|去重|重复|相似(?:文件|图片)|批量(?:处理|清理)|清空(?:回收站|垃圾桶)|(?:移动|迁移|重命名|复制|拷贝|删除|移除).{0,12}(?:文件|文件夹|目录|路径)|(?:移动|迁移|重命名|复制|拷贝|删除|移除).{0,20}(?:\/|~\/|[A-Za-z]:\\)|(?:\/|~\/|[A-Za-z]:\\).{0,20}(?:移动|迁移|重命名|复制|拷贝|删除|移除))/i;
 const HOST_CONTROL_PATTERN = /(关机|重启|清空(?:回收站|垃圾桶)|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b|\bempty\s+(?:the\s+)?(?:trash|recycle\s+bin)\b|\bclear\s+(?:the\s+)?(?:trash|recycle\s+bin)\b)/i;
@@ -47,7 +49,7 @@ const WEB_RESEARCH_PATTERN = /(\bweb\s*(research|search|lookup|news|data)\b|\bon
 const MARKET_QUERY_PATTERN = /(股价|港股|美股|a股|买入|卖出|持有|目标价|估值|市盈率|ticker|stock|stocks|market|equity|quote|analyst|rating)/i;
 const VOICE_PATTERN = /(语音|朗读|读给我听|播报|tts|text-to-speech|voice\s*(read|speak|tts)?|speak\s+(?:it|this|that)\s+aloud|read\s+(?:it|this|that)\s+aloud)/i;
 const HIGH_RISK_ACTION_PATTERN = /(删除|移除|drop\s+table|rm\s+-rf|publish|发帖|发布到|send email|付款|payment)/i;
-const MANUAL_ACTION_PATTERN = /(登录|验证码|captcha|手动|人工|approve|approval|确认后再|先让我看)/i;
+const MANUAL_ACTION_PATTERN = /(登录|验证码|captcha|手动|人工|manual\s+review|needs\s+manual|requires\s+manual|approve|approval|确认后再|先让我看)/i;
 const AUTH_PATTERN = /(登录|授权|auth|oauth|token|session|cookie|验证码|captcha)/i;
 const SELF_MANAGEMENT_PATTERN = /toolpack|skill|workspace 管理|workspace management/i;
 const PARALLEL_PATTERN = /(并行|同时|parallel|concurrently|in parallel)/i;
@@ -190,6 +192,58 @@ function inferPreferredTools(signals: IntentSignals, publishIntent?: PublishInte
     if (tools.length === 0) tools.push('list_dir');
     return dedupe(tools);
 }
+
+function buildExecutionRequirements(signals: IntentSignals): TaskExecutionRequirement[] {
+    const requirements: Array<{
+        capability: TaskEvidenceCapability;
+        reason: string;
+    }> = [];
+    if (signals.webResearch || signals.market) {
+        requirements.push({
+            capability: 'web_research',
+            reason: 'External or time-sensitive research must be backed by web/tool evidence.',
+        });
+    }
+    if (signals.browser) {
+        requirements.push({
+            capability: 'browser_automation',
+            reason: 'Browser tasks must show browser automation evidence.',
+        });
+    }
+    if (signals.shell) {
+        requirements.push({
+            capability: 'command_execution',
+            reason: 'Shell or host operations must show command execution evidence.',
+        });
+    }
+    if (signals.fileWrite || signals.code) {
+        requirements.push({
+            capability: 'artifact_write',
+            reason: 'File/code change tasks must show artifact write evidence.',
+        });
+    }
+    if (signals.fileRead) {
+        requirements.push({
+            capability: 'filesystem_read',
+            reason: 'Filesystem inspection tasks must show file read/list evidence.',
+        });
+    }
+    if (signals.voice) {
+        requirements.push({
+            capability: 'voice_output',
+            reason: 'Voice output requests must show voice/tts evidence.',
+        });
+    }
+    return Array.from(new Map(requirements.map((item) => [item.capability, item])).values())
+        .map((item) => ({
+            id: randomUUID(),
+            kind: 'tool_evidence',
+            capability: item.capability,
+            required: true,
+            reason: item.reason,
+        }));
+}
+
 function inferPreferredSkills(signals: IntentSignals, mode: NormalizedWorkRequest['mode']): string[] {
     const skills: string[] = [];
     if (signals.code) {
@@ -219,6 +273,7 @@ function buildTask(input: {
         preferredSkills: inferPreferredSkills(signals, input.mode),
         preferredTools: inferPreferredTools(signals, input.publishIntent),
         sourceUrls: urls.length > 0 ? urls : undefined,
+        executionRequirements: buildExecutionRequirements(signals),
     };
 }
 function buildTasksFromScheduledIntent(input: {
@@ -396,6 +451,34 @@ function buildUserActions(input: {
     }
     return [];
 }
+function shouldRequireTaskDraft(input: {
+    mode: NormalizedWorkRequest['mode'];
+    tasks: TaskDefinition[];
+    clarification: ClarificationDecision;
+    signals: IntentSignals;
+    hitlPolicy: HitlPolicy;
+    publishIntent?: PublishIntent;
+}): boolean {
+    if (input.clarification.required) {
+        return true;
+    }
+    if (input.mode === 'scheduled_task' || input.mode === 'scheduled_multi_task') {
+        return true;
+    }
+    if (input.tasks.length > 1 || input.signals.parallel || input.signals.chain) {
+        return true;
+    }
+    if (input.signals.fileWrite || input.signals.code || input.signals.highRisk) {
+        return true;
+    }
+    if (input.signals.manualAction || input.signals.auth) {
+        return true;
+    }
+    if (input.publishIntent?.requiresSideEffect) {
+        return true;
+    }
+    return input.hitlPolicy.riskTier !== 'low' || input.hitlPolicy.requiresPlanConfirmation;
+}
 function resolveMode(input: {
     text: string;
     scheduledIntent: ParsedScheduledIntent | null;
@@ -406,6 +489,9 @@ function resolveMode(input: {
         return (input.scheduledIntent.chainedStages?.length ?? 0) > 0
             ? 'scheduled_multi_task'
             : 'scheduled_task';
+    }
+    if (forcedMode === 'scheduled_task') {
+        return 'scheduled_task';
     }
     if (forcedMode) {
         return forcedMode;
@@ -546,6 +632,14 @@ export function analyzeWorkRequest(input: {
     });
     const checkpoints = buildCheckpoints({ clarification, hitlPolicy, publishIntent });
     const userActionsRequired = buildUserActions({ clarification, checkpoints, signals });
+    const taskDraftRequired = shouldRequireTaskDraft({
+        mode,
+        tasks,
+        clarification,
+        signals,
+        hitlPolicy,
+        publishIntent,
+    });
     const seedEvidence: ResearchEvidence = {
         id: randomUUID(),
         kind: 'context_research',
@@ -577,7 +671,7 @@ export function analyzeWorkRequest(input: {
         schemaVersion: 1,
         mode,
         intentRouting,
-        taskDraftRequired: clarification.required,
+        taskDraftRequired,
         sourceText,
         workspacePath: input.workspacePath,
         environmentContext: input.environmentContext,
@@ -727,6 +821,9 @@ export function buildExecutionQueryForTaskIds(
             if (task.constraints.length > 0) lines.push(`Constraints: ${task.constraints.join('; ')}`);
             if (task.acceptanceCriteria.length > 0) lines.push(`Acceptance criteria: ${task.acceptanceCriteria.join('; ')}`);
             if (task.sourceUrls?.length) lines.push(`Reference URLs: ${task.sourceUrls.join('; ')}`);
+            if (task.executionRequirements?.length) {
+                lines.push(`Required evidence: ${task.executionRequirements.map((requirement) => `${requirement.capability} (${requirement.reason})`).join('; ')}`);
+            }
             if (includeGlobalContracts && (request.deliverables?.length ?? 0) > 0) {
                 lines.push(`Deliverables: ${request.deliverables!.map((d) => (d.path ? `${d.title} (${d.path})` : d.title)).join('; ')}`);
             }

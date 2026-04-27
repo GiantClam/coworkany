@@ -22,6 +22,8 @@ export interface ExecuteTaskToolEvidence {
     toolCallCount: number;
     commandToolCallCount: number;
     toolNames: string[];
+    satisfiedCapabilities: string[];
+    missingCapabilities: string[];
 }
 export interface ExecuteTaskOutput {
     result: string;
@@ -31,6 +33,11 @@ export interface ExecuteTaskOutput {
 
 const COMMAND_EXECUTION_CAPABILITY = 'command_execution';
 const COMMAND_EXECUTION_TOOL_PATTERN = /\b(mastra_workspace_execute_command|run_command|bash|bash_approval|shell(?:[_\s-]?command)?|terminal(?:[_\s-]?command)?)\b/i;
+const WEB_RESEARCH_TOOL_PATTERN = /\b(search_web|websearch|crawl_url|get_news|check_weather|finance|quote|ticker|stock|market|weather|forecast|browser_search|web[_-]?research)\b/i;
+const BROWSER_AUTOMATION_TOOL_PATTERN = /\b(browser_[a-z_]+|playwright|navigate|screenshot|click|fill|browser_navigate|browser_screenshot|browser_click|browser_fill)\b/i;
+const VOICE_OUTPUT_TOOL_PATTERN = /\b(voice_speak|tts|text[-_]?to[-_]?speech|speak|read[_-]?aloud)\b/i;
+const ARTIFACT_WRITE_TOOL_PATTERN = /\b(write_to_file|replace_file_content|append_to_file|move_file|delete_path|apply_patch|mastra_workspace_write_file|mastra_workspace_replace_in_file|mastra_workspace_rename_file|mastra_workspace_delete_file)\b/i;
+const FILESYSTEM_READ_TOOL_PATTERN = /\b(list_dir|view_file|read_file|mastra_workspace_list_files|mastra_workspace_read_file|mastra_workspace_file_stat|file_stat)\b/i;
 const WORKSPACE_EXECUTE_COMMAND_TOOL = 'mastra_workspace_execute_command';
 const MAX_TOOL_EVIDENCE_SCAN_DEPTH = 8;
 const MAX_TOOL_EVIDENCE_SCAN_ITEMS = 512;
@@ -152,6 +159,54 @@ function buildToolEvidence(toolNames: Set<string>): ExecuteTaskToolEvidence {
         toolCallCount: normalized.length,
         commandToolCallCount,
         toolNames: normalized,
+        satisfiedCapabilities: [],
+        missingCapabilities: [],
+    };
+}
+
+function toolNameSatisfiesCapability(toolName: string, capability: string): boolean {
+    if (capability === COMMAND_EXECUTION_CAPABILITY) {
+        return COMMAND_EXECUTION_TOOL_PATTERN.test(toolName);
+    }
+    if (capability === 'web_research') {
+        return WEB_RESEARCH_TOOL_PATTERN.test(toolName);
+    }
+    if (capability === 'browser_automation') {
+        return BROWSER_AUTOMATION_TOOL_PATTERN.test(toolName);
+    }
+    if (capability === 'voice_output') {
+        return VOICE_OUTPUT_TOOL_PATTERN.test(toolName);
+    }
+    if (capability === 'artifact_write') {
+        return ARTIFACT_WRITE_TOOL_PATTERN.test(toolName);
+    }
+    if (capability === 'filesystem_read') {
+        return FILESYSTEM_READ_TOOL_PATTERN.test(toolName);
+    }
+    return false;
+}
+
+function annotateCapabilityCoverage(input: {
+    toolEvidence: ExecuteTaskToolEvidence;
+    requiredCapabilities: Set<string>;
+}): ExecuteTaskToolEvidence {
+    if (input.requiredCapabilities.size === 0) {
+        return {
+            ...input.toolEvidence,
+            satisfiedCapabilities: [],
+            missingCapabilities: [],
+        };
+    }
+    const satisfiedCapabilities = [...input.requiredCapabilities]
+        .filter((capability) => input.toolEvidence.toolNames.some((toolName) => (
+            toolNameSatisfiesCapability(toolName, capability)
+        )));
+    const missingCapabilities = [...input.requiredCapabilities]
+        .filter((capability) => !satisfiedCapabilities.includes(capability));
+    return {
+        ...input.toolEvidence,
+        satisfiedCapabilities,
+        missingCapabilities,
     };
 }
 
@@ -375,6 +430,8 @@ async function tryAttachmentVideoMergeDeterministicFallback(input: {
             toolCallCount: 1,
             commandToolCallCount: 1,
             toolNames: [WORKSPACE_EXECUTE_COMMAND_TOOL],
+            satisfiedCapabilities: [COMMAND_EXECUTION_CAPABILITY],
+            missingCapabilities: [],
         },
     };
 }
@@ -463,21 +520,27 @@ async function resolveAttachmentPathForVideoMerge(candidatePath: string): Promis
 function buildExecutionPrompt(input: {
     executionQuery: string;
     requiresCommandExecutionEvidence: boolean;
+    requiredCapabilities: string[];
     attempt: number;
 }): string {
-    if (!input.requiresCommandExecutionEvidence) {
+    if (!input.requiresCommandExecutionEvidence && input.requiredCapabilities.length === 0) {
         return input.executionQuery;
     }
     const contractLines = [
         '',
         'Execution contract (hard requirement):',
-        '- Before finishing, you MUST call a command-execution tool (`mastra_workspace_execute_command` or `run_command`).',
+        `- Required tool evidence capabilities: ${input.requiredCapabilities.join(', ') || COMMAND_EXECUTION_CAPABILITY}.`,
         '- Narrative-only completion is invalid for this task.',
-        '- After the command runs, summarize the result and concrete output path(s).',
     ];
+    if (input.requiresCommandExecutionEvidence) {
+        contractLines.push(
+            '- Before finishing, you MUST call a command-execution tool (`mastra_workspace_execute_command` or `run_command`).',
+            '- After the command runs, summarize the result and concrete output path(s).',
+        );
+    }
     if (input.attempt > 0) {
         contractLines.push(
-            '- Recovery note: previous attempt had no command tool evidence. Run the command first in this attempt.',
+            '- Recovery note: previous attempt missed required tool evidence. Call the required tool type before finalizing.',
         );
     }
     return `${input.executionQuery}${contractLines.join('\n')}`;
@@ -504,6 +567,8 @@ export async function executeFrozenTask(input: {
                 toolCallCount: 0,
                 commandToolCallCount: 0,
                 toolNames: [],
+                satisfiedCapabilities: [],
+                missingCapabilities: [],
             },
         };
     }
@@ -548,6 +613,8 @@ export async function executeFrozenTask(input: {
         toolCallCount: 0,
         commandToolCallCount: 0,
         toolNames: [],
+        satisfiedCapabilities: [],
+        missingCapabilities: [],
     };
     for (let attempt = 0; attempt <= executeStepRetryCount; attempt += 1) {
         const abortController = new AbortController();
@@ -556,6 +623,7 @@ export async function executeFrozenTask(input: {
         const prompt = buildExecutionPrompt({
             executionQuery: input.task.executionQuery,
             requiresCommandExecutionEvidence,
+            requiredCapabilities: [...requiredCapabilities],
             attempt,
         });
         try {
@@ -605,31 +673,33 @@ export async function executeFrozenTask(input: {
                 value: output,
                 target: observedToolNames,
             });
-            toolEvidence = buildToolEvidence(observedToolNames);
+            toolEvidence = annotateCapabilityCoverage({
+                toolEvidence: buildToolEvidence(observedToolNames),
+                requiredCapabilities,
+            });
             if (requiredCapabilities.size > 0) {
-                const hasAnyRequiredToolEvidence = toolEvidence.toolCallCount > 0;
-                const hasRequiredCommandEvidence = !requiresCommandExecutionEvidence
-                    || toolEvidence.commandToolCallCount > 0;
-                if (!hasAnyRequiredToolEvidence || !hasRequiredCommandEvidence) {
-                    const missingLabel = requiresCommandExecutionEvidence
-                        ? COMMAND_EXECUTION_CAPABILITY
-                        : [...requiredCapabilities].join(',');
+                if (toolEvidence.missingCapabilities.length > 0) {
+                    const missingLabel = toolEvidence.missingCapabilities.join(',');
                     const evidenceError = new Error(`workflow_missing_required_tool_evidence:${missingLabel}`);
                     lastError = evidenceError;
                     const canRetry = attempt < executeStepRetryCount;
                     if (!canRetry) {
-                        const fallbackResult = await tryAttachmentVideoMergeDeterministicFallback({
-                            queryCandidates: [
-                                input.task.originalMessage,
-                                input.task.executionQuery,
-                                input.task.frozen.sourceText,
-                                ...((Array.isArray(input.task.frozen.tasks) ? input.task.frozen.tasks : [])
-                                    .flatMap((task) => task.resolvedTargets ?? [])),
-                            ].filter((value): value is string => typeof value === 'string'),
-                            workspacePath: input.workspacePath,
-                        });
-                        if (fallbackResult) {
-                            return fallbackResult;
+                        const canUseCommandOnlyFallback = toolEvidence.missingCapabilities.length === 1
+                            && toolEvidence.missingCapabilities[0] === COMMAND_EXECUTION_CAPABILITY;
+                        if (canUseCommandOnlyFallback) {
+                            const fallbackResult = await tryAttachmentVideoMergeDeterministicFallback({
+                                queryCandidates: [
+                                    input.task.originalMessage,
+                                    input.task.executionQuery,
+                                    input.task.frozen.sourceText,
+                                    ...((Array.isArray(input.task.frozen.tasks) ? input.task.frozen.tasks : [])
+                                        .flatMap((task) => task.resolvedTargets ?? [])),
+                                ].filter((value): value is string => typeof value === 'string'),
+                                workspacePath: input.workspacePath,
+                            });
+                            if (fallbackResult) {
+                                return fallbackResult;
+                            }
                         }
                         throw evidenceError;
                     }

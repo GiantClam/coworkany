@@ -146,6 +146,18 @@ function normalizeErrorCode(errorCode: string | undefined): string {
     return (errorCode ?? '').trim().toUpperCase();
 }
 
+function humanizeProtocolFailure(errorText: string, errorCode: string): string {
+    const normalized = errorText.trim();
+    const normalizedLower = normalized.toLowerCase();
+    if (
+        normalizedLower.startsWith('workflow_missing_required_tool_evidence')
+        || errorCode === 'E_PROTOCOL_MISSING_TOOL_EVIDENCE'
+    ) {
+        return 'Required execution steps did not run before the task reported completion.';
+    }
+    return normalized;
+}
+
 function normalizeFailureClass(value: string | undefined): string {
     return (value ?? '').trim().toLowerCase();
 }
@@ -187,8 +199,10 @@ export function formatTaskFailureDetails(
     const suggestion = (failure?.suggestion ?? '').trim();
     const failureClass = normalizeFailureClass(failure?.failureClass);
 
-    if (errorText) {
-        appendUniqueLine(lines, includePrefix ? `Task failed: ${errorText}` : errorText);
+    const readableErrorText = humanizeProtocolFailure(errorText, errorCode);
+
+    if (readableErrorText) {
+        appendUniqueLine(lines, includePrefix ? `Task failed: ${readableErrorText}` : readableErrorText);
     } else if (options.fallbackDescription.trim().length > 0) {
         appendUniqueLine(lines, options.fallbackDescription);
     }
@@ -218,9 +232,9 @@ export function getTaskFailureUiDescriptor(
         return {
             category: 'suspended',
             action: 'retry',
-            titleKey: 'chat.failureRetryableTitle',
+            titleKey: 'chat.failureSuspendedTitle',
             titleDefault: 'Task suspended',
-            descriptionKey: 'chat.failureRetryableDesc',
+            descriptionKey: 'chat.failureSuspendedDesc',
             descriptionDefault: session.suspension.userMessage || 'Task is suspended and can be resumed by retrying.',
             actionLabelKey: 'chat.failureActionRetry',
             actionLabelDefault: 'Retry',

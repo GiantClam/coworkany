@@ -685,6 +685,46 @@ const AssistantStructuredDetails: React.FC<AssistantStructuredDetailsProps> = ({
                                 </div>
                             </>
                         ) : null}
+                        {structured.task.items && structured.task.items.length > 0 ? (
+                            <div className={styles.taskDetailList}>
+                                {structured.task.items.slice(0, 6).map((item) => (
+                                    <div key={`${item.title}-${item.status}`} className={styles.taskDetailItem}>
+                                        <span className={styles.taskDetailTitle}>{item.title}</span>
+                                        <span className={styles.taskDetailStatus}>{item.status}</span>
+                                        {item.dependencies ? (
+                                            <span className={styles.structuredSubline}>Depends on: {item.dependencies}</span>
+                                        ) : null}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
+                        {structured.task.sections && structured.task.sections.length > 0 ? (
+                            <div className={styles.taskDetailSections}>
+                                {structured.task.sections.slice(0, 3).map((section) => (
+                                    <section key={section.label} className={styles.taskDetailSection}>
+                                        <span className={styles.taskDetailSectionLabel}>{section.label}</span>
+                                        {section.lines.map((line) => (
+                                            <span key={`${section.label}-${line}`} className={styles.structuredSubline}>{line}</span>
+                                        ))}
+                                    </section>
+                                ))}
+                            </div>
+                        ) : null}
+                        {structured.task.collaboration ? (
+                            <section className={styles.taskDetailSection}>
+                                <span className={styles.taskDetailSectionLabel}>Collaboration</span>
+                                <strong className={styles.taskDetailTitle}>{structured.task.collaboration.title}</strong>
+                                {structured.task.collaboration.description ? (
+                                    <span className={styles.structuredSubline}>{structured.task.collaboration.description}</span>
+                                ) : null}
+                                {[
+                                    ...structured.task.collaboration.questions,
+                                    ...structured.task.collaboration.instructions,
+                                ].slice(0, 4).map((line) => (
+                                    <span key={line} className={styles.structuredSubline}>{line}</span>
+                                ))}
+                            </section>
+                        ) : null}
                     </div>
                 </AssistantUiStructuredCard>
             )}

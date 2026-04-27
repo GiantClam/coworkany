@@ -252,18 +252,6 @@ export function buildTaskCardViewModel(
         }))
         .filter((section) => section.lines.length > 0 && !hiddenSectionLabels.has(section.label));
 
-    const displayedTasks = isSimplifiedTaskCenterCard ? (item.tasks ?? []).slice(0, 3) : (item.tasks ?? []);
-    const hiddenTaskCount = Math.max((item.tasks?.length ?? 0) - displayedTasks.length, 0);
-    const taskItems = displayedTasks.map((task) => ({
-        id: task.id,
-        title: sanitizeDisplayText(task.title),
-        statusKey: task.status,
-        statusLabel: taskStatusLabel(task.status),
-        dependenciesText: !isSimplifiedTaskCenterCard && task.dependencies.length > 0
-            ? `Depends on: ${task.dependencies.join(', ')}`
-            : undefined,
-    }));
-
     const resultLines = [
         item.result?.summary || '',
         ...(item.result?.artifacts ?? []).map((artifact) => `Artifact: ${artifact}`),
@@ -363,10 +351,6 @@ export function buildTaskCardViewModel(
         }
         : undefined;
 
-    const presentation: TaskCardViewModel['presentation'] = isSimplifiedTaskCenterCard
-        ? (collaboration ? 'input_panel' : 'hidden')
-        : 'card';
-
     const profileSection = executionProfileLines.length > 0
         ? {
             label: 'Execution profile',
@@ -379,6 +363,33 @@ export function buildTaskCardViewModel(
             lines: capabilityPlanLines,
         }
         : undefined;
+    const inputFirstCollaboration = collaboration && (
+        collaboration.actionId === 'intent_route'
+        || collaboration.actionId === 'task_draft_confirm'
+        || collaboration.hasAuthOpenChoice
+    );
+    const shouldExpandDenseTaskCenter = isSimplifiedTaskCenterCard
+        && !inputFirstCollaboration
+        && (
+            (item.tasks?.length ?? 0) > 3
+            || sectionViews.length > 1
+            || Boolean(profileSection)
+            || Boolean(capabilitySection)
+        );
+    const presentation: TaskCardViewModel['presentation'] = isSimplifiedTaskCenterCard
+        ? (shouldExpandDenseTaskCenter ? 'card' : (collaboration ? 'input_panel' : 'hidden'))
+        : 'card';
+    const displayedTasks = isSimplifiedTaskCenterCard && !shouldExpandDenseTaskCenter ? (item.tasks ?? []).slice(0, 3) : (item.tasks ?? []);
+    const hiddenTaskCount = Math.max((item.tasks?.length ?? 0) - displayedTasks.length, 0);
+    const taskItems = displayedTasks.map((task) => ({
+        id: task.id,
+        title: sanitizeDisplayText(task.title),
+        statusKey: task.status,
+        statusLabel: taskStatusLabel(task.status),
+        dependenciesText: (!isSimplifiedTaskCenterCard || shouldExpandDenseTaskCenter) && task.dependencies.length > 0
+            ? `Depends on: ${task.dependencies.join(', ')}`
+            : undefined,
+    }));
     const trimmedSections = presentation === 'card'
         ? ([profileSection, capabilitySection, ...sectionViews].filter(Boolean) as TaskCardSectionViewModel[])
         : [];

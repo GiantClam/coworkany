@@ -1,5 +1,4 @@
-import { globalToolRegistry } from '../tools/registry';
-import { STANDARD_TOOLS } from '../tools/standard';
+import { resolveCoworkAnyMastraToolMetadata } from './tools/coworkanyToolRegistry';
 
 export type RuntimeResolvedTool = {
     name: string;
@@ -40,13 +39,12 @@ export function resolveRuntimeInternalTool(toolName: string): RuntimeResolvedToo
     if (normalizedToolName.length === 0) {
         return undefined;
     }
-    const registered = globalToolRegistry.getTool(normalizedToolName)
-        ?? STANDARD_TOOLS.find((tool) => tool.name === normalizedToolName);
-    if (registered) {
+    const mastraRegistered = resolveCoworkAnyMastraToolMetadata(normalizedToolName);
+    if (mastraRegistered) {
         return {
-            name: registered.name,
-            description: registered.description,
-            effects: [...registered.effects],
+            name: mastraRegistered.id,
+            description: mastraRegistered.description,
+            effects: [...mastraRegistered.effects],
         };
     }
     return DECLARED_INTERNAL_TOOL_FALLBACKS[normalizedToolName];

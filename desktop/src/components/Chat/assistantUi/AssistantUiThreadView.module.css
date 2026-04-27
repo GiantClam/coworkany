@@ -575,6 +575,43 @@
     line-height: 1.4;
 }
 
+.taskDetailList,
+.taskDetailSections {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.taskDetailItem,
+.taskDetailSection {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+    border-radius: 10px;
+    padding: 7px 9px;
+    background: color-mix(in srgb, var(--bg-element) 72%, transparent);
+}
+
+.taskDetailTitle {
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 560;
+    line-height: 1.35;
+}
+
+.taskDetailStatus,
+.taskDetailSectionLabel {
+    align-self: flex-start;
+    color: var(--text-muted);
+    font-family: var(--font-code);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
 .runtimeStatusCard {
     border-color: color-mix(in srgb, var(--status-info) 22%, var(--border-subtle));
 }

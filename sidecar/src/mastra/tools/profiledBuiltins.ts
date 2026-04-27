@@ -1,21 +1,19 @@
 import type { Tool } from '@mastra/core/tools';
 import { areBuiltinToolpacksEnabled } from '../../config/runtimeProfile';
-import { rememberTool, recallTool } from './memory';
-import { crawlUrlTool, extractContentTool, searchWebTool } from './research';
-import { voiceSpeakTool } from './voice';
+import { resolveCoworkAnyMastraTools } from './coworkanyToolRegistry';
 
 type AnyMastraTool = Tool<any, any, any, any>;
 
-const BUILTIN_AGENT_TOOLS = {
-    search_web: searchWebTool as AnyMastraTool,
-    crawl_url: crawlUrlTool as AnyMastraTool,
-    extract_content: extractContentTool as AnyMastraTool,
-    remember: rememberTool as AnyMastraTool,
-    recall: recallTool as AnyMastraTool,
-    voice_speak: voiceSpeakTool as AnyMastraTool,
-} as const;
+const BUILTIN_AGENT_TOOL_IDS = [
+    'search_web',
+    'crawl_url',
+    'extract_content',
+    'remember',
+    'recall',
+    'voice_speak',
+] as const;
 
-export type ProfiledBuiltinAgentToolId = keyof typeof BUILTIN_AGENT_TOOLS;
+export type ProfiledBuiltinAgentToolId = typeof BUILTIN_AGENT_TOOL_IDS[number];
 export type ProfiledBuiltinAgentToolMap = Partial<Record<ProfiledBuiltinAgentToolId, AnyMastraTool>>;
 
 export function resolveProfiledBuiltinAgentTools(options?: {
@@ -26,10 +24,9 @@ export function resolveProfiledBuiltinAgentTools(options?: {
         return {};
     }
 
-    const include = options?.include ?? Object.keys(BUILTIN_AGENT_TOOLS) as ProfiledBuiltinAgentToolId[];
-    const tools: ProfiledBuiltinAgentToolMap = {};
-    for (const toolId of include) {
-        tools[toolId] = BUILTIN_AGENT_TOOLS[toolId];
-    }
-    return tools;
+    const include = options?.include ?? BUILTIN_AGENT_TOOL_IDS;
+    return resolveCoworkAnyMastraTools({
+        env: options?.env,
+        include,
+    }) as ProfiledBuiltinAgentToolMap;
 }

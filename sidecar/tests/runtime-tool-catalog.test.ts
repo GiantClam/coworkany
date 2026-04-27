@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { RequestContext } from '@mastra/core/request-context';
 import type { StoredToolpack } from '../src/storage/toolpackStore';
 import { buildInternalRuntimeToolsets, countToolsInToolsets } from '../src/mastra/runtimeToolCatalog';
 import type { ToolDefinition } from '../src/tools/standard';
 import { resolveRuntimeInternalTool } from '../src/mastra/internalToolResolver';
+import { resolveCoworkAnyMastraTools } from '../src/mastra/tools/coworkanyToolRegistry';
 
 const NOOP_TOOL: ToolDefinition = {
     name: 'list_dir',
@@ -77,5 +82,78 @@ describe('runtime tool catalog', () => {
 
         expect(toolsets['internal:builtin-websearch']?.search_web).toBeDefined();
         expect(countToolsInToolsets(toolsets)).toBe(1);
+    });
+
+    test('core profile resolves baseline standard tools as Mastra tools', () => {
+        const tools = resolveCoworkAnyMastraTools({
+            env: { COWORKANY_RUNTIME_PROFILE: 'core' } as NodeJS.ProcessEnv,
+        });
+
+        expect(Object.keys(tools).sort()).toEqual([
+            'list_dir',
+            'replace_file_content',
+            'run_command',
+            'view_file',
+            'write_to_file',
+        ]);
+    });
+
+    test('full profile resolves all standard tools as Mastra tools', () => {
+        const tools = resolveCoworkAnyMastraTools({
+            env: { COWORKANY_RUNTIME_PROFILE: 'full' } as NodeJS.ProcessEnv,
+        });
+
+        expect(Object.keys(tools).sort()).toEqual([
+            'batch_delete_paths',
+            'batch_move_files',
+            'compute_file_hash',
+            'crawl_url',
+            'create_directory',
+            'delete_path',
+            'extract_content',
+            'list_dir',
+            'move_file',
+            'recall',
+            'remember',
+            'replace_file_content',
+            'run_command',
+            'search_web',
+            'view_file',
+            'voice_speak',
+            'write_to_file',
+        ]);
+    });
+
+    test('builtin research tools expose web research metadata through internal resolver', () => {
+        const resolved = resolveRuntimeInternalTool('search_web');
+
+        expect(resolved?.name).toBe('search_web');
+        expect(resolved?.effects).toContain('network:outbound');
+    });
+
+    test('standard tool aliases resolve to canonical Mastra tool metadata', () => {
+        const resolved = resolveRuntimeInternalTool('bash');
+
+        expect(resolved?.name).toBe('run_command');
+        expect(resolved?.effects).toContain('process:spawn');
+        expect(resolved?.effects).toContain('code:execute');
+    });
+
+    test('standard Mastra tools execute with CoworkAny request context', async () => {
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-mastra-standard-tool-'));
+        fs.writeFileSync(path.join(workspace, 'note.txt'), 'hello from standard mastra tool', 'utf8');
+        const requestContext = new RequestContext();
+        requestContext.set('workspacePath', workspace);
+        requestContext.set('taskId', 'task-standard-mastra-tool');
+        const tools = resolveCoworkAnyMastraTools({ include: ['view_file'] });
+        const viewFile = tools.view_file;
+
+        expect(viewFile?.execute).toBeDefined();
+        const result = await viewFile?.execute?.(
+            { path: 'note.txt' },
+            { requestContext } as any,
+        );
+
+        expect(result).toBe('hello from standard mastra tool');
     });
 });

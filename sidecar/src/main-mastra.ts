@@ -4,9 +4,7 @@ import { getMastraHealth } from './mastra';
 import { handleApprovalResponse, handleUserMessage, rewindTaskContextCompression, warmupChatRuntime } from './ipc/streaming';
 import { createMastraEntrypointProcessor } from './mastra/entrypoint';
 import { createVoiceProviderBindings } from './mastra/runtimeBindings';
-import { getVoicePlaybackState, stopVoicePlayback } from './tools/core/voice';
-import { globalToolRegistry } from './tools/registry';
-import { STANDARD_TOOLS } from './tools/standard';
+import { configureVoiceProviders, getVoicePlaybackState, stopVoicePlayback } from './tools/core/voice';
 import { createMastraAdditionalCommandHandler } from './mastra/additionalCommands';
 import { createMastraSchedulerRuntime } from './mastra/schedulerRuntime';
 import {
@@ -36,6 +34,7 @@ import {
     countToolsInToolsets,
     describeRuntimeToolpackState,
 } from './mastra/runtimeToolCatalog';
+import { resolveVoiceProviderMastraToolDefinition } from './mastra/voiceProviderToolResolver';
 const workspaceRoot = process.cwd();
 const appDataRoot = resolveRuntimeAppDataRoot({ cwd: workspaceRoot });
 const llmEnvSeedResult = seedRuntimeLlmEnvFromConfig({
@@ -76,6 +75,13 @@ const taskExecutionService = createMastraTaskExecutionService();
 const schedulerDisabled = /^(1|true|yes|on)$/i.test(
     (process.env.COWORKANY_DISABLE_SCHEDULER ?? '').trim(),
 );
+const listEnabledSkills = () => additionalCommandRuntime.skillStore.listEnabled();
+const getVoiceProviderToolByName = (toolName: string) => resolveVoiceProviderMastraToolDefinition(toolName);
+
+configureVoiceProviders({
+    listEnabledSkills,
+    getToolByName: getVoiceProviderToolByName,
+});
 
 function resolveInternalToolDefinition(toolName: string) {
     return resolveRuntimeInternalTool(toolName);
@@ -126,11 +132,8 @@ async function run(): Promise<void> {
         stopVoicePlayback,
         getVoicePlaybackState,
         ...createVoiceProviderBindings({
-            listEnabledSkills: () => additionalCommandRuntime.skillStore.listEnabled(),
-            getToolByName: (toolName) => (
-                globalToolRegistry.getTool(toolName)
-                ?? STANDARD_TOOLS.find((tool) => tool.name === toolName)
-            ),
+            listEnabledSkills,
+            getToolByName: getVoiceProviderToolByName,
             workspaceRoot,
         }),
         scheduleTaskIfNeeded: async (input) => {

@@ -127,11 +127,9 @@ describe('Command Sandbox Integration', () => {
         expect(content).toContain('PYTHONDONTWRITEBYTECODE');
     });
 
-    test('mastra bash tool enforces PYTHONDONTWRITEBYTECODE by default', () => {
-        const content = fs.readFileSync(
-            path.resolve(__dirname, '../src/mastra/tools/bash.ts'),
-            'utf-8'
-        );
-        expect(content).toContain('PYTHONDONTWRITEBYTECODE');
+    test('legacy mastra bash tool file is not part of the runtime surface', () => {
+        expect(fs.existsSync(
+            path.resolve(__dirname, '../src/mastra/tools/bash.ts')
+        )).toBe(false);
     });
 });

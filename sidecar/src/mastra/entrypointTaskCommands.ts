@@ -75,6 +75,8 @@ type TaskCapabilityGateResult = {
     summary?: string;
 };
 
+type ExecutionForcedRouteMode = NonNullable<UserMessageExecutionOptions['forcedRouteMode']>;
+
 type TaskTranscriptHistoryEntry = {
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -944,6 +946,18 @@ function resolveStartTaskIntentRoute(input: {
     };
 }
 
+function toExecutionForcedRouteMode(
+    routeMode: 'chat' | 'task' | 'schedule' | null | undefined,
+): ExecutionForcedRouteMode | null {
+    if (routeMode === 'chat') {
+        return 'chat';
+    }
+    if (routeMode === 'task' || routeMode === 'schedule') {
+        return 'task';
+    }
+    return null;
+}
+
 const TASK_ROUTE_CONTINUITY_STATUSES = new Set<TaskRuntimeState['status']>([
     'running',
     'retrying',
@@ -1067,7 +1081,9 @@ export async function handleStartOrSendTaskCommand(
     const appendUserTranscript = (): void => {
         input.appendTranscript(taskId, 'user', normalizedMessage);
     };
-    const workspacePath = input.getString(input.toRecord(payload.context).workspacePath) ?? process.cwd();
+    const workspacePath = input.getString(input.toRecord(payload.context).workspacePath)
+        ?? previousState?.workspacePath
+        ?? process.cwd();
     const inferredCapabilityRequirements = resolveTaskCapabilityRequirements({
         message: effectiveMessage,
         workspacePath,
@@ -1093,13 +1109,14 @@ export async function handleStartOrSendTaskCommand(
     )
         ? 'direct'
         : inheritedExecutionPath;
+    const routedForcedRouteMode = toExecutionForcedRouteMode(routedMessage.forcedRouteMode);
     const followupRouteMode = resolveFollowupRouteMode({
         commandType,
-        routedForcedRouteMode: routedMessage.forcedRouteMode,
+        routedForcedRouteMode,
         previousState,
     });
     let resolvedExecutionPath = configuredExecutionPath ?? defaultExecutionPath;
-    let resolvedForcedRouteMode = routedMessage.forcedRouteMode ?? (
+    let resolvedForcedRouteMode = routedForcedRouteMode ?? (
         commandType === 'start_task'
             ? (resolvedExecutionPath === 'direct' ? 'chat' : 'task')
             : followupRouteMode
@@ -1456,9 +1473,19 @@ export async function handleStartOrSendTaskCommand(
         });
     }
 
+    const inheritedRequiredCompletionCapabilities = (
+        isFollowupCommand
+        && previousState?.turnContract?.mode === 'task'
+        && executionOptions.forcedRouteMode === 'task'
+    )
+        ? normalizeCapabilityValues(previousState.turnContract.requiredCapabilities)
+        : [];
+    const baseRequiredCompletionCapabilities = (executionOptions.requiredCompletionCapabilities ?? []).length > 0
+        ? (executionOptions.requiredCompletionCapabilities ?? [])
+        : inheritedRequiredCompletionCapabilities;
     const augmentedRequiredCompletionCapabilities = maybeAppendArtifactWriteCapability(
         effectiveMessage,
-        executionOptions.requiredCompletionCapabilities ?? [],
+        baseRequiredCompletionCapabilities,
     );
     setRequiredCompletionCapabilities(augmentedRequiredCompletionCapabilities);
     const turnContract = buildTaskTurnContract({

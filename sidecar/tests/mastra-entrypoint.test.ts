@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import {
     createMastraEntrypointProcessor,
     deriveHostControlShellCommand,
@@ -11,6 +12,7 @@ import {
 import type { DesktopEvent } from '../src/ipc/bridge';
 import { MastraRemoteSessionStore } from '../src/mastra/remoteSessionStore';
 import type { TaskRuntimeState } from '../src/mastra/taskRuntimeState';
+import { resolveSupervisorIterationDecision } from '../src/mastra/agents/iterationPolicy';
 
 function toRecord(value: unknown): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -77,6 +79,36 @@ type HookEvent = {
     traceId?: string;
     payload?: Record<string, unknown>;
 };
+type RealAgentLoopReplayCase = {
+    id: string;
+    sourceThreadId: string;
+    sourceRecoveryThreadId: string;
+    failureClass: string;
+    userMessage: string;
+    firstRoundAssistantText: string;
+    manualExecutionAssistantText?: string;
+    followupUserMessages?: string[];
+    permissionRepairAssistantText?: string;
+    failedCommand: string;
+    failedErrorSnippet: string;
+    expectedCorrectedCommandContains: string[];
+    secondRoundSummary: string;
+    expectedFinishedEvent: 'TASK_FINISHED';
+};
+type RealAgentLoopReplayFixture = {
+    source: string;
+    capturedAt: string;
+    cases: RealAgentLoopReplayCase[];
+};
+
+function loadRealAgentLoopReplayFixture(): RealAgentLoopReplayFixture {
+    const fixturePath = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        'fixtures',
+        'real-agent-loop-replay-cases.json',
+    );
+    return JSON.parse(fs.readFileSync(fixturePath, 'utf-8')) as RealAgentLoopReplayFixture;
+}
 
 function createHarness(overrides?: {
     onHandleUserMessage?: (
@@ -598,6 +630,171 @@ describe('mastra entrypoint processor', () => {
         expect(harness.outgoing.some((message) => message.type === 'TASK_STARTED')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TEXT_DELTA')).toBe(true);
         expect(harness.outgoing.some((message) => message.type === 'TASK_FINISHED')).toBe(true);
+    });
+
+    test('real DB replay runs second loop after ffmpeg command failure and emits TASK_FINISHED', async () => {
+        const fixture = loadRealAgentLoopReplayFixture();
+        expect(fixture.source).toContain('.coworkany/data/coworkany.db');
+        const replayCase = fixture.cases.find((entry) =>
+            entry.id === 'thread-03220ed5-ffmpeg-command-failure-second-loop'
+        );
+        expect(replayCase).toBeDefined();
+        if (!replayCase) {
+            return;
+        }
+
+        const iterationDecision = resolveSupervisorIterationDecision({
+            iteration: 2,
+            toolCalls: [],
+            text: replayCase.firstRoundAssistantText,
+            isFinal: false,
+        });
+        expect(iterationDecision?.continue).toBe(true);
+        expect(iterationDecision?.feedback).toContain('Import the failure details');
+        expect(iterationDecision?.feedback).toContain('run the corrected retry command now');
+        if (replayCase.manualExecutionAssistantText) {
+            const manualDelegationDecision = resolveSupervisorIterationDecision({
+                iteration: 3,
+                toolCalls: [],
+                text: replayCase.manualExecutionAssistantText,
+                isFinal: false,
+            });
+            expect(manualDelegationDecision?.continue).toBe(true);
+            expect(manualDelegationDecision?.feedback).toContain('Do not ask the user to run commands manually');
+            expect(manualDelegationDecision?.feedback).toContain('execute the corrected command yourself via tools');
+        }
+        if (replayCase.permissionRepairAssistantText) {
+            const permissionRepairDecision = resolveSupervisorIterationDecision({
+                iteration: 4,
+                toolCalls: [],
+                text: replayCase.permissionRepairAssistantText,
+                isFinal: false,
+            });
+            expect(permissionRepairDecision?.continue).toBe(true);
+            expect(permissionRepairDecision?.feedback).toContain('Do not stop or ask for confirmation');
+            expect(permissionRepairDecision?.feedback).toContain('-framerate 1/5');
+        }
+
+        const correctedCommand = [
+            'ffmpeg -y -framerate 1/5',
+            '-pattern_type glob -i "/Users/beihuang/Library/Application Support/CoworkAny/attachments/2026-04-26/*.png"',
+            '-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"',
+            '-c:v libx264 -r 30 output/merged_images_5s.mp4',
+        ].join(' ');
+        for (const expectedFragment of replayCase.expectedCorrectedCommandContains) {
+            expect(correctedCommand).toContain(expectedFragment);
+        }
+
+        const secondLoopReplayMessage = [
+            replayCase.userMessage,
+            '[Replay first-round failure]',
+            `Failed command: ${replayCase.failedCommand}`,
+            replayCase.failedErrorSnippet,
+            replayCase.firstRoundAssistantText,
+            iterationDecision?.feedback ?? '',
+        ].join('\n\n');
+        const taskId = `replay-${replayCase.id}`;
+        const harness = createHarness({
+            onHandleUserMessage: async (input, emit) => {
+                expect(input.threadId).toBe(taskId);
+                expect(input.resourceId).toBe(`employee-${taskId}`);
+                expect(input.options?.forcedRouteMode).toBe('task');
+                expect(input.options?.requireToolEvidenceForCompletion).toBe(true);
+                expect(input.options?.requiredCompletionCapabilities).toContain('command_execution');
+                expect(input.options?.requiredCompletionCapabilities).toContain('artifact_write');
+                expect(input.message).toContain('Unrecognized option');
+                expect(input.message).toContain('-framerate1/5');
+                expect(input.message).toContain('run the corrected retry command now');
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-real-agent-loop-ffmpeg-second-round',
+                    toolCallId: 'tool-fixed-ffmpeg',
+                    toolName: 'mastra_workspace_execute_command',
+                    args: {
+                        command: correctedCommand,
+                        cwd: '/tmp/coworkany-real-agent-loop-replay',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-real-agent-loop-ffmpeg-second-round',
+                    toolCallId: 'tool-fixed-ffmpeg',
+                    toolName: 'mastra_workspace_execute_command',
+                    result: {
+                        stdout: 'frame=  10 fps=0.0 q=-1.0 Lsize=128kB time=00:00:10.00 bitrate=104.8kbits/s\noutput/merged_images_5s.mp4',
+                        stderr: '',
+                        exitCode: 0,
+                    },
+                    isError: false,
+                });
+                emit({
+                    type: 'tool_call',
+                    runId: 'run-real-agent-loop-ffmpeg-second-round',
+                    toolCallId: 'tool-output-artifact',
+                    toolName: 'mastra_workspace_write_file',
+                    args: {
+                        path: 'output/merged_images_5s.mp4',
+                        content: '<binary video artifact produced by ffmpeg>',
+                    },
+                });
+                emit({
+                    type: 'tool_result',
+                    runId: 'run-real-agent-loop-ffmpeg-second-round',
+                    toolCallId: 'tool-output-artifact',
+                    toolName: 'mastra_workspace_write_file',
+                    result: {
+                        success: true,
+                        path: 'output/merged_images_5s.mp4',
+                        bytesWritten: 131072,
+                    },
+                    isError: false,
+                });
+                emit({
+                    type: 'text_delta',
+                    runId: 'run-real-agent-loop-ffmpeg-second-round',
+                    role: 'assistant',
+                    content: replayCase.secondRoundSummary,
+                });
+                emit({
+                    type: 'complete',
+                    runId: 'run-real-agent-loop-ffmpeg-second-round',
+                    finishReason: 'stop',
+                });
+                return { runId: 'run-real-agent-loop-ffmpeg-second-round' };
+            },
+        });
+
+        await harness.process({
+            id: 'cmd-real-agent-loop-replay',
+            type: 'start_task',
+            payload: {
+                taskId,
+                title: 'real DB ffmpeg second-loop replay',
+                userQuery: `/task ${secondLoopReplayMessage}`,
+                context: {
+                    workspacePath: '/tmp/coworkany-real-agent-loop-replay',
+                },
+            },
+        });
+
+        const startResponse = harness.outgoing.find((message) => message.type === 'start_task_response');
+        expect((startResponse?.payload as Record<string, unknown>)?.success).toBe(true);
+        expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
+        expect(harness.outgoing.some((message) =>
+            message.type === replayCase.expectedFinishedEvent && message.taskId === taskId
+        )).toBe(true);
+        expect(harness.outgoing.some((message) =>
+            message.type === 'TOOL_CALL'
+            && JSON.stringify(message).includes('ffmpeg -y -framerate 1/5')
+        )).toBe(true);
+        expect(harness.outgoing.some((message) =>
+            message.type === 'TOOL_RESULT'
+            && JSON.stringify(message).includes('output/merged_images_5s.mp4')
+        )).toBe(true);
+        expect(harness.outgoing.some((message) =>
+            message.type === 'TEXT_DELTA'
+            && JSON.stringify(message).includes('output/merged_images_5s.mp4')
+        )).toBe(true);
     });
 
     test('start_task forwards enabledToolpacks into per-turn execution options', async () => {
@@ -2259,6 +2456,270 @@ describe('mastra entrypoint processor', () => {
             expect(harness.userMessageCalls.length).toBeGreaterThanOrEqual(2);
             expect(harness.userMessageCalls[1]?.message).toContain('Last failed command: python /tmp/bubble_sort.py');
             expect(harness.userMessageCalls[1]?.message).toContain('Retry this fallback command first: python3 /tmp/bubble_sort.py');
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('send_task_message injects repaired ffmpeg option command after unrecognized glued option failure', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '60';
+        try {
+            const harness = createHarness({
+                onHandleUserMessage: async (_input, emit) => {
+                    emit({
+                        type: 'tool_call',
+                        runId: 'run-ffmpeg-glued-option',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: {
+                            command: [
+                                'mkdir -p output && ffmpeg -y -framerate1/5',
+                                '-pattern_type glob -i "/tmp/staged/*.png"',
+                                '-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"',
+                                '-c:v libx264 -r30 output/merged_images_5s.mp4',
+                            ].join(' '),
+                        },
+                    });
+                    emit({
+                        type: 'tool_result',
+                        runId: 'run-ffmpeg-glued-option',
+                        toolCallId: 'tool-ffmpeg-glued-option',
+                        toolName: 'mastra_workspace_execute_command',
+                        result: "Unrecognized option 'framerate1/5'.\nError splitting the argument list: Option not found\n\nExit code: 8",
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-ffmpeg-glued-option',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-ffmpeg-glued-option' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-ffmpeg-glued-option-retry-contract',
+                type: 'send_task_message',
+                payload: {
+                    taskId: 'task-ffmpeg-glued-option-retry-contract',
+                    content: '把附件图片合并为一个视频，每张图片播放 5s',
+                    config: {
+                        maxRetries: 1,
+                    },
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 500);
+            });
+
+            expect(harness.userMessageCalls.length).toBeGreaterThanOrEqual(2);
+            expect(harness.userMessageCalls[1]?.message).toContain('Last failed command: mkdir -p output && ffmpeg -y -framerate1/5');
+            expect(harness.userMessageCalls[1]?.message).toContain('Retry this fallback command first: mkdir -p output && ffmpeg -y -framerate 1/5');
+            expect(harness.userMessageCalls[1]?.message).toContain('Do not repeat the last failed command verbatim');
+        } finally {
+            if (typeof previousRetryDelay === 'string') {
+                process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;
+            } else {
+                delete process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+            }
+        }
+    });
+
+    test('real DB follow-up replay executes repaired command and returns final result after user reply', async () => {
+        const previousRetryDelay = process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS;
+        process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = '30';
+        try {
+            const fixture = loadRealAgentLoopReplayFixture();
+            const replayCase = fixture.cases.find((entry) =>
+                entry.id === 'thread-03220ed5-ffmpeg-command-failure-second-loop'
+            );
+            expect(replayCase).toBeDefined();
+            if (!replayCase) {
+                return;
+            }
+            const firstFollowup = replayCase.followupUserMessages?.[0] ?? '帮我执行上述指令';
+            const taskId = `followup-${replayCase.id}`;
+            const badCommand = [
+                'mkdir -p output && ffmpeg -y -framerate1/5',
+                '-pattern_type glob -i "/tmp/staged/*.png"',
+                '-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"',
+                '-c:v libx264 -r30 output/merged_images_5s.mp4',
+            ].join(' ');
+            const repairedCommand = [
+                'mkdir -p output && ffmpeg -y -framerate 1/5',
+                '-pattern_type glob -i "/tmp/staged/*.png"',
+                '-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"',
+                '-c:v libx264 -r30 output/merged_images_5s.mp4',
+                '&& ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/merged_images_5s.mp4',
+            ].join(' ');
+            let sawPlainFollowup = false;
+            let sawRetryContract = false;
+            let sawRepairedCommand = false;
+            const harness = createHarness({
+                initialTaskStates: [
+                    {
+                        taskId,
+                        conversationThreadId: replayCase.sourceRecoveryThreadId,
+                        title: 'real DB ffmpeg follow-up replay',
+                        workspacePath: '/tmp/coworkany-real-agent-loop-replay',
+                        createdAt: '2026-04-27T00:30:19.425Z',
+                        status: 'running',
+                        resourceId: `employee-${taskId}`,
+                        executionPath: 'direct',
+                        lastUserMessage: replayCase.userMessage,
+                        retry: {
+                            attempts: 0,
+                            maxAttempts: 2,
+                        },
+                        turnContract: {
+                            hash: 'real-db-followup-replay',
+                            mode: 'task',
+                            domain: 'general',
+                            route: 'direct',
+                            messageFingerprint: 'real-db-followup-replay',
+                            requiredCapabilities: ['command_execution', 'artifact_write'],
+                            createdAt: '2026-04-27T00:30:19.425Z',
+                        },
+                    },
+                ],
+                onHandleUserMessage: async (input, emit) => {
+                    if (input.message.includes('[CoworkAny Retry Execution Contract]')) {
+                        sawRetryContract = true;
+                        expect(input.message).toContain('Retry this fallback command first: mkdir -p output && ffmpeg -y -framerate 1/5');
+                        expect(input.message).toContain('Do not repeat the last failed command verbatim');
+                        expect(input.message).toContain("Unrecognized option 'framerate1/5'");
+                        emit({
+                            type: 'tool_call',
+                            runId: 'run-real-followup-repaired',
+                            toolCallId: 'tool-real-followup-repaired',
+                            toolName: 'mastra_workspace_execute_command',
+                            args: {
+                                command: repairedCommand,
+                            },
+                        });
+                        sawRepairedCommand = true;
+                        emit({
+                            type: 'tool_result',
+                            runId: 'run-real-followup-repaired',
+                            toolCallId: 'tool-real-followup-repaired',
+                            toolName: 'mastra_workspace_execute_command',
+                            result: {
+                                stdout: '30.000000\noutput/merged_images_5s.mp4',
+                                stderr: '',
+                                exitCode: 0,
+                            },
+                            isError: false,
+                        });
+                        emit({
+                            type: 'tool_call',
+                            runId: 'run-real-followup-repaired',
+                            toolCallId: 'tool-real-followup-artifact',
+                            toolName: 'mastra_workspace_write_file',
+                            args: {
+                                path: 'output/merged_images_5s.mp4',
+                                content: '<binary video artifact produced by ffmpeg>',
+                            },
+                        });
+                        emit({
+                            type: 'tool_result',
+                            runId: 'run-real-followup-repaired',
+                            toolCallId: 'tool-real-followup-artifact',
+                            toolName: 'mastra_workspace_write_file',
+                            result: {
+                                success: true,
+                                path: 'output/merged_images_5s.mp4',
+                                bytesWritten: 131072,
+                            },
+                            isError: false,
+                        });
+                        emit({
+                            type: 'text_delta',
+                            runId: 'run-real-followup-repaired',
+                            role: 'assistant',
+                            content: replayCase.secondRoundSummary,
+                        });
+                        emit({
+                            type: 'complete',
+                            runId: 'run-real-followup-repaired',
+                            finishReason: 'stop',
+                        });
+                        return { runId: 'run-real-followup-repaired' };
+                    }
+
+                    sawPlainFollowup = input.message === firstFollowup;
+                    expect(input.message).toBe(firstFollowup);
+                    emit({
+                        type: 'tool_call',
+                        runId: 'run-real-followup-failed',
+                        toolCallId: 'tool-real-followup-failed',
+                        toolName: 'mastra_workspace_execute_command',
+                        args: {
+                            command: badCommand,
+                        },
+                    });
+                    emit({
+                        type: 'tool_result',
+                        runId: 'run-real-followup-failed',
+                        toolCallId: 'tool-real-followup-failed',
+                        toolName: 'mastra_workspace_execute_command',
+                        result: `${replayCase.failedErrorSnippet}`,
+                    });
+                    emit({
+                        type: 'text_delta',
+                        runId: 'run-real-followup-failed',
+                        role: 'assistant',
+                        content: replayCase.permissionRepairAssistantText ?? '请允许我再执行一次真正修复后的命令。',
+                    });
+                    emit({
+                        type: 'complete',
+                        runId: 'run-real-followup-failed',
+                        finishReason: 'stop',
+                    });
+                    return { runId: 'run-real-followup-failed' };
+                },
+            });
+
+            await harness.process({
+                id: 'cmd-real-followup-user-reply',
+                type: 'send_task_message',
+                payload: {
+                    taskId,
+                    content: firstFollowup,
+                    config: {
+                        maxRetries: 1,
+                    },
+                },
+            });
+            await new Promise((resolve) => {
+                setTimeout(resolve, 500);
+            });
+
+            expect(sawPlainFollowup).toBe(true);
+            expect(sawRetryContract).toBe(true);
+            expect(sawRepairedCommand).toBe(true);
+            expect(harness.userMessageCalls).toHaveLength(2);
+            expect(harness.userMessageCalls[0]?.message).toBe(firstFollowup);
+            expect(harness.userMessageCalls[1]?.message).toContain('Retry this fallback command first');
+            expect(harness.outgoing.some((message) =>
+                message.type === 'TOOL_CALL'
+                && JSON.stringify(message).includes('-framerate1/5')
+            )).toBe(true);
+            expect(harness.outgoing.some((message) =>
+                message.type === 'TOOL_CALL'
+                && JSON.stringify(message).includes('-framerate 1/5')
+            )).toBe(true);
+            expect(harness.outgoing.some((message) =>
+                message.type === 'TEXT_DELTA'
+                && JSON.stringify(message).includes('output/merged_images_5s.mp4')
+            )).toBe(true);
+            expect(harness.outgoing.some((message) =>
+                message.type === 'TASK_FINISHED'
+                && message.taskId === taskId
+            )).toBe(true);
+            expect(harness.outgoing.some((message) => message.type === 'TASK_FAILED')).toBe(false);
         } finally {
             if (typeof previousRetryDelay === 'string') {
                 process.env.COWORKANY_PROTOCOL_MISSING_TOOL_EVIDENCE_AUTO_RETRY_DELAY_MS = previousRetryDelay;

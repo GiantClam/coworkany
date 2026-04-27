@@ -61,6 +61,41 @@ describe('task failure UI formatter', () => {
         expect(descriptor?.descriptionDefault).toContain('did not execute required tools');
     });
 
+    test('does not expose missing tool evidence protocol errors in user-visible details', () => {
+        const text = formatTaskFailureDetails(
+            {
+                error: 'workflow_missing_required_tool_evidence:artifact_write',
+                errorCode: 'E_PROTOCOL_MISSING_TOOL_EVIDENCE',
+                recoverable: true,
+                suggestion: 'Retry this task and ensure required tools are invoked before completion.',
+            },
+            {
+                fallbackDescription: 'Execution failed unexpectedly.',
+                includePrefix: true,
+            },
+        );
+
+        expect(text).toContain('Required execution steps did not run before the task reported completion.');
+        expect(text).not.toContain('workflow_missing_required_tool_evidence');
+    });
+
+    test('uses dedicated suspended copy instead of retryable upstream copy', () => {
+        const descriptor = getTaskFailureUiDescriptor({
+            status: 'suspended',
+            failure: undefined,
+            suspension: {
+                reason: 'waiting_for_user',
+                userMessage: 'Waiting for confirmation before continuing.',
+                canAutoResume: false,
+            },
+        });
+
+        expect(descriptor?.category).toBe('suspended');
+        expect(descriptor?.titleKey).toBe('chat.failureSuspendedTitle');
+        expect(descriptor?.titleDefault).toBe('Task suspended');
+        expect(descriptor?.descriptionDefault).toBe('Waiting for confirmation before continuing.');
+    });
+
     test('routes provider TLS trust failures to configuration action', () => {
         const descriptor = getTaskFailureUiDescriptor({
             status: 'failed',

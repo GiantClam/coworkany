@@ -4,6 +4,8 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { evaluateLiveAcceptance } from '../src/acceptance/liveAcceptanceOracle';
+
 type JsonMessage = Record<string, unknown>;
 type ModelCandidate = {
     modelId: string;
@@ -47,17 +49,6 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function getString(value: unknown): string | undefined {
     return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function hasSubstantiveAssistantText(content: string): boolean {
-    const normalized = content
-        .replace(/[`*_>#-]/gu, ' ')
-        .replace(/\s+/gu, ' ')
-        .trim();
-    if (normalized.length < 4) {
-        return false;
-    }
-    return /[\p{L}\p{N}]/u.test(normalized);
 }
 
 function normalizeOpenAiBaseUrl(input: string | undefined): string | undefined {
@@ -601,6 +592,16 @@ describe('real model smoke e2e', () => {
             .map((message) => getString(toRecord(message.payload).delta) ?? '')
             .join('')
             .trim();
-        expect(hasSubstantiveAssistantText(text)).toBe(true);
+        const acceptance = evaluateLiveAcceptance({
+            answer: {
+                text,
+                minChars: 4,
+                routeMode: 'chat',
+            },
+            tone: {
+                text,
+            },
+        });
+        expect(acceptance.failedChecks).toEqual([]);
     }, 240_000);
 });

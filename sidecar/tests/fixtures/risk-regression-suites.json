@@ -44,7 +44,7 @@
         "tests/phase2-tools.test.ts",
         "tests/execute-task-step.test.ts",
         "--test-name-pattern",
-        "bash tool executes safe command|bash tool returns non-zero for failed command|bash tool returns command recovery hints for missing commands|bash tool timeout returns quickly|deterministic fallback generates attachment video when model never emits command tool evidence"
+        "run_command tool executes safe command|run_command tool returns non-zero for failed command|run_command tool returns command recovery hints for missing commands|run_command tool timeout returns quickly|deterministic fallback generates attachment video when model never emits command tool evidence"
       ],
       "minPass": 5,
       "acceptanceRisks": [
