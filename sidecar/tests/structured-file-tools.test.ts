@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { STANDARD_TOOLS } from '../src/tools/standard';
+import { COWORKANY_BUILTIN_TOOL_DEFINITIONS } from '../src/tools/builtinTools';
 
 const tempDirs: string[] = [];
 
@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 function getTool(name: string) {
-    const tool = STANDARD_TOOLS.find((candidate) => candidate.name === name);
+    const tool = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((candidate) => candidate.name === name);
     if (!tool) {
         throw new Error(`Tool not found: ${name}`);
     }

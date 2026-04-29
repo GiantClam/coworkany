@@ -1,14 +1,10 @@
 import { Agent } from '@mastra/core/agent';
 import { memoryConfig } from '../memory/config';
-import { listMcpToolsSafe } from '../mcp/clients';
-import { deleteFilesTool, sendEmailTool } from '../tools/approval-tools';
-import { enterpriseTools } from '../tools/enterprise';
 import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrails/processors';
 import { runtimeScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
-import { areBuiltinToolpacksEnabled } from '../../config/runtimeProfile';
-import { resolveCoworkAnyMastraTools } from '../tools/coworkanyToolRegistry';
+import { resolveAgentToolsForRequest } from './resolveAgentToolsForRequest';
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 export const coworker = new Agent({
     id: 'coworker',
@@ -33,21 +29,11 @@ export const coworker = new Agent({
     ].join('\n'),
     model: DEFAULT_MODEL,
     memory: memoryConfig,
-    tools: async () => {
-        const mcpTools = await listMcpToolsSafe();
-        const builtinToolpacksEnabled = areBuiltinToolpacksEnabled();
-        return {
-            ...(builtinToolpacksEnabled
-                ? {
-                    delete_files: deleteFilesTool,
-                    send_email: sendEmailTool,
-                    ...enterpriseTools,
-                }
-                : {}),
-            ...resolveCoworkAnyMastraTools(),
-            ...mcpTools,
-        };
-    },
+    tools: async () => resolveAgentToolsForRequest({
+        surface: 'task-full',
+        includeMcp: true,
+        includeEnterprise: true,
+    }),
     workspace: async ({ requestContext }) => {
         return await getWorkspaceForRequestContext(requestContext);
     },

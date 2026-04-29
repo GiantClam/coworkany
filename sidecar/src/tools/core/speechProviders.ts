@@ -1,5 +1,5 @@
 import type { StoredSkill } from '../../storage/skillStore';
-import type { ToolContext, ToolDefinition } from '../standard';
+import type { ToolContext, ToolDefinition } from './types';
 export type SpeechProviderKind = 'asr' | 'tts';
 export type VoiceProviderMode = 'auto' | 'system' | 'custom';
 export type SpeechProviderRegistration = {

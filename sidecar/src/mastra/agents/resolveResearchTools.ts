@@ -155,7 +155,7 @@ export async function resolveResearchTools(
 }> {
     const listMcpToolsetsFn = deps?.listMcpToolsetsFn ?? listMcpToolsetsSafe;
     const includeBuiltins = areBuiltinToolpacksEnabled(deps?.env ?? process.env);
-    const mcpToolsets = await listMcpToolsetsFn();
+    const mcpToolsets = includeBuiltins ? await listMcpToolsetsFn() : {};
     const builtInResearchTools: ResearchToolsMap = includeBuiltins
         ? resolveCoworkAnyMastraTools({
             env: deps?.env ?? process.env,

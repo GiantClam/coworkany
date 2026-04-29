@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 const SANDBOX_FILE = path.resolve(__dirname, '../src/tools/commandSandbox.ts');
+const COMMAND_TOOL_FILE = path.resolve(__dirname, '../src/tools/core/commandTool.ts');
 
 describe('Command Sandbox Module', () => {
     test('commandSandbox.ts exists', () => {
@@ -86,20 +87,24 @@ describe('Command Sandbox Patterns', () => {
 });
 
 describe('Command Sandbox Integration', () => {
-    test('standard.ts imports commandSandbox', () => {
+    test('commandTool.ts imports commandSandbox', () => {
+        const commandToolContent = fs.readFileSync(COMMAND_TOOL_FILE, 'utf-8');
+        expect(commandToolContent).toContain("from '../commandSandbox'");
+        expect(commandToolContent).toContain('checkCommand');
+    });
+
+    test('builtinTools.ts aggregates the command tool without owning sandbox logic', () => {
         const standardContent = fs.readFileSync(
-            path.resolve(__dirname, '../src/tools/standard.ts'),
+            path.resolve(__dirname, '../src/tools/builtinTools.ts'),
             'utf-8'
         );
-        expect(standardContent).toContain("from './commandSandbox'");
-        expect(standardContent).toContain('checkCommand');
+        expect(standardContent).toContain("from './core/commandTool'");
+        expect(standardContent).toContain('runCommandTool');
+        expect(standardContent).not.toContain('checkCommand');
     });
 
     test('run_command handler calls checkCommand before spawn', () => {
-        const content = fs.readFileSync(
-            path.resolve(__dirname, '../src/tools/standard.ts'),
-            'utf-8'
-        );
+        const content = fs.readFileSync(COMMAND_TOOL_FILE, 'utf-8');
         const handlerStart = content.indexOf("name: 'run_command'");
         expect(handlerStart).toBeGreaterThan(-1);
         const handlerContent = content.slice(handlerStart);
@@ -112,18 +117,12 @@ describe('Command Sandbox Integration', () => {
     });
 
     test('blocked commands return COMMAND BLOCKED message', () => {
-        const content = fs.readFileSync(
-            path.resolve(__dirname, '../src/tools/standard.ts'),
-            'utf-8'
-        );
+        const content = fs.readFileSync(COMMAND_TOOL_FILE, 'utf-8');
         expect(content).toContain('COMMAND BLOCKED');
     });
 
     test('run_command enforces PYTHONDONTWRITEBYTECODE by default', () => {
-        const content = fs.readFileSync(
-            path.resolve(__dirname, '../src/tools/standard.ts'),
-            'utf-8'
-        );
+        const content = fs.readFileSync(COMMAND_TOOL_FILE, 'utf-8');
         expect(content).toContain('PYTHONDONTWRITEBYTECODE');
     });
 

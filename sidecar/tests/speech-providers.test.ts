@@ -7,7 +7,7 @@ import {
 import { createVoiceProviderBindings } from '../src/mastra/runtimeBindings';
 import { resolveVoiceProviderMastraToolDefinition } from '../src/mastra/voiceProviderToolResolver';
 import type { StoredSkill } from '../src/storage/skillStore';
-import type { ToolDefinition } from '../src/tools/standard';
+import type { ToolDefinition } from '../src/tools/core/types';
 
 function makeSkill(name: string, metadata: Record<string, unknown>): StoredSkill {
     return {

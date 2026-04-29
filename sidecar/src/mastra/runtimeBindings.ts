@@ -3,7 +3,7 @@ import {
     getSpeechProviderStatus,
     invokeCustomAsrProvider,
 } from '../tools/core/speechProviders';
-import type { ToolDefinition } from '../tools/standard';
+import type { ToolDefinition } from '../tools/core/types';
 type VoiceProviderInput = {
     listEnabledSkills: () => StoredSkill[];
     getToolByName: (toolName: string) => ToolDefinition | undefined;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { STANDARD_TOOLS } from '../src/tools/standard';
+import { COWORKANY_BUILTIN_TOOL_DEFINITIONS } from '../src/tools/builtinTools';
 
 const tempDirs: string[] = [];
 
@@ -36,7 +36,7 @@ describe('recall tool matching behavior', () => {
             },
         ], null, 2), 'utf-8');
 
-        const recallTool = STANDARD_TOOLS.find((tool) => tool.name === 'recall');
+        const recallTool = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'recall');
         expect(recallTool).toBeDefined();
         const result = await recallTool!.handler(
             {
@@ -71,7 +71,7 @@ describe('recall tool matching behavior', () => {
             },
         ], null, 2), 'utf-8');
 
-        const recallTool = STANDARD_TOOLS.find((tool) => tool.name === 'recall');
+        const recallTool = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'recall');
         expect(recallTool).toBeDefined();
         const result = await recallTool!.handler(
             {

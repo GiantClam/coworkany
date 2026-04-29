@@ -3,7 +3,8 @@ import { createTool, type Tool, type ToolExecutionContext } from '@mastra/core/t
 import { z } from 'zod/v4';
 import { CORE_BASELINE_TOOL_IDS } from '../../data/coreToolpack';
 import { resolveRuntimeCapabilityProfile } from '../../config/runtimeProfile';
-import { STANDARD_TOOLS, type ToolContext, type ToolDefinition, type ToolEffect } from '../../tools/standard';
+import { COWORKANY_BUILTIN_TOOL_DEFINITIONS } from '../../tools/builtinTools';
+import type { ToolContext, ToolDefinition, ToolEffect } from '../../tools/core/types';
 import { crawlUrlTool, extractContentTool, searchWebTool } from './research';
 
 type AnyMastraTool = Tool<any, any, any, any>;
@@ -24,7 +25,7 @@ export type CoworkAnyMastraToolMetadata = {
     id: string;
     description?: string;
     aliases: string[];
-    source: 'standard' | 'builtin';
+    source: 'coworkany_builtin' | 'feature_builtin';
     effects: ToolEffect[];
     capabilities: CoworkAnyToolCapability[];
     evidenceKind: CoworkAnyToolEvidenceKind;
@@ -37,7 +38,7 @@ export type CoworkAnyMastraToolRegistration = {
     metadata: CoworkAnyMastraToolMetadata;
 };
 
-const standardToolIds = new Set(STANDARD_TOOLS.map((tool) => tool.name));
+const coworkanyBuiltinToolIds = new Set(COWORKANY_BUILTIN_TOOL_DEFINITIONS.map((tool) => tool.name));
 const coreToolIds = new Set<string>(CORE_BASELINE_TOOL_IDS);
 const builtinFeatureToolIds = new Set(['search_web', 'crawl_url', 'extract_content']);
 
@@ -119,7 +120,7 @@ function getRequestContextValue(context: ToolExecutionContext, key: string): unk
     return (context.requestContext as RequestContext | undefined)?.get(key);
 }
 
-function resolveStandardToolContext(context: ToolExecutionContext): ToolContext {
+function resolveCoworkAnyToolContext(context: ToolExecutionContext): ToolContext {
     const workspacePath = getRequestContextValue(context, 'workspacePath');
     const taskId = getRequestContextValue(context, 'taskId');
     const abortSignal = context.abortSignal;
@@ -193,7 +194,7 @@ function buildMetadata(tool: ToolDefinition): CoworkAnyMastraToolMetadata {
         id: tool.name,
         description: tool.description,
         aliases: tool.name === 'run_command' ? ['bash', 'shell', 'terminal'] : [],
-        source: 'standard',
+        source: 'coworkany_builtin',
         effects: [...tool.effects],
         capabilities,
         evidenceKind: inferEvidenceKind(tool, capabilities),
@@ -201,7 +202,7 @@ function buildMetadata(tool: ToolDefinition): CoworkAnyMastraToolMetadata {
     };
 }
 
-function createCoworkAnyStandardMastraTool(tool: ToolDefinition): CoworkAnyMastraToolRegistration {
+function createCoworkAnyBuiltinMastraTool(tool: ToolDefinition): CoworkAnyMastraToolRegistration {
     const metadata = buildMetadata(tool);
     return {
         id: tool.name,
@@ -212,15 +213,15 @@ function createCoworkAnyStandardMastraTool(tool: ToolDefinition): CoworkAnyMastr
             inputSchema: inputSchemas[tool.name] ?? z.record(z.string(), z.unknown()),
             outputSchema: z.unknown(),
             execute: async (input, context) => {
-                return await tool.handler(input, resolveStandardToolContext(context));
+                return await tool.handler(input, resolveCoworkAnyToolContext(context));
             },
         }) as AnyMastraTool,
     };
 }
 
 const registrations = new Map<string, CoworkAnyMastraToolRegistration>(
-    STANDARD_TOOLS.map((tool) => {
-        const registration = createCoworkAnyStandardMastraTool(tool);
+    COWORKANY_BUILTIN_TOOL_DEFINITIONS.map((tool) => {
+        const registration = createCoworkAnyBuiltinMastraTool(tool);
         return [registration.id, registration];
     }),
 );
@@ -241,7 +242,7 @@ function addBuiltinMastraToolRegistration(input: {
             id: input.id,
             description: input.description,
             aliases: [],
-            source: 'builtin',
+            source: 'feature_builtin',
             effects: input.effects,
             capabilities: input.capabilities,
             evidenceKind: input.evidenceKind,
@@ -308,7 +309,7 @@ export function resolveCoworkAnyMastraTools(options?: {
         ? new Set(options.include)
         : resolveRuntimeCapabilityProfile(options?.env ?? process.env) === 'core'
             ? coreToolIds
-            : new Set([...standardToolIds, ...builtinFeatureToolIds]);
+            : new Set([...coworkanyBuiltinToolIds, ...builtinFeatureToolIds]);
     const tools: Record<string, AnyMastraTool> = {};
     for (const id of requestedIds) {
         const registration = registrations.get(id);

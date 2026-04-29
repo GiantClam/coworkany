@@ -66,7 +66,7 @@ Task Path
 
 ## Tool 统一方案
 
-CoworkAny 不再把 `core tools`、`STANDARD_TOOLS`、`Mastra agent builtins` 视为三套并行工具机制。统一目标是：
+CoworkAny 不再把 `core tools`、旧 `STANDARD_TOOLS`、`Mastra agent builtins` 视为三套并行工具机制。统一目标是：
 
 ```text
 CoworkAny Tool = Mastra createTool(...) + CoworkAny metadata
@@ -82,30 +82,61 @@ CoworkAny Tool = Mastra createTool(...) + CoworkAny metadata
 
 ### 保留的概念边界
 
-- `core` 不是工具实现层，而是 runtime profile/filter。`core` 只允许 baseline tool id：`view_file`、`list_dir`、`write_to_file`、`replace_file_content`、`run_command`。
-- `full` 允许完整内置工具集合，并继续叠加已启用 toolpack/MCP。
+- `core` 不是工具实现层，也不是只读安全模式，而是 `task-core/execution-core` profile。它只允许 baseline tool id：`view_file`、`list_dir`、`write_to_file`、`replace_file_content`、`run_command`。这些工具足够支撑本地任务执行，但包含写入和命令能力，因此必须继续受 approval/policy/evidence gate 约束。
+- `full` 不是“无条件全开”，而是允许从已启用来源中选择完整内置工具集合，并可叠加已启用 toolpack/MCP。最终每一轮请求仍要按 route/surface 再过滤。
+- `chat`、`task-core`、`task-full`、`research`、`voice` 是 agent tool surface。`core/full` 只决定可用能力上限，surface 决定本轮实际注入哪些工具。
 - `toolpack/MCP` 是工具来源，不是另一套执行模型。内部 toolpack 和 MCP discovered tools 都进入同一个 runtime toolset 视图。
 - `skill` 不是 tool。skill 只提供触发规则、说明、依赖和 allowed tools，不拥有执行实现。
+
+### Agent Tool Surface 规则
+
+| Surface | 用途 | 默认工具 |
+| --- | --- | --- |
+| `chat` | 普通对话 fast path | 不注入 side-effect tools、不注入 MCP、不注入 voice |
+| `task-core` | 最小本地任务执行 | `CORE_BASELINE_TOOL_IDS` |
+| `task-full` | 完整任务执行 | `full` 下为 registry 完整内置工具 + 显式允许的 MCP/toolpack；`core` 下自动降级为 `task-core` |
+| `research` | 研究/检索专用 agent | `full` 下为 research tools + command fallback + 研究类 MCP；`core` 下不加载 research/MCP |
+| `voice` | spoken output endpoint | `full` 下暴露 `voice_speak`；`voice_speak` 下方复用 voice provider resolver |
+
+所有 agent 的 `tools` 必须通过统一 resolver 获取，不允许在 agent 文件中直接拼接 `listMcpToolsSafe()`、enterprise tools 和 registry tools。这样可以避免 `core` profile 被 MCP 或 feature builtin 旁路绕过。
 
 ### 迁移原则
 
 1. 标准工具直接注册为 Mastra `createTool(...)`，不再先维护 legacy tool 再通过兼容 adapter 暴露给 Mastra。
 2. 工具执行逻辑仍保持为可测试的纯实现函数，避免把文件操作或命令执行细节散落在 agent 定义里。
 3. `core/full`、capability summary、evidence gate、approval policy 统一读取同一份 Mastra-native registry metadata。
-4. `STANDARD_TOOLS` 命名在迁移期保留为执行实现来源；最终应降级为内部实现模块或被拆分到各 tool 文件，不再作为独立 runtime 机制。
+4. 旧 `STANDARD_TOOLS` 命名不再作为运行时代码概念保留。迁移期底层实现集合改名为 `COWORKANY_BUILTIN_TOOL_DEFINITIONS`，只作为 CoworkAny 内置工具定义输入和低层单测 seam；最终应继续拆分到各 Mastra-native tool module。
 
 ### 已落地切片
 
-- 新增 `CoworkAnyToolRegistry`，将当前 `STANDARD_TOOLS` 注册为 Mastra tools，并附带 `effects/capabilities/evidenceKind/riskLevel/aliases`。
+- 新增 `CoworkAnyToolRegistry`，将当前 `COWORKANY_BUILTIN_TOOL_DEFINITIONS` 注册为 Mastra tools，并附带 `effects/capabilities/evidenceKind/riskLevel/aliases`。
 - `core` profile 通过 registry filter 暴露 baseline Mastra tools，而不是维护另一套工具实现。
 - supervisor、supervisorSolo、coworker、coder 已直接消费 registry 产出的 Mastra tools。
 - `resolveRuntimeInternalTool` 已改为从 Mastra-native registry 读取标准工具 metadata，runtime capability/toolset 视图与 agent 可调用工具开始收敛。
 - `search_web`、`crawl_url`、`extract_content` 已注册进同一 registry。supervisor、supervisorSolo、research resolver 和 `resolveProfiledBuiltinAgentTools` 不再各自维护一份 research builtin 工具表。
 - agent 默认命令执行面已收敛到 `run_command`。旧 `bash`/`bash_approval` Mastra 工具实现已删除；事件解析仍兼容历史工具名，以便 replay 旧会话。
-- runtime 入口不再把 `STANDARD_TOOLS` 作为工具解析 fallback；旧 `mastra/tools/memory.ts` 包装层已删除。`STANDARD_TOOLS` 当前仅作为迁移期执行实现来源和底层单测入口保留。
+- runtime 入口不再把旧 `STANDARD_TOOLS` 作为工具解析 fallback；旧 `mastra/tools/memory.ts` 包装层已删除。CoworkAny 内置工具定义当前仅通过 `COWORKANY_BUILTIN_TOOL_DEFINITIONS` 输入 Mastra registry，不再作为独立 runtime surface。
 - 结构化文件工具缺口已补齐：`create_directory`、`compute_file_hash`、`batch_delete_paths`、`batch_move_files` 进入标准实现并自动注册为 Mastra tools，避免 capability/tool evidence 指向不可调用工具。
 - internal toolpack 解析不再读取 legacy `globalToolRegistry`，避免旧注册表覆盖 Mastra-native registry metadata。legacy `globalToolRegistry` singleton 已删除；自定义语音 provider 如需工具能力，必须由调用方显式注入 `getToolByName`，不再通过全局注册表隐式获得工具。
 - voice provider 与 Mastra tool 已合并到同一解析链：`voice_speak` 是 provider 层之上的公开 Mastra tool endpoint；custom ASR/TTS provider 通过 `resolveVoiceProviderMastraToolDefinition` 复用 Mastra registry 中的工具。`voice_speak` 不允许作为 provider 实现注册，避免递归调用。
+- agent 工具注入已收敛到 `resolveAgentToolsForRequest`。`chat` surface 默认无工具；`task-core` 只暴露 baseline；`task-full` 在 `core` profile 下自动降级并禁止 MCP/enterprise/voice 旁路，在 `full` profile 下才允许叠加 enabled MCP 与 enterprise side-effect tools。
+- 旧 `STANDARD_TOOLS` 导出已移除，内部引用与低层测试改用 `COWORKANY_BUILTIN_TOOL_DEFINITIONS`，减少“标准工具数组”被误认为 runtime 机制的风险。
+- `ToolEffect`、`ToolContext`、`ToolDefinition` 已迁移到 `tools/core/types.ts`，`builtinTools.ts` 不再定义跨模块工具契约，只保留迁移期工具实现集合。旧 `taskToolResolver` 测试面已删除，统一工具组装行为由 `resolveAgentToolsForRequest` 和 runtime catalog 测试覆盖。
+- memory tools 已从 `builtinTools.ts` 拆到 `tools/core/memoryTools.ts`，包括 `.coworkany/memory.json` 读写、记忆搜索匹配、`remember` 与 `recall` 定义。`builtinTools.ts` 当前只聚合 memory tool definitions。
+- 文件系统工具已从 `builtinTools.ts` 拆到 `tools/core/fileTools.ts`，包括 list/view/write/replace/move/delete/hash/batch 文件操作和共享路径/move fallback helper。`builtinTools.ts` 当前只聚合 file tool definitions 与命令工具。
+- 命令执行工具已从 `builtinTools.ts` 拆到 `tools/core/commandTool.ts`，包括 sandbox 检查、sudo 自动执行计划、可见终端镜像、进程树终止、缺失命令恢复建议与自动重试。`builtinTools.ts` 现在只聚合工具定义，不再承载具体工具实现。
+- `tools/standard.ts` 已改名为 `tools/builtinTools.ts`，registry metadata source 从历史 `standard` 拆成 `coworkany_builtin` 与 `feature_builtin`，避免把 CoworkAny 内置工具定义误解为第三套 standard runtime。
+
+### 本轮验证证据
+
+工具统一与命名清理完成后，已补跑以下验收链路：
+
+- 标准工具与 agent surface 回归：命令、文件、记忆、语音、runtime catalog、agent tool surface 共 59 个相关测试通过。
+- 高风险验收：`npm run test:risk:acceptance` 通过，覆盖 TLS 配置分类、任务生命周期自动重试、缺工具证据重试、命令 fallback/timeout、remote session full-chain governance、桌面手工验收 replay。
+- 真实 replay：DB-derived real session replay、production replay、control-plane incident replay、UI timeline DB snapshot、live acceptance oracle 共 53 个测试通过。
+- core/full profile 回归：`npm run test:regression:core-full -- --skip-live-model --skip-desktop-ui` 通过，覆盖 sidecar lint、core/full capability、runtime lifecycle、desktop manual acceptance replay。
+- 真实环境 core/full live 回归：`npm run test:regression:core-full:live` 通过，使用本机真实 provider 配置完成网络预检、sidecar live model smoke 与 desktop UI live user input。
+- 视觉截图验收：`desktop` 的 `npm run test:e2e:assistant-ui:visual` 通过 11 个 Playwright 截图场景，包括 recoverable failure、configuration required、suspended、dense multi-turn timeline、narrow viewport，以及真实 DB UI timeline 的长多轮、慢响应、manual approval 分支。
 
 ## 路由规则
 

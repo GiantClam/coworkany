@@ -7,9 +7,8 @@ import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrai
 import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
-import { listMcpToolsSafe } from '../mcp/clients';
-import { resolveCoworkAnyMastraTools } from '../tools/coworkanyToolRegistry';
 import { resolveSupervisorIterationDecision } from './iterationPolicy';
+import { resolveAgentToolsForRequest } from './resolveAgentToolsForRequest';
 
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 const UNSAFE_DELEGATION_PATTERNS: RegExp[] = [
@@ -62,13 +61,10 @@ export const supervisor = new Agent({
         researcher,
         coder,
     },
-    tools: async () => {
-        const mcpTools = await listMcpToolsSafe();
-        return {
-            ...resolveCoworkAnyMastraTools(),
-            ...mcpTools,
-        };
-    },
+    tools: async () => resolveAgentToolsForRequest({
+        surface: 'task-full',
+        includeMcp: true,
+    }),
     workspace: async ({ requestContext }) => {
         return await getWorkspaceForRequestContext(requestContext);
     },

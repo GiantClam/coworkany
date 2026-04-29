@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, TypeScript, Mastra, existing sidecar test harness.
 
-**Tool Unification Decision:** Mastra tool is the only first-class runtime tool shape. `core` is a profile/filter, `STANDARD_TOOLS` is a migration-stage implementation source, toolpack/MCP is a source of registered tools, and skills remain instructions/triggers rather than executable tools. Standard CoworkAny tools are registered directly as Mastra `createTool(...)` entries with CoworkAny metadata (`effects`, `capabilities`, `evidenceKind`, `riskLevel`, `aliases`) so capability summary, evidence gates, approval policy, and agent callable tools can converge on the same registry.
+**Tool Unification Decision:** Mastra tool is the only first-class runtime tool shape. `core` is a profile/filter, `COWORKANY_BUILTIN_TOOL_DEFINITIONS` is a migration-stage internal implementation source, toolpack/MCP is a source of registered tools, and skills remain instructions/triggers rather than executable tools. Standard CoworkAny tools are registered directly as Mastra `createTool(...)` entries with CoworkAny metadata (`effects`, `capabilities`, `evidenceKind`, `riskLevel`, `aliases`) so capability summary, evidence gates, approval policy, and agent callable tools can converge on the same registry.
 
 ---
 
@@ -428,7 +428,7 @@ Latest DB follow-up showed the user replied "帮我执行上述指令", "执行�
 
 - [x] **Step 1: Define Mastra-native registry**
 
-Added `CoworkAnyToolRegistry`, which registers current standard tools as Mastra `createTool(...)` objects and stores CoworkAny metadata (`effects`, `capabilities`, `evidenceKind`, `riskLevel`, `aliases`) next to the tool definition.
+Added `CoworkAnyToolRegistry`, which registers current CoworkAny builtin tools as Mastra `createTool(...)` objects and stores CoworkAny metadata (`effects`, `capabilities`, `evidenceKind`, `riskLevel`, `aliases`) next to the tool definition.
 
 - [x] **Step 2: Make core a filter**
 
@@ -440,11 +440,11 @@ Supervisor, SupervisorSolo, Coworker, and Coder now consume registry-produced Ma
 
 - [x] **Step 4: Align runtime capability metadata**
 
-`resolveRuntimeInternalTool` now reads standard tool metadata from the Mastra-native registry, so runtime toolset/capability views begin converging with the tools agents can actually call.
+`resolveRuntimeInternalTool` now reads CoworkAny builtin tool metadata from the Mastra-native registry, so runtime toolset/capability views begin converging with the tools agents can actually call.
 
 - [x] **Step 5: Lock with tests**
 
-Added coverage that core profile exposes only baseline standard tools, full profile exposes all standard tools, and a registry-produced `view_file` Mastra tool executes using CoworkAny request context.
+Added coverage that core profile exposes only baseline CoworkAny builtin tools, full profile exposes all CoworkAny builtin tools, and a registry-produced `view_file` Mastra tool executes using CoworkAny request context.
 
 ### Task 18: Move Builtin Research Tools Into The Registry
 
@@ -505,9 +505,9 @@ Updated streaming toolset resolver coverage so full profile expects `run_command
 - Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
 - Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
 
-- [x] **Step 1: Remove runtime STANDARD_TOOLS fallback**
+- [x] **Step 1: Remove runtime builtin tool definition fallback**
 
-The sidecar runtime entrypoint no longer falls back from `globalToolRegistry` to `STANDARD_TOOLS` when resolving voice provider tools. Runtime-facing tool resolution should now flow through the runtime registry paths rather than the legacy standard array.
+The sidecar runtime entrypoint no longer falls back from `globalToolRegistry` to the CoworkAny builtin definition array when resolving voice provider tools. Runtime-facing tool resolution should now flow through the runtime registry paths rather than the legacy standard array.
 
 - [x] **Step 2: Delete unused memory wrapper**
 
@@ -515,12 +515,12 @@ Removed the unused `mastra/tools/memory.ts` wrapper. `remember` and `recall` rem
 
 - [x] **Step 3: Keep implementation source deliberately**
 
-`STANDARD_TOOLS` remains in `tools/standard.ts` as a migration-stage implementation source and low-level test seam. It is no longer a default agent or runtime fallback surface.
+The CoworkAny builtin definition collection remains in `tools/builtinTools.ts` as a migration-stage implementation source and low-level test seam. It is no longer a default agent or runtime fallback surface.
 
 ### Task 21: Restore Structured File Tool Coverage
 
 **Files:**
-- Modify: `sidecar/src/tools/standard.ts`
+- Modify: `sidecar/src/tools/builtinTools.ts`
 - Modify: `sidecar/src/mastra/tools/coworkanyToolRegistry.ts`
 - Modify: `sidecar/tests/runtime-tool-catalog.test.ts`
 - Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
@@ -631,3 +631,219 @@ Deleted the unused `sidecar/src/mastra/tools/voice.ts` implementation. The canon
 - [x] **Step 5: Lock recursion prevention**
 
 Added tests proving Mastra registry tools can back provider discovery while `voice_speak` itself is rejected as a provider implementation.
+
+### Task 26: Add Per-Request Agent Tool Surfaces
+
+**Files:**
+- Create: `sidecar/src/mastra/agents/resolveAgentToolsForRequest.ts`
+- Modify: `sidecar/src/mastra/agents/supervisor.ts`
+- Modify: `sidecar/src/mastra/agents/supervisorSolo.ts`
+- Modify: `sidecar/src/mastra/agents/coworker.ts`
+- Modify: `sidecar/src/mastra/agents/researcher.ts`
+- Modify: `sidecar/src/mastra/agents/resolveResearchTools.ts`
+- Create: `sidecar/tests/agent-tool-surface.test.ts`
+- Modify: `sidecar/tests/streaming-toolset-resolution.test.ts`
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Clarify core/full semantics**
+
+Documented that `core` is `task-core/execution-core`, not a read-only safety mode. `full` is an upper bound over enabled sources, not unconditional all-tools injection.
+
+- [x] **Step 2: Introduce tool surfaces**
+
+Added `chat`, `task-core`, `task-full`, `research`, and `voice` surfaces. The surface determines the tools injected for the current request; `core/full` determines the maximum available capability set.
+
+- [x] **Step 3: Centralize agent tool assembly**
+
+Added `resolveAgentToolsForRequest`. Supervisor, SupervisorSolo, and Coworker now use this resolver instead of directly combining registry tools, MCP tools, and enterprise side-effect tools in each agent file.
+
+- [x] **Step 4: Close the core/MCP bypass**
+
+`task-full` now downgrades to baseline tools under `core`, and MCP/enterprise tools are only appended under `full`. `resolveResearchTools` no longer loads MCP research tools in `core`.
+
+- [x] **Step 5: Lock behavior with tests**
+
+Added regression coverage for chat/no-tools, task-core baseline, core downgrade/no-MCP, and full task surface with builtin + enterprise + MCP tools. Updated research resolver coverage so `core` suppresses MCP research tools.
+
+### Task 27: Retire STANDARD_TOOLS Runtime Naming
+
+**Files:**
+- Modify: `sidecar/src/tools/builtinTools.ts`
+- Modify: `sidecar/src/mastra/tools/coworkanyToolRegistry.ts`
+- Modify: `sidecar/tests/structured-file-tools.test.ts`
+- Modify: `sidecar/tests/run-command-cancellation.test.ts`
+- Modify: `sidecar/tests/recall-tool.test.ts`
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Rename the internal implementation collection**
+
+Replaced the exported `STANDARD_TOOLS` name with `COWORKANY_BUILTIN_TOOL_DEFINITIONS` to make clear that this is an internal definition source, not a separate runtime tool system.
+
+- [x] **Step 2: Update registry and low-level tests**
+
+`CoworkAnyToolRegistry` and the low-level command/file/memory tests now consume `COWORKANY_BUILTIN_TOOL_DEFINITIONS`.
+
+- [x] **Step 3: Update architecture docs**
+
+The plan now states that old `STANDARD_TOOLS` runtime naming is retired. The remaining collection is a temporary implementation seam feeding Mastra-native registration.
+
+### Task 28: Move Standard Tool Types Out Of The Implementation File
+
+**Files:**
+- Create: `sidecar/src/tools/core/types.ts`
+- Modify: `sidecar/src/tools/builtinTools.ts`
+- Modify: `sidecar/src/mastra/tools/coworkanyToolRegistry.ts`
+- Modify: `sidecar/src/mastra/runtimeBindings.ts`
+- Modify: `sidecar/src/mastra/voiceProviderToolResolver.ts`
+- Modify: `sidecar/src/tools/core/speechProviders.ts`
+- Modify: `sidecar/src/tools/core/voice.ts`
+- Modify: `sidecar/tests/speech-providers.test.ts`
+- Modify: `sidecar/tests/runtime-tool-catalog.test.ts`
+- Delete: `sidecar/tests/task-tool-resolver.test.ts`
+
+- [x] **Step 1: Extract the internal tool contract types**
+
+Moved `ToolEffect`, `ToolContext`, and `ToolDefinition` to `sidecar/src/tools/core/types.ts`. The large `builtinTools.ts` implementation file now imports the contract instead of defining it.
+
+- [x] **Step 2: Update consumers to depend on the contract module**
+
+Mastra registry, voice provider bindings, speech provider code, and tests now import tool contract types from `tools/core/types`.
+
+- [x] **Step 3: Remove stale legacy resolver coverage**
+
+Deleted the dangling `task-tool-resolver.test.ts`, which referenced a removed legacy resolver path. Modern tool assembly is covered by `agent-tool-surface.test.ts` and `runtime-tool-catalog.test.ts`.
+
+### Task 29: Extract Memory Tool Implementations
+
+**Files:**
+- Create: `sidecar/src/tools/core/memoryTools.ts`
+- Modify: `sidecar/src/tools/builtinTools.ts`
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Move memory persistence and matching helpers**
+
+Moved `.coworkany/memory.json` path resolution, loading/saving, normalization, tokenization, and fuzzy matching helpers out of `builtinTools.ts`.
+
+- [x] **Step 2: Move remember/recall definitions**
+
+Moved `remember` and `recall` to `memoryTools.ts` as `rememberTool` and `recallTool`. `builtinTools.ts` now imports and aggregates them into `COWORKANY_BUILTIN_TOOL_DEFINITIONS`.
+
+- [x] **Step 3: Verify behavior stayed stable**
+
+Ran recall-focused tests plus runtime catalog and agent tool surface coverage. `builtinTools.ts` dropped from 1189 lines to 930 lines after this split.
+
+### Task 30: Extract File Tool Implementations
+
+**Files:**
+- Create: `sidecar/src/tools/core/fileTools.ts`
+- Modify: `sidecar/src/tools/builtinTools.ts`
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Move filesystem helpers**
+
+Moved workspace path resolution and cross-device move fallback helpers into `fileTools.ts`.
+
+- [x] **Step 2: Move file tool definitions**
+
+Moved `list_dir`, `view_file`, `write_to_file`, `replace_file_content`, `move_file`, `delete_path`, `create_directory`, `compute_file_hash`, `batch_delete_paths`, and `batch_move_files` definitions into `fileTools.ts`.
+
+- [x] **Step 3: Keep standard aggregation only**
+
+`builtinTools.ts` now imports file tool definitions and aggregates them with `run_command`, memory, and voice tools. It dropped from 930 lines to 540 lines after this split.
+
+- [x] **Step 4: Verify structured file behavior**
+
+Ran structured file, command, runtime catalog, and agent surface tests to confirm registry output and file behavior stayed stable.
+
+### Task 31: Extract Command Tool Implementation
+
+**Files:**
+- Create: `sidecar/src/tools/core/commandTool.ts`
+- Modify: `sidecar/src/tools/builtinTools.ts`
+- Modify: `sidecar/tests/command-sandbox.test.ts`
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Move command execution helpers**
+
+Moved command error classification, alternative retry selection, child process tree termination, sudo failure hinting usage, and visible terminal mirroring into `commandTool.ts`.
+
+- [x] **Step 2: Move run_command definition**
+
+Moved `run_command` to `runCommandTool`. `builtinTools.ts` now imports it and only aggregates standard CoworkAny tool definitions for the Mastra-native registry.
+
+- [x] **Step 3: Update structure-sensitive tests**
+
+`command-sandbox.test.ts` now verifies the sandbox integration in `commandTool.ts` and separately verifies that `builtinTools.ts` is only an aggregator.
+
+### Task 32: Rename Builtin Tool Aggregation Boundary
+
+**Files:**
+- Move: `sidecar/src/tools/standard.ts` -> `sidecar/src/tools/builtinTools.ts`
+- Modify: `sidecar/src/mastra/tools/coworkanyToolRegistry.ts`
+- Modify: `sidecar/tests/structured-file-tools.test.ts`
+- Modify: `sidecar/tests/run-command-cancellation.test.ts`
+- Modify: `sidecar/tests/recall-tool.test.ts`
+- Modify: `sidecar/tests/command-sandbox.test.ts`
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Remove standard naming from the implementation seam**
+
+Renamed the aggregate export to `COWORKANY_BUILTIN_TOOL_DEFINITIONS` and moved the file to `tools/builtinTools.ts`.
+
+- [x] **Step 2: Clarify registry metadata sources**
+
+Registry metadata now uses `coworkany_builtin` for CoworkAny native tools and `feature_builtin` for feature-level builtins such as research tools.
+
+- [x] **Step 3: Update tests and docs**
+
+Low-level tests now import the builtin definitions path directly, and the plan records that `standard` is no longer a runtime or implementation-boundary name.
+
+### Task 33: Run Replay And Visual Acceptance Sweep
+
+**Files:**
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Run risk acceptance suites**
+
+Ran `npm run test:risk:acceptance`; it passed all configured high-risk suites, including task lifecycle retry guardrails, command fallback/timeout, remote-session full-chain governance, and desktop manual acceptance replay.
+
+- [x] **Step 2: Run real replay and oracle suites**
+
+Ran real session replay, production replay, incident replay, UI timeline DB snapshot, and live acceptance oracle tests. The suite passed with 53 tests.
+
+- [x] **Step 3: Run core/full regression without live dependencies**
+
+Ran `npm run test:regression:core-full -- --skip-live-model --skip-desktop-ui`; it passed sidecar lint, core/full capability regression, runtime lifecycle regression, and desktop manual acceptance replay.
+
+- [x] **Step 4: Run screenshot visual acceptance**
+
+Ran `desktop` `npm run test:e2e:assistant-ui:visual`; all 11 Playwright screenshot scenarios passed, including dense real DB UI timeline replay cases for long multiturn, slow response, and manual approval branches.
+
+### Task 34: Run Strict Live Environment Acceptance
+
+**Files:**
+- Modify: `docs/plans/2026-04-26-mastra-single-core-optimization.md`
+- Modify: `docs/superpowers/plans/2026-04-26-mastra-single-core-optimization.md`
+
+- [x] **Step 1: Run strict live core/full regression**
+
+Ran `npm run test:regression:core-full:live` against the local real provider configuration.
+
+- [x] **Step 2: Verify live provider preflight**
+
+Provider network preflight passed against `https://aiberm.com/v1` with HTTP 200.
+
+- [x] **Step 3: Verify sidecar live model smoke**
+
+`real-model-smoke.e2e.test.ts` passed using `openai/gpt-5.3-codex` from `llm-config.json(aiberm)`.
+
+- [x] **Step 4: Verify desktop live user input**
+
+`live-model-desktop-user-input.e2e.test.ts` passed, confirming a real desktop UI user message receives assistant text through the configured live model path.

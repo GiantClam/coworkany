@@ -4,7 +4,7 @@
  * Provides Text-to-Speech (TTS) capabilities to the system.
  * Part of the Unified Capability Model.
  */
-import type { ToolDefinition, ToolContext } from '../standard';
+import type { ToolDefinition, ToolContext } from './types';
 import {
     createVoiceInterface,
     type VoicePlaybackState,

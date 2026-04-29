@@ -101,7 +101,7 @@ describe('researcher tools resolver', () => {
         expect(orderedToolNames.at(-1)).toBe('run_command');
     });
 
-    test('core profile exposes MCP research tools without builtin research or command fallback', async () => {
+    test('core profile suppresses MCP research, builtin research, and command fallback', async () => {
         const fakeSearchWebTool = { id: 'search_web' } as unknown as Tool<unknown, unknown, unknown, unknown>;
         const { tools, diagnostics } = await resolveResearchTools({
             env: { COWORKANY_RUNTIME_PROFILE: 'core' } as NodeJS.ProcessEnv,
@@ -112,10 +112,11 @@ describe('researcher tools resolver', () => {
             }),
         });
 
-        expect(tools.search_web).toBe(fakeSearchWebTool);
+        expect(tools.search_web).toBeUndefined();
         expect(tools.mcp_runtime_search_web).toBeUndefined();
         expect(tools.bash).toBeUndefined();
         expect(tools.run_command).toBeUndefined();
+        expect(Object.keys(tools)).toEqual([]);
         expect(diagnostics.includesCommandFallback).toBe(false);
         expect(diagnostics.includesBashFallback).toBe(false);
     });

@@ -4,9 +4,8 @@ import { guardrailInputProcessors, guardrailOutputProcessors } from '../guardrai
 import { runtimeScorers, supervisorIsTaskCompleteScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
-import { listMcpToolsSafe } from '../mcp/clients';
-import { resolveCoworkAnyMastraTools } from '../tools/coworkanyToolRegistry';
 import { resolveSupervisorIterationDecision } from './iterationPolicy';
+import { resolveAgentToolsForRequest } from './resolveAgentToolsForRequest';
 
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 
@@ -40,13 +39,10 @@ export const supervisorSolo = new Agent({
     ].join('\n'),
     model: DEFAULT_MODEL,
     memory: memoryConfig,
-    tools: async () => {
-        const mcpTools = await listMcpToolsSafe();
-        return {
-            ...resolveCoworkAnyMastraTools(),
-            ...mcpTools,
-        };
-    },
+    tools: async () => resolveAgentToolsForRequest({
+        surface: 'task-full',
+        includeMcp: true,
+    }),
     workspace: async ({ requestContext }) => {
         return await getWorkspaceForRequestContext(requestContext);
     },

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { STANDARD_TOOLS } from '../src/tools/standard';
+import { COWORKANY_BUILTIN_TOOL_DEFINITIONS } from '../src/tools/builtinTools';
 
 describe('run_command cancellation', () => {
     test('automatically retries command-not-found once with a safe alternative', async () => {
-        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        const runCommand = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'run_command');
         if (!runCommand) {
             throw new Error('run_command tool not found');
         }
@@ -30,7 +30,7 @@ describe('run_command cancellation', () => {
     });
 
     test('returns directly executable fallback commands for command-not-found errors', async () => {
-        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        const runCommand = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'run_command');
         if (!runCommand) {
             throw new Error('run_command tool not found');
         }
@@ -59,7 +59,7 @@ describe('run_command cancellation', () => {
     });
 
     test('does not short-circuit sudo commands into opened_in_terminal guidance', async () => {
-        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        const runCommand = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'run_command');
         if (!runCommand) {
             throw new Error('run_command tool not found');
         }
@@ -80,7 +80,7 @@ describe('run_command cancellation', () => {
     });
 
     test('kills the running command when task cancellation is requested', async () => {
-        const runCommand = STANDARD_TOOLS.find((tool) => tool.name === 'run_command');
+        const runCommand = COWORKANY_BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'run_command');
         if (!runCommand) {
             throw new Error('run_command tool not found');
         }

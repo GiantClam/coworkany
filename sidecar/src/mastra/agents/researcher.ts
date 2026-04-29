@@ -5,7 +5,7 @@ import { runtimeScorers } from '../scorers/runtime';
 import { getWorkspaceForRequestContext } from '../workspace/runtime';
 import { resolveRuntimeModelConfig } from '../model/runtimeModel';
 import { resolveResearchTools } from './resolveResearchTools';
-import { resolveCoworkAnyMastraTools } from '../tools/coworkanyToolRegistry';
+import { resolveAgentToolsForRequest } from './resolveAgentToolsForRequest';
 const DEFAULT_MODEL = resolveRuntimeModelConfig();
 export const researcher = new Agent({
     id: 'researcher',
@@ -35,9 +35,10 @@ export const researcher = new Agent({
     memory: memoryConfig,
     tools: async () => {
         const resolved = await resolveResearchTools();
+        const voiceTools = await resolveAgentToolsForRequest({ surface: 'voice' });
         return {
             ...resolved.tools,
-            ...resolveCoworkAnyMastraTools({ include: ['voice_speak'] }),
+            ...voiceTools,
         };
     },
     workspace: async ({ requestContext }) => {

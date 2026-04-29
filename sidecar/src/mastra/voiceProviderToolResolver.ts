@@ -1,6 +1,6 @@
 import { RequestContext } from '@mastra/core/request-context';
 import type { ToolExecutionContext } from '@mastra/core/tools';
-import type { ToolContext, ToolDefinition } from '../tools/standard';
+import type { ToolContext, ToolDefinition } from '../tools/core/types';
 import { getCoworkAnyMastraToolRegistration } from './tools/coworkanyToolRegistry';
 
 const NON_PROVIDER_TOOL_IDS = new Set([

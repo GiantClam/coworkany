@@ -5,7 +5,7 @@ import * as path from 'path';
 import { RequestContext } from '@mastra/core/request-context';
 import type { StoredToolpack } from '../src/storage/toolpackStore';
 import { buildInternalRuntimeToolsets, countToolsInToolsets } from '../src/mastra/runtimeToolCatalog';
-import type { ToolDefinition } from '../src/tools/standard';
+import type { ToolDefinition } from '../src/tools/core/types';
 import { resolveRuntimeInternalTool } from '../src/mastra/internalToolResolver';
 import { resolveCoworkAnyMastraTools } from '../src/mastra/tools/coworkanyToolRegistry';
 
@@ -84,7 +84,7 @@ describe('runtime tool catalog', () => {
         expect(countToolsInToolsets(toolsets)).toBe(1);
     });
 
-    test('core profile resolves baseline standard tools as Mastra tools', () => {
+    test('core profile resolves baseline CoworkAny builtin tools as Mastra tools', () => {
         const tools = resolveCoworkAnyMastraTools({
             env: { COWORKANY_RUNTIME_PROFILE: 'core' } as NodeJS.ProcessEnv,
         });
@@ -98,7 +98,7 @@ describe('runtime tool catalog', () => {
         ]);
     });
 
-    test('full profile resolves all standard tools as Mastra tools', () => {
+    test('full profile resolves all CoworkAny builtin tools as Mastra tools', () => {
         const tools = resolveCoworkAnyMastraTools({
             env: { COWORKANY_RUNTIME_PROFILE: 'full' } as NodeJS.ProcessEnv,
         });
@@ -131,7 +131,7 @@ describe('runtime tool catalog', () => {
         expect(resolved?.effects).toContain('network:outbound');
     });
 
-    test('standard tool aliases resolve to canonical Mastra tool metadata', () => {
+    test('CoworkAny builtin tool aliases resolve to canonical Mastra tool metadata', () => {
         const resolved = resolveRuntimeInternalTool('bash');
 
         expect(resolved?.name).toBe('run_command');
@@ -139,12 +139,12 @@ describe('runtime tool catalog', () => {
         expect(resolved?.effects).toContain('code:execute');
     });
 
-    test('standard Mastra tools execute with CoworkAny request context', async () => {
-        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-mastra-standard-tool-'));
-        fs.writeFileSync(path.join(workspace, 'note.txt'), 'hello from standard mastra tool', 'utf8');
+    test('CoworkAny builtin Mastra tools execute with CoworkAny request context', async () => {
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'coworkany-mastra-builtin-tool-'));
+        fs.writeFileSync(path.join(workspace, 'note.txt'), 'hello from builtin mastra tool', 'utf8');
         const requestContext = new RequestContext();
         requestContext.set('workspacePath', workspace);
-        requestContext.set('taskId', 'task-standard-mastra-tool');
+        requestContext.set('taskId', 'task-builtin-mastra-tool');
         const tools = resolveCoworkAnyMastraTools({ include: ['view_file'] });
         const viewFile = tools.view_file;
 
@@ -154,6 +154,6 @@ describe('runtime tool catalog', () => {
             { requestContext } as any,
         );
 
-        expect(result).toBe('hello from standard mastra tool');
+        expect(result).toBe('hello from builtin mastra tool');
     });
 });
