@@ -15,7 +15,8 @@
 
 - `CoworkAny-Windows-x64-normal.zip`：标准绿色桌面包。
 - `CoworkAny-Windows-x64-portable.zip`：便携绿色桌面包，可复制到其他 Windows 设备运行。
-- `CoworkAny-Runtime-x64.zip`：独立本地运行时包，供桌面包按需安装或更新。
+
+本次没有重新发布 runtime。`0.1.1` 使用与 `0.1.0` 相同的运行时资产；需要运行时的用户请下载 [`v0.1.0` 中的 CoworkAny-Runtime-x64.zip](https://github.com/GiantClam/coworkany/releases/download/v0.1.0/CoworkAny-Runtime-x64.zip)。只有 Node、OpenCode、Python、字体、嵌入模型或 runtime manifest 发生变化时才会重新发布 runtime。
 
 ### 构建与校验
 
@@ -43,7 +44,8 @@ CoworkAny 0.1.1 is built from the latest `coworkany/main` code and continues the
 
 - `CoworkAny-Windows-x64-normal.zip`: standard green desktop package.
 - `CoworkAny-Windows-x64-portable.zip`: portable green desktop package for copying to another Windows device.
-- `CoworkAny-Runtime-x64.zip`: standalone local runtime package used for on-demand installation or updates.
+
+The runtime was not republished for this release. `0.1.1` uses the same runtime assets as `0.1.0`; users who need the runtime should download [`CoworkAny-Runtime-x64.zip` from `v0.1.0`](https://github.com/GiantClam/coworkany/releases/download/v0.1.0/CoworkAny-Runtime-x64.zip). A new runtime release is needed only when Node, OpenCode, Python, fonts, the embedding model, or the runtime manifest changes.
 
 ### Build and verify
 
