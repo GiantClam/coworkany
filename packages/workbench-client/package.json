@@ -5,5 +5,5 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "typecheck": "tsc -p tsconfig.json --noEmit", "test": "tsx --test test/**/*.test.ts", "build": "tsc -p tsconfig.json --noEmit" },
-  "dependencies": { "ai": "^7.0.48" }
+  "dependencies": { "ai": "^7.0.93" }
 }
