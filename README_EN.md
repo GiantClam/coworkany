@@ -2,7 +2,7 @@
 
 An enterprise AI workspace for AI chat, agent conversations, writing, image generation, presentations, workflows, and local execution.
 
-[中文 README](README.md) · [0.1.0 Release Notes](RELEASE_NOTES_0.1.0.md)
+[中文 README](README.md) · [0.1.1 Release Notes](RELEASE_NOTES_0.1.1.md)
 
 ## Capabilities
 
@@ -34,7 +34,7 @@ The desktop development shell uses the local Tauri host and shares the workbench
 
 ## Build the Windows portable release
 
-The project version is `0.1.0`. Build the desktop application and create the portable ZIP with:
+The project version is `0.1.1`. Build the desktop application and create the portable ZIP with:
 
 ```bash
 pnpm tauri:build

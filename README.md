@@ -2,7 +2,7 @@
 
 企业级 AI 工作台，提供 AI 对话、Agent 对话、写作、图片生成、PPT、工作流和本地运行能力。
 
-[English README](README_EN.md) · [0.1.0 发布说明](RELEASE_NOTES_0.1.0.md)
+[English README](README_EN.md) · [0.1.1 发布说明](RELEASE_NOTES_0.1.1.md)
 
 ## 主要能力
 
@@ -34,7 +34,7 @@ pnpm tauri:dev
 
 ## 构建 Windows 绿色版
 
-项目版本号为 `0.1.0`。执行以下命令构建桌面端并生成绿色便携压缩包：
+项目版本号为 `0.1.1`。执行以下命令构建桌面端并生成绿色便携压缩包：
 
 ```bash
 pnpm tauri:build

@@ -1,6 +1,6 @@
 [package]
 name = "coworkany"
-version = "0.1.0"
+version = "0.1.1"
 description = "CoworkAny local Windows workbench"
 authors = ["CoworkAny"]
 edition = "2021"
