@@ -47,7 +47,22 @@ pnpm --filter @coworkany/desktop package:portable-zip
 .artifacts/desktop-release/CoworkAny-Windows-x64-portable.zip
 ```
 
-绿色版不会要求安装器注册系统组件；运行时数据保存在可执行文件旁的 `data` 目录中，适合复制到其他 Windows 设备使用。
+绿色版不会要求安装器注册系统组件；便携版的运行时数据保存在可执行文件旁的 `data` 目录中，适合复制到其他 Windows 设备使用。
+
+### Windows 安装、Runtime 与运行
+
+Windows 绿色版不需要安装向导。首次使用时，请按以下步骤操作：
+
+1. 从 [CoworkAny v0.1.1 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.1) 下载一个桌面 ZIP；同时从 [CoworkAny v0.1.0 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0) 下载 `CoworkAny-Runtime-x64.zip`。
+2. 将桌面 ZIP 解压到可写目录。不要修改压缩包内的 `_up_`、`runtime` 或 `data` 目录结构。
+3. 将 `CoworkAny-Runtime-x64.zip` 原样放到 `CoworkAny.exe` 同一目录，不要先手动解压或重命名。
+4. 双击 `CoworkAny.exe`。应用会读取并校验 Runtime 清单，然后自动安装运行时并启动工作台。
+
+普通版将运行时数据安装到 `%LOCALAPPDATA%\CoworkAny`；便携版（包含 `portable.flag`）安装到 exe 旁的 `data\` 目录。便携版可连同整个目录复制到另一台 Windows x64 设备。
+
+如果 Runtime ZIP 没有放在 exe 旁，可进入“设置 → 运行环境与诊断”，填写 Runtime ZIP 的绝对路径，点击“导入离线运行时”后重新检查。Runtime 是独立资产，不随每个桌面版本重复发布；只有 Runtime 内容或 manifest 变化时才需要下载新的 Runtime 包。
+
+首次运行可能需要系统 WebView2；应用不会自动替换自身。请先关闭 CoworkAny，再备份便携版的 `data\` 目录后进行升级。
 
 ## 发布前校验
 

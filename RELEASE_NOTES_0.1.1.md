@@ -18,6 +18,14 @@
 
 本次没有重新发布 runtime。`0.1.1` 使用与 `0.1.0` 相同的运行时资产；需要运行时的用户请下载 [`v0.1.0` 中的 CoworkAny-Runtime-x64.zip](https://github.com/GiantClam/coworkany/releases/download/v0.1.0/CoworkAny-Runtime-x64.zip)。只有 Node、OpenCode、Python、字体、嵌入模型或 runtime manifest 发生变化时才会重新发布 runtime。
 
+### 安装与运行
+
+1. 下载本发布中的任一桌面 ZIP，并下载上方链接的 `CoworkAny-Runtime-x64.zip`。
+2. 解压桌面 ZIP，将 Runtime ZIP 原样放在 `CoworkAny.exe` 旁边。
+3. 双击 `CoworkAny.exe`；首次启动会自动校验并安装 Runtime。
+
+普通版的 Runtime 数据目录为 `%LOCALAPPDATA%\CoworkAny`；便携版（含 `portable.flag`）的 Runtime 数据目录为 exe 旁的 `data\`。如果 Runtime ZIP 不在 exe 旁，可在“设置 → 运行环境与诊断”填写绝对路径并点击“导入离线运行时”。不要手动解压 Runtime ZIP，也不要改变桌面包目录结构。
+
 ### 构建与校验
 
 ```bash
@@ -46,6 +54,14 @@ CoworkAny 0.1.1 is built from the latest `coworkany/main` code and continues the
 - `CoworkAny-Windows-x64-portable.zip`: portable green desktop package for copying to another Windows device.
 
 The runtime was not republished for this release. `0.1.1` uses the same runtime assets as `0.1.0`; users who need the runtime should download [`CoworkAny-Runtime-x64.zip` from `v0.1.0`](https://github.com/GiantClam/coworkany/releases/download/v0.1.0/CoworkAny-Runtime-x64.zip). A new runtime release is needed only when Node, OpenCode, Python, fonts, the embedding model, or the runtime manifest changes.
+
+### Install and run
+
+1. Download either desktop ZIP from this release and download `CoworkAny-Runtime-x64.zip` from the link above.
+2. Extract the desktop ZIP and place the Runtime ZIP unchanged beside `CoworkAny.exe`.
+3. Double-click `CoworkAny.exe`; the first launch validates and installs the Runtime automatically.
+
+The normal package stores Runtime data under `%LOCALAPPDATA%\CoworkAny`; the portable package (with `portable.flag`) stores it under `data\` beside the executable. If the Runtime ZIP is not beside the executable, enter its absolute path under `Settings → Runtime & diagnostics` and select `Import offline runtime`. Do not extract the Runtime ZIP manually or change the desktop package layout.
 
 ### Build and verify
 

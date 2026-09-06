@@ -47,7 +47,22 @@ The output is written to:
 .artifacts/desktop-release/CoworkAny-Windows-x64-portable.zip
 ```
 
-The portable build does not require an installer. Runtime data is stored in the `data` directory next to the executable, so the package can be copied to another Windows device.
+The green build does not require an installation wizard. The portable package stores Runtime data in the `data` directory next to the executable, so the package can be copied to another Windows device.
+
+### Install and run CoworkAny on Windows
+
+The Windows green release does not use an installation wizard. For the first run:
+
+1. Download one desktop ZIP from the [CoworkAny v0.1.1 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.1), and download `CoworkAny-Runtime-x64.zip` from the [CoworkAny v0.1.0 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).
+2. Extract the desktop ZIP into a writable directory. Keep the `_up_`, `runtime`, and `data` layout unchanged.
+3. Place `CoworkAny-Runtime-x64.zip` unchanged beside `CoworkAny.exe`; do not extract or rename it.
+4. Double-click `CoworkAny.exe`. The app validates the Runtime manifest, installs the Runtime, and then opens the workbench.
+
+The normal package installs Runtime data under `%LOCALAPPDATA%\CoworkAny`. The portable package (identified by `portable.flag`) installs it under the `data\` directory beside the executable. The complete portable directory can be copied to another Windows x64 device.
+
+If the Runtime ZIP is not beside the executable, open `Settings → Runtime & diagnostics`, enter its absolute path, and select `Import offline runtime`. Runtime is an independent asset and is not republished with every desktop release; download a new Runtime package only when its contents or manifest changes.
+
+WebView2 may be required on first launch. The app does not replace itself automatically; close CoworkAny and back up the portable `data\` directory before upgrading.
 
 ## Release verification
 
