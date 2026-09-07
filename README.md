@@ -2,7 +2,7 @@
 
 企业级 AI 工作台，提供 AI 对话、Agent 对话、写作、图片生成、PPT、工作流和本地运行能力。
 
-[English README](README_EN.md) · [0.1.1 发布说明](RELEASE_NOTES_0.1.1.md)
+[English README](README_EN.md) · [0.1.2 发布说明](RELEASE_NOTES_0.1.2.md)
 
 ## 主要能力
 
@@ -34,7 +34,7 @@ pnpm tauri:dev
 
 ## 构建 Windows 绿色版
 
-项目版本号为 `0.1.1`。执行以下命令构建桌面端并生成绿色便携压缩包：
+项目版本号为 `0.1.2`。执行以下命令构建桌面端并生成绿色便携压缩包：
 
 ```bash
 pnpm tauri:build
@@ -53,7 +53,7 @@ pnpm --filter @coworkany/desktop package:portable-zip
 
 Windows 绿色版不需要安装向导。首次使用时，请按以下步骤操作：
 
-1. 从 [CoworkAny v0.1.1 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.1) 下载一个桌面 ZIP；同时从 [CoworkAny v0.1.0 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0) 下载 `CoworkAny-Runtime-x64.zip`。
+1. 从 [CoworkAny v0.1.2 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.2) 下载一个桌面 ZIP；同时从 [CoworkAny v0.1.0 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0) 下载 `CoworkAny-Runtime-x64.zip`。
 2. 将桌面 ZIP 解压到可写目录。不要修改压缩包内的 `_up_`、`runtime` 或 `data` 目录结构。
 3. 将 `CoworkAny-Runtime-x64.zip` 原样放到 `CoworkAny.exe` 同一目录，不要先手动解压或重命名。
 4. 双击 `CoworkAny.exe`。应用会读取并校验 Runtime 清单，然后自动安装运行时并启动工作台。

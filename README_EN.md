@@ -2,7 +2,7 @@
 
 An enterprise AI workspace for AI chat, agent conversations, writing, image generation, presentations, workflows, and local execution.
 
-[中文 README](README.md) · [0.1.1 Release Notes](RELEASE_NOTES_0.1.1.md)
+[中文 README](README.md) · [0.1.2 Release Notes](RELEASE_NOTES_0.1.2.md)
 
 ## Capabilities
 
@@ -34,7 +34,7 @@ The desktop development shell uses the local Tauri host and shares the workbench
 
 ## Build the Windows portable release
 
-The project version is `0.1.1`. Build the desktop application and create the portable ZIP with:
+The project version is `0.1.2`. Build the desktop application and create the portable ZIP with:
 
 ```bash
 pnpm tauri:build
@@ -53,7 +53,7 @@ The green build does not require an installation wizard. The portable package st
 
 The Windows green release does not use an installation wizard. For the first run:
 
-1. Download one desktop ZIP from the [CoworkAny v0.1.1 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.1), and download `CoworkAny-Runtime-x64.zip` from the [CoworkAny v0.1.0 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).
+1. Download one desktop ZIP from the [CoworkAny v0.1.2 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.2), and download `CoworkAny-Runtime-x64.zip` from the [CoworkAny v0.1.0 Release](https://github.com/GiantClam/coworkany/releases/tag/v0.1.0).
 2. Extract the desktop ZIP into a writable directory. Keep the `_up_`, `runtime`, and `data` layout unchanged.
 3. Place `CoworkAny-Runtime-x64.zip` unchanged beside `CoworkAny.exe`; do not extract or rename it.
 4. Double-click `CoworkAny.exe`. The app validates the Runtime manifest, installs the Runtime, and then opens the workbench.
