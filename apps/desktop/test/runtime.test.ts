@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createPaths, detectDesktopPaths } from "../runtime/paths";
 import { defaultDesktopConfig, readDesktopConfig, redactSecrets, writeDesktopConfig } from "../runtime/config";
 import { acquireInstanceLock } from "../runtime/lock";
+import { desktopPlatform } from "../runtime/platform";
 
 test("normal and portable paths are deterministic", async () => {
   const root = await mkdtemp(join(tmpdir(), "coworkany desktop "));
@@ -14,6 +15,23 @@ test("normal and portable paths are deterministic", async () => {
     assert.equal(normal.mode, "normal");
     await writeFile(join(root, "portable.flag"), "", "utf8");
     assert.equal(detectDesktopPaths({ executableDir: root }).mode, "portable");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("macOS arm64 uses Application Support, Unix runtime filenames, and an external portable data folder", async () => {
+  const root = await mkdtemp(join(tmpdir(), "coworkany-macos-home-"));
+  const platform = desktopPlatform({ platform: "darwin", architecture: "arm64", homeDirectory: root });
+  try {
+    const paths = detectDesktopPaths({ executableDir: root, platform: "darwin", architecture: "arm64", homeDirectory: root });
+    assert.equal(platform.target, "macos-arm64");
+    assert.equal(platform.nodeExecutable, "node");
+    assert.equal(platform.openCodeExecutable, "opencode");
+    assert.equal(platform.pythonExecutable, "python3");
+    assert.equal(platform.fontAsset, "NotoSansCJKsc-Regular.otf");
+    assert.equal(platform.portableDataDirectory, "CoworkAny Data");
+    assert.equal(paths.root, join(root, "Library", "Application Support", "CoworkAny"));
+    await writeFile(join(root, "portable.flag"), "", "utf8");
+    assert.equal(detectDesktopPaths({ executableDir: root, platform: "darwin", architecture: "arm64", homeDirectory: root }).root, join(root, "CoworkAny Data"));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

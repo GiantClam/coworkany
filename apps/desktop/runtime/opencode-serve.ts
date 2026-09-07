@@ -61,8 +61,13 @@ function statusType(value: unknown) {
 
 async function terminateProcessTree(child: ChildProcess) {
   if (child.exitCode !== null) return;
-  if (process.platform !== "win32" || !child.pid) {
+  if (!child.pid) {
     child.kill();
+    return;
+  }
+  if (process.platform !== "win32") {
+    try { process.kill(-child.pid, "SIGTERM"); }
+    catch { child.kill(); }
     return;
   }
   await new Promise<void>((resolve) => {
@@ -166,6 +171,7 @@ export class OpenCodeServeClient {
       env: { ...isolatedEnvironment, OPENCODE_SERVER_USERNAME: this.username, OPENCODE_SERVER_PASSWORD: this.password, OPENCODE_DISABLE_AUTOUPDATE: "true", OPENCODE_DISABLE_MODELS_FETCH: "true" } as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      detached: process.platform !== "win32",
     }) as ChildProcess;
     this.child = child;
     child.stderr?.on("data", (chunk: Buffer) => {

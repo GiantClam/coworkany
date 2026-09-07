@@ -1,0 +1,44 @@
+name: Desktop macOS Validation
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "scripts/generate-macos-icon.mjs"
+      - "scripts/package-macos-portable.mjs"
+      - "scripts/stage-macos-desktop-runtime.mjs"
+      - ".github/workflows/desktop-macos.yml"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate desktop TypeScript and platform tests
+        run: |
+          pnpm desktop:typecheck
+          pnpm desktop:test
+
+      - name: Validate macOS Rust target
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Parse macOS release scripts
+        run: |
+          node --check scripts/generate-macos-icon.mjs
+          node --check scripts/stage-macos-desktop-runtime.mjs
+          node --check scripts/package-macos-portable.mjs

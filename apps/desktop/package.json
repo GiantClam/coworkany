@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "node ../../scripts/clear-desktop-dev-processes.mjs 1420 && pnpm run build:host && pnpm run build:skills && pnpm run build:agents && vite --host 127.0.0.1",
     "build": "pnpm run build:runtime && pnpm run build:host && pnpm run build:skills && pnpm run build:agents && tsc -p tsconfig.json --noEmit && vite build",
+    "build:macos": "pnpm run build:runtime:macos && pnpm run build:host && pnpm run build:skills && pnpm run build:agents && tsc -p tsconfig.json --noEmit && vite build && node ../../scripts/generate-macos-icon.mjs",
     "package:zip": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/package-desktop-zip.ps1",
     "package:portable-zip": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/package-desktop-zip.ps1 -Portable",
     "build:runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-desktop-runtime.ps1",
+    "build:runtime:macos": "node ../../scripts/stage-macos-desktop-runtime.mjs",
     "build:host": "node ../../scripts/clean-desktop-host.mjs && esbuild runtime/host.ts --bundle --platform=node --format=esm --outfile=dist-runtime/host.mjs --external:node:* --external:@lancedb/lancedb && esbuild runtime/knowledge-service.ts --bundle --platform=node --format=esm --outfile=dist-runtime/knowledge.mjs --external:node:* --external:@lancedb/lancedb",
     "build:skills": "node ../../scripts/generate-shared-skill-catalog.mjs && node ../../scripts/bundle-desktop-skills.mjs && node ../../scripts/validate-shared-skill-catalog.mjs ../../content/skills dist-runtime/skill-catalog.json --allow-extra=ppt-master --allow-extra=dashi-ppt",
     "build:agents": "node ../../scripts/generate-desktop-agency-agent-catalog.mjs",
@@ -22,7 +24,9 @@
     "test:real-providers:image": "node ../../scripts/test-desktop-real-providers.mjs --image-only",
     "test:real-parallel": "node ../../scripts/desktop-real-parallel-regression.mjs",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:macos": "tauri build --config src-tauri/tauri.macos.conf.json --target aarch64-apple-darwin",
+    "package:macos:portable": "node ../../scripts/package-macos-portable.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.82",

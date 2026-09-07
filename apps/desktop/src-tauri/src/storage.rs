@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS vault_mappings (id TEXT PRIMARY KEY, vault_path TEXT 
 "#;
 
 pub fn data_root(executable: &Path, local_app_data: Option<PathBuf>) -> PathBuf {
-    if executable.join("portable.flag").exists() { return executable.join("data"); }
+    if executable.join("portable.flag").exists() { return executable.join(crate::platform::portable_data_directory()); }
     local_app_data.unwrap_or_else(|| PathBuf::from(".").join("CoworkAny"))
 }
 

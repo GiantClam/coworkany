@@ -1,7 +1,7 @@
 [package]
 name = "coworkany"
 version = "0.1.1"
-description = "CoworkAny local Windows workbench"
+description = "CoworkAny local desktop workbench"
 authors = ["CoworkAny"]
 edition = "2021"
 
@@ -17,9 +17,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 sha2 = "0.10"
 regex = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

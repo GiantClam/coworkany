@@ -239,7 +239,6 @@ fn download_bootstrapper(destination: &Path) -> Result<(), String> {
     );
     let status = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map_err(|error| format!("webview2_download_spawn_failed: {error}"))?;
     if !status.success() { return Err(format!("webview2_download_failed:{}", status.code().unwrap_or(-1))); }
@@ -249,7 +248,6 @@ fn download_bootstrapper(destination: &Path) -> Result<(), String> {
 fn install_bootstrapper(bootstrapper: &Path) -> Result<(), String> {
     let status = Command::new(bootstrapper)
         .args(["/silent", "/install"])
-        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map_err(|error| format!("webview2_install_spawn_failed: {error}"))?;
     if !status.success() { return Err(format!("webview2_install_failed:{}", status.code().unwrap_or(-1))); }

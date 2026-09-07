@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -121,7 +122,6 @@ fn read_bounded_line(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
 }
 
 fn host_script(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(path) = configured_runtime_path(app, "hostPath").filter(|path| path.is_file()) { return Ok(path); }
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let packaged = resource.join("dist-runtime").join("host.mjs");
     if packaged.is_file() { return std::fs::canonicalize(packaged).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
@@ -129,62 +129,83 @@ fn host_script(app: &AppHandle) -> Result<PathBuf, String> {
     if up_packaged.is_file() { return std::fs::canonicalize(up_packaged).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
     let flattened = resource.join("host.mjs");
     if flattened.is_file() { return std::fs::canonicalize(flattened).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
+    if let Some(path) = configured_runtime_path(app, "hostPath").filter(|path| path.is_file()) { return Ok(path); }
     let development = std::env::current_dir().map_err(|error| error.to_string())?.join("apps").join("desktop").join("dist-runtime").join("host.mjs");
     if development.is_file() { return std::fs::canonicalize(development).map(crate::bootstrap::powershell_compatible_path).map_err(|error| error.to_string()); }
     Err(format!("workflow_host_bundle_missing: {}", packaged.display()))
 }
 
 fn knowledge_script(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(path) = configured_runtime_path(app, "knowledgePath").filter(|path| path.is_file()) { return Ok(path); }
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
-    let candidates = [
+    let mut candidates = [
         resource.join("dist-runtime").join("knowledge.mjs"),
         resource.join("_up_").join("dist-runtime").join("knowledge.mjs"),
         resource.join("knowledge.mjs"),
         std::env::current_dir().map_err(|error| error.to_string())?.join("apps").join("desktop").join("dist-runtime").join("knowledge.mjs"),
-    ];
-    candidates.into_iter().find(|path| path.is_file()).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)).ok_or_else(|| "knowledge_service_bundle_missing".to_string())
+    ].into_iter().chain(configured_runtime_path(app, "knowledgePath"));
+    candidates.find(|path| path.is_file()).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)).ok_or_else(|| "knowledge_service_bundle_missing".to_string())
 }
 
 fn node_executable(app: &AppHandle) -> Result<String, String> {
     let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
-    if let Some(path) = configured_runtime_path(app, "nodePath").filter(|path| path.is_file() && executable_works(path, &["--version"])) { return Ok(path.to_string_lossy().into_owned()); }
-    let candidates = [
-        data.join("runtime").join("node").join("node.exe"),
-        resource.join("dist-runtime").join("runtime").join("node").join("node.exe"),
-        resource.join("_up_").join("dist-runtime").join("runtime").join("node").join("node.exe"),
-        resource.join("runtime").join("node").join("node.exe"),
-        resource.join("node.exe"),
+    let private = [data.join("runtime").join("node").join(crate::platform::runtime_executable("node"))];
+    let packaged = [
+        resource.join("dist-runtime").join("runtime").join("node").join(crate::platform::runtime_executable("node")),
+        resource.join("_up_").join("dist-runtime").join("runtime").join("node").join(crate::platform::runtime_executable("node")),
+        resource.join("runtime").join("node").join(crate::platform::runtime_executable("node")),
+        resource.join(crate::platform::runtime_executable("node")),
     ];
-    Ok(candidates.into_iter().find(|path| path.is_file() && executable_works(path, &["--version"])).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)).or_else(|| system_executable("node")).map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| "node".to_string()))
+    let configured = configured_runtime_path(app, "nodePath");
+    Ok(crate::ordered_runtime_candidates(private, packaged, configured, std::iter::empty())
+        .into_iter()
+        .find(|path| path.is_file() && executable_works(path, &["--version"]))
+        .and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path))
+        .or_else(|| system_executable("node"))
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "node".to_string()))
 }
 
 pub(crate) fn opencode_executable(app: &AppHandle) -> Result<Option<String>, String> {
     let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
-    // runtime_probe persists discovered paths. An old cached private binary
-    // must not shadow the version shipped by an application upgrade.
-    let bundled = [
-        resource.join("dist-runtime").join("runtime").join("opencode").join("opencode.exe"),
-        resource.join("_up_").join("dist-runtime").join("runtime").join("opencode").join("opencode.exe"),
-        resource.join("runtime").join("opencode").join("opencode.exe"),
+    // App-managed Runtime paths must win over stale paths persisted by an
+    // older install. Configured paths remain a compatibility fallback.
+    let private = [data.join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode"))];
+    let packaged = [
+        resource.join("dist-runtime").join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode")),
+        resource.join("_up_").join("dist-runtime").join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode")),
+        resource.join("runtime").join("opencode").join(crate::platform::runtime_executable("opencode")),
     ];
     let configured = configured_runtime_path(app, "opencodePath").into_iter().flat_map(crate::resolve_windows_command_shim);
-    Ok(bundled.into_iter().chain(configured).chain([data.join("runtime").join("opencode").join("opencode.exe")]).find(|path| path.is_file() && executable_works(path, &["--version"])).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)).or_else(|| system_executable("opencode")).map(|path| path.to_string_lossy().into_owned()))
+    Ok(crate::ordered_runtime_candidates(private, packaged, configured, std::iter::empty())
+        .into_iter()
+        .find(|path| path.is_file() && executable_works(path, &["--version"]))
+        .and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path))
+        .or_else(|| system_executable("opencode"))
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 fn system_executable(command: &str) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
     let mut where_command = Command::new("where.exe");
     where_command.creation_flags(0x08000000);
     let output = where_command.arg(command).output().ok()?;
     if !output.status.success() { return None; }
-    String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).flat_map(crate::resolve_windows_command_shim).filter(|path| path.is_file() && executable_works(path, &["--version"])).find_map(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path))
+    return String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).flat_map(crate::resolve_windows_command_shim).filter(|path| path.is_file() && executable_works(path, &["--version"])).find_map(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path));
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("which").arg(command).output().ok()?;
+        if !output.status.success() { return None; }
+        String::from_utf8_lossy(&output.stdout).lines().map(str::trim).find(|line| !line.is_empty()).map(PathBuf::from).filter(|path| path.is_file() && executable_works(path, &["--version"])).and_then(|path| std::fs::canonicalize(path).ok())
+    }
 }
 
 fn executable_works(path: &std::path::Path, args: &[&str]) -> bool {
     let mut command = Command::new(path);
-    command.creation_flags(0x08000000);
+    crate::platform::configure_child_command(&mut command);
     command.args(args).output().map(|output| output.status.success()).unwrap_or(false)
 }
 
@@ -198,29 +219,36 @@ fn configured_runtime_path(app: &AppHandle, key: &str) -> Option<PathBuf> {
 pub(crate) fn python_executable(app: &AppHandle) -> Result<Option<String>, String> {
     let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
-    // Application upgrades must activate the standard Python and dependency
-    // set shipped with that build. A previously discovered interpreter is a
-    // fallback only; otherwise stale config silently defeats runtime upgrades.
+    // Application-managed Python must win over stale paths persisted by an
+    // older install. Configured paths remain a compatibility fallback.
+    let private = [data.join("runtime").join("python").join(crate::platform::runtime_executable("python"))];
     let bundled = [
-        resource.join("dist-runtime").join("runtime").join("python").join("python.exe"),
-        resource.join("_up_").join("dist-runtime").join("runtime").join("python").join("python.exe"),
+        resource.join("dist-runtime").join("runtime").join("python").join(crate::platform::runtime_executable("python")),
+        resource.join("_up_").join("dist-runtime").join("runtime").join("python").join(crate::platform::runtime_executable("python")),
     ];
     let configured = configured_runtime_path(app, "pythonPath").into_iter();
-    let private = [data.join("runtime").join("python").join("python.exe")];
-    if let Some(path) = bundled.into_iter().chain(configured).chain(private).find(|path| path.is_file() && python_capable(path)).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)) { return Ok(Some(path.to_string_lossy().into_owned())); }
-    let system = system_executable("python").filter(|path| python_capable(path));
+    if let Some(path) = crate::ordered_runtime_candidates(private, bundled, configured, std::iter::empty())
+        .into_iter()
+        .find(|path| path.is_file() && python_capable(path))
+        .and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)) { return Ok(Some(path.to_string_lossy().into_owned())); }
+    let system = system_executable(crate::platform::runtime_executable("python")).filter(|path| python_capable(path));
     Ok(system.map(|path| path.to_string_lossy().into_owned()))
 }
 
 pub(crate) fn skills_directory(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(select_skills_directory(&resource, configured_runtime_path(app, "skillsPath")))
+    let configured = configured_runtime_path(app, "skillsPath");
+    Ok(select_skills_directory(crate::ordered_runtime_candidates(
+        [data.join("skills")],
+        [resource.join("dist-runtime/skills"), resource.join("_up_/dist-runtime/skills"), resource.join("skills")],
+        configured,
+        std::iter::empty(),
+    )))
 }
 
-fn select_skills_directory(resource: &std::path::Path, configured: Option<PathBuf>) -> Option<PathBuf> {
-    // Cached discovery paths must not hide the catalog shipped by an upgrade.
-    [resource.join("dist-runtime/skills"), resource.join("_up_/dist-runtime/skills"), resource.join("skills")]
-        .into_iter().chain(configured).find(|path| {
+fn select_skills_directory(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|path| {
             ["ppt-master", "dashi-ppt"].iter().all(|id| {
                 path.join(id).join("SKILL.md").is_file() && path.join(format!("{id}.manifest.json")).is_file()
             })
@@ -229,19 +257,23 @@ fn select_skills_directory(resource: &std::path::Path, configured: Option<PathBu
 
 fn python_capable(path: &std::path::Path) -> bool {
     let mut command = Command::new(path);
-    command.creation_flags(0x08000000);
+    crate::platform::configure_child_command(&mut command);
     command.args(["-c", crate::PPT_PYTHON_PROBE]).output().map(|output| output.status.success()).unwrap_or(false)
 }
 
 fn lancedb_runtime_directory(app: &AppHandle) -> Result<Option<String>, String> {
     let data = crate::data_dir(app)?;
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
-    if let Some(path) = configured_runtime_path(app, "lancedbPath").filter(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").is_file()) { return Ok(Some(path.to_string_lossy().into_owned())); }
-    let candidates = [
-        data.join("runtime").join("lancedb"),
+    let configured = configured_runtime_path(app, "lancedbPath");
+    let candidates = crate::ordered_runtime_candidates(
+        [data.join("runtime").join("lancedb")],
+        [
         resource.join("dist-runtime").join("runtime").join("lancedb"),
         resource.join("_up_").join("dist-runtime").join("runtime").join("lancedb"),
-    ];
+        ],
+        configured,
+        std::iter::empty(),
+    );
     Ok(candidates.into_iter().find(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").is_file()).and_then(|path| std::fs::canonicalize(path).ok().map(crate::bootstrap::powershell_compatible_path)).map(|path| path.to_string_lossy().into_owned()))
 }
 
@@ -325,18 +357,19 @@ fn ensure_knowledge_process(app: &AppHandle, state: &Arc<Mutex<Option<KnowledgeP
         *guard = None;
     }
     let script = knowledge_script(app)?;
-    let mut child = Command::new(node_executable(app)?)
+    let mut command = Command::new(node_executable(app)?);
+    command
         .arg(script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(if cfg!(windows) { 0x08000000 } else { 0 })
-        .spawn()
+        .stderr(Stdio::null());
+    crate::platform::configure_child_command(&mut command);
+    let mut child = command.spawn()
         .map_err(|error| format!("knowledge_service_spawn_failed: {error}"))?;
     let stdin = child.stdin.take().ok_or_else(|| "knowledge_service_stdin_missing".to_string())?;
     let stdout = child.stdout.take().ok_or_else(|| "knowledge_service_stdout_missing".to_string())?;
     let job = match crate::supervisor::JobObject::new() {
-        Ok(job) => {
+        Ok(mut job) => {
             if let Err(error) = job.assign(&child) {
                 let mut child = child;
                 let _ = child.kill();
@@ -398,19 +431,20 @@ pub fn host_start(app: AppHandle, state: State<'_, HostState>) -> Result<u64, St
     // Keep OpenCode's sockets and lock files under CoworkAny's writable data
     // root; this is runtime plumbing, not Skill-specific behavior.
     let opencode_runtime = crate::data_dir(&app)?;
-    let mut child = Command::new(node_executable(&app)?)
+    let mut command = Command::new(node_executable(&app)?);
+    command
         .arg(script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(if cfg!(windows) { 0x08000000 } else { 0 })
         .envs(skills.as_ref().map(|path| [("COWORKANY_SKILLS_DIR", path.to_string_lossy().to_string())]).into_iter().flatten())
         .envs(agents.as_ref().map(|path| [("COWORKANY_AGENTS_DIR", path.to_string_lossy().to_string())]).into_iter().flatten())
         .envs(opencode_executable(&app)?.map(|path| [("COWORKANY_OPENCODE_PATH", path)]).into_iter().flatten())
         .envs(python.map(|path| [("COWORKANY_PYTHON_PATH", path)]).into_iter().flatten())
         .envs(lancedb_runtime_directory(&app)?.map(|path| [("COWORKANY_LANCEDB_DIR", path)]).into_iter().flatten())
-        .env("OPENCODE_RUNTIME_DIR", opencode_runtime)
-        .spawn()
+        .env("OPENCODE_RUNTIME_DIR", opencode_runtime);
+    crate::platform::configure_child_command(&mut command);
+    let mut child = command.spawn()
         .map_err(|error| format!("workflow_host_spawn_failed: {error}"))?;
     let stdout = child.stdout.take().ok_or_else(|| "workflow_host_stdout_missing".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "workflow_host_stderr_missing".to_string())?;
@@ -483,7 +517,7 @@ pub fn host_start(app: AppHandle, state: State<'_, HostState>) -> Result<u64, St
         }
     });
     let job = match crate::supervisor::JobObject::new() {
-        Ok(job) => {
+        Ok(mut job) => {
             if let Err(error) = job.assign(&child) {
                 let mut child = child;
                 let _ = child.kill();
@@ -547,10 +581,32 @@ mod tests {
                 std::fs::write(path.join(format!("{id}.manifest.json")), b"{}").unwrap();
             }
         }
-        assert_eq!(select_skills_directory(&root, Some(cached.clone())), Some(bundled.clone()));
+        assert_eq!(select_skills_directory(crate::ordered_runtime_candidates([], [bundled.clone()], [cached.clone()], std::iter::empty())), Some(bundled.clone()));
         std::fs::remove_file(bundled.join("dashi-ppt/SKILL.md")).unwrap();
-        assert_eq!(select_skills_directory(&root, Some(cached.clone())), Some(cached.clone()));
+        assert_eq!(select_skills_directory(crate::ordered_runtime_candidates([], [bundled.clone()], [cached.clone()], std::iter::empty())), Some(cached.clone()));
         assert_eq!(std::fs::read(cached.join("ppt-master/SKILL.md")).unwrap(), b"original");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_skills_replace_packaged_skills_before_using_stale_config() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("coworkany-private-skill-selection-{}-{stamp}", std::process::id()));
+        let private = root.join("skills");
+        let bundled = root.join("bundled");
+        let cached = root.join("cached");
+        for path in [&private, &bundled, &cached] {
+            for id in ["ppt-master", "dashi-ppt"] {
+                std::fs::create_dir_all(path.join(id)).unwrap();
+                std::fs::write(path.join(id).join("SKILL.md"), b"skill").unwrap();
+                std::fs::write(path.join(format!("{id}.manifest.json")), b"{}").unwrap();
+            }
+        }
+
+        assert_eq!(
+            select_skills_directory(crate::ordered_runtime_candidates([private.clone()], [bundled], [cached], std::iter::empty())),
+            Some(private)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

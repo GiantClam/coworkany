@@ -2,15 +2,15 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use std::fs;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 mod storage;
 mod supervisor;
+mod platform;
 mod host;
 mod config;
 mod artifacts;
@@ -28,6 +28,10 @@ assert not sys.flags.isolated and not sys.flags.safe_path, "python_script_path_i
 /// returns both `opencode` and `opencode.cmd`; neither shim is safe to pass
 /// directly to `CreateProcess`.
 pub(crate) fn resolve_windows_command_shim(path: PathBuf) -> Vec<PathBuf> {
+    #[cfg(not(windows))]
+    return vec![path];
+    #[cfg(windows)]
+    {
     let extension = path.extension().and_then(|value| value.to_str()).map(|value| value.to_ascii_lowercase());
     if matches!(extension.as_deref(), Some("exe")) { return vec![path]; }
     let mut candidates = Vec::new();
@@ -43,6 +47,7 @@ pub(crate) fn resolve_windows_command_shim(path: PathBuf) -> Vec<PathBuf> {
     candidates.sort_by_key(|candidate| if candidate.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case("exe")) { 0 } else { 1 });
     candidates.dedup();
     candidates
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -65,8 +70,18 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let database = data.join("app.db");
     let migrations = storage::migrations_ready_without_initialization(&database).unwrap_or(false);
     let configured_node = configured_runtime_executable(&data, "nodePath");
-    let private_node = data.join("runtime").join("node").join("node.exe");
-    let node_path = configured_node.filter(|path| executable_works(path, &["--version"])).or_else(|| if private_node.exists() && executable_works(&private_node, &["--version"]) { Some(private_node) } else { system_executable("node").filter(|path| executable_works(path, &["--version"])) }).and_then(canonical_path);
+    let private_node = data.join("runtime").join("node").join(platform::runtime_executable("node"));
+    let packaged_nodes = [
+        resource.join("dist-runtime").join("runtime").join("node").join(platform::runtime_executable("node")),
+        resource.join("_up_").join("dist-runtime").join("runtime").join("node").join(platform::runtime_executable("node")),
+        resource.join("runtime").join("node").join(platform::runtime_executable("node")),
+        resource.join(platform::runtime_executable("node")),
+    ];
+    let node_path = ordered_runtime_candidates([private_node], packaged_nodes, configured_node, std::iter::empty())
+        .into_iter()
+        .find(|path| path.is_file() && executable_works(path, &["--version"]))
+        .or_else(|| system_executable("node"))
+        .and_then(canonical_path);
     let opencode_path = host::opencode_executable(&app)?.map(PathBuf::from).and_then(canonical_path);
     let node = node_path.is_some();
     let opencode = opencode_path.is_some();
@@ -74,22 +89,55 @@ fn runtime_probe(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let python = python_path.is_some();
     let development = std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime");
     let configured_host = configured_runtime_path(&data, "hostPath");
-    let host_path = configured_host.filter(|path| path.is_file()).or_else(|| [resource.join("dist-runtime").join("host.mjs"), resource.join("_up_").join("dist-runtime").join("host.mjs"), development.join("host.mjs")].into_iter().find(|path| path.is_file())).and_then(canonical_path);
+    let host_path = [resource.join("dist-runtime").join("host.mjs"), resource.join("_up_").join("dist-runtime").join("host.mjs")]
+        .into_iter()
+        .chain(configured_host)
+        .chain([development.join("host.mjs")])
+        .find(|path| path.is_file())
+        .and_then(canonical_path);
     let host = host_path.is_some();
     let configured_knowledge = configured_runtime_path(&data, "knowledgePath");
-    let knowledge_path = configured_knowledge.filter(|path| path.is_file()).or_else(|| [resource.join("dist-runtime").join("knowledge.mjs"), resource.join("_up_").join("dist-runtime").join("knowledge.mjs"), development.join("knowledge.mjs")].into_iter().find(|path| path.is_file())).and_then(canonical_path);
+    let knowledge_path = [resource.join("dist-runtime").join("knowledge.mjs"), resource.join("_up_").join("dist-runtime").join("knowledge.mjs")]
+        .into_iter()
+        .chain(configured_knowledge)
+        .chain([development.join("knowledge.mjs")])
+        .find(|path| path.is_file())
+        .and_then(canonical_path);
     let knowledge = knowledge_path.is_some();
     let skill_path = host::skills_directory(&app)?.and_then(canonical_path);
     let skills = skill_path.is_some();
     let configured_fonts = configured_runtime_path(&data, "fontsPath");
-    let fonts_path = configured_fonts.filter(|path| bootstrap::font_asset_works(&path.join("msyh.ttc"))).or_else(|| [resource.join("dist-runtime").join("runtime").join("fonts"), resource.join("_up_").join("dist-runtime").join("runtime").join("fonts"), development.join("runtime").join("fonts")].into_iter().find(|path| bootstrap::font_asset_works(&path.join("msyh.ttc")))).and_then(canonical_path);
+    let fonts_path = ordered_runtime_candidates(
+        [data.join("runtime").join("fonts")],
+        [resource.join("dist-runtime").join("runtime").join("fonts"), resource.join("_up_").join("dist-runtime").join("runtime").join("fonts")],
+        configured_fonts,
+        [development.join("runtime").join("fonts")],
+    )
+        .into_iter()
+        .find(|path| bootstrap::font_asset_works(&path.join(platform::font_asset_name())))
+        .and_then(canonical_path);
     let fonts = fonts_path.is_some();
     let configured_lancedb = configured_runtime_path(&data, "lancedbPath");
-    let lancedb_candidates = [data.join("runtime").join("lancedb"), resource.join("dist-runtime").join("runtime").join("lancedb")];
-    let lancedb_path = configured_lancedb.filter(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").exists()).or_else(|| lancedb_candidates.into_iter().find(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").exists())).and_then(canonical_path);
+    let lancedb_path = ordered_runtime_candidates(
+        [data.join("runtime").join("lancedb")],
+        [resource.join("dist-runtime").join("runtime").join("lancedb"), resource.join("_up_").join("dist-runtime").join("runtime").join("lancedb")],
+        configured_lancedb,
+        std::iter::empty(),
+    )
+        .into_iter()
+        .find(|path| path.join("node_modules").join("@lancedb").join("lancedb").join("dist").join("index.js").exists())
+        .and_then(canonical_path);
     let lancedb = lancedb_path.is_some();
     let configured_embedding = configured_runtime_path(&data, "embeddingPath");
-    let embedding_path = configured_embedding.filter(|path| path.is_file()).or_else(|| [resource.join("dist-runtime").join("runtime").join("embedding").join("local-hash-384-v1.json"), resource.join("_up_").join("dist-runtime").join("runtime").join("embedding").join("local-hash-384-v1.json"), data.join("runtime").join("embedding").join("local-hash-384-v1.json")].into_iter().find(|path| path.is_file())).and_then(canonical_path);
+    let embedding_path = ordered_runtime_candidates(
+        [data.join("runtime").join("embedding").join("local-hash-384-v1.json")],
+        [resource.join("dist-runtime").join("runtime").join("embedding").join("local-hash-384-v1.json"), resource.join("_up_").join("dist-runtime").join("runtime").join("embedding").join("local-hash-384-v1.json")],
+        configured_embedding,
+        std::iter::empty(),
+    )
+        .into_iter()
+        .find(|path| path.is_file())
+        .and_then(canonical_path);
     let embedding = embedding_path.is_some();
     persist_runtime_paths(&data, &[
         ("nodePath", node_path.as_ref()), ("opencodePath", opencode_path.as_ref()), ("pythonPath", python_path.as_ref()),
@@ -115,6 +163,7 @@ fn runtime_probe_fingerprint(data: &Path, resource: &Path) -> String {
     [
         ("native-runtime-v2", resource.join("dist-runtime/skill-catalog.json")),
         ("up-skill-catalog", resource.join("_up_/dist-runtime/skill-catalog.json")),
+        ("private-runtime-manifest", data.join("runtime/runtime-manifest.json")),
         ("config", data.join("config.json")),
         ("database", data.join("app.db")),
         ("resource", resource.to_path_buf()),
@@ -170,11 +219,11 @@ fn list_local_skill_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, 
     let data = data_dir(&app)?;
     let development = std::env::current_dir().unwrap_or_default().join("apps").join("desktop").join("dist-runtime");
     let configured_catalog = configured_runtime_path(&data, "skillsPath").and_then(|path| path.parent().map(|parent| parent.join("skill-catalog.json")));
-    read_local_skill_catalog(configured_catalog.into_iter().chain([
+    read_local_skill_catalog([
         resource.join("dist-runtime").join("skill-catalog.json"),
         resource.join("_up_").join("dist-runtime").join("skill-catalog.json"),
         development.join("skill-catalog.json"),
-    ]))
+    ].into_iter().chain(configured_catalog))
 }
 
 fn executable_works(path: &std::path::Path, args: &[&str]) -> bool {
@@ -198,6 +247,15 @@ fn configured_runtime_executable(data: &std::path::Path, key: &str) -> Option<Pa
     configured_runtime_path(data, key).and_then(|path| resolve_windows_command_shim(path).into_iter().find(|candidate| candidate.is_file()))
 }
 
+fn ordered_runtime_candidates(
+    private: impl IntoIterator<Item = PathBuf>,
+    packaged: impl IntoIterator<Item = PathBuf>,
+    configured: impl IntoIterator<Item = PathBuf>,
+    system: impl IntoIterator<Item = PathBuf>,
+) -> Vec<PathBuf> {
+    private.into_iter().chain(packaged).chain(configured).chain(system).collect()
+}
+
 fn persist_runtime_paths(data: &std::path::Path, updates: &[(&str, Option<&PathBuf>)]) -> Result<(), String> {
     let path = data.join("config.json");
     let mut value = config::read(&path, data)?;
@@ -216,12 +274,20 @@ fn persist_runtime_paths(data: &std::path::Path, updates: &[(&str, Option<&PathB
 }
 
 fn system_executable(command: &str) -> Option<PathBuf> {
-    let mut where_command = Command::new("where.exe");
     #[cfg(windows)]
+    {
+    let mut where_command = Command::new("where.exe");
     where_command.creation_flags(0x08000000);
     let output = where_command.arg(command).output().ok()?;
     if !output.status.success() { return None; }
-    String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).flat_map(resolve_windows_command_shim).filter(|path| path.exists() && executable_works(path, &["--version"])).find_map(canonical_path)
+    return String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(PathBuf::from).flat_map(resolve_windows_command_shim).filter(|path| path.exists() && executable_works(path, &["--version"])).find_map(canonical_path);
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("which").arg(command).output().ok()?;
+        if !output.status.success() { return None; }
+        String::from_utf8_lossy(&output.stdout).lines().map(str::trim).find(|line| !line.is_empty()).map(PathBuf::from).filter(|path| path.is_file() && executable_works(path, &["--version"])).and_then(canonical_path)
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -248,6 +314,7 @@ fn discover_offline_runtime_zip(resource: &Path) -> Option<PathBuf> {
 }
 
 #[tauri::command]
+#[cfg(windows)]
 fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
     let resource = app.path().resource_dir().map_err(|error| error.to_string())?;
     let manifest = [resource.join("runtime-manifest.json"), resource.join("dist-runtime").join("runtime").join("runtime-manifest.json"), resource.join("_up_").join("dist-runtime").join("runtime").join("runtime-manifest.json")]
@@ -321,14 +388,23 @@ fn repair_runtime(app: tauri::AppHandle, options: Option<RuntimeRepairOptions>) 
     Ok(serde_json::json!({ "status": "ok", "installRoot": install_root }))
 }
 
+#[tauri::command]
+#[cfg(not(windows))]
+fn repair_runtime(_app: tauri::AppHandle, _options: Option<RuntimeRepairOptions>) -> Result<serde_json::Value, String> {
+    // macOS runtime executables are sealed inside the signed application bundle.
+    // Downloading or replacing them after notarization would invalidate the
+    // distribution security model, so repair is intentionally fail-closed.
+    Err("runtime_repair_requires_signed_macos_bundle".to_string())
+}
+
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    Ok(storage::data_root(executable.parent().unwrap_or(executable.as_path()), configured_local_app_data(&app)))
+    Ok(storage::data_root(&platform::distribution_root(&executable), configured_local_app_data(&app)))
 }
 
 /// Older green packages and user instructions sometimes placed `config.json`
 /// beside the executable. Portable storage is intentionally rooted at
-/// `data/`, but importing that misplaced file is safe when the data config is
+/// the platform-specific portable data directory, but importing that misplaced file is safe when the data config is
 /// still uses the untouched first-run text provider. Merge only provider
 /// configuration so existing portable media profiles and runtime paths are
 /// preserved.
@@ -336,7 +412,7 @@ fn migrate_portable_root_config(executable_dir: &Path) -> Result<bool, String> {
     if !executable_dir.join("portable.flag").exists() { return Ok(false); }
     let misplaced = executable_dir.join("config.json");
     if !misplaced.is_file() { return Ok(false); }
-    let data = executable_dir.join("data");
+    let data = executable_dir.join(platform::portable_data_directory());
     let target = data.join("config.json");
     let current = config::read(&target, &data)?;
     if !is_default_portable_text_config(&current) { return Ok(false); }
@@ -352,9 +428,11 @@ fn portable_default_workspace_path(executable_dir: &Path, configured: &Path) -> 
     if !executable_dir.join("portable.flag").is_file() { return None; }
     let configured_name = configured.file_name()?.to_str()?;
     let data_name = configured.parent()?.file_name()?.to_str()?;
-    let portable_name = configured.parent()?.parent()?.file_name()?.to_str()?;
-    if !configured_name.eq_ignore_ascii_case("projects") || !data_name.eq_ignore_ascii_case("data") || !portable_name.eq_ignore_ascii_case("CoworkAny-Windows-x64-portable") { return None; }
-    let current = executable_dir.join("data").join("projects");
+    let portable_root = configured.parent()?.parent()?;
+    let portable_name = portable_root.file_name()?.to_str()?;
+    let generated_package = portable_name.starts_with("CoworkAny-Windows-") || portable_name.starts_with("CoworkAny-macOS-");
+    if !configured_name.eq_ignore_ascii_case("projects") || !data_name.eq_ignore_ascii_case(platform::portable_data_directory()) || !generated_package { return None; }
+    let current = executable_dir.join(platform::portable_data_directory()).join("projects");
     if configured == current { return None; }
     Some(current)
 }
@@ -405,6 +483,10 @@ fn configured_local_app_data(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
         return Some(PathBuf::from(local_app_data).join("CoworkAny"));
     }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return Some(PathBuf::from(home).join("Library").join("Application Support").join("CoworkAny"));
+    }
     app.path().app_local_data_dir().ok()
 }
 
@@ -440,7 +522,7 @@ fn attachment_target(app: &tauri::AppHandle, relative_path: &str) -> Result<(Pat
     let root = project_root(app)?;
     let relative = std::path::Path::new(relative_path);
     if relative.is_absolute() || relative.components().any(|component| matches!(component, std::path::Component::ParentDir)) || !relative_path.starts_with("attachments/") { return Err("attachment_path_escape".to_string()); }
-    let target = root.join(relative_path.replace('/', "\\"));
+    let target = root.join(&relative_path);
     if !target.starts_with(&root) { return Err("attachment_path_escape".to_string()); }
     Ok((root, target))
 }
@@ -453,7 +535,7 @@ fn begin_local_attachment(app: tauri::AppHandle, file_name: String, byte_length:
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or(0);
     let relative_path = attachment_relative_path(&file_name, stamp);
     let root = project_root(&app)?;
-    let target = root.join(relative_path.replace('/', "\\"));
+    let target = root.join(&relative_path);
     if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
     fs::File::create(attachment_partial_target(&target)).map_err(|error| error.to_string())?;
     Ok(serde_json::json!({ "relativePath": relative_path, "byteLength": 0, "expectedByteLength": byte_length }))
@@ -503,7 +585,7 @@ fn allocate_media_temp(app: tauri::AppHandle, run_id: String, node_key: String) 
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or(0);
     let relative_path = format!("artifacts/.tmp/{}/{}/{}", safe_media_component(&run_id, "run"), safe_media_component(&node_key, "node"), stamp);
     let root = project_root(&app)?;
-    let target = root.join(relative_path.replace('/', "\\"));
+    let target = root.join(&relative_path);
     if !target.starts_with(&root) { return Err("media_temp_path_escape".to_string()); }
     fs::create_dir_all(&target).map_err(|error| format!("media_temp_create_failed: {error}"))?;
     Ok(serde_json::json!({ "relativePath": relative_path }))
@@ -516,7 +598,7 @@ fn write_writer_draft(app: tauri::AppHandle, content: String) -> Result<artifact
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or(0);
     let relative_path = format!("articles/coworkany-writer-{}.md", stamp);
     let root = project_root(&app)?;
-    let target = root.join(relative_path.replace('/', "\\"));
+    let target = root.join(&relative_path);
     if !target.starts_with(&root) { return Err("writer_draft_path_escape".to_string()); }
     write_file_atomically(&target, content.as_bytes())?;
     let metadata = artifacts::inspect(&root, &relative_path, "text/markdown")?;
@@ -669,13 +751,13 @@ fn open_with_default_program(target: &Path) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn open_with_default_program(target: &Path) -> Result<(), String> {
-    Command::new("xdg-open").arg(target).spawn().map(|_| ()).map_err(|error| format!("default_program_spawn_failed: {error}"))
+    platform::open_path_command(target).spawn().map(|_| ()).map_err(|error| format!("default_program_spawn_failed: {error}"))
 }
 
 #[tauri::command]
 fn open_workspace(app: tauri::AppHandle) -> Result<(), String> {
     let root = project_root(&app)?;
-    Command::new("explorer.exe").arg(root).spawn().map(|_| ()).map_err(|error| format!("explorer_spawn_failed: {error}"))
+    platform::open_path_command(&root).spawn().map(|_| ()).map_err(|error| format!("workspace_open_failed: {error}"))
 }
 
 #[tauri::command]
@@ -866,7 +948,7 @@ fn save_workflow_output(
         let root = project_root(&app)?;
         let metadata = artifacts::inspect(&root, &value, &mime_type)?;
         if metadata.byte_length > MAX_OUTPUT_BYTES { return Err("workflow_output_too_large".to_string()); }
-        let source = root.join(metadata.relative_path.replace('/', "\\"));
+        let source = root.join(metadata.relative_path);
         fs::read(&source).map_err(|error| format!("workflow_output_read_failed: {error}"))?
     } else {
         return Err("workflow_output_missing_source".to_string());
@@ -916,17 +998,17 @@ fn read_workflow_local_file(local_path: String, mime_type: String) -> Result<ser
 fn open_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
     let root = project_root(&app)?;
     let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
-    let target = root.join(metadata.relative_path.replace('/', "\\"));
-    Command::new("explorer.exe").args(["/select,", &target.to_string_lossy()]).spawn().map(|_| ()).map_err(|error| format!("explorer_spawn_failed: {error}"))
+    let target = root.join(metadata.relative_path);
+    platform::reveal_path_command(&target).spawn().map(|_| ()).map_err(|error| format!("artifact_reveal_failed: {error}"))
 }
 
 #[tauri::command]
 fn open_artifact_folder(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
     let root = project_root(&app)?;
     let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
-    let target = root.join(metadata.relative_path.replace('/', "\\"));
+    let target = root.join(metadata.relative_path);
     let folder = target.parent().ok_or_else(|| "artifact_folder_missing".to_string())?;
-    Command::new("explorer.exe").arg(folder).spawn().map(|_| ()).map_err(|error| format!("explorer_spawn_failed: {error}"))
+    platform::open_path_command(folder).spawn().map(|_| ()).map_err(|error| format!("artifact_folder_open_failed: {error}"))
 }
 
 #[cfg(windows)]
@@ -945,14 +1027,14 @@ fn open_with_installed_program(target: &Path) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn open_with_installed_program(target: &Path) -> Result<(), String> {
-    Command::new("xdg-open").arg(target).spawn().map(|_| ()).map_err(|error| format!("open_with_program_spawn_failed: {error}"))
+    platform::open_path_command(target).spawn().map(|_| ()).map_err(|error| format!("open_with_program_spawn_failed: {error}"))
 }
 
 #[tauri::command]
 fn open_artifact_default(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
     let root = project_root(&app)?;
     let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
-    let target = root.join(metadata.relative_path.replace('/', "\\"));
+    let target = root.join(metadata.relative_path);
     open_with_default_program(&target)
 }
 
@@ -960,7 +1042,7 @@ fn open_artifact_default(app: tauri::AppHandle, relative_path: String, mime_type
 fn open_artifact_with(app: tauri::AppHandle, relative_path: String, mime_type: String) -> Result<(), String> {
     let root = project_root(&app)?;
     let metadata = artifacts::inspect(&root, &relative_path, &mime_type)?;
-    let target = root.join(metadata.relative_path.replace('/', "\\"));
+    let target = root.join(metadata.relative_path);
     open_with_installed_program(&target)
 }
 
@@ -972,7 +1054,7 @@ fn read_artifact(app: tauri::AppHandle, relative_path: String, mime_type: String
     if metadata.byte_length > MAX_PREVIEW_BYTES {
         return Err("artifact_preview_too_large".to_string());
     }
-    let target = root.join(metadata.relative_path.replace('/', "\\"));
+    let target = root.join(metadata.relative_path);
     let bytes = std::fs::read(&target).map_err(|error| format!("artifact_read_failed: {error}"))?;
     Ok(serde_json::json!({ "mimeType": metadata.mime_type, "data": bytes }))
 }
@@ -986,19 +1068,19 @@ fn open_vault_file(app: tauri::AppHandle, relative_path: String) -> Result<(), S
         .map(PathBuf::from)
         .ok_or_else(|| "obsidian_vault_not_configured".to_string())?;
     let root = std::fs::canonicalize(&vault).map_err(|error| format!("obsidian_vault_unavailable: {error}"))?;
-    let requested = root.join(relative_path.replace('/', "\\"));
+    let requested = root.join(relative_path);
     let target = std::fs::canonicalize(&requested).map_err(|error| format!("obsidian_file_unavailable: {error}"))?;
     if target != root && !target.starts_with(&root) { return Err("obsidian_path_escape".to_string()); }
-    Command::new("explorer.exe").args(["/select,", &target.to_string_lossy()]).spawn().map(|_| ()).map_err(|error| format!("explorer_spawn_failed: {error}"))
+    platform::reveal_path_command(&target).spawn().map(|_| ()).map_err(|error| format!("obsidian_file_reveal_failed: {error}"))
 }
 
 #[tauri::command]
 fn read_config(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let data = data_dir(&app)?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let executable_dir = executable.parent().unwrap_or(executable.as_path());
+    let executable_dir = platform::distribution_root(&executable);
     let mut value = config::read(&data.join("config.json"), &data)?;
-    repair_portable_workspace_config(executable_dir, &data, &mut value)?;
+    repair_portable_workspace_config(&executable_dir, &data, &mut value)?;
     Ok(value)
 }
 
@@ -1015,9 +1097,9 @@ fn write_config(app: tauri::AppHandle, value: serde_json::Value) -> Result<(), S
 #[tauri::command]
 fn runtime_paths(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let executable_dir = executable.parent().unwrap_or(executable.as_path());
-    let portable = executable_dir.join("portable.flag").exists();
-    let data = storage::data_root(executable_dir, configured_local_app_data(&app));
+    let distribution_root = platform::distribution_root(&executable);
+    let portable = distribution_root.join("portable.flag").exists();
+    let data = storage::data_root(&distribution_root, configured_local_app_data(&app));
     Ok(serde_json::json!({
         "mode": if portable { "portable" } else { "normal" },
         "data": data,
@@ -1151,12 +1233,11 @@ pub fn run() {
         Err(error) => { eprintln!("CoworkAny cannot acquire instance lock: {error}"); bootstrap::show_startup_error(&error); return; }
     };
     if let Ok(executable) = std::env::current_exe() {
-        if let Some(executable_dir) = executable.parent() {
-            match migrate_portable_root_config(executable_dir) {
-                Ok(true) => eprintln!("CoworkAny imported portable config from the executable directory into data/config.json"),
-                Ok(false) => {},
-                Err(error) => eprintln!("CoworkAny could not import the portable config: {error}"),
-            }
+        let executable_dir = platform::distribution_root(&executable);
+        match migrate_portable_root_config(&executable_dir) {
+            Ok(true) => eprintln!("CoworkAny imported portable config from the executable directory into data/config.json"),
+            Ok(false) => {},
+            Err(error) => eprintln!("CoworkAny could not import the portable config: {error}"),
         }
     }
     let startup_progress = bootstrap::StartupProgress::new(bootstrap::StartupStage::Starting);
@@ -1190,9 +1271,13 @@ pub fn run() {
 
 fn lock_path() -> Result<std::path::PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let executable_dir = executable.parent().unwrap_or(executable.as_path());
-    let local_app_data = std::env::var_os("LOCALAPPDATA").map(|value| std::path::PathBuf::from(value).join("CoworkAny"));
-    let data_root = storage::data_root(executable_dir, local_app_data);
+    let distribution_root = platform::distribution_root(&executable);
+    let normal_data = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|value| std::path::PathBuf::from(value).join("CoworkAny"))
+    } else {
+        std::env::var_os("HOME").map(|value| std::path::PathBuf::from(value).join("Library").join("Application Support").join("CoworkAny"))
+    };
+    let data_root = storage::data_root(&distribution_root, normal_data);
     // Keep the lock adjacent to the data root rather than inside it. The
     // first-run runtime installer atomically swaps the whole data directory;
     // a lock file held by this process inside that directory would make the
@@ -1207,7 +1292,7 @@ fn adjacent_instance_lock_path(data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, persist_runtime_paths, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
+    use super::{adjacent_instance_lock_path, archive_diagnostics, attachment_relative_path, bootstrap, config, configured_runtime_executable, is_default_portable_text_config, is_usable_desktop_config, migrate_portable_root_config, ordered_runtime_candidates, persist_runtime_paths, portable_default_workspace_path, powershell_quote, read_local_skill_catalog, read_runtime_probe_cache, redact_diagnostic_value, resolve_windows_command_shim, safe_attachment_name, safe_media_component, workflow_export_file_name, write_file_atomically, write_runtime_probe_cache, MAX_ATTACHMENT_NAME_CHARS};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1321,6 +1406,26 @@ mod tests {
         assert_eq!(saved["runtime"]["nodePath"].as_str(), Some(canonical_text.as_str()));
         assert!(configured_runtime_executable(&root, "nodePath").is_some());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_managed_runtime_paths_precede_stale_configured_and_system_paths() {
+        let candidates = ordered_runtime_candidates(
+            [PathBuf::from("data/runtime")],
+            [PathBuf::from("resource/dist-runtime")],
+            [PathBuf::from("stale/configured-runtime")],
+            [PathBuf::from("system/runtime")],
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("data/runtime"),
+                PathBuf::from("resource/dist-runtime"),
+                PathBuf::from("stale/configured-runtime"),
+                PathBuf::from("system/runtime"),
+            ]
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { access, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { desktopPlatform } from "./platform";
 
 export type DesktopStorageMode = "normal" | "portable";
 
@@ -17,13 +18,20 @@ export interface DesktopPaths {
   readonly lockFile: string;
 }
 
-export function detectDesktopPaths(options: { readonly executableDir?: string; readonly localAppData?: string } = {}): DesktopPaths {
+export function detectDesktopPaths(options: {
+  readonly executableDir?: string;
+  readonly localAppData?: string;
+  readonly homeDirectory?: string;
+  readonly platform?: NodeJS.Platform;
+  readonly architecture?: string;
+} = {}): DesktopPaths {
   const executableDir = resolve(options.executableDir ?? process.cwd());
   const portable = join(executableDir, "portable.flag");
   const isPortable = existsSync(portable);
+  const platform = desktopPlatform(options);
   const root = isPortable
-    ? join(executableDir, "data")
-    : join(options.localAppData ?? process.env.LOCALAPPDATA ?? join(process.env.TEMP ?? ".", "LocalAppData"), "CoworkAny");
+    ? join(executableDir, platform.portableDataDirectory)
+    : platform.userDataRoot;
   return createPaths(root, isPortable ? "portable" : "normal");
 }
 

@@ -1017,8 +1017,8 @@ test("desktop media and asset artifact reveals consume the WorkbenchClient file 
   assert.match(appSource, /<video controls preload="metadata" src=\{previewSource\}/);
   assert.doesNotMatch(appSource, /FileReader|readAsDataURL/);
   assert.doesNotMatch(appSource, /tauriBridge\.invoke\("open_artifact"/);
-  assert.match(tauriSource, /fn open_artifact\([\s\S]*?Command::new\("explorer\.exe"\)\.args\(\["\/select,"/);
-  assert.match(tauriSource, /fn open_artifact_folder\([\s\S]*?Command::new\("explorer\.exe"\)\.arg\(folder\)/);
+  assert.match(tauriSource, /fn open_artifact\([\s\S]*?platform::reveal_path_command\(&target\)/);
+  assert.match(tauriSource, /fn open_artifact_folder\([\s\S]*?platform::open_path_command\(folder\)/);
   assert.match(tauriSource, /fn open_artifact_with\(/);
   assert.match(tauriSource, /fn open_with_installed_program\(target: &Path\)/);
   assert.match(tauriSource, /fn open_artifact_default\([\s\S]*?open_with_default_program\(&target\)/);

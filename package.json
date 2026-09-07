@@ -17,6 +17,8 @@
     "desktop:typecheck": "pnpm --filter @coworkany/desktop typecheck",
     "desktop:test": "pnpm --filter @coworkany/desktop test",
     "desktop:build": "pnpm --filter @coworkany/desktop build",
+    "desktop:macos:build": "pnpm --filter @coworkany/desktop tauri:build:macos",
+    "desktop:macos:portable": "pnpm --filter @coworkany/desktop package:macos:portable",
     "desktop:release:regression": "node scripts/desktop-release-entry-regression.mjs",
     "tauri:dev": "pnpm --filter @coworkany/desktop tauri:dev",
     "tauri:build": "pnpm --filter @coworkany/desktop tauri:build",

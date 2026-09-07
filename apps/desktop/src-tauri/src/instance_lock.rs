@@ -80,8 +80,13 @@ fn process_alive(pid: u32) -> bool {
     }
     #[cfg(not(windows))]
     {
-        let _ = pid;
-        false
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            // Preserve the lock when process inspection is unavailable rather
+            // than deleting a potentially live lock on an unusual Unix host.
+            .unwrap_or(true)
     }
 }
 
@@ -106,12 +111,30 @@ fn process_matches_current_executable(pid: u32) -> bool {
 }
 
 #[cfg(not(windows))]
-fn process_matches_current_executable(_pid: u32) -> bool {
-    true
+fn process_matches_current_executable(pid: u32) -> bool {
+    let Some(current) = std::env::current_exe().ok().and_then(|path| std::fs::canonicalize(path).ok()) else { return false; };
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output();
+    let Ok(output) = output else { return true; };
+    if !output.status.success() { return false; }
+    let command_line = String::from_utf8_lossy(&output.stdout);
+    let current = current.to_string_lossy();
+    command_line.lines().any(|line| {
+        let line = line.trim_start();
+        line == current || line.strip_prefix(current.as_ref()).is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    })
 }
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
-    left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    #[cfg(windows)]
+    {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
 }
 
 #[cfg(test)]

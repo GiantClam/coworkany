@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { DesktopConfig } from "./config";
 import type { DesktopPaths } from "./paths";
+import { desktopPlatform } from "./platform";
 
 const execFileAsync = promisify(execFile);
 export type RuntimeSource = "system" | "private";
@@ -41,9 +42,10 @@ export const MANDATORY_RUNTIME_COMPONENTS: readonly RuntimeComponent[] = [
 
 export async function probeRuntime(paths: DesktopPaths, config: DesktopConfig): Promise<BootstrapManifest> {
   const probes: RuntimeProbe[] = [];
-  probes.push(await probeExecutable("node", config.runtime.nodePath ?? (config.runtime.source === "private" ? join(paths.runtime, "node", "node.exe") : "node")));
-  probes.push(await probeExecutable("opencode", config.runtime.opencodePath ?? (config.runtime.source === "private" ? join(paths.runtime, "opencode", "opencode.exe") : "opencode")));
-  probes.push(await probePython(config.runtime.pythonPath ?? (config.runtime.source === "private" ? join(paths.runtime, "python", "python.exe") : "python")));
+  const platform = desktopPlatform();
+  probes.push(await probeExecutable("node", config.runtime.nodePath ?? (config.runtime.source === "private" ? join(paths.runtime, "node", platform.nodeExecutable) : "node")));
+  probes.push(await probeExecutable("opencode", config.runtime.opencodePath ?? (config.runtime.source === "private" ? join(paths.runtime, "opencode", platform.openCodeExecutable) : "opencode")));
+  probes.push(await probePython(config.runtime.pythonPath ?? (config.runtime.source === "private" ? join(paths.runtime, "python", platform.pythonExecutable) : platform.pythonExecutable)));
   probes.push(await probePath("host", config.runtime.hostPath ?? join(paths.runtime, "host.mjs")));
   probes.push(await probePath("knowledge", config.runtime.knowledgePath ?? join(paths.runtime, "knowledge.mjs")));
   probes.push(await probeFonts(config.runtime.fontsPath ?? join(paths.runtime, "fonts")));
@@ -72,7 +74,7 @@ async function probeEmbedding(path: string): Promise<RuntimeProbe> {
 }
 
 export function fontsAssetPath(path: string): string {
-  return path.toLowerCase().endsWith(".ttc") || path.toLowerCase().endsWith(".ttf") ? path : join(path, "msyh.ttc");
+  return path.toLowerCase().endsWith(".ttc") || path.toLowerCase().endsWith(".ttf") || path.toLowerCase().endsWith(".otf") ? path : join(path, desktopPlatform().fontAsset);
 }
 
 export function embeddingDescriptorPath(path: string): string {

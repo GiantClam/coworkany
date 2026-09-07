@@ -73,7 +73,7 @@ mod platform {
             Ok(Self(handle))
         }
 
-        pub fn assign(&self, child: &Child) -> io::Result<()> {
+        pub fn assign(&mut self, child: &Child) -> io::Result<()> {
             let process = child.as_raw_handle() as HANDLE;
             if unsafe { AssignProcessToJobObject(self.0, process) } == 0 {
                 return Err(io::Error::last_os_error());
@@ -102,15 +102,27 @@ mod platform {
 mod platform {
     use std::io;
     use std::process::Child;
-    pub struct JobObject;
+    pub struct JobObject {
+        process_group: Option<u32>,
+    }
     impl JobObject {
         pub fn new() -> io::Result<Self> {
-            Ok(Self)
+            Ok(Self { process_group: None })
         }
-        pub fn assign(&self, _child: &Child) -> io::Result<()> {
+        pub fn assign(&mut self, child: &Child) -> io::Result<()> {
+            self.process_group = child.id().into();
             Ok(())
         }
         pub fn terminate(&self) -> io::Result<()> {
+            if let Some(process_group) = self.process_group {
+                // Every host command is spawned in its own Unix process group by
+                // platform::configure_child_command. Killing the group prevents
+                // OpenCode descendants from surviving an app exit.
+                let status = std::process::Command::new("kill")
+                    .args(["-TERM", &format!("-{process_group}")])
+                    .status()?;
+                if !status.success() { return Err(io::Error::other("process_group_terminate_failed")); }
+            }
             Ok(())
         }
     }
@@ -133,7 +145,7 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("cmd.exe should be available on Windows");
-        let job = JobObject::new().expect("Windows job object should be created");
+        let mut job = JobObject::new().expect("Windows job object should be created");
         if let Err(error) = job.assign(&child) {
             let _ = child.kill();
             let _ = child.wait();

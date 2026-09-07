@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "pnpm --filter @coworkany/desktop build:macos"
+  },
+  "bundle": {
+    "icon": ["icons/coworkany-icon.icns"],
+    "resources": [
+      "../dist-runtime/host.mjs",
+      "../dist-runtime/knowledge.mjs",
+      "../dist-runtime/skills",
+      "../dist-runtime/agents",
+      "../dist-runtime/skill-catalog.json",
+      "../dist-runtime/agency-agent-manifest.json",
+      "../dist-runtime/runtime"
+    ],
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

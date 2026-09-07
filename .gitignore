@@ -122,10 +122,12 @@ docs/plans/*
 !docs/plans/2026-07-16-workflow-canvas-infinite-canvas-optimization-plan.zh-CN.md
 !docs/plans/2026-08-06-writer-assistant-opencode-skill-first-refactor.zh-CN.md
 !docs/plans/2026-08-11-windows-desktop-v1-implementation-plan.zh-CN.md
+!docs/plans/2026-09-07-desktop-cross-platform-runtime-plan.zh-CN.md
 !docs/desktop/
 docs/desktop/*
 !docs/desktop/windows-v1-feasibility-results.zh-CN.md
 !docs/desktop/windows-v1-package-validation.zh-CN.md
+!docs/desktop/macos-arm64-release.zh-CN.md
 !docs/upstream/
 !docs/upstream/infinite-canvas-import-manifest.md
 !docs/performance/
