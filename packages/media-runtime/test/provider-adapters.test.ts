@@ -629,6 +629,18 @@ test("RunningHub H3 adapter maps canonical media roles to the documented multimo
   });
 });
 
+test("RunningHub H3 adapter maps a first frame before additional image inputs", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const adapter = createRunningHubAdapter({ provider: "runninghub" as MediaProviderId, baseUrl: "https://www.runninghub.cn", apiKey: "secret", submitPath: "/openapi/v2/minimax/hailuo-h3/multimodal-to-video", fetchImpl: async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({ data: { taskId: "h3-frame", taskStatus: "RUNNING" } }), { status: 200 });
+  } });
+  await adapter.execute({ provider: "runninghub" as MediaProviderId, modelId: "MiniMax-Hailuo-H3", input: {
+    prompt: "animate", firstFrameUrl: "https://files.invalid/first.png", imageUrls: ["https://files.invalid/second.png"],
+  } }, cancellation());
+  assert.deepEqual(requestBody?.imageUrls, ["https://files.invalid/first.png", "https://files.invalid/second.png"]);
+});
+
 test("RunningHub digital-human adapter submits the configured workflow and polls its task", async () => {
   let call = 0;
   const adapter = createRunningHubDigitalHumanAdapter({ provider: "runninghub" as MediaProviderId, baseUrl: "https://www.runninghub.cn", apiKey: "secret", workflowId: "workflow-1", fetchImpl: async (_input, init) => {

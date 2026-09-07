@@ -35,7 +35,7 @@ test("enables Wan 3 media roles that the DashScope adapter implements", () => {
 test("enables only the documented multimodal roles for the RunningHub H3 endpoint", () => {
   const profile = resolveVideoMediaCapabilities("runninghub", "MiniMax-Hailuo-H3");
   for (const role of ["image.reference", "video.reference", "audio.reference"]) assert.equal(supportsVideoMediaRole(profile, role), true, role);
-  assert.equal(supportsVideoMediaRole(profile, "image.first_frame"), false);
+  assert.equal(supportsVideoMediaRole(profile, "image.first_frame"), true);
   assert.doesNotThrow(() => assertVideoMediaCapability(profile, {
     referenceImageUrls: ["https://example.test/reference.png"],
     referenceVideoUrls: ["https://example.test/reference.mp4"],

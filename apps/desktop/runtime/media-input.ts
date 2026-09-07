@@ -202,6 +202,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     );
     const referenceMode = config.mode === "reference-to-video";
     const referenceImages = preferredMediaReferences(inputs["image.reference"], inputs.referenceImages, config.referenceImageUrls, config.referenceImages, ...(referenceMode ? [config.imageUrls] : []));
+    const imageInputs = referenceMode ? [] : preferredMediaReferences(config.imageUrls);
     const sourceVideo = preferredMediaReferences(inputs["video.source"], inputs.videos, inputs.video, ...(referenceMode ? [] : [config.sourceVideoUrl, config.videos, config.video]));
     const referenceVideos = preferredMediaReferences(inputs["video.reference"], inputs.referenceVideos, config.referenceVideoUrls, config.referenceVideos, config.videoUrls, ...(referenceMode ? [config.sourceVideoUrl] : []));
     const referenceAudios = preferredMediaReferences(inputs["audio.reference"], inputs.referenceAudios, config.referenceAudioUrls, config.referenceAudios, config.audioUrls, config.audioUrl);
@@ -212,6 +213,7 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     // normalization (for example RunningHub H3 is stricter at 9/3/3, while
     // Wan 3 accepts 10 reference images and 5 reference videos/audio files).
     assertMaximum("image.reference", referenceImages, 10);
+    assertMaximum("image.input", imageInputs, 9);
     assertMaximum("video.source", sourceVideo, 1);
     assertMaximum("video.reference", referenceVideos, 5);
     assertMaximum("audio.reference", referenceAudios, 5);
@@ -223,15 +225,17 @@ export function buildMediaCapabilityInput(executorId: string, config: Record<str
     if (firstFrameUrl) request.firstFrameUrl = firstFrameUrl;
     if (lastFrameUrl) request.lastFrameUrl = lastFrameUrl;
     const referenceImageUrls = referenceImages.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
+    const imageUrls = imageInputs.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
     const sourceVideoUrl = firstNonEmptyString(sourceVideo[0]?.url, sourceVideo[0]?.localPath);
     const referenceVideoUrls = referenceVideos.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
     const referenceAudioUrls = referenceAudios.flatMap((reference) => reference.url ? [reference.url] : reference.localPath ? [reference.localPath] : []);
     if (referenceImageUrls.length) request.referenceImageUrls = referenceImageUrls;
+    if (imageUrls.length) request.imageUrls = imageUrls;
     if (sourceVideoUrl) request.sourceVideoUrl = sourceVideoUrl;
     if (referenceVideoUrls.length) request.referenceVideoUrls = referenceVideoUrls;
     if (referenceAudioUrls.length) request.referenceAudioUrls = referenceAudioUrls;
     const localMediaReferences = {
-      firstFrame: firstFrame.filter((reference) => reference.localPath), lastFrame: lastFrame.filter((reference) => reference.localPath), referenceImages: referenceImages.filter((reference) => reference.localPath), sourceVideo: sourceVideo.filter((reference) => reference.localPath), referenceVideos: referenceVideos.filter((reference) => reference.localPath), referenceAudios: referenceAudios.filter((reference) => reference.localPath),
+      firstFrame: firstFrame.filter((reference) => reference.localPath), lastFrame: lastFrame.filter((reference) => reference.localPath), referenceImages: [...referenceImages, ...imageInputs].filter((reference) => reference.localPath), sourceVideo: sourceVideo.filter((reference) => reference.localPath), referenceVideos: referenceVideos.filter((reference) => reference.localPath), referenceAudios: referenceAudios.filter((reference) => reference.localPath),
     };
     if (Object.values(localMediaReferences).some((references) => references.length)) request.localMediaReferences = localMediaReferences;
   }

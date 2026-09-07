@@ -106,7 +106,7 @@ async function uploadDirectRunningHubMediaReferences(
     const localPath = localPathFromWorkflowValue(value);
     return localPath ? uploaded.get(localPath) ?? value : value;
   };
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, ["firstFrameUrl", "lastFrameUrl", "referenceImageUrls", "sourceVideoUrl", "referenceVideoUrls", "referenceAudioUrls"].includes(key) ? replace(value) : value]));
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, ["firstFrameUrl", "lastFrameUrl", "imageUrls", "referenceImageUrls", "sourceVideoUrl", "referenceVideoUrls", "referenceAudioUrls"].includes(key) ? replace(value) : value]));
 }
 
 function defaultOpenCodeExecutable() {
@@ -1041,7 +1041,6 @@ async function runMediaCapabilityOnce(command: HostCommand, runId: string, nodeK
     const runningHubRegisteredWorkflow = Boolean(providerKind.includes("runninghub") && registeredWorkflow);
     const runningHubDirectVideo = executorId === "video_generate" && providerKind.includes("runninghub") && Boolean(configuredEndpoint);
     const openAICompatibleImage = executorId === "image_generate" && (providerKind.includes("openai") || providerKind.includes("pptoken") || endpoint === "/images/generations");
-    const hasLocalNonImageVideoMedia = ["sourceVideo", "referenceVideos", "referenceAudios"].some((key) => Array.isArray(localMediaReferences[key]) && (localMediaReferences[key] as unknown[]).length > 0);
     const inlineImageReferences = openAICompatibleImage
       || (executorId === "image_generate" && dashScopeProvider)
       || (executorId === "video_generate" && (dashScopeProvider || providerKind.includes("minimax")));

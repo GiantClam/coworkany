@@ -49,6 +49,9 @@ const BAILIAN_WAN3_VIDEO: VideoMediaCapabilityProfile = {
 
 const RUNNINGHUB_H3_VIDEO: VideoMediaCapabilityProfile = {
   ...NO_VIDEO_MEDIA,
+  // H3 consumes a first frame as the first item in imageUrls; it has no
+  // separate first-frame request field.
+  supportsFirstFrame: true,
   supportsReferenceImages: true,
   supportsReferenceVideos: true,
   supportsReferenceAudios: true,

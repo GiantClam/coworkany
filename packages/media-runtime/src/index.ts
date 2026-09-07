@@ -1029,7 +1029,13 @@ export function createRunningHubAdapter(options: DirectProviderOptions & { reado
   const mapInput = (input: Record<string, unknown>) => {
     if (!options.submitPath.toLowerCase().includes("minimax/hailuo-h3/multimodal-to-video")) return input;
     const mapped: Record<string, unknown> = { prompt: input.prompt, resolution: input.resolution, duration: input.duration, ratio: input.ratio };
-    if (Array.isArray(input.referenceImageUrls) && input.referenceImageUrls.length) mapped.imageUrls = input.referenceImageUrls;
+    const imageUrls = [
+      ...(typeof input.firstFrameUrl === "string" && input.firstFrameUrl.trim() ? [input.firstFrameUrl.trim()] : []),
+      ...(Array.isArray(input.imageUrls) ? input.imageUrls : []),
+      ...(Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls : []),
+    ].filter((value, index, values): value is string => typeof value === "string" && Boolean(value.trim()) && values.indexOf(value) === index);
+    if (imageUrls.length > 9) throw new Error("workflow_media_role_limit:image.input:9");
+    if (imageUrls.length) mapped.imageUrls = imageUrls;
     if (Array.isArray(input.referenceVideoUrls) && input.referenceVideoUrls.length) mapped.videoUrls = input.referenceVideoUrls;
     if (Array.isArray(input.referenceAudioUrls) && input.referenceAudioUrls.length) mapped.audioUrls = input.referenceAudioUrls;
     if (input.watermark !== undefined) mapped.aigc_watermark = input.watermark;
